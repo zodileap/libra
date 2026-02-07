@@ -1,0 +1,189 @@
+# 全局规范
+
+- 当进行回答的时候，默认使用中文。
+
+## Git规范
+
+### 对于版本号
+
+- 采用三段式版本：`Major.Minor.Patch`。
+
+### 对于 commit
+
+- 提交说明结构：
+  `<type>[optional scope]: <description>`
+  `[optional body]`
+  `[optional footer(s)]`
+- 多标签格式（当涉及多个变更类型时）：
+  `<type1>[optional scope]: <description1>`
+  `<type2>[optional scope]: <description2>`
+  `[optional body]`
+  `[optional footer(s)]`
+
+### 核心提交类型
+
+- `major`：重大更新或架构变更。
+  版本变更：Major（`X.0.0`）。
+  适用场景：不兼容的 API 变更、大规模重构。
+  使用 `major` 时，必须在正文或脚注中说明：
+  `BREAKING CHANGE: <详细描述不兼容的变更>`。
+- `feat`：新增功能或模块。
+  版本变更：Minor（`0.X.0`）。
+  适用场景：新增完整功能、模块或组件。
+- `update`：现有功能的微小更新或调整。
+  版本变更：Patch（`0.0.X`）。
+  适用场景：参数调整、配置更新、文案修改、或不涉及大规模结构变化的小改进。
+- `fix`：缺陷修复。
+  版本变更：Patch（`0.0.X`）。
+  适用场景：修复 bug、解决已知问题。
+- `perf`：性能优化。
+  版本变更：Patch（`0.0.X`）。
+  适用场景：提升性能的代码更改。
+- `refactor`：代码重构。
+  版本变更：Patch（`0.0.X`）。
+  适用场景：既不修复 bug 也不新增功能的结构优化。
+- `build`：构建系统变更。
+  版本变更：Patch（`0.0.X`）。
+  适用场景：构建系统或外部依赖项调整。
+
+### 辅助提交类型（不影响版本号）
+
+- `docs`：文档更新。
+- `style`：代码风格调整（不影响功能）。
+- `test`：测试相关变更。
+- `ci`：CI 配置变更。
+- `chore`：杂项变更（不修改 src 或 test 的其他变更）。
+- `revert`：代码回退（特殊处理）。
+
+### 提交信息格式要求
+
+- 必须使用中文描述。
+- 严格遵循约定式提交规范格式。
+- 不添加额外签名信息（如工具生成标识）。
+- 提交信息简洁明了，准确反映变更内容。
+- 支持多个标签：一次提交涉及多个变更类型时可使用多标签。
+- 提交信息末尾不要署名。
+
+## 文档规范
+
+### 总体说明
+
+- 文档注释标签均为可选。
+- 注释必须以“描述”开头，开头不要添加函数、方法、属性等名称。
+- 每个标签的内容之间空一行。
+- 描述部分要详细说明作用；若是函数/方法注释，需要说明函数具体做了哪些事情。
+
+### 标签
+
+- `Params:` 参数标签。
+  示例：
+  `// Params:`
+  `//`
+  `//   - path: 文件路径。`
+  `//   - b: 文件内容。`
+- `default:` 参数默认值标签。
+  示例：
+  `// Params:`
+  `//`
+  `//   - path: 文件夹路径。`
+  `//     default: 111`
+- `Returns:` 返回值标签。
+  示例：
+  `// Returns:`
+  `//`
+  `//   0: 成功。`
+- `Example:` 示例代码标签。
+- `ExamplePath:` 示例代码在 git 上的路径标签。
+  示例：
+  `// ExamplePath: taurus_go_demo/asset/asset_test.go`
+- `ErrCodes:` 错误码标签（用于函数或方法注释）。
+  示例：
+  `// ErrCodes:`
+  `//   - Err_0200010001`
+  `//   - Err_0200010002`
+- `Verbs:` 错误码参数值注释标签（用于错误码注释）。
+- `Extends:` 继承来源标记。
+  示例：
+  `Extends [AriContainer]`
+  `Extends {@link AriContainer}`
+
+# Web 模块（React）
+
+- 硬性规定：Web 端使用 `aries_react` 作为 UI 组件基础，不使用第三方 UI 库。
+- 使用 React hooks 时遵循最佳开发实践。
+- 页面应按以下结构组织：
+  `routes.ts`、`context.ts`、`provider.tsx`、`layout.tsx`、`types.ts`、`hooks/`、`components/`、`widgets/`。
+- `context.ts` 只定义 Context 和 hooks，不写 JSX，不定义组件。
+- `provider.tsx` 统一承载状态管理、hooks 调用、路由解析和 i18n 注入。
+- i18n 必须在 provider 中统一注册，并通过 context 向下游注入。
+- 不要把 hook 返回值拆散后再注入 context，应整体注入以保证一致性。
+- 页面路由必须懒加载，并通过 `t` 函数提供路由标题等文案。
+- 类型统一放在 `types.ts` 中，命名与页面名称保持一致。
+- 页面布局写在 `layout.tsx`，页面主体由 layout 组合。
+- 编写实现时需保持与现有模块风格一致。
+- 使用 `aries_react` 组件前必须先查看对应 props 类型定义再编码。
+- 若 `aries_react` 不能满足业务需求，可直接修改 `aries_react`。
+- 每次修改 `aries_react` 后必须同步更新本地包：
+  1. 进入 `aries_react` 包目录。
+  2. 执行 `pnpm build`。
+  3. 执行 `yalc push`。
+
+# Desktop 模块（Tauri）
+
+- 客户端采用 Tauri，目标平台为 macOS 和 Windows。
+- 在 `client` 下创建 `aries_tauri` UI 包。
+- 当前阶段不全量复制 `aries_react`，先完成基础框架。
+- 仅当 Web 端实际使用到 `aries_react` 的组件时，才在 `aries_tauri` 中按需复刻。
+- Desktop 的 UI 视觉和交互尽量与 Web 保持一致。
+
+# 服务模块（Go）
+
+- 服务目录分为 `dao` 与 `api` 两个子目录。
+
+## DAO
+
+- Go 版本要求：`>= 1.24.0`。
+- DAO 是数据库实体项目，实体以 schema 为唯一修改入口。
+- 实体结构需与 `dao/entity/v1` 设计保持一致。
+- 生成 schema 时在目标目录执行：
+  `go run github.com/zodileap/taurus_go/entity/cmd new`
+  例如: `go run github.com/zodileap/taurus_go/entity/cmd new User Permission -e Address,Blog -t "."`
+- 每个 schema 生成后先完善字段与约束，再统一生成服务基础代码。
+- 在 dao 根目录维护 `generate.sh`，通过该脚本向对应服务生成默认代码。
+- 优先使用 zspecs 中已有的实体类型（优先 `E` 结尾类型）。
+- 表实体命名以 `xxEntity` 结尾；关联表以 `Rel` 开头。
+- 实体属性与表字段优先使用指针类型。
+- 命名使用驼峰风格。
+- 禁止使用关系定义（禁止关系建模）。
+- 每张表必须包含至少一个主键，默认主键名为 `Id`。
+- 每张表必须包含 `CreatedAt`、`LastAt`、`DeletedAt` 三个字段，并按统一默认值与精度配置。
+- 每个字段都必须有 Comment，结构体字段注释与字段 Comment 必须语义一致。
+- Entity `Config` 中 `Comment` 必填，内容简短、直接描述实体本身（如“用户基本信息”）。
+- DAO 主要基于 `git.zodileap.com/taurus` 体系构建。
+
+## API
+
+- Go 版本要求：`>= 1.24.0`。
+- `api_mate` 与其他服务模块统一遵循同一服务开发规范。
+- 服务目录按分层组织：`api/v1`、`service/v1`、`specs/v1`、`configs`、`cmd` 等。
+- API 层必须使用 `WithGet`、`WithPost`、`WithPut`、`WithDelete` 包裹，并通过 `init.go` 注册路由映射。
+- Service 层必须使用 `WithService`，模块实现优先复用 `base_service.go` 能力。
+- 仅使用内部 Go 包体系（zodileap_go、taurus_go 及实体映射体系）。
+- 实体字段访问使用函数调用形式，不使用 `.Get()`。
+- RPC 包禁止依赖服务的 `specs` 包，避免循环引用。
+- RPC 转换函数返回值统一遵循 `(data, error)`，且返回实体包真实存在的类型。
+- RPC 层只负责基础类型转换，Service 层负责组装完整请求结构并执行业务调用。
+- 所有函数返回值固定为两个：`(DataType, error)`。
+- 返回错误时，`err != nil` 需使用 `zerr.Must(err)` 包裹后返回。
+- 错误处理需要可定位（文件名、行号）且包含必要上下文，避免泄露敏感信息。
+- 错误码需通过统一流程检查、创建和维护，避免重复或冲突。
+- 初始化流程固定为：
+  1. 通过 toolkit 初始化服务。
+  2. 执行 DAO 的 `generate.sh` 生成基础代码。
+  3. 在基础代码上补充业务实现。
+
+# Core 模块（Rust）
+
+- Core 使用 Rust 构建，承载跨 Web / Desktop / Backend 的核心一致性逻辑。
+- 同一业务规则必须在 Core 中单点定义，避免多端重复实现导致行为漂移。
+- Core 需对外提供稳定接口，供前端、后端、客户端按各自方式集成。
