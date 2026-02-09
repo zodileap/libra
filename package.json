@@ -1,0 +1,16 @@
+{
+  "name": "zodileap-agen",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.0.0",
+  "scripts": {
+    "dev": "pnpm run dev:desktop",
+    "dev:web": "pnpm --dir apps/web dev",
+    "build:web": "pnpm --dir apps/web build",
+    "sync:aries:web": "bash scripts/sync-aries-web.sh",
+    "sync:aries:web:dev": "bash scripts/sync-aries-web.sh --dev",
+    "dev:desktop": "pnpm --dir apps/desktop dev",
+    "build:desktop": "pnpm --dir apps/desktop build",
+    "bootstrap": "bash scripts/bootstrap.sh"
+  }
+}

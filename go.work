@@ -1,0 +1,18 @@
+go 1.24.2
+
+use (
+	./services/account
+	./services/agent_3d
+	./services/agent_code
+	./services/billing
+	./services/enterprise
+	./services/entity/v1/account
+	./services/entity/v1/agent_3d
+	./services/entity/v1/agent_code
+	./services/entity/v1/billing
+	./services/entity/v1/enterprise
+	./services/entity/v1/license
+	./services/entity/v1/runtime
+	./services/license
+	./services/runtime
+)

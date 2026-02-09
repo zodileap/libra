@@ -1,6 +1,8 @@
 # 全局规范
 
 - 当进行回答的时候，默认使用中文。
+- Desktop 与 Web 的样式值（颜色、间距、尺寸、圆角、阴影、透明度等）禁止硬编码，必须优先引用 `aries_react` 在 `:root` 中提供的 `--z-*` 变量，确保主题与 Light/Dark 可自适应。
+- 若当前变量体系不存在所需样式值，先在 `aries_react` 中补齐变量，再在业务项目中引用，禁止直接写死。
 
 ## Git规范
 
@@ -138,18 +140,18 @@
 
 # 服务模块（Go）
 
-- 服务目录分为 `dao` 与 `api` 两个子目录。
+- 服务目录分为 `entity` 与 `api` 两个子目录。
 
-## DAO
+## Entity（DAO）
 
 - Go 版本要求：`>= 1.24.0`。
-- DAO 是数据库实体项目，实体以 schema 为唯一修改入口。
-- 实体结构需与 `dao/entity/v1` 设计保持一致。
+- Entity 是数据库实体项目，实体以 schema 为唯一修改入口。
+- 项目内实体目录为 `services/entity/v1`，整体设计与 `go/dao/entity/v1` 保持一致。
 - 生成 schema 时在目标目录执行：
   `go run github.com/zodileap/taurus_go/entity/cmd new`
   例如: `go run github.com/zodileap/taurus_go/entity/cmd new User Permission -e Address,Blog -t "."`
 - 每个 schema 生成后先完善字段与约束，再统一生成服务基础代码。
-- 在 dao 根目录维护 `generate.sh`，通过该脚本向对应服务生成默认代码。
+- 在 `services/entity` 根目录维护 `generate.sh`，通过该脚本向对应服务生成默认代码。
 - 优先使用 zspecs 中已有的实体类型（优先 `E` 结尾类型）。
 - 表实体命名以 `xxEntity` 结尾；关联表以 `Rel` 开头。
 - 实体属性与表字段优先使用指针类型。
@@ -159,7 +161,7 @@
 - 每张表必须包含 `CreatedAt`、`LastAt`、`DeletedAt` 三个字段，并按统一默认值与精度配置。
 - 每个字段都必须有 Comment，结构体字段注释与字段 Comment 必须语义一致。
 - Entity `Config` 中 `Comment` 必填，内容简短、直接描述实体本身（如“用户基本信息”）。
-- DAO 主要基于 `git.zodileap.com/taurus` 体系构建。
+- Entity（DAO）主要基于 `git.zodileap.com/taurus` 体系构建。
 
 ## API
 
@@ -179,7 +181,7 @@
 - 错误码需通过统一流程检查、创建和维护，避免重复或冲突。
 - 初始化流程固定为：
   1. 通过 toolkit 初始化服务。
-  2. 执行 DAO 的 `generate.sh` 生成基础代码。
+  2. 执行 Entity 的 `generate.sh` 生成基础代码。
   3. 在基础代码上补充业务实现。
 
 # Core 模块（Rust）

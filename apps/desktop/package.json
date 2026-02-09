@@ -1,0 +1,26 @@
+{
+  "name": "@zodileap-agen/desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev:ui": "vite --host 127.0.0.1 --port 1420 --strictPort --logLevel error",
+    "build:ui": "vite build",
+    "dev": "pnpm exec tauri dev",
+    "build": "pnpm exec tauri build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0",
+    "react": "link:/Users/yoho/code/client/aries_react/node_modules/react",
+    "react-dom": "link:/Users/yoho/code/client/aries_react/node_modules/react-dom",
+    "react-router-dom": "link:/Users/yoho/code/client/aries_react/node_modules/react-router-dom"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "@types/react": "link:/Users/yoho/code/client/aries_react/node_modules/@types/react",
+    "@types/react-dom": "link:/Users/yoho/code/client/aries_react/node_modules/@types/react-dom",
+    "@vitejs/plugin-react-swc": "link:/Users/yoho/code/client/aries_react/node_modules/@vitejs/plugin-react-swc",
+    "typescript": "link:/Users/yoho/code/client/aries_react/node_modules/typescript",
+    "vite": "link:/Users/yoho/code/client/aries_react/node_modules/vite"
+  }
+}
