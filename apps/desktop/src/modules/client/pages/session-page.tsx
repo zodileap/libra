@@ -15,6 +15,7 @@ import type {
   BlenderBridgeRuntime,
   ModelMcpCapabilities,
 } from "../types";
+import { ChatMarkdown } from "../widgets/chat-markdown";
 
 interface SessionPageProps {
   modelMcpCapabilities: ModelMcpCapabilities;
@@ -33,6 +34,36 @@ interface AgentRunResponse {
 interface MessageItem {
   role: "user" | "assistant";
   text: string;
+}
+
+const OUTPUT_DIR_QUOTED_REGEX =
+  /(?:导出到|导出至|输出到|保存到|export\s+to|save\s+to)\s*[“"']([^"”']+)[”"']/i;
+const OUTPUT_DIR_PLAIN_REGEX =
+  /(?:导出到|导出至|输出到|保存到|export\s+to|save\s+to)\s*(\/[^\s`"'，。；！？]+|[a-zA-Z]:\\[^\s`"'，。；！？]+)/i;
+
+function trimOutputSuffix(path: string): string {
+  let result = path.trim().replace(/[，。；！？、]+$/u, "");
+  result = result.replace(/[)"'`”]+$/u, "");
+  if ((result.startsWith("/") || /^[a-zA-Z]:\\/.test(result)) && /[中里]$/.test(result)) {
+    result = result.slice(0, -1);
+  }
+  return result;
+}
+
+function extractOutputDirFromPrompt(prompt: string): string | undefined {
+  const quotedMatch = prompt.match(OUTPUT_DIR_QUOTED_REGEX);
+  if (quotedMatch?.[1]) {
+    const normalized = trimOutputSuffix(quotedMatch[1]);
+    return normalized || undefined;
+  }
+
+  const plainMatch = prompt.match(OUTPUT_DIR_PLAIN_REGEX);
+  if (plainMatch?.[1]) {
+    const normalized = trimOutputSuffix(plainMatch[1]);
+    return normalized || undefined;
+  }
+
+  return undefined;
 }
 
 export function SessionPage({
@@ -118,6 +149,7 @@ export function SessionPage({
     }
     const traceId = `trace-${Date.now()}`;
     const provider = primaryKey?.provider || "codex";
+    const outputDir = isModelAgent ? extractOutputDirFromPrompt(content) : undefined;
     setInput("");
     setSending(true);
     setActiveTraceId(traceId);
@@ -137,6 +169,7 @@ export function SessionPage({
         projectName: title,
         modelExportEnabled: modelMcpCapabilities.export,
         blenderBridgeAddr: DEFAULT_BLENDER_BRIDGE_ADDR,
+        outputDir,
       });
       setDebugLogs((prev) => [
         `[${response.trace_id}] [info] [frontend] invoke success`,
@@ -202,7 +235,7 @@ export function SessionPage({
             {messages.map((message, index) => (
               <AriCard key={`${message.role}-${index}`} className={`desk-msg ${message.role === "user" ? "user" : ""}`}>
                 <AriTypography variant="caption" value={message.role === "user" ? "你" : "智能体"} />
-                <AriTypography variant="body" value={message.text} />
+                <ChatMarkdown content={message.text} />
               </AriCard>
             ))}
           </div>

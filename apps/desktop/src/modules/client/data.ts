@@ -41,12 +41,19 @@ export const AGENT_SESSIONS: AgentSession[] = [
 ];
 
 const MODEL_PROJECT_STORAGE_KEY = "zodileap.desktop.model.projects";
+const SESSION_META_STORAGE_KEY = "zodileap.desktop.session.meta";
 
 interface StoredModelProject {
   id: string;
   title: string;
   prompt: string;
   updatedAt: string;
+}
+
+interface SessionMeta {
+  renamedTitles: Record<string, string>;
+  pinnedIds: string[];
+  removedIds: string[];
 }
 
 function readModelProjects(): StoredModelProject[] {
@@ -76,6 +83,47 @@ function writeModelProjects(list: StoredModelProject[]) {
   window.localStorage.setItem(MODEL_PROJECT_STORAGE_KEY, JSON.stringify(list));
 }
 
+function readSessionMeta(): SessionMeta {
+  if (typeof window === "undefined") {
+    return {
+      renamedTitles: {},
+      pinnedIds: [],
+      removedIds: [],
+    };
+  }
+
+  const raw = window.localStorage.getItem(SESSION_META_STORAGE_KEY);
+  if (!raw) {
+    return {
+      renamedTitles: {},
+      pinnedIds: [],
+      removedIds: [],
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    return {
+      renamedTitles: parsed?.renamedTitles || {},
+      pinnedIds: Array.isArray(parsed?.pinnedIds) ? parsed.pinnedIds : [],
+      removedIds: Array.isArray(parsed?.removedIds) ? parsed.removedIds : [],
+    };
+  } catch (_err) {
+    return {
+      renamedTitles: {},
+      pinnedIds: [],
+      removedIds: [],
+    };
+  }
+}
+
+function writeSessionMeta(meta: SessionMeta) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(SESSION_META_STORAGE_KEY, JSON.stringify(meta));
+}
+
 export function getModelProjectById(id: string): StoredModelProject | null {
   return readModelProjects().find((item) => item.id === id) || null;
 }
@@ -94,21 +142,77 @@ export function upsertModelProject(input: {
   writeModelProjects(next);
 }
 
-export function getAgentSessions(agentKey: "code" | "model"): AgentSession[] {
-  const defaults = AGENT_SESSIONS.filter((item) => item.agentKey === agentKey);
-  if (agentKey !== "model") {
-    return defaults;
+export function renameAgentSession(sessionId: string, title: string) {
+  const trimmed = title.trim();
+  const meta = readSessionMeta();
+  if (!trimmed) {
+    delete meta.renamedTitles[sessionId];
+  } else {
+    meta.renamedTitles[sessionId] = trimmed;
+  }
+  writeSessionMeta(meta);
+}
+
+export function togglePinnedAgentSession(sessionId: string): boolean {
+  const meta = readSessionMeta();
+  const exists = meta.pinnedIds.includes(sessionId);
+  meta.pinnedIds = exists
+    ? meta.pinnedIds.filter((id) => id !== sessionId)
+    : [sessionId, ...meta.pinnedIds];
+  writeSessionMeta(meta);
+  return !exists;
+}
+
+export function isAgentSessionPinned(sessionId: string): boolean {
+  return readSessionMeta().pinnedIds.includes(sessionId);
+}
+
+export function removeAgentSession(agentKey: "code" | "model", sessionId: string) {
+  if (agentKey === "model") {
+    const projects = readModelProjects();
+    const hasDynamic = projects.some((item) => item.id === sessionId);
+    if (hasDynamic) {
+      writeModelProjects(projects.filter((item) => item.id !== sessionId));
+    }
   }
 
-  const dynamic = readModelProjects().map<AgentSession>((item) => ({
-    id: item.id,
-    agentKey: "model",
-    title: item.title,
-    updatedAt: item.updatedAt,
-  }));
+  const meta = readSessionMeta();
+  if (!meta.removedIds.includes(sessionId)) {
+    meta.removedIds.push(sessionId);
+  }
+  meta.pinnedIds = meta.pinnedIds.filter((id) => id !== sessionId);
+  delete meta.renamedTitles[sessionId];
+  writeSessionMeta(meta);
+}
 
-  return [
+export function getAgentSessions(agentKey: "code" | "model"): AgentSession[] {
+  const meta = readSessionMeta();
+  const defaults = AGENT_SESSIONS.filter((item) => item.agentKey === agentKey);
+  const dynamic =
+    agentKey === "model"
+      ? readModelProjects().map<AgentSession>((item) => ({
+          id: item.id,
+          agentKey: "model",
+          title: item.title,
+          updatedAt: item.updatedAt,
+        }))
+      : [];
+
+  const merged = [
     ...dynamic,
     ...defaults.filter((item) => !dynamic.some((dynamicItem) => dynamicItem.id === item.id)),
   ];
+
+  const visible = merged.filter((item) => !meta.removedIds.includes(item.id));
+  const renamed = visible.map((item) => ({
+    ...item,
+    title: meta.renamedTitles[item.id] || item.title,
+  }));
+
+  return renamed.sort((a, b) => {
+    const aPinned = meta.pinnedIds.includes(a.id);
+    const bPinned = meta.pinnedIds.includes(b.id);
+    if (aPinned === bPinned) return 0;
+    return aPinned ? -1 : 1;
+  });
 }

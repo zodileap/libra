@@ -62,6 +62,19 @@ html[data-color-theme="dark"] body {
   margin-top: var(--z-inset-sm);
 }
 
+.desk-session-item-time {
+  white-space: nowrap;
+}
+
+.desk-session-context-menu {
+  min-width: calc(var(--z-inset) * 10);
+  border: 1px solid var(--z-color-border-glass);
+  border-radius: var(--z-border-radius);
+  background: var(--z-color-use-bg);
+  box-shadow: var(--z-shadow-lg);
+  padding: var(--z-inset-xs);
+}
+
 .desk-agent-menu .ari-menu,
 .desk-history-menu .ari-menu {
   background: var(--z-color-use-bg);
@@ -271,6 +284,84 @@ html[data-color-theme="dark"] body {
 .desk-msg.user {
   border-color: #8eacff !important;
   background: #edf3ff !important;
+}
+
+.desk-chat-markdown {
+  margin-top: var(--z-inset-sm);
+  color: var(--z-color-font);
+  display: grid;
+  gap: var(--z-inset-sm);
+}
+
+.desk-md-text-block {
+  display: grid;
+  gap: var(--z-inset-sm);
+}
+
+.desk-md-paragraph {
+  margin: 0;
+  color: var(--z-color-font);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.desk-md-heading {
+  margin: 0;
+  color: var(--z-color-font);
+  line-height: 1.4;
+}
+
+.desk-md-heading-1 {
+  font-size: calc(var(--z-font-size) * 1.35);
+}
+
+.desk-md-heading-2 {
+  font-size: calc(var(--z-font-size) * 1.2);
+}
+
+.desk-md-heading-3 {
+  font-size: calc(var(--z-font-size) * 1.08);
+}
+
+.desk-md-list {
+  margin: 0;
+  padding-left: calc(var(--z-inset) * 1.2);
+  display: grid;
+  gap: var(--z-inset-sm);
+}
+
+.desk-md-list li {
+  line-height: 1.5;
+}
+
+.desk-md-quote {
+  margin: 0;
+  padding: var(--z-inset-sm) var(--z-inset);
+  border-left: var(--z-border-width) solid var(--z-color-border-glass);
+  background: var(--z-color-bg-opacity);
+  border-radius: var(--z-border-radius);
+}
+
+.desk-md-inline-code {
+  display: inline-block;
+  padding: 0 calc(var(--z-inset-sm) * 0.8);
+  border-radius: var(--z-border-radius-sm);
+  background: var(--z-color-bg-opacity);
+  border: var(--z-border-width) solid var(--z-color-border-glass);
+  font-family: var(--z-font-code-family);
+  font-size: calc(var(--z-font-size) * 0.92);
+}
+
+.desk-md-link {
+  color: var(--z-color-primary);
+  text-decoration: underline;
+}
+
+.desk-md-code-wrap {
+  border: var(--z-border-width) solid var(--z-color-border-glass);
+  border-radius: var(--z-border-radius);
+  overflow: hidden;
 }
 
 .desk-login {

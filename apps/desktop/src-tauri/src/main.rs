@@ -331,6 +331,7 @@ fn run_agent_command(
     project_name: Option<String>,
     model_export_enabled: Option<bool>,
     blender_bridge_addr: Option<String>,
+    output_dir: Option<String>,
 ) -> Result<AgentRunResponse, String> {
     let trace_id = trace_id
         .as_deref()
@@ -350,13 +351,41 @@ fn run_agent_command(
     };
 
     let current_dir = env::current_dir().map_err(|err| format!("read current dir failed: {}", err))?;
-    let output_dir = app
+    let default_output_dir = app
         .path()
         .app_data_dir()
         .ok()
         .map(|path| path.join("exports"))
         .unwrap_or_else(|| env::temp_dir().join("zodileap-agen").join("exports"));
-    fs::create_dir_all(&output_dir)
+    let selected_output_dir = output_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or(default_output_dir);
+    let mut selected_output_dir = if selected_output_dir.is_absolute() {
+        selected_output_dir
+    } else {
+        current_dir.join(selected_output_dir)
+    };
+
+    if cfg!(debug_assertions) && selected_output_dir.starts_with(&current_dir) {
+        let safe_output_dir = current_dir
+            .parent()
+            .map(|path| path.join("exports"))
+            .unwrap_or_else(|| env::temp_dir().join("zodileap-agen").join("exports"));
+        log(
+            "warn",
+            "request",
+            format!(
+                "output_dir {} is under src-tauri and may trigger dev restart; redirecting to {}",
+                selected_output_dir.to_string_lossy(),
+                safe_output_dir.to_string_lossy()
+            ),
+        );
+        selected_output_dir = safe_output_dir;
+    }
+    fs::create_dir_all(&selected_output_dir)
         .map_err(|err| format!("create agent output dir failed: {}", err))?;
     log(
         "info",
@@ -374,6 +403,11 @@ fn run_agent_command(
         "request",
         format!("workdir={}", current_dir.to_string_lossy()),
     );
+    log(
+        "debug",
+        "request",
+        format!("output_dir={}", selected_output_dir.to_string_lossy()),
+    );
 
     let result = run_agent(AgentRunRequest {
         agent_key,
@@ -382,7 +416,7 @@ fn run_agent_command(
         project_name,
         model_export_enabled: model_export_enabled.unwrap_or(false),
         blender_bridge_addr,
-        output_dir: Some(output_dir.to_string_lossy().to_string()),
+        output_dir: Some(selected_output_dir.to_string_lossy().to_string()),
         workdir: Some(current_dir.to_string_lossy().to_string()),
     });
 

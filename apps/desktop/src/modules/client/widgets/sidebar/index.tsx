@@ -1,16 +1,24 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import {
   AriAvatar,
   AriButton,
   AriContainer,
   AriFlex,
+  AriInput,
   AriMenu,
   AriTooltip,
   AriTypography,
 } from "aries_react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { AGENTS, getAgentSessions } from "../../data";
+import {
+  AGENTS,
+  getAgentSessions,
+  isAgentSessionPinned,
+  removeAgentSession,
+  renameAgentSession,
+  togglePinnedAgentSession,
+} from "../../data";
 import type { AgentKey, LoginUser } from "../../types";
 
 interface ClientSidebarProps {
@@ -145,11 +153,51 @@ function AgentSidebar({
 }) {
   const navigate = useNavigate();
   const location = useLocation();
+  const [sessionVersion, setSessionVersion] = useState(0);
+  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; sessionId: string } | null>(null);
 
-  const sessions = useMemo(() => getAgentSessions(agentKey), [agentKey]);
+  const sessions = useMemo(() => getAgentSessions(agentKey), [agentKey, sessionVersion]);
   const selectedSessionKey = location.pathname.includes("/session/")
     ? location.pathname.split("/").pop() || ""
     : "";
+  const pinnedMap = useMemo(
+    () =>
+      sessions.reduce<Record<string, boolean>>((acc, session) => {
+        acc[session.id] = isAgentSessionPinned(session.id);
+        return acc;
+      }, {}),
+    [sessions],
+  );
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    window.addEventListener("click", close);
+    window.addEventListener("blur", close);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("blur", close);
+    };
+  }, [contextMenu]);
+
+  const refreshSessions = () => setSessionVersion((value) => value + 1);
+
+  const startRename = (sessionId: string) => {
+    const target = sessions.find((item) => item.id === sessionId);
+    if (!target) return;
+    setRenamingSessionId(sessionId);
+    setRenameValue(target.title);
+  };
+
+  const commitRename = () => {
+    if (!renamingSessionId) return;
+    renameAgentSession(renamingSessionId, renameValue);
+    setRenamingSessionId(null);
+    setRenameValue("");
+    refreshSessions();
+  };
 
   return (
     <AriContainer className="desk-sidebar">
@@ -163,12 +211,95 @@ function AgentSidebar({
         <AriMenu
           items={sessions.map((item) => ({
             key: item.id,
-            label: `${item.title} · ${item.updatedAt}`,
+            label:
+              renamingSessionId === item.id ? (
+                <AriInput
+                  value={renameValue}
+                  autoFocus
+                  onChange={setRenameValue}
+                  onBlur={commitRename}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      commitRename();
+                    }
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      setRenamingSessionId(null);
+                      setRenameValue("");
+                    }
+                  }}
+                />
+              ) : (
+                item.title
+              ),
+            meta: renamingSessionId === item.id ? null : (
+              <AriTypography className="desk-session-item-time" variant="caption" value={item.updatedAt} />
+            ),
+            actions:
+              renamingSessionId === item.id ? null : (
+                <AriFlex align="center" space={4}>
+                  <AriButton
+                    size="sm"
+                    type="text"
+                    icon={pinnedMap[item.id] ? "push_pin_fill" : "push_pin"}
+                    onClick={() => {
+                      togglePinnedAgentSession(item.id);
+                      refreshSessions();
+                    }}
+                  />
+                  <AriButton
+                    size="sm"
+                    type="text"
+                    icon="delete"
+                    onClick={() => {
+                      removeAgentSession(agentKey, item.id);
+                      refreshSessions();
+                    }}
+                  />
+                </AriFlex>
+              ),
+            showActionsOnHover: true,
+            onContextMenu: (event) => {
+              event.preventDefault();
+              setContextMenu({
+                x: event.clientX,
+                y: event.clientY,
+                sessionId: item.id,
+              });
+            },
           }))}
           selectedKey={selectedSessionKey}
           onSelect={(key) => navigate(`/agents/${agentKey}/session/${key}`)}
         />
       </div>
+
+      {contextMenu ? (
+        <AriContainer
+          className="desk-session-context-menu"
+          style={{
+            position: "fixed",
+            top: contextMenu.y,
+            left: contextMenu.x,
+            zIndex: 9999,
+          }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <AriMenu
+            items={[
+              {
+                key: "rename",
+                label: "重新命名",
+                icon: "edit",
+              },
+            ]}
+            onSelect={() => {
+              startRename(contextMenu.sessionId);
+              setContextMenu(null);
+            }}
+          />
+        </AriContainer>
+      ) : null}
 
       <div style={{ flex: 1 }} />
       {agentKey === "model" ? (
