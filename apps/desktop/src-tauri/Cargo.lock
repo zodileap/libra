@@ -4603,4 +4603,26 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-build",
+ "zodileap_agent_core",
+ "zodileap_mcp_model",
+]
+
+[[package]]
+name = "zodileap_agent_core"
+version = "0.1.0"
+dependencies = [
+ "zodileap_mcp_model",
+]
+
+[[package]]
+name = "zodileap_mcp_common"
+version = "0.1.0"
+
+[[package]]
+name = "zodileap_mcp_model"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "zodileap_mcp_common",
 ]

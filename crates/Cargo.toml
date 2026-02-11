@@ -1,3 +1,8 @@
 [workspace]
-members = ["core"]
+members = [
+  "core/agent",
+  "core/mcp/common",
+  "core/mcp/code",
+  "core/mcp/model",
+]
 resolver = "2"

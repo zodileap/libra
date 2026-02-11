@@ -10,7 +10,7 @@ import {
   AriTypography,
 } from "aries_react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { AGENTS, AGENT_SESSIONS } from "../../data";
+import { AGENTS, getAgentSessions } from "../../data";
 import type { AgentKey, LoginUser } from "../../types";
 
 interface ClientSidebarProps {
@@ -146,10 +146,7 @@ function AgentSidebar({
   const navigate = useNavigate();
   const location = useLocation();
 
-  const sessions = useMemo(
-    () => AGENT_SESSIONS.filter((item) => item.agentKey === agentKey),
-    [agentKey],
-  );
+  const sessions = useMemo(() => getAgentSessions(agentKey), [agentKey]);
   const selectedSessionKey = location.pathname.includes("/session/")
     ? location.pathname.split("/").pop() || ""
     : "";
@@ -174,6 +171,15 @@ function AgentSidebar({
       </div>
 
       <div style={{ flex: 1 }} />
+      {agentKey === "model" ? (
+        <AriContainer className="desk-model-settings-trigger">
+          <AriButton
+            icon="tune"
+            label="模型设置"
+            onClick={() => navigate("/agents/model/settings")}
+          />
+        </AriContainer>
+      ) : null}
       <UserHoverMenu user={user} onLogout={onLogout} />
     </AriContainer>
   );

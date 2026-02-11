@@ -1,0 +1,13 @@
+[package]
+name = "zodileap_agent_core"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+with-mcp-model = ["dep:zodileap_mcp_model"]
+with-mcp-code = ["dep:zodileap_mcp_code"]
+
+[dependencies]
+zodileap_mcp_model = { path = "../mcp/model", optional = true }
+zodileap_mcp_code = { path = "../mcp/code", optional = true }

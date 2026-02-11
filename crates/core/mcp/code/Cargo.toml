@@ -1,0 +1,7 @@
+[package]
+name = "zodileap_mcp_code"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+zodileap_mcp_common = { path = "../common" }

@@ -39,3 +39,76 @@ export const AGENT_SESSIONS: AgentSession[] = [
   { id: "model-001", agentKey: "model", title: "机械臂材质方案", updatedAt: "今天 10:12" },
   { id: "model-002", agentKey: "model", title: "低模角色风格探索", updatedAt: "昨天 18:22" }
 ];
+
+const MODEL_PROJECT_STORAGE_KEY = "zodileap.desktop.model.projects";
+
+interface StoredModelProject {
+  id: string;
+  title: string;
+  prompt: string;
+  updatedAt: string;
+}
+
+function readModelProjects(): StoredModelProject[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+  const raw = window.localStorage.getItem(MODEL_PROJECT_STORAGE_KEY);
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.filter((item) => item?.id && item?.title);
+  } catch (_err) {
+    return [];
+  }
+}
+
+function writeModelProjects(list: StoredModelProject[]) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(MODEL_PROJECT_STORAGE_KEY, JSON.stringify(list));
+}
+
+export function getModelProjectById(id: string): StoredModelProject | null {
+  return readModelProjects().find((item) => item.id === id) || null;
+}
+
+export function upsertModelProject(input: {
+  id: string;
+  title: string;
+  prompt: string;
+  updatedAt: string;
+}) {
+  const list = readModelProjects();
+  const next = [
+    input,
+    ...list.filter((item) => item.id !== input.id),
+  ].slice(0, 50);
+  writeModelProjects(next);
+}
+
+export function getAgentSessions(agentKey: "code" | "model"): AgentSession[] {
+  const defaults = AGENT_SESSIONS.filter((item) => item.agentKey === agentKey);
+  if (agentKey !== "model") {
+    return defaults;
+  }
+
+  const dynamic = readModelProjects().map<AgentSession>((item) => ({
+    id: item.id,
+    agentKey: "model",
+    title: item.title,
+    updatedAt: item.updatedAt,
+  }));
+
+  return [
+    ...dynamic,
+    ...defaults.filter((item) => !dynamic.some((dynamicItem) => dynamicItem.id === item.id)),
+  ];
+}

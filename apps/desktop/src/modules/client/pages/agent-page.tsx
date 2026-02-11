@@ -1,16 +1,23 @@
 import { useMemo, useState } from "react";
 import { AriButton, AriCard, AriContainer, AriFlex, AriInput, AriTag, AriTypography } from "aries_react";
-import { useParams } from "react-router-dom";
-import { AGENTS } from "../data";
-import type { AgentKey } from "../types";
+import { useNavigate, useParams } from "react-router-dom";
+import { AGENTS, upsertModelProject } from "../data";
+import type { AgentKey, ModelMcpCapabilities } from "../types";
 
 function normalizeAgentKey(value: string | undefined): AgentKey {
   return value === "model" ? "model" : "code";
 }
 
-export function AgentPage() {
+interface AgentPageProps {
+  modelMcpCapabilities: ModelMcpCapabilities;
+}
+
+export function AgentPage({ modelMcpCapabilities }: AgentPageProps) {
   const params = useParams<{ agentKey: string }>();
+  const navigate = useNavigate();
   const [prompt, setPrompt] = useState("");
+  const [projectName, setProjectName] = useState("新建模型项目");
+  const [status, setStatus] = useState("");
   const agentKey = normalizeAgentKey(params.agentKey);
 
   const agent = useMemo(
@@ -18,24 +25,74 @@ export function AgentPage() {
     [agentKey]
   );
 
+  const handleCreateModelProject = () => {
+    const normalizedProjectName = projectName.trim() || "新建模型项目";
+    const normalizedPrompt = prompt.trim();
+    const sessionId = `model-local-${Date.now()}`;
+    const updatedAt = new Date().toLocaleString("zh-CN", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    upsertModelProject({
+      id: sessionId,
+      title: normalizedProjectName,
+      prompt: normalizedPrompt,
+      updatedAt,
+    });
+    setStatus("项目已创建，已进入会话。");
+    navigate(`/agents/model/session/${sessionId}`);
+  };
+
+  const handleStartAgentFlow = () => {
+    if (!modelMcpCapabilities.export) {
+      setStatus("导出能力已关闭，请先在模型设置中开启“导出模型（Blender）”。");
+      return;
+    }
+    handleCreateModelProject();
+  };
+
   return (
     <AriContainer className="desk-content">
-      <AriTypography
-        variant="h1"
-        value={agentKey === "code" ? "开始你的代码任务" : "开始你的建模任务"}
-      />
+      <AriTypography variant="h1" value={agentKey === "code" ? "开始你的代码任务" : "模型项目"} />
 
-      <AriCard className="desk-prompt-card">
-        <AriInput
-          value={prompt}
-          onChange={setPrompt}
-          placeholder={agentKey === "code" ? "描述你要生成的页面或功能..." : "描述你要生成的三维模型..."}
-        />
-        <AriFlex justify="space-between" align="center" style={{ marginTop: 12 }}>
-          <AriTag color="brand">Model: {agentKey === "code" ? "Code Agent v1" : "Model Agent v1"}</AriTag>
-          <AriButton color="primary" label={agentKey === "code" ? "开始生成" : "开始建模"} />
-        </AriFlex>
-      </AriCard>
+      {agentKey === "model" ? (
+        <AriCard className="desk-prompt-card">
+          <AriInput
+            value={projectName}
+            onChange={setProjectName}
+            placeholder="输入项目名称，例如：机甲角色_v1"
+          />
+          <div className="desk-inline-gap" />
+          <AriInput
+            value={prompt}
+            onChange={setPrompt}
+            placeholder="输入模型需求，例如：导出一个低模风格角色，保留硬表面细节"
+          />
+          <AriFlex justify="space-between" align="center" style={{ marginTop: 12 }}>
+            <AriTag color="brand">Model Agent v1 · Blender Export</AriTag>
+            <AriFlex align="center" space={8}>
+              <AriButton label="新建项目" onClick={handleCreateModelProject} />
+              <AriButton color="primary" label="开始对话" onClick={handleStartAgentFlow} />
+            </AriFlex>
+          </AriFlex>
+          {status ? <AriTypography className="desk-inline-status" variant="caption" value={status} /> : null}
+        </AriCard>
+      ) : (
+        <AriCard className="desk-prompt-card">
+          <AriInput
+            value={prompt}
+            onChange={setPrompt}
+            placeholder="描述你要生成的页面或功能..."
+          />
+          <AriFlex justify="space-between" align="center" style={{ marginTop: 12 }}>
+            <AriTag color="brand">Model: Code Agent v1</AriTag>
+            <AriButton color="primary" label="开始生成" />
+          </AriFlex>
+        </AriCard>
+      )}
 
       <section className="desk-block">
         <AriTypography variant="h3" value="你可以这样开始" />
@@ -44,14 +101,14 @@ export function AgentPage() {
             <AriTypography variant="h4" value={agent.hint} />
             <AriTypography
               variant="caption"
-              value={agentKey === "code" ? "限定 aries_react 组件，输出页面与预览步骤。" : "输出 Blender / ZBrush 双流程建议与参数。"}
+              value={agentKey === "code" ? "限定 aries_react 组件，输出页面与预览步骤。" : "新建项目后输入需求，在会话中执行 Blender 导出。"}
             />
           </AriCard>
           <AriCard>
             <AriTypography variant="h4" value="约束资产" />
             <AriTypography
               variant="caption"
-              value={agentKey === "code" ? "框架、组件、代码模块会作为生成约束。 " : "风格、拓扑、贴图规范会作为建模约束。"}
+              value={agentKey === "code" ? "框架、组件、代码模块会作为生成约束。 " : "导出能力可在“模型设置”中开关。"}
             />
           </AriCard>
         </div>

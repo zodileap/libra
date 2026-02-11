@@ -6,7 +6,15 @@ import { AgentPage } from "./pages/agent-page";
 import { SessionPage } from "./pages/session-page";
 import { AiKeyPage } from "./pages/ai-key-page";
 import { SettingsGeneralPage } from "./pages/settings-general-page";
-import type { ColorThemeMode, LoginUser } from "./types";
+import { ModelAgentSettingsPage } from "./pages/model-agent-settings-page";
+import type {
+  AiKeyItem,
+  BlenderBridgeEnsureResult,
+  BlenderBridgeRuntime,
+  ColorThemeMode,
+  LoginUser,
+  ModelMcpCapabilities,
+} from "./types";
 
 interface AuthState {
   user: LoginUser | null;
@@ -14,6 +22,12 @@ interface AuthState {
   logout: () => void;
   colorThemeMode: ColorThemeMode;
   setColorThemeMode: (value: ColorThemeMode) => void;
+  modelMcpCapabilities: ModelMcpCapabilities;
+  setModelMcpCapabilities: (value: ModelMcpCapabilities) => void;
+  aiKeys: AiKeyItem[];
+  setAiKeys: (value: AiKeyItem[]) => void;
+  blenderBridgeRuntime: BlenderBridgeRuntime;
+  ensureBlenderBridge: () => Promise<BlenderBridgeEnsureResult>;
 }
 
 export function DesktopRouter({ auth }: { auth: AuthState }) {
@@ -48,9 +62,36 @@ export function DesktopRouter({ auth }: { auth: AuthState }) {
             />
           }
         />
-        <Route path="ai-keys" element={<AiKeyPage />} />
-        <Route path="agents/:agentKey" element={<AgentPage />} />
-        <Route path="agents/:agentKey/session/:sessionId" element={<SessionPage />} />
+        <Route
+          path="ai-keys"
+          element={<AiKeyPage aiKeys={auth.aiKeys} onAiKeysChange={auth.setAiKeys} />}
+        />
+        <Route
+          path="agents/:agentKey"
+          element={<AgentPage modelMcpCapabilities={auth.modelMcpCapabilities} />}
+        />
+        <Route
+          path="agents/:agentKey/session/:sessionId"
+          element={
+            <SessionPage
+              modelMcpCapabilities={auth.modelMcpCapabilities}
+              blenderBridgeRuntime={auth.blenderBridgeRuntime}
+              ensureBlenderBridge={auth.ensureBlenderBridge}
+              aiKeys={auth.aiKeys}
+            />
+          }
+        />
+        <Route
+          path="agents/model/settings"
+          element={
+            <ModelAgentSettingsPage
+              modelMcpCapabilities={auth.modelMcpCapabilities}
+              onModelMcpCapabilitiesChange={auth.setModelMcpCapabilities}
+              blenderBridgeRuntime={auth.blenderBridgeRuntime}
+              ensureBlenderBridge={auth.ensureBlenderBridge}
+            />
+          }
+        />
       </Route>
 
       <Route path="*" element={<Navigate to={auth.user ? "/home" : "/login"} replace />} />

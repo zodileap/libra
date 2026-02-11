@@ -71,6 +71,14 @@ html[data-color-theme="dark"] body {
   width: 100%;
 }
 
+.desk-model-settings-trigger {
+  margin-bottom: var(--z-inset-sm);
+}
+
+.desk-model-settings-trigger .ari-button {
+  width: 100%;
+}
+
 .desk-user-trigger {
   margin-top: var(--z-inset-sm);
   padding: var(--z-inset-sm) var(--z-inset);
@@ -136,6 +144,31 @@ html[data-color-theme="dark"] body {
 .desk-prompt-card {
   margin-top: 16px;
   padding: 14px;
+}
+
+.desk-inline-gap {
+  height: var(--z-inset-sm);
+}
+
+.desk-inline-status {
+  display: block;
+  margin-top: var(--z-inset-sm);
+}
+
+.desk-debug-panel {
+  margin-top: var(--z-inset-sm);
+  border: 1px solid var(--z-color-border-glass);
+  border-radius: var(--z-border-radius);
+  padding: var(--z-inset-sm);
+  background: var(--z-color-bg-opacity);
+}
+
+.desk-debug-list {
+  margin-top: var(--z-inset-sm);
+  max-height: calc(var(--z-inset) * 10);
+  overflow: auto;
+  display: grid;
+  gap: var(--z-inset-sm);
 }
 
 .desk-settings-shell {
