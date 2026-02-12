@@ -30,6 +30,12 @@ export interface LoginUser {
 
 export interface ModelMcpCapabilities {
   export: boolean;
+  scene: boolean;
+  transform: boolean;
+  geometry: boolean;
+  mesh_opt: boolean;
+  material: boolean;
+  file: boolean;
 }
 
 export type AiProvider = "codex" | "gemini";
@@ -59,4 +65,28 @@ export interface AgentLogEvent {
   level: string;
   stage: string;
   message: string;
+}
+
+export interface ModelStepRecord {
+  index: number;
+  action: string;
+  input: string;
+  status: string;
+  elapsed_ms: number;
+  summary: string;
+  error?: string;
+  exported_file?: string;
+}
+
+export interface ModelEventRecord {
+  event: string;
+  step_index?: number;
+  timestamp_ms: number;
+  message: string;
+}
+
+export interface ModelAssetRecord {
+  kind: string;
+  path: string;
+  version: number;
 }

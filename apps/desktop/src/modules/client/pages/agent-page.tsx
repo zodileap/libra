@@ -12,7 +12,7 @@ interface AgentPageProps {
   modelMcpCapabilities: ModelMcpCapabilities;
 }
 
-export function AgentPage({ modelMcpCapabilities }: AgentPageProps) {
+export function AgentPage({ modelMcpCapabilities: _modelMcpCapabilities }: AgentPageProps) {
   const params = useParams<{ agentKey: string }>();
   const navigate = useNavigate();
   const [prompt, setPrompt] = useState("");
@@ -47,10 +47,6 @@ export function AgentPage({ modelMcpCapabilities }: AgentPageProps) {
   };
 
   const handleStartAgentFlow = () => {
-    if (!modelMcpCapabilities.export) {
-      setStatus("导出能力已关闭，请先在模型设置中开启“导出模型（Blender）”。");
-      return;
-    }
     handleCreateModelProject();
   };
 
@@ -69,10 +65,10 @@ export function AgentPage({ modelMcpCapabilities }: AgentPageProps) {
           <AriInput
             value={prompt}
             onChange={setPrompt}
-            placeholder="输入模型需求，例如：导出一个低模风格角色，保留硬表面细节"
+            placeholder="输入模型需求，例如：打开模型后加厚并倒角；需要时再导出"
           />
           <AriFlex justify="space-between" align="center" style={{ marginTop: 12 }}>
-            <AriTag color="brand">Model Agent v1 · Blender Export</AriTag>
+            <AriTag color="brand">Model Agent v1 · MCP（Blender）</AriTag>
             <AriFlex align="center" space={8}>
               <AriButton label="新建项目" onClick={handleCreateModelProject} />
               <AriButton color="primary" label="开始对话" onClick={handleStartAgentFlow} />
@@ -101,7 +97,7 @@ export function AgentPage({ modelMcpCapabilities }: AgentPageProps) {
             <AriTypography variant="h4" value={agent.hint} />
             <AriTypography
               variant="caption"
-              value={agentKey === "code" ? "限定 aries_react 组件，输出页面与预览步骤。" : "新建项目后输入需求，在会话中执行 Blender 导出。"}
+              value={agentKey === "code" ? "限定 aries_react 组件，输出页面与预览步骤。" : "新建项目后输入需求，在会话中通过 MCP 执行新建/打开/编辑/导出。"}
             />
           </AriCard>
           <AriCard>

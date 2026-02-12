@@ -42,6 +42,7 @@ export const AGENT_SESSIONS: AgentSession[] = [
 
 const MODEL_PROJECT_STORAGE_KEY = "zodileap.desktop.model.projects";
 const SESSION_META_STORAGE_KEY = "zodileap.desktop.session.meta";
+const SESSION_MESSAGES_STORAGE_KEY = "zodileap.desktop.session.messages";
 
 interface StoredModelProject {
   id: string;
@@ -54,6 +55,17 @@ interface SessionMeta {
   renamedTitles: Record<string, string>;
   pinnedIds: string[];
   removedIds: string[];
+}
+
+interface StoredSessionMessage {
+  role: "user" | "assistant";
+  text: string;
+}
+
+interface StoredSessionMessageGroup {
+  sessionId: string;
+  agentKey: "code" | "model";
+  messages: StoredSessionMessage[];
 }
 
 function readModelProjects(): StoredModelProject[] {
@@ -124,6 +136,37 @@ function writeSessionMeta(meta: SessionMeta) {
   window.localStorage.setItem(SESSION_META_STORAGE_KEY, JSON.stringify(meta));
 }
 
+function readSessionMessages(): StoredSessionMessageGroup[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+  const raw = window.localStorage.getItem(SESSION_MESSAGES_STORAGE_KEY);
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.filter(
+      (item) =>
+        item?.sessionId &&
+        (item?.agentKey === "code" || item?.agentKey === "model") &&
+        Array.isArray(item?.messages),
+    );
+  } catch (_err) {
+    return [];
+  }
+}
+
+function writeSessionMessages(groups: StoredSessionMessageGroup[]) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(SESSION_MESSAGES_STORAGE_KEY, JSON.stringify(groups));
+}
+
 export function getModelProjectById(id: string): StoredModelProject | null {
   return readModelProjects().find((item) => item.id === id) || null;
 }
@@ -183,6 +226,37 @@ export function removeAgentSession(agentKey: "code" | "model", sessionId: string
   meta.pinnedIds = meta.pinnedIds.filter((id) => id !== sessionId);
   delete meta.renamedTitles[sessionId];
   writeSessionMeta(meta);
+
+  const groups = readSessionMessages();
+  writeSessionMessages(
+    groups.filter((item) => !(item.agentKey === agentKey && item.sessionId === sessionId)),
+  );
+}
+
+export function getSessionMessages(
+  agentKey: "code" | "model",
+  sessionId: string,
+): Array<{ role: "user" | "assistant"; text: string }> {
+  const group = readSessionMessages().find(
+    (item) => item.agentKey === agentKey && item.sessionId === sessionId,
+  );
+  return group?.messages || [];
+}
+
+export function upsertSessionMessages(input: {
+  agentKey: "code" | "model";
+  sessionId: string;
+  messages: Array<{ role: "user" | "assistant"; text: string }>;
+}) {
+  const groups = readSessionMessages();
+  const nextGroup: StoredSessionMessageGroup = {
+    agentKey: input.agentKey,
+    sessionId: input.sessionId,
+    messages: input.messages.slice(-200),
+  };
+  const next = [nextGroup, ...groups.filter((item) => !(item.agentKey === input.agentKey && item.sessionId === input.sessionId))]
+    .slice(0, 200);
+  writeSessionMessages(next);
 }
 
 export function getAgentSessions(agentKey: "code" | "model"): AgentSession[] {

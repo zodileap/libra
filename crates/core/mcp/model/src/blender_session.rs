@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -12,15 +13,26 @@ const DEFAULT_BRIDGE_ADDR: &str = "127.0.0.1:23331";
 
 #[derive(Serialize)]
 struct BridgeRequest {
-    action: &'static str,
-    output_path: String,
+    action: String,
+    payload: Value,
+    output_path: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct BridgeResponse {
     ok: bool,
+    code: Option<String>,
     output_path: Option<String>,
     message: Option<String>,
+    data: Option<Value>,
+    suggestion: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BridgeActionResponse {
+    pub message: String,
+    pub output_path: Option<String>,
+    pub data: Value,
 }
 
 pub fn export_current_scene(request: ExportModelRequest) -> McpResult<ExportModelResult> {
@@ -33,67 +45,12 @@ pub fn export_current_scene(request: ExportModelRequest) -> McpResult<ExportMode
     })?;
 
     let output_path = build_output_path(output_dir, &request.project_name);
-    let addr = request
-        .blender_bridge_addr
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(DEFAULT_BRIDGE_ADDR);
-
-    let mut stream = connect_bridge(addr)?;
-
-    let bridge_request = BridgeRequest {
-        action: "export_glb",
-        output_path: output_path.to_string_lossy().to_string(),
-    };
-    let raw_request = serde_json::to_string(&bridge_request).map_err(|err| {
-        McpError::new(
-            "mcp.model.export.request_encode_failed",
-            format!("encode bridge request failed: {}", err),
-        )
-    })?;
-
-    stream
-        .write_all(format!("{}\n", raw_request).as_bytes())
-        .map_err(|err| {
-            McpError::new(
-                "mcp.model.export.request_send_failed",
-                format!("send bridge request failed: {}", err),
-            )
-        })?;
-
-    let mut reader = BufReader::new(stream);
-    let mut raw_response = String::new();
-    reader.read_line(&mut raw_response).map_err(|err| {
-        McpError::new(
-            "mcp.model.export.response_read_failed",
-            format!("read bridge response failed: {}", err),
-        )
-    })?;
-
-    if raw_response.trim().is_empty() {
-        return Err(McpError::new(
-            "mcp.model.export.empty_response",
-            "bridge response is empty",
-        ));
-    }
-
-    let bridge_response: BridgeResponse =
-        serde_json::from_str(raw_response.trim()).map_err(|err| {
-            McpError::new(
-                "mcp.model.export.response_parse_failed",
-                format!("parse bridge response failed: {}", err),
-            )
-        })?;
-
-    if !bridge_response.ok {
-        return Err(McpError::new(
-            "mcp.model.export.bridge_rejected",
-            bridge_response
-                .message
-                .unwrap_or_else(|| "bridge rejected request".to_string()),
-        ));
-    }
+    let bridge_response = invoke_action(
+        "export_glb",
+        json!({ "output_path": output_path.to_string_lossy().to_string() }),
+        request.blender_bridge_addr,
+        Some(120),
+    )?;
 
     let final_path = bridge_response
         .output_path
@@ -122,30 +79,48 @@ pub fn export_current_scene(request: ExportModelRequest) -> McpResult<ExportMode
 }
 
 pub fn ping_bridge(addr: Option<String>) -> McpResult<String> {
+    let response = invoke_action("ping", json!({}), addr, Some(8))?;
+    Ok(if response.message.trim().is_empty() {
+        "bridge is reachable".to_string()
+    } else {
+        response.message
+    })
+}
+
+pub fn invoke_action(
+    action: &str,
+    payload: Value,
+    addr: Option<String>,
+    timeout_secs: Option<u64>,
+) -> McpResult<BridgeActionResponse> {
     let addr = addr
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(DEFAULT_BRIDGE_ADDR);
+    let timeout_secs = timeout_secs.unwrap_or(45).clamp(1, 240);
+    let mut stream = connect_bridge(addr, timeout_secs)?;
 
-    let mut stream = connect_bridge(addr)?;
-    let request = BridgeRequest {
-        action: "ping",
-        output_path: "".to_string(),
+    let bridge_request = BridgeRequest {
+        action: action.to_string(),
+        output_path: payload
+            .get("output_path")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string()),
+        payload,
     };
-    let raw_request = serde_json::to_string(&request).map_err(|err| {
+    let raw_request = serde_json::to_string(&bridge_request).map_err(|err| {
         McpError::new(
-            "mcp.model.bridge.ping_encode_failed",
-            format!("encode ping request failed: {}", err),
+            "mcp.model.bridge.request_encode_failed",
+            format!("encode bridge request failed: {}", err),
         )
     })?;
-
     stream
         .write_all(format!("{}\n", raw_request).as_bytes())
         .map_err(|err| {
             McpError::new(
-                "mcp.model.bridge.ping_send_failed",
-                format!("send ping failed: {}", err),
+                "mcp.model.bridge.request_send_failed",
+                format!("send bridge request failed: {}", err),
             )
         })?;
 
@@ -153,39 +128,55 @@ pub fn ping_bridge(addr: Option<String>) -> McpResult<String> {
     let mut raw_response = String::new();
     reader.read_line(&mut raw_response).map_err(|err| {
         McpError::new(
-            "mcp.model.bridge.ping_read_failed",
-            format!("read ping response failed: {}", err),
+            "mcp.model.bridge.response_read_failed",
+            format!("read bridge response failed: {}", err),
         )
     })?;
 
     if raw_response.trim().is_empty() {
         return Err(McpError::new(
-            "mcp.model.bridge.ping_empty_response",
-            "bridge ping response is empty",
+            "mcp.model.bridge.empty_response",
+            format!("bridge response is empty for action `{}`", action),
         ));
     }
 
     let bridge_response: BridgeResponse =
         serde_json::from_str(raw_response.trim()).map_err(|err| {
             McpError::new(
-                "mcp.model.bridge.ping_parse_failed",
-                format!("parse ping response failed: {}", err),
+                "mcp.model.bridge.response_parse_failed",
+                format!("parse bridge response failed: {}", err),
             )
         })?;
 
     if !bridge_response.ok {
+        let code = bridge_response
+            .code
+            .unwrap_or_else(|| "mcp.model.bridge.rejected".to_string());
+        let message = bridge_response
+            .message
+            .unwrap_or_else(|| "bridge rejected request".to_string());
+        let suggestion = bridge_response.suggestion.unwrap_or_default();
+        let merged = if suggestion.trim().is_empty() {
+            message
+        } else {
+            format!("{}（建议：{}）", message, suggestion)
+        };
         return Err(McpError::new(
-            "mcp.model.bridge.ping_rejected",
-            bridge_response
-                .message
-                .unwrap_or_else(|| "bridge rejected ping".to_string()),
+            "mcp.model.bridge.action_failed",
+            format!("[{}] {}: {}", code, action, merged),
         ));
     }
 
-    Ok("bridge is reachable".to_string())
+    Ok(BridgeActionResponse {
+        message: bridge_response
+            .message
+            .unwrap_or_else(|| format!("action `{}` succeeded", action)),
+        output_path: bridge_response.output_path,
+        data: bridge_response.data.unwrap_or_else(|| json!({})),
+    })
 }
 
-fn connect_bridge(addr: &str) -> McpResult<TcpStream> {
+fn connect_bridge(addr: &str, timeout_secs: u64) -> McpResult<TcpStream> {
     let socket_addr = addr
         .to_socket_addrs()
         .map_err(|err| {
@@ -213,7 +204,7 @@ fn connect_bridge(addr: &str) -> McpResult<TcpStream> {
     })?;
 
     stream
-        .set_read_timeout(Some(Duration::from_secs(120)))
+        .set_read_timeout(Some(Duration::from_secs(timeout_secs)))
         .map_err(|err| {
             McpError::new(
                 "mcp.model.export.bridge_timeout_set_failed",

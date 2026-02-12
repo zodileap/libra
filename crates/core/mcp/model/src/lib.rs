@@ -1,6 +1,7 @@
 mod blender_session;
 mod zbrush;
 
+use serde_json::Value;
 use zodileap_mcp_common::{McpError, McpResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,6 +24,121 @@ pub struct ExportModelResult {
     pub exported_file: String,
     pub summary: String,
     pub target: ModelToolTarget,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelToolAction {
+    ListObjects,
+    SelectObjects,
+    RenameObject,
+    OrganizeHierarchy,
+    AlignOrigin,
+    NormalizeScale,
+    NormalizeAxis,
+    AddCube,
+    Solidify,
+    Bevel,
+    Mirror,
+    Array,
+    Boolean,
+    AutoSmooth,
+    WeightedNormal,
+    Decimate,
+    TidyMaterialSlots,
+    CheckTexturePaths,
+    PackTextures,
+    NewFile,
+    OpenFile,
+    SaveFile,
+    Undo,
+    Redo,
+}
+
+impl ModelToolAction {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ModelToolAction::ListObjects => "list_objects",
+            ModelToolAction::SelectObjects => "select_objects",
+            ModelToolAction::RenameObject => "rename_object",
+            ModelToolAction::OrganizeHierarchy => "organize_hierarchy",
+            ModelToolAction::AlignOrigin => "align_origin",
+            ModelToolAction::NormalizeScale => "normalize_scale",
+            ModelToolAction::NormalizeAxis => "normalize_axis",
+            ModelToolAction::AddCube => "add_cube",
+            ModelToolAction::Solidify => "solidify",
+            ModelToolAction::Bevel => "bevel",
+            ModelToolAction::Mirror => "mirror",
+            ModelToolAction::Array => "array",
+            ModelToolAction::Boolean => "boolean",
+            ModelToolAction::AutoSmooth => "auto_smooth",
+            ModelToolAction::WeightedNormal => "weighted_normal",
+            ModelToolAction::Decimate => "decimate",
+            ModelToolAction::TidyMaterialSlots => "tidy_material_slots",
+            ModelToolAction::CheckTexturePaths => "check_texture_paths",
+            ModelToolAction::PackTextures => "pack_textures",
+            ModelToolAction::NewFile => "new_file",
+            ModelToolAction::OpenFile => "open_file",
+            ModelToolAction::SaveFile => "save_file",
+            ModelToolAction::Undo => "undo",
+            ModelToolAction::Redo => "redo",
+        }
+    }
+}
+
+impl std::fmt::Display for ModelToolAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for ModelToolAction {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_lowercase().as_str() {
+            "list_objects" => Ok(Self::ListObjects),
+            "select_objects" => Ok(Self::SelectObjects),
+            "rename_object" => Ok(Self::RenameObject),
+            "organize_hierarchy" => Ok(Self::OrganizeHierarchy),
+            "align_origin" => Ok(Self::AlignOrigin),
+            "normalize_scale" => Ok(Self::NormalizeScale),
+            "normalize_axis" => Ok(Self::NormalizeAxis),
+            "add_cube" => Ok(Self::AddCube),
+            "solidify" => Ok(Self::Solidify),
+            "bevel" => Ok(Self::Bevel),
+            "mirror" => Ok(Self::Mirror),
+            "array" => Ok(Self::Array),
+            "boolean" => Ok(Self::Boolean),
+            "auto_smooth" => Ok(Self::AutoSmooth),
+            "weighted_normal" => Ok(Self::WeightedNormal),
+            "decimate" => Ok(Self::Decimate),
+            "tidy_material_slots" => Ok(Self::TidyMaterialSlots),
+            "check_texture_paths" => Ok(Self::CheckTexturePaths),
+            "pack_textures" => Ok(Self::PackTextures),
+            "new_file" => Ok(Self::NewFile),
+            "open_file" => Ok(Self::OpenFile),
+            "save_file" => Ok(Self::SaveFile),
+            "undo" => Ok(Self::Undo),
+            "redo" => Ok(Self::Redo),
+            _ => Err(format!("unsupported model tool action: {}", value)),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ModelToolRequest {
+    pub action: ModelToolAction,
+    pub params: Value,
+    pub blender_bridge_addr: Option<String>,
+    pub timeout_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModelToolResult {
+    pub action: ModelToolAction,
+    pub message: String,
+    pub output_path: Option<String>,
+    pub data: Value,
 }
 
 pub fn export_model(request: ExportModelRequest) -> McpResult<ExportModelResult> {
@@ -60,6 +176,142 @@ pub fn blender_bridge_addon_script() -> &'static str {
 
 pub fn ping_blender_bridge(addr: Option<String>) -> McpResult<String> {
     blender_session::ping_bridge(addr)
+}
+
+pub fn execute_model_tool(request: ModelToolRequest) -> McpResult<ModelToolResult> {
+    validate_tool_request(&request)?;
+    let response = blender_session::invoke_action(
+        request.action.as_str(),
+        request.params,
+        request.blender_bridge_addr,
+        request.timeout_secs,
+    )?;
+    Ok(ModelToolResult {
+        action: request.action,
+        message: response.message,
+        output_path: response.output_path,
+        data: response.data,
+    })
+}
+
+fn validate_tool_request(request: &ModelToolRequest) -> McpResult<()> {
+    match request.action {
+        ModelToolAction::AddCube => {
+            let size = request
+                .params
+                .get("size")
+                .and_then(|value| value.as_f64())
+                .unwrap_or(2.0);
+            if !(0.001..=1000.0).contains(&size) {
+                return Err(McpError::new(
+                    "mcp.model.tool.add_cube_size_out_of_range",
+                    "cube size must be in range [0.001, 1000.0]",
+                ));
+            }
+        }
+        ModelToolAction::Array => {
+            let count = request
+                .params
+                .get("count")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(2);
+            if count == 0 || count > 128 {
+                return Err(McpError::new(
+                    "mcp.model.tool.array_count_out_of_range",
+                    "array count must be in range [1, 128]",
+                ));
+            }
+        }
+        ModelToolAction::Decimate => {
+            let ratio = request
+                .params
+                .get("ratio")
+                .and_then(|value| value.as_f64())
+                .unwrap_or(0.5);
+            if !(0.01..=1.0).contains(&ratio) {
+                return Err(McpError::new(
+                    "mcp.model.tool.decimate_ratio_out_of_range",
+                    "decimate ratio must be in range [0.01, 1.0]",
+                ));
+            }
+        }
+        ModelToolAction::Bevel => {
+            let width = request
+                .params
+                .get("width")
+                .and_then(|value| value.as_f64())
+                .unwrap_or(0.02);
+            if !(0.0001..=10.0).contains(&width) {
+                return Err(McpError::new(
+                    "mcp.model.tool.bevel_width_out_of_range",
+                    "bevel width must be in range [0.0001, 10.0]",
+                ));
+            }
+            let segments = request
+                .params
+                .get("segments")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(2);
+            if segments == 0 || segments > 32 {
+                return Err(McpError::new(
+                    "mcp.model.tool.bevel_segments_out_of_range",
+                    "bevel segments must be in range [1, 32]",
+                ));
+            }
+        }
+        ModelToolAction::Solidify => {
+            let thickness = request
+                .params
+                .get("thickness")
+                .and_then(|value| value.as_f64())
+                .unwrap_or(0.02);
+            if !(0.0001..=10.0).contains(&thickness) {
+                return Err(McpError::new(
+                    "mcp.model.tool.solidify_thickness_out_of_range",
+                    "solidify thickness must be in range [0.0001, 10.0]",
+                ));
+            }
+        }
+        ModelToolAction::Boolean => {
+            let times = request
+                .params
+                .get("times")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(1);
+            if times == 0 || times > 8 {
+                return Err(McpError::new(
+                    "mcp.model.tool.boolean_times_out_of_range",
+                    "boolean times must be in range [1, 8]",
+                ));
+            }
+        }
+        ModelToolAction::OpenFile => {
+            let path = request
+                .params
+                .get("path")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .unwrap_or("");
+            if path.is_empty() {
+                return Err(McpError::new(
+                    "mcp.model.tool.open_file_missing_path",
+                    "open_file requires non-empty `path`",
+                ));
+            }
+        }
+        ModelToolAction::SaveFile => {
+            if let Some(path) = request.params.get("path").and_then(|value| value.as_str()) {
+                if path.trim().is_empty() {
+                    return Err(McpError::new(
+                        "mcp.model.tool.save_file_invalid_path",
+                        "save_file path cannot be empty when provided",
+                    ));
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 #[cfg(test)]

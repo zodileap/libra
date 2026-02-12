@@ -262,6 +262,32 @@ html[data-color-theme="dark"] body {
   padding-top: var(--z-inset-sm);
 }
 
+.desk-action-slot {
+  margin-bottom: var(--z-inset-sm);
+  border: 1px solid var(--z-color-border-glass);
+  border-radius: var(--z-border-radius);
+  background: var(--z-color-bg-opacity);
+  padding: var(--z-inset-sm);
+  display: grid;
+  gap: var(--z-inset-sm);
+}
+
+.desk-action-slot-warning {
+  background: var(--z-color-bg-opacity-blur);
+}
+
+.desk-action-slot-info {
+  background: var(--z-color-bg-opacity);
+}
+
+.desk-action-slot-danger {
+  background: var(--z-color-bg-opacity-blur);
+}
+
+.desk-action-slot-actions {
+  flex-wrap: wrap;
+}
+
 .desk-session-prompt-card {
   margin-top: 0;
   width: 100%;
@@ -362,6 +388,22 @@ html[data-color-theme="dark"] body {
   border: var(--z-border-width) solid var(--z-color-border-glass);
   border-radius: var(--z-border-radius);
   overflow: hidden;
+}
+
+.desk-model-step-list {
+  margin-top: var(--z-inset-sm);
+  display: grid;
+  gap: calc(var(--z-inset-sm) * 0.7);
+}
+
+.desk-native-select {
+  width: 100%;
+  min-height: calc(var(--z-inset) * 1.8);
+  border-radius: var(--z-border-radius);
+  border: var(--z-border-width) solid var(--z-color-border-glass);
+  background: var(--z-color-use-bg);
+  color: var(--z-color-font);
+  padding: 0 var(--z-inset-sm);
 }
 
 .desk-login {

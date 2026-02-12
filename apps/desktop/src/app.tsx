@@ -43,13 +43,29 @@ export default function App() {
       try {
         const parsed = JSON.parse(saved);
         if (typeof parsed?.export === "boolean") {
-          return { export: parsed.export };
+          return {
+            export: parsed.export,
+            scene: typeof parsed?.scene === "boolean" ? parsed.scene : true,
+            transform: typeof parsed?.transform === "boolean" ? parsed.transform : true,
+            geometry: typeof parsed?.geometry === "boolean" ? parsed.geometry : true,
+            mesh_opt: typeof parsed?.mesh_opt === "boolean" ? parsed.mesh_opt : true,
+            material: typeof parsed?.material === "boolean" ? parsed.material : true,
+            file: typeof parsed?.file === "boolean" ? parsed.file : true,
+          };
         }
       } catch (_err) {
         // Ignore invalid cached value.
       }
     }
-    return { export: true };
+    return {
+      export: true,
+      scene: true,
+      transform: true,
+      geometry: true,
+      mesh_opt: true,
+      material: true,
+      file: true,
+    };
   });
   const [aiKeys, setAiKeys] = useState<AiKeyItem[]>(() => {
     const saved = localStorage.getItem("zodileap.desktop.aiKeys");

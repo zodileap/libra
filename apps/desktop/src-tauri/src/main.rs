@@ -1,16 +1,20 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
+use std::time::Instant;
 use tauri::Emitter;
 use tauri::Manager;
 use zodileap_agent_core::{run_agent, AgentRunRequest};
 use zodileap_mcp_model::{
-    blender_bridge_addon_script, export_model, ping_blender_bridge, ExportModelRequest,
-    ModelToolTarget,
+    blender_bridge_addon_script, execute_model_tool, export_model, ping_blender_bridge,
+    ExportModelRequest, ModelToolAction, ModelToolRequest, ModelToolTarget,
 };
 
 #[derive(Serialize)]
@@ -36,6 +40,70 @@ struct AgentRunResponse {
     trace_id: String,
     message: String,
     actions: Vec<String>,
+    exported_file: Option<String>,
+}
+
+#[derive(Deserialize, Clone, Default)]
+struct ModelMcpCapabilities {
+    export: Option<bool>,
+    scene: Option<bool>,
+    transform: Option<bool>,
+    geometry: Option<bool>,
+    mesh_opt: Option<bool>,
+    material: Option<bool>,
+    file: Option<bool>,
+}
+
+#[derive(Serialize, Clone)]
+struct ModelStepRecord {
+    index: usize,
+    action: String,
+    input: String,
+    status: String,
+    elapsed_ms: u128,
+    summary: String,
+    error: Option<String>,
+    exported_file: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+struct ModelEventRecord {
+    event: String,
+    step_index: Option<usize>,
+    timestamp_ms: u128,
+    message: String,
+}
+
+#[derive(Serialize, Clone)]
+struct ModelAssetRecord {
+    kind: String,
+    path: String,
+    version: u64,
+}
+
+#[derive(Default)]
+struct ModelSessionState {
+    steps: Vec<ModelStepRecord>,
+    events: Vec<ModelEventRecord>,
+    assets: Vec<ModelAssetRecord>,
+    last_prompt: Option<String>,
+    last_output_dir: Option<String>,
+    version: u64,
+    cancelled: bool,
+}
+
+#[derive(Default)]
+struct ModelSessionStore {
+    sessions: Mutex<HashMap<String, ModelSessionState>>,
+}
+
+#[derive(Serialize)]
+struct ModelSessionRunResponse {
+    trace_id: String,
+    message: String,
+    steps: Vec<ModelStepRecord>,
+    events: Vec<ModelEventRecord>,
+    assets: Vec<ModelAssetRecord>,
     exported_file: Option<String>,
 }
 
@@ -106,7 +174,11 @@ fn read_codex_version(bin: &str) -> Option<String> {
     }
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let raw = if stdout.trim().is_empty() { stderr } else { stdout };
+    let raw = if stdout.trim().is_empty() {
+        stderr
+    } else {
+        stdout
+    };
     extract_semver(&raw)
 }
 
@@ -350,7 +422,8 @@ fn run_agent_command(
         let _ = app.emit("agent:log", payload);
     };
 
-    let current_dir = env::current_dir().map_err(|err| format!("read current dir failed: {}", err))?;
+    let current_dir =
+        env::current_dir().map_err(|err| format!("read current dir failed: {}", err))?;
     let default_output_dir = app
         .path()
         .app_data_dir()
@@ -489,15 +562,849 @@ fn check_codex_cli_health(minimum_version: Option<String>) -> CodexCliHealthResp
     }
 }
 
+fn now_millis() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_millis())
+        .unwrap_or(0)
+}
+
+fn normalize_output_dir_for_model(
+    app: &tauri::AppHandle,
+    output_dir: Option<String>,
+) -> Result<PathBuf, String> {
+    let current_dir =
+        env::current_dir().map_err(|err| format!("read current dir failed: {}", err))?;
+    let default_output_dir = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .map(|path| path.join("exports"))
+        .unwrap_or_else(|| env::temp_dir().join("zodileap-agen").join("exports"));
+    let candidate = output_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or(default_output_dir);
+    let mut selected = if candidate.is_absolute() {
+        candidate
+    } else {
+        current_dir.join(candidate)
+    };
+
+    if cfg!(debug_assertions) && selected.starts_with(&current_dir) {
+        selected = current_dir
+            .parent()
+            .map(|path| path.join("exports"))
+            .unwrap_or_else(|| env::temp_dir().join("zodileap-agen").join("exports"));
+    }
+    fs::create_dir_all(&selected).map_err(|err| format!("create output dir failed: {}", err))?;
+    Ok(selected)
+}
+
+fn capability_enabled(value: Option<bool>) -> bool {
+    value.unwrap_or(true)
+}
+
+fn parse_first_number(input: &str) -> Option<f64> {
+    let mut buf = String::new();
+    let mut started = false;
+    for ch in input.chars() {
+        if ch.is_ascii_digit() || ch == '.' {
+            buf.push(ch);
+            started = true;
+            continue;
+        }
+        if started {
+            break;
+        }
+    }
+    if buf.is_empty() {
+        None
+    } else {
+        buf.parse::<f64>().ok()
+    }
+}
+
+fn parse_path_in_prompt(prompt: &str) -> Option<String> {
+    let trimmed = prompt.trim();
+    for token in trimmed.split_whitespace() {
+        let candidate = token.trim_matches(|value| value == '"' || value == '\'' || value == '`');
+        if candidate.starts_with('/') || candidate.contains(":\\") {
+            return Some(candidate.to_string());
+        }
+    }
+    None
+}
+
+#[derive(Clone)]
+enum PlannedModelStep {
+    Export {
+        input: String,
+    },
+    Tool {
+        action: ModelToolAction,
+        input: String,
+        params: serde_json::Value,
+    },
+}
+
+fn plan_model_steps(prompt: &str) -> Vec<PlannedModelStep> {
+    let lower = prompt.to_lowercase();
+    let mut steps: Vec<PlannedModelStep> = Vec::new();
+
+    if ["导出", "export", "输出glb", "导出模型"]
+        .iter()
+        .any(|key| lower.contains(key))
+    {
+        steps.push(PlannedModelStep::Export {
+            input: "导出 GLB".to_string(),
+        });
+    }
+    if ["列出对象", "查看对象", "list objects"]
+        .iter()
+        .any(|key| lower.contains(key))
+    {
+        steps.push(PlannedModelStep::Tool {
+            action: ModelToolAction::ListObjects,
+            input: "列出对象".to_string(),
+            params: json!({}),
+        });
+    }
+    if lower.contains("选择对象") || lower.contains("select object") {
+        let names_text = prompt
+            .split_once("选择对象")
+            .map(|(_, right)| right)
+            .or_else(|| prompt.split_once("select object").map(|(_, right)| right))
+            .unwrap_or("")
+            .trim();
+        let names = names_text
+            .split(|value: char| value == ',' || value == '，' || value.is_whitespace())
+            .filter_map(|value| {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            })
+            .collect::<Vec<_>>();
+        if !names.is_empty() {
+            steps.push(PlannedModelStep::Tool {
+                action: ModelToolAction::SelectObjects,
+                input: format!("选择对象 {:?}", names),
+                params: json!({ "names": names }),
+            });
+        }
+    }
+    if lower.contains("重命名") || lower.contains("rename") {
+        if let Some((left, right)) = prompt.split_once("为") {
+            let old_name = left
+                .replace("重命名", "")
+                .replace("对象", "")
+                .trim()
+                .to_string();
+            let new_name = right.trim().to_string();
+            if !old_name.is_empty() && !new_name.is_empty() {
+                steps.push(PlannedModelStep::Tool {
+                    action: ModelToolAction::RenameObject,
+                    input: format!("重命名 {} -> {}", old_name, new_name),
+                    params: json!({ "old_name": old_name, "new_name": new_name }),
+                });
+            }
+        }
+    }
+    if lower.contains("设为父级") || lower.contains("parent") {
+        let normalized = prompt.replace("设为父级", " ");
+        let parts = normalized
+            .split_whitespace()
+            .filter(|value| !value.trim().is_empty())
+            .collect::<Vec<_>>();
+        if parts.len() >= 2 {
+            steps.push(PlannedModelStep::Tool {
+                action: ModelToolAction::OrganizeHierarchy,
+                input: format!("层级整理 {} -> {}", parts[0], parts[1]),
+                params: json!({ "child": parts[0], "parent": parts[1] }),
+            });
+        }
+    }
+    if ["新建", "new file"].iter().any(|key| lower.contains(key)) {
+        steps.push(PlannedModelStep::Tool {
+            action: ModelToolAction::NewFile,
+            input: "新建 Blender 文件".to_string(),
+            params: json!({"use_empty": true}),
+        });
+    }
+    if ["打开", "导入", "open file"]
+        .iter()
+        .any(|key| lower.contains(key))
+    {
+        if let Some(path) = parse_path_in_prompt(prompt) {
+            steps.push(PlannedModelStep::Tool {
+                action: ModelToolAction::OpenFile,
+                input: format!("打开文件 {}", path),
+                params: json!({ "path": path }),
+            });
+        }
+    }
+    if ["保存", "save file"].iter().any(|key| lower.contains(key)) {
+        let path = parse_path_in_prompt(prompt);
+        steps.push(PlannedModelStep::Tool {
+            action: ModelToolAction::SaveFile,
+            input: "保存文件".to_string(),
+            params: path
+                .map(|value| json!({ "path": value }))
+                .unwrap_or_else(|| json!({})),
+        });
+    }
+    if ["撤销", "undo"].iter().any(|key| lower.contains(key)) {
+        steps.push(PlannedModelStep::Tool {
+            action: ModelToolAction::Undo,
+            input: "撤销".to_string(),
+            params: json!({}),
+        });
+    }
+    if ["重做", "redo"].iter().any(|key| lower.contains(key)) {
+        steps.push(PlannedModelStep::Tool {
+            action: ModelToolAction::Redo,
+            input: "重做".to_string(),
+            params: json!({}),
+        });
+    }
+    if ["对齐原点", "原点", "align origin"]
+        .iter()
+        .any(|key| lower.contains(key))
+    {
+        steps.push(PlannedModelStep::Tool {
+            action: ModelToolAction::AlignOrigin,
+            input: "对齐到原点".to_string(),
+            params: json!({ "selected_only": true }),
+        });
+    }
+    if ["统一尺度", "normalize scale", "应用缩放"]
+        .iter()
+        .any(|key| lower.contains(key))
+    {
+        steps.push(PlannedModelStep::Tool {
+            action: ModelToolAction::NormalizeScale,
+            input: "统一尺度".to_string(),
+            params: json!({ "selected_only": true, "apply": true }),
+        });
+    }
+    if ["旋转方向", "坐标系", "normalize axis"]
+        .iter()
+        .any(|key| lower.contains(key))
+    {
+        steps.push(PlannedModelStep::Tool {
+            action: ModelToolAction::NormalizeAxis,
+            input: "旋转方向标准化".to_string(),
+            params: json!({ "selected_only": true }),
+        });
+    }
+    if ["正方体", "立方体", "cube", "方块", "box"]
+        .iter()
+        .any(|key| lower.contains(key))
+    {
+        let size = parse_first_number(prompt)
+            .unwrap_or(2.0)
+            .clamp(0.001, 1000.0);
+        steps.push(PlannedModelStep::Tool {
+            action: ModelToolAction::AddCube,
+            input: format!("添加正方体 size={}", size),
+            params: json!({ "size": size }),
+        });
+    }
+    if ["加厚", "solidify"].iter().any(|key| lower.contains(key)) {
+        let thickness = parse_first_number(prompt)
+            .unwrap_or(0.02)
+            .clamp(0.0001, 10.0);
+        steps.push(PlannedModelStep::Tool {
+            action: ModelToolAction::Solidify,
+            input: format!("加厚 {}", thickness),
+            params: json!({ "thickness": thickness }),
+        });
+    }
+    if ["倒角", "bevel"].iter().any(|key| lower.contains(key)) {
+        let width = parse_first_number(prompt)
+            .unwrap_or(0.02)
+            .clamp(0.0001, 10.0);
+        steps.push(PlannedModelStep::Tool {
+            action: ModelToolAction::Bevel,
+            input: format!("倒角 {}", width),
+            params: json!({ "width": width, "segments": 2 }),
+        });
+    }
+    if ["镜像", "mirror"].iter().any(|key| lower.contains(key)) {
+        let axis = if lower.contains(" y ") || lower.contains("y轴") || lower.contains(" y轴") {
+            "Y"
+        } else if lower.contains(" z ") || lower.contains("z轴") || lower.contains(" z轴") {
+            "Z"
+        } else {
+            "X"
+        };
+        steps.push(PlannedModelStep::Tool {
+            action: ModelToolAction::Mirror,
+            input: format!("镜像 {}", axis),
+            params: json!({ "axis": axis }),
+        });
+    }
+    if ["阵列", "array"].iter().any(|key| lower.contains(key)) {
+        let count = parse_first_number(prompt)
+            .map(|value| value as u64)
+            .unwrap_or(3)
+            .clamp(1, 128);
+        steps.push(PlannedModelStep::Tool {
+            action: ModelToolAction::Array,
+            input: format!("阵列 {}", count),
+            params: json!({ "count": count, "offset": 1.0 }),
+        });
+    }
+    if ["布尔", "boolean"].iter().any(|key| lower.contains(key)) {
+        let operation = if lower.contains("并") || lower.contains("union") {
+            "UNION"
+        } else if lower.contains("交") || lower.contains("intersect") {
+            "INTERSECT"
+        } else {
+            "DIFFERENCE"
+        };
+        steps.push(PlannedModelStep::Tool {
+            action: ModelToolAction::Boolean,
+            input: format!("布尔 {}", operation),
+            params: json!({ "operation": operation, "times": 1 }),
+        });
+    }
+    if ["自动平滑", "auto smooth", "smooth"]
+        .iter()
+        .any(|key| lower.contains(key))
+    {
+        steps.push(PlannedModelStep::Tool {
+            action: ModelToolAction::AutoSmooth,
+            input: "自动平滑".to_string(),
+            params: json!({ "angle": 0.5235987756, "selected_only": true }),
+        });
+    }
+    if ["weighted normal", "法线加权"]
+        .iter()
+        .any(|key| lower.contains(key))
+    {
+        steps.push(PlannedModelStep::Tool {
+            action: ModelToolAction::WeightedNormal,
+            input: "Weighted Normal".to_string(),
+            params: json!({ "selected_only": true }),
+        });
+    }
+    if ["减面", "decimate"].iter().any(|key| lower.contains(key)) {
+        let ratio = parse_first_number(prompt).unwrap_or(0.5).clamp(0.01, 1.0);
+        steps.push(PlannedModelStep::Tool {
+            action: ModelToolAction::Decimate,
+            input: format!("减面 {}", ratio),
+            params: json!({ "ratio": ratio }),
+        });
+    }
+    if ["材质槽", "整理材质"].iter().any(|key| lower.contains(key)) {
+        steps.push(PlannedModelStep::Tool {
+            action: ModelToolAction::TidyMaterialSlots,
+            input: "整理材质槽".to_string(),
+            params: json!({ "selected_only": false }),
+        });
+    }
+    if ["贴图路径", "纹理路径", "check texture"]
+        .iter()
+        .any(|key| lower.contains(key))
+    {
+        steps.push(PlannedModelStep::Tool {
+            action: ModelToolAction::CheckTexturePaths,
+            input: "检查贴图路径".to_string(),
+            params: json!({}),
+        });
+    }
+    if ["打包贴图", "pack textures"]
+        .iter()
+        .any(|key| lower.contains(key))
+    {
+        steps.push(PlannedModelStep::Tool {
+            action: ModelToolAction::PackTextures,
+            input: "打包贴图".to_string(),
+            params: json!({}),
+        });
+    }
+    steps
+}
+
+fn check_capability_for_step(
+    capabilities: &ModelMcpCapabilities,
+    step: &PlannedModelStep,
+) -> Result<(), String> {
+    match step {
+        PlannedModelStep::Export { .. } => {
+            if !capability_enabled(capabilities.export) {
+                return Err("导出能力已关闭，请在模型设置中开启“导出模型（Blender）”".to_string());
+            }
+        }
+        PlannedModelStep::Tool { action, .. } => {
+            let allowed = match action {
+                ModelToolAction::ListObjects
+                | ModelToolAction::SelectObjects
+                | ModelToolAction::RenameObject
+                | ModelToolAction::OrganizeHierarchy => capability_enabled(capabilities.scene),
+                ModelToolAction::AlignOrigin
+                | ModelToolAction::NormalizeScale
+                | ModelToolAction::NormalizeAxis => capability_enabled(capabilities.transform),
+                ModelToolAction::Solidify
+                | ModelToolAction::AddCube
+                | ModelToolAction::Bevel
+                | ModelToolAction::Mirror
+                | ModelToolAction::Array
+                | ModelToolAction::Boolean => capability_enabled(capabilities.geometry),
+                ModelToolAction::AutoSmooth
+                | ModelToolAction::WeightedNormal
+                | ModelToolAction::Decimate => capability_enabled(capabilities.mesh_opt),
+                ModelToolAction::TidyMaterialSlots
+                | ModelToolAction::CheckTexturePaths
+                | ModelToolAction::PackTextures => capability_enabled(capabilities.material),
+                ModelToolAction::NewFile
+                | ModelToolAction::OpenFile
+                | ModelToolAction::SaveFile
+                | ModelToolAction::Undo
+                | ModelToolAction::Redo => capability_enabled(capabilities.file),
+            };
+            if !allowed {
+                return Err(format!(
+                    "能力 `{}` 已关闭，请到模型设置中开启后再执行",
+                    action
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_unsupported_action_error(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    lower.contains("unsupported action")
+        || lower.contains("unsupported_action")
+        || lower.contains("mcp.model.bridge.rejected")
+}
+
+fn execute_model_tool_with_bridge_upgrade(
+    action: ModelToolAction,
+    params: serde_json::Value,
+    blender_bridge_addr: Option<String>,
+) -> Result<(String, Option<String>), String> {
+    let run_once = || {
+        execute_model_tool(ModelToolRequest {
+            action,
+            params: params.clone(),
+            blender_bridge_addr: blender_bridge_addr.clone(),
+            timeout_secs: Some(45),
+        })
+        .map(|result| (result.message, result.output_path))
+        .map_err(|err| err.to_string())
+    };
+
+    match run_once() {
+        Ok(result) => Ok(result),
+        Err(first_err) => {
+            if !is_unsupported_action_error(&first_err) {
+                return Err(first_err);
+            }
+
+            let _ = install_blender_bridge(None);
+            match run_once() {
+                Ok(result) => Ok(result),
+                Err(second_err) => Err(format!(
+                    "{}。已自动写入最新 Bridge 文件，但当前 Blender 会话仍是旧版本；请重启 Blender 后重试。",
+                    second_err
+                )),
+            }
+        }
+    }
+}
+
+#[tauri::command]
+fn run_model_session_command(
+    app: tauri::AppHandle,
+    store: tauri::State<ModelSessionStore>,
+    session_id: String,
+    prompt: String,
+    trace_id: Option<String>,
+    project_name: Option<String>,
+    capabilities: Option<ModelMcpCapabilities>,
+    output_dir: Option<String>,
+    blender_bridge_addr: Option<String>,
+) -> Result<ModelSessionRunResponse, String> {
+    let trace_id = trace_id.unwrap_or_else(|| format!("trace-{}", now_millis()));
+    let normalized_prompt = prompt.trim();
+    if normalized_prompt.is_empty() {
+        return Err("prompt cannot be empty".to_string());
+    }
+    let capabilities = capabilities.unwrap_or_default();
+    let output_dir = normalize_output_dir_for_model(&app, output_dir)?;
+    let output_dir_string = output_dir.to_string_lossy().to_string();
+    let planned_steps = plan_model_steps(normalized_prompt);
+    if planned_steps.is_empty() {
+        return Err("未识别到可执行的模型操作。可尝试：导出、打开文件、保存、加厚、倒角、镜像、阵列、减面、自动平滑。".to_string());
+    }
+
+    {
+        let mut map = store
+            .sessions
+            .lock()
+            .map_err(|_| "model session store lock poisoned".to_string())?;
+        let session = map.entry(session_id.clone()).or_default();
+        session.cancelled = false;
+        session.last_prompt = Some(normalized_prompt.to_string());
+        session.last_output_dir = Some(output_dir_string.clone());
+    }
+
+    let mut created_steps: Vec<ModelStepRecord> = Vec::new();
+    let mut created_events: Vec<ModelEventRecord> = Vec::new();
+    let mut created_assets: Vec<ModelAssetRecord> = Vec::new();
+    let mut exported_file: Option<String> = None;
+
+    for step in planned_steps {
+        {
+            let map = store
+                .sessions
+                .lock()
+                .map_err(|_| "model session store lock poisoned".to_string())?;
+            let session = map
+                .get(&session_id)
+                .ok_or_else(|| "session state not found".to_string())?;
+            if session.cancelled {
+                return Err("步骤执行已取消".to_string());
+            }
+        }
+
+        check_capability_for_step(&capabilities, &step)?;
+        let next_index = {
+            let map = store
+                .sessions
+                .lock()
+                .map_err(|_| "model session store lock poisoned".to_string())?;
+            map.get(&session_id)
+                .map(|state| state.steps.len())
+                .unwrap_or(0)
+        };
+        created_events.push(ModelEventRecord {
+            event: "step_started".to_string(),
+            step_index: Some(next_index),
+            timestamp_ms: now_millis(),
+            message: format!("step {} started", next_index + 1),
+        });
+        let started = Instant::now();
+
+        let step_result: Result<(String, Option<String>), String> = match &step {
+            PlannedModelStep::Export { .. } => {
+                let result = export_model(ExportModelRequest {
+                    project_name: project_name
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or("model-project")
+                        .to_string(),
+                    prompt: normalized_prompt.to_string(),
+                    output_dir: output_dir_string.clone(),
+                    blender_bridge_addr: blender_bridge_addr.clone(),
+                    target: ModelToolTarget::Blender,
+                })
+                .map_err(|err| err.to_string())?;
+                Ok((
+                    format!("导出成功：{}", result.exported_file),
+                    Some(result.exported_file),
+                ))
+            }
+            PlannedModelStep::Tool { action, params, .. } => {
+                execute_model_tool_with_bridge_upgrade(
+                    *action,
+                    params.clone(),
+                    blender_bridge_addr.clone(),
+                )
+            }
+        };
+
+        let elapsed = started.elapsed().as_millis();
+        match step_result {
+            Ok((summary, output_path)) => {
+                let step_record = ModelStepRecord {
+                    index: next_index,
+                    action: match &step {
+                        PlannedModelStep::Export { .. } => "export_glb".to_string(),
+                        PlannedModelStep::Tool { action, .. } => action.as_str().to_string(),
+                    },
+                    input: match &step {
+                        PlannedModelStep::Export { input } => input.clone(),
+                        PlannedModelStep::Tool { input, .. } => input.clone(),
+                    },
+                    status: "success".to_string(),
+                    elapsed_ms: elapsed,
+                    summary: summary.clone(),
+                    error: None,
+                    exported_file: output_path.clone(),
+                };
+                if let Some(path) = output_path.clone() {
+                    exported_file = Some(path.clone());
+                    let version = {
+                        let mut map = store
+                            .sessions
+                            .lock()
+                            .map_err(|_| "model session store lock poisoned".to_string())?;
+                        let session = map
+                            .get_mut(&session_id)
+                            .ok_or_else(|| "session state not found".to_string())?;
+                        session.version += 1;
+                        session.version
+                    };
+                    created_assets.push(ModelAssetRecord {
+                        kind: "exported_model".to_string(),
+                        path,
+                        version,
+                    });
+                }
+                created_events.push(ModelEventRecord {
+                    event: "step_finished".to_string(),
+                    step_index: Some(next_index),
+                    timestamp_ms: now_millis(),
+                    message: summary,
+                });
+                created_steps.push(step_record);
+            }
+            Err(err) => {
+                let step_record = ModelStepRecord {
+                    index: next_index,
+                    action: match &step {
+                        PlannedModelStep::Export { .. } => "export_glb".to_string(),
+                        PlannedModelStep::Tool { action, .. } => action.as_str().to_string(),
+                    },
+                    input: match &step {
+                        PlannedModelStep::Export { input } => input.clone(),
+                        PlannedModelStep::Tool { input, .. } => input.clone(),
+                    },
+                    status: "failed".to_string(),
+                    elapsed_ms: elapsed,
+                    summary: "执行失败".to_string(),
+                    error: Some(err.clone()),
+                    exported_file: None,
+                };
+                created_events.push(ModelEventRecord {
+                    event: "step_failed".to_string(),
+                    step_index: Some(next_index),
+                    timestamp_ms: now_millis(),
+                    message: err.clone(),
+                });
+                created_steps.push(step_record.clone());
+
+                let mut map = store
+                    .sessions
+                    .lock()
+                    .map_err(|_| "model session store lock poisoned".to_string())?;
+                let session = map.entry(session_id.clone()).or_default();
+                session.steps.extend(created_steps.clone());
+                session.steps.push(step_record);
+                session.events.extend(created_events.clone());
+                session.assets.extend(created_assets.clone());
+                return Err(format!(
+                    "步骤 {} 失败：{}。建议：检查 Bridge 连接、对象选择状态以及参数范围。",
+                    next_index + 1,
+                    err
+                ));
+            }
+        }
+    }
+
+    let (all_steps, all_events, all_assets) = {
+        let mut map = store
+            .sessions
+            .lock()
+            .map_err(|_| "model session store lock poisoned".to_string())?;
+        let session = map.entry(session_id.clone()).or_default();
+        session.steps.extend(created_steps.clone());
+        session.events.extend(created_events.clone());
+        session.assets.extend(created_assets.clone());
+        (
+            session.steps.clone(),
+            session.events.clone(),
+            session.assets.clone(),
+        )
+    };
+
+    let message = created_steps
+        .iter()
+        .map(|step| {
+            format!(
+                "- [{}] {}（{}ms）",
+                step.action, step.summary, step.elapsed_ms
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let _ = app.emit(
+        "agent:log",
+        AgentLogEvent {
+            trace_id: trace_id.clone(),
+            level: "info".to_string(),
+            stage: "model-session".to_string(),
+            message: format!("session={}, steps={}", session_id, created_steps.len()),
+        },
+    );
+
+    Ok(ModelSessionRunResponse {
+        trace_id,
+        message,
+        steps: all_steps,
+        events: all_events,
+        assets: all_assets,
+        exported_file,
+    })
+}
+
+#[tauri::command]
+fn retry_model_session_last_step(
+    app: tauri::AppHandle,
+    store: tauri::State<ModelSessionStore>,
+    session_id: String,
+    trace_id: Option<String>,
+    project_name: Option<String>,
+    capabilities: Option<ModelMcpCapabilities>,
+    blender_bridge_addr: Option<String>,
+) -> Result<ModelSessionRunResponse, String> {
+    let (last_prompt, last_output_dir) = {
+        let map = store
+            .sessions
+            .lock()
+            .map_err(|_| "model session store lock poisoned".to_string())?;
+        let state = map
+            .get(&session_id)
+            .ok_or_else(|| "会话不存在，无法重试".to_string())?;
+        (
+            state
+                .last_prompt
+                .clone()
+                .ok_or_else(|| "暂无可重试步骤".to_string())?,
+            state.last_output_dir.clone(),
+        )
+    };
+
+    run_model_session_command(
+        app,
+        store,
+        session_id,
+        last_prompt,
+        trace_id,
+        project_name,
+        capabilities,
+        last_output_dir,
+        blender_bridge_addr,
+    )
+}
+
+#[tauri::command]
+fn undo_model_session_step(
+    app: tauri::AppHandle,
+    store: tauri::State<ModelSessionStore>,
+    session_id: String,
+    trace_id: Option<String>,
+    blender_bridge_addr: Option<String>,
+) -> Result<ModelSessionRunResponse, String> {
+    run_model_session_command(
+        app,
+        store,
+        session_id,
+        "撤销".to_string(),
+        trace_id,
+        Some("undo-operation".to_string()),
+        Some(ModelMcpCapabilities {
+            file: Some(true),
+            ..ModelMcpCapabilities::default()
+        }),
+        None,
+        blender_bridge_addr,
+    )
+}
+
+#[tauri::command]
+fn cancel_model_session_step(
+    store: tauri::State<ModelSessionStore>,
+    session_id: String,
+) -> Result<bool, String> {
+    let mut map = store
+        .sessions
+        .lock()
+        .map_err(|_| "model session store lock poisoned".to_string())?;
+    let session = map.entry(session_id).or_default();
+    session.cancelled = true;
+    Ok(true)
+}
+
+#[tauri::command]
+fn get_model_session_records(
+    store: tauri::State<ModelSessionStore>,
+    session_id: String,
+) -> Result<ModelSessionRunResponse, String> {
+    let map = store
+        .sessions
+        .lock()
+        .map_err(|_| "model session store lock poisoned".to_string())?;
+    let session = map
+        .get(&session_id)
+        .ok_or_else(|| "会话不存在".to_string())?;
+    Ok(ModelSessionRunResponse {
+        trace_id: "".to_string(),
+        message: "".to_string(),
+        steps: session.steps.clone(),
+        events: session.events.clone(),
+        assets: session.assets.clone(),
+        exported_file: session.assets.last().map(|item| item.path.clone()),
+    })
+}
+
 fn main() {
     tauri::Builder::default()
+        .manage(ModelSessionStore::default())
         .invoke_handler(tauri::generate_handler![
             export_model_command,
             install_blender_bridge,
             check_blender_bridge,
             run_agent_command,
-            check_codex_cli_health
+            check_codex_cli_health,
+            run_model_session_command,
+            retry_model_session_last_step,
+            undo_model_session_step,
+            cancel_model_session_step,
+            get_model_session_records
         ])
         .run(tauri::generate_context!())
         .expect("error while running zodileap_agen_desktop");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{plan_model_steps, PlannedModelStep};
+
+    #[test]
+    fn add_cube_should_not_trigger_export() {
+        let steps = plan_model_steps("在当前对话中，添加一个正方体");
+        let has_export = steps
+            .iter()
+            .any(|step| matches!(step, PlannedModelStep::Export { .. }));
+        let has_add_cube = steps.iter().any(|step| {
+            matches!(
+                step,
+                PlannedModelStep::Tool { action, .. } if action.as_str() == "add_cube"
+            )
+        });
+
+        assert!(!has_export, "添加正方体不应自动触发导出");
+        assert!(has_add_cube, "添加正方体应路由到 add_cube 动作");
+    }
+
+    #[test]
+    fn export_keyword_should_trigger_export() {
+        let steps = plan_model_steps("请把当前模型导出到 /tmp/exports");
+        let has_export = steps
+            .iter()
+            .any(|step| matches!(step, PlannedModelStep::Export { .. }));
+        assert!(has_export, "用户明确要求导出时应触发导出动作");
+    }
 }
