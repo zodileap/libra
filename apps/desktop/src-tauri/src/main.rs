@@ -638,6 +638,52 @@ fn parse_path_in_prompt(prompt: &str) -> Option<String> {
     None
 }
 
+fn is_add_cube_intent(prompt: &str, lower: &str) -> bool {
+    const CN_EXPLICIT: [&str; 12] = [
+        "添加正方体",
+        "添加一个正方体",
+        "添加立方体",
+        "添加一个立方体",
+        "新建正方体",
+        "新建立方体",
+        "创建正方体",
+        "创建立方体",
+        "加个正方体",
+        "加一个正方体",
+        "加个立方体",
+        "加一个立方体",
+    ];
+    if CN_EXPLICIT.iter().any(|pattern| lower.contains(pattern)) {
+        return true;
+    }
+
+    const EN_EXPLICIT: [&str; 10] = [
+        "add cube",
+        "add a cube",
+        "create cube",
+        "create a cube",
+        "new cube",
+        "add box",
+        "add a box",
+        "create box",
+        "create a box",
+        "new box",
+    ];
+    if EN_EXPLICIT.iter().any(|pattern| lower.contains(pattern)) {
+        return true;
+    }
+
+    let trimmed = prompt.trim_start();
+    let starts_with_create_verb = ["添加", "新建", "创建", "生成", "add ", "create ", "new "]
+        .iter()
+        .any(|prefix| trimmed.to_lowercase().starts_with(prefix));
+    let has_cube_noun = ["正方体", "立方体", "方块", "cube", "box"]
+        .iter()
+        .any(|keyword| lower.contains(keyword));
+
+    starts_with_create_verb && has_cube_noun
+}
+
 #[derive(Clone)]
 enum PlannedModelStep {
     Export {
@@ -802,10 +848,7 @@ fn plan_model_steps(prompt: &str) -> Vec<PlannedModelStep> {
             params: json!({ "selected_only": true }),
         });
     }
-    if ["正方体", "立方体", "cube", "方块", "box"]
-        .iter()
-        .any(|key| lower.contains(key))
-    {
+    if is_add_cube_intent(prompt, &lower) {
         let size = parse_first_number(prompt)
             .unwrap_or(2.0)
             .clamp(0.001, 1000.0);
@@ -1044,7 +1087,22 @@ fn run_model_session_command(
     let output_dir_string = output_dir.to_string_lossy().to_string();
     let planned_steps = plan_model_steps(normalized_prompt);
     if planned_steps.is_empty() {
-        return Err("未识别到可执行的模型操作。可尝试：导出、打开文件、保存、加厚、倒角、镜像、阵列、减面、自动平滑。".to_string());
+        let lower = normalized_prompt.to_lowercase();
+        let has_dcc_intent = [
+            "blender", "zbrush", "模型", "mcp", "移动", "旋转", "缩放", "颜色", "材质", "导入",
+            "导出", "打开", "保存", "正方体", "立方体", "cube", "box",
+        ]
+        .iter()
+        .any(|keyword| lower.contains(keyword));
+        if has_dcc_intent {
+            return Err(
+                "已识别为 DCC 操作，但当前 MCP 暂不支持该具体指令；不会自动替换成其他动作。当前可用：导出、列出对象、选择对象、重命名、层级整理、新建/打开/保存、撤销/重做、对齐原点、统一尺度/方向、添加正方体、加厚、倒角、镜像、阵列、布尔、自动平滑、法线加权、减面、材质槽整理、贴图路径检查、打包贴图。".to_string()
+            );
+        }
+        return Err(
+            "未识别到可执行的模型操作。可尝试：导出、打开文件、保存、加厚、倒角、镜像、阵列、减面、自动平滑。"
+                .to_string(),
+        );
     }
 
     {

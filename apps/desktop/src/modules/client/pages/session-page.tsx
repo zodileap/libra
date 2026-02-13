@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { AriButton, AriCard, AriContainer, AriFlex, AriInput, AriTypography } from "aries_react";
+import {
+  AriButton,
+  AriCard,
+  AriContainer,
+  AriFlex,
+  AriInput,
+  AriMenu,
+  AriTooltip,
+  AriTypography,
+} from "aries_react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   AGENT_SESSIONS,
@@ -15,7 +23,6 @@ import {
   normalizeInvokeError,
 } from "../services/blender-bridge";
 import type {
-  AgentLogEvent,
   ModelAssetRecord,
   ModelEventRecord,
   ModelStepRecord,
@@ -106,8 +113,6 @@ export function SessionPage({
   const [input, setInput] = useState("");
   const [status, setStatus] = useState("");
   const [sending, setSending] = useState(false);
-  const [activeTraceId, setActiveTraceId] = useState<string>("");
-  const [debugLogs, setDebugLogs] = useState<string[]>([]);
   const [stepRecords, setStepRecords] = useState<ModelStepRecord[]>([]);
   const [eventRecords, setEventRecords] = useState<ModelEventRecord[]>([]);
   const [assetRecords, setAssetRecords] = useState<ModelAssetRecord[]>([]);
@@ -132,14 +137,19 @@ export function SessionPage({
   const title = modelProject?.title || session?.title || "会话详情";
   const updatedAt = modelProject?.updatedAt || session?.updatedAt || "-";
   const [messages, setMessages] = useState<MessageItem[]>([]);
-
-  const primaryKey = aiKeys[0];
-  const visibleDebugLogs = useMemo(
+  const availableAiKeys = useMemo(
     () =>
-      activeTraceId
-        ? debugLogs.filter((line) => line.includes(`[${activeTraceId}]`))
-        : debugLogs,
-    [debugLogs, activeTraceId]
+      aiKeys.filter(
+        (item) =>
+          item.enabled
+          || item.keyValue.trim().length > 0,
+      ),
+    [aiKeys],
+  );
+  const [selectedProvider, setSelectedProvider] = useState<string>("");
+  const selectedAi = useMemo(
+    () => availableAiKeys.find((item) => item.provider === selectedProvider) || availableAiKeys[0] || null,
+    [availableAiKeys, selectedProvider],
   );
 
   useEffect(() => {
@@ -170,6 +180,48 @@ export function SessionPage({
   }, [messages, messagesHydrated, hydratedSessionKey, normalizedAgentKey, sessionId, sessionStorageKey]);
 
   useEffect(() => {
+    if (!import.meta.env.DEV) {
+      return;
+    }
+    window.dispatchEvent(
+      new CustomEvent("zodileap:session-debug", {
+        detail: {
+          sessionId,
+          agentKey: normalizedAgentKey,
+          title,
+          status,
+          workflowStepRecords,
+          stepRecords,
+          eventRecords,
+          assetRecords,
+          messageCount: messages.length,
+          timestamp: Date.now(),
+        },
+      }),
+    );
+  }, [
+    assetRecords,
+    eventRecords,
+    messages.length,
+    normalizedAgentKey,
+    sessionId,
+    status,
+    stepRecords,
+    title,
+    workflowStepRecords,
+  ]);
+
+  useEffect(() => {
+    if (availableAiKeys.length === 0) {
+      setSelectedProvider("");
+      return;
+    }
+    if (!availableAiKeys.some((item) => item.provider === selectedProvider)) {
+      setSelectedProvider(availableAiKeys[0].provider);
+    }
+  }, [availableAiKeys, selectedProvider]);
+
+  useEffect(() => {
     if (!isModelAgent) {
       return;
     }
@@ -191,32 +243,6 @@ export function SessionPage({
       });
   }, [isModelAgent, sessionId]);
 
-  useEffect(() => {
-    let disposed = false;
-    let unlisten: (() => void) | null = null;
-
-    const setup = async () => {
-      const handler = await listen<AgentLogEvent>("agent:log", (event) => {
-        if (disposed) return;
-        const payload = event.payload;
-        const line = `[${payload.trace_id}] [${payload.level}] [${payload.stage}] ${payload.message}`;
-        setDebugLogs((prev) => [line, ...prev].slice(0, 120));
-      });
-      if (!disposed) {
-        unlisten = handler;
-      } else {
-        handler();
-      }
-    };
-
-    void setup();
-
-    return () => {
-      disposed = true;
-      if (unlisten) unlisten();
-    };
-  }, []);
-
   const executePrompt = async (
     content: string,
     options?: {
@@ -229,16 +255,10 @@ export function SessionPage({
 
     const allowDangerousAction = Boolean(options?.allowDangerousAction);
     const appendUserMessage = options?.appendUserMessage !== false;
-    const traceId = `trace-${Date.now()}`;
-    const provider = primaryKey?.provider || "codex";
+    const provider = selectedAi?.provider || "codex";
     const outputDir = isModelAgent ? extractOutputDirFromPrompt(normalizedContent) : undefined;
     setInput("");
     setSending(true);
-    setActiveTraceId(traceId);
-    setDebugLogs((prev) => [
-      `[${traceId}] [info] [frontend] send message, provider=${provider}`,
-      ...prev,
-    ].slice(0, 120));
     setStatus("智能体执行中...");
     setUiHint(null);
     if (appendUserMessage) {
@@ -259,10 +279,6 @@ export function SessionPage({
           outputDir,
           allowDangerousAction,
         });
-        setDebugLogs((prev) => [
-          `[${traceId}] [info] [frontend] workflow invoke success runId=${response.runId}`,
-          ...prev,
-        ].slice(0, 120));
         setWorkflowStepRecords(response.steps || []);
         setStepRecords(response.modelSession?.steps || []);
         setEventRecords(response.modelSession?.events || []);
@@ -305,17 +321,12 @@ export function SessionPage({
           agentKey: agentKey || "code",
           provider,
           prompt: content,
-          traceId,
+          traceId: `trace-${Date.now()}`,
           projectName: title,
           modelExportEnabled: modelMcpCapabilities.export,
           blenderBridgeAddr: DEFAULT_BLENDER_BRIDGE_ADDR,
           outputDir,
         });
-        setDebugLogs((prev) => [
-          `[${response.trace_id}] [info] [frontend] invoke success`,
-          ...prev,
-        ].slice(0, 120));
-
         setMessages((prev) => [...prev, { role: "assistant", text: response.message }]);
         const actionText =
           response.actions?.length > 0 ? `动作：${response.actions.join(", ")}` : "动作：无";
@@ -327,10 +338,6 @@ export function SessionPage({
       }
     } catch (err) {
       const reason = normalizeInvokeError(err);
-      setDebugLogs((prev) => [
-        `[${traceId}] [error] [frontend] invoke failed: ${reason}`,
-        ...prev,
-      ].slice(0, 120));
       setMessages((prev) => [...prev, { role: "assistant", text: `执行失败：${reason}` }]);
       setStatus(`执行失败：${reason}`);
       if (
@@ -396,33 +403,6 @@ export function SessionPage({
       setPendingDangerousPrompt("");
       setStatus("已取消本次危险操作");
       setMessages((prev) => [...prev, { role: "assistant", text: "已取消本次危险操作。" }]);
-    }
-  };
-
-  const undoLastStep = async () => {
-    if (!sessionId || sending || !isModelAgent) {
-      return;
-    }
-    const traceId = `trace-${Date.now()}`;
-    setSending(true);
-    setStatus("撤销中...");
-    try {
-      const response = await invoke<ModelSessionRunResponse>("undo_model_session_step", {
-        sessionId,
-        traceId,
-        blenderBridgeAddr: DEFAULT_BLENDER_BRIDGE_ADDR,
-      });
-      setStepRecords(response.steps || []);
-      setEventRecords(response.events || []);
-      setAssetRecords(response.assets || []);
-      setMessages((prev) => [...prev, { role: "assistant", text: "已撤销最近一步操作。" }]);
-      setStatus("撤销成功");
-    } catch (err) {
-      const reason = normalizeInvokeError(err);
-      setStatus(`撤销失败：${reason}`);
-      setMessages((prev) => [...prev, { role: "assistant", text: `撤销失败：${reason}` }]);
-    } finally {
-      setSending(false);
     }
   };
 
@@ -538,76 +518,45 @@ export function SessionPage({
               onChange={setInput}
               placeholder={isModelAgent ? "输入需求，例如：打开模型并加厚；或导出当前模型到 exports" : "继续提问，或要求智能体修改结果..."}
             />
-            <AriFlex justify="space-between" align="center" style={{ marginTop: 12 }}>
-              <AriTypography variant="caption" value={status || ""} />
-              <AriFlex align="center" space={8}>
-                {isModelAgent ? (
-                  <>
-                    <AriButton
-                      type="text"
-                      label="撤销一步"
-                      onClick={undoLastStep}
-                      disabled={sending || blenderBridgeRuntime.checking}
-                    />
-                    <AriButton
-                      type="text"
-                      label="重试上一步"
-                      onClick={retryLastStep}
-                      disabled={sending || blenderBridgeRuntime.checking}
-                    />
-                  </>
-                ) : null}
+            <AriTypography className="desk-prompt-status" variant="caption" value={status || ""} />
+            <AriFlex justify="space-between" align="center" className="desk-prompt-toolbar">
+              <AriFlex align="center" space={8} className="desk-prompt-toolbar-left">
                 <AriButton
-                  color="primary"
-                  label={sending ? "发送中..." : "发送"}
-                  onClick={sendMessage}
-                  disabled={sending || (isModelAgent && blenderBridgeRuntime.checking)}
+                  type="text"
+                  icon="add"
+                  className="desk-prompt-icon-btn"
+                  disabled={sending}
                 />
+                <AriTooltip
+                  content={(
+                    <AriMenu
+                      items={availableAiKeys.map((item) => ({
+                        key: item.provider,
+                        label: item.providerLabel,
+                      }))}
+                      selectedKey={selectedAi?.provider || ""}
+                      onSelect={(key) => setSelectedProvider(key)}
+                    />
+                  )}
+                >
+                  <AriButton
+                    type="text"
+                    label={selectedAi?.providerLabel || "选择 AI"}
+                    icon="arrow_drop_down"
+                    disabled={availableAiKeys.length === 0}
+                  />
+                </AriTooltip>
               </AriFlex>
-            </AriFlex>
-            <AriContainer className="desk-debug-panel">
-              <AriTypography
-                variant="caption"
-                value={`调试日志（当前 traceId: ${activeTraceId || "-"})`}
+              <AriButton
+                type="default"
+                color="brand"
+                shape="round"
+                icon={sending ? "hourglass_top" : "arrow_upward"}
+                className="desk-prompt-icon-btn"
+                onClick={sendMessage}
+                disabled={sending || (isModelAgent && blenderBridgeRuntime.checking)}
               />
-              <div className="desk-debug-list">
-                {visibleDebugLogs.length === 0 ? (
-                  <AriTypography variant="caption" value="暂无日志" />
-                ) : (
-                  visibleDebugLogs.map((line, index) => (
-                    <AriTypography key={`${line}-${index}`} variant="caption" value={line} />
-                  ))
-                )}
-              </div>
-            </AriContainer>
-            {isModelAgent && assetRecords.length > 0 ? (
-              <AriContainer className="desk-debug-panel">
-                <AriTypography variant="caption" value="会话资产" />
-                <div className="desk-debug-list">
-                  {assetRecords.slice().reverse().map((asset) => (
-                    <AriTypography
-                      key={`${asset.kind}-${asset.path}-${asset.version}`}
-                      variant="caption"
-                      value={`${asset.kind} v${asset.version}: ${asset.path}`}
-                    />
-                  ))}
-                </div>
-              </AriContainer>
-            ) : null}
-            {isModelAgent && eventRecords.length > 0 ? (
-              <AriContainer className="desk-debug-panel">
-                <AriTypography variant="caption" value="事件流（step started/finished/failed）" />
-                <div className="desk-debug-list">
-                  {eventRecords.slice().reverse().map((event, index) => (
-                    <AriTypography
-                      key={`${event.event}-${event.timestamp_ms}-${index}`}
-                      variant="caption"
-                      value={`${event.event}${typeof event.step_index === "number" ? `#${event.step_index + 1}` : ""}: ${event.message}`}
-                    />
-                  ))}
-                </div>
-              </AriContainer>
-            ) : null}
+            </AriFlex>
           </AriCard>
         </div>
       </div>

@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { HashRouter } from "react-router-dom";
 import { DesktopRouter } from "./modules/client/router";
 import { ensureBlenderBridge } from "./modules/client/services/blender-bridge";
+import { DevDebugFloat } from "./modules/client/widgets/dev-debug-float";
 import type {
   AiKeyItem,
   BlenderBridgeEnsureResult,
@@ -257,6 +258,7 @@ export default function App() {
         <HashRouter>
           <DesktopRouter auth={auth} />
         </HashRouter>
+        {import.meta.env.DEV ? <DevDebugFloat /> : null}
       </AriApp>
     </StrictMode>
   );
