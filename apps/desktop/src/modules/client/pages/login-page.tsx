@@ -9,19 +9,18 @@ export function LoginPage({ onLogin }: LoginPageProps) {
   const [account, setAccount] = useState("demo@zodileap.com");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState("");
 
-  // 描述：提交登录请求并在失败时显示错误提示。
+  // 描述：提交登录请求并在失败时使用弹窗提示错误信息。
   const handleSubmit = async () => {
     if (submitting) {
       return;
     }
     setSubmitting(true);
-    setError("");
     try {
       await onLogin(account.trim() || "demo@zodileap.com", password);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "登录失败，请稍后重试");
+      const message = err instanceof Error ? err.message : "登录失败，请稍后重试";
+      window.alert(message);
     } finally {
       setSubmitting(false);
     }
@@ -54,7 +53,6 @@ export function LoginPage({ onLogin }: LoginPageProps) {
               void handleSubmit();
             }}
           />
-          {error ? <AriTypography variant="caption" value={error} /> : null}
         </AriFlex>
       </AriCard>
     </AriContainer>

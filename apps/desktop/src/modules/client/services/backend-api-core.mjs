@@ -22,6 +22,12 @@ export function buildBackendErrorMessage(code, message, fallback) {
   return fallback;
 }
 
+// 描述：构建网络层失败文案，统一提示服务可达性与跨域配置问题。
+export function buildNetworkFailureMessage(url, detail) {
+  const errorDetail = detail && String(detail).trim().length > 0 ? String(detail).trim() : "unknown";
+  return `无法连接后端服务：${url}。请确认服务已启动且允许跨域访问。原始错误：${errorDetail}`;
+}
+
 // 描述：将对象转换为查询字符串。
 export function toQueryString(params) {
   const query = new URLSearchParams();

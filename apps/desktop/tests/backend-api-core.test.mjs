@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildAuthHeaders,
   buildBackendErrorMessage,
+  buildNetworkFailureMessage,
   isUnauthorizedResponse,
   toQueryString,
 } from "../src/modules/client/services/backend-api-core.mjs";
@@ -34,6 +35,15 @@ test("isUnauthorizedResponse should match http status or business code", () => {
 test("buildBackendErrorMessage should prefer backend message", () => {
   assert.equal(buildBackendErrorMessage(5001, "业务失败", "fallback"), "[5001] 业务失败");
   assert.equal(buildBackendErrorMessage(5001, "   ", "fallback"), "fallback");
+});
+
+// 描述：校验网络错误文案包含请求地址与原始错误信息。
+test("buildNetworkFailureMessage should include url and detail", () => {
+  const message = buildNetworkFailureMessage("http://127.0.0.1:18080/auth/v1/login", "Load failed");
+  assert.equal(
+    message,
+    "无法连接后端服务：http://127.0.0.1:18080/auth/v1/login。请确认服务已启动且允许跨域访问。原始错误：Load failed",
+  );
 });
 
 // 描述：校验查询字符串构造会忽略空值并保留有效字段。

@@ -2,6 +2,7 @@ import type { LoginUser } from "../types";
 import {
   buildAuthHeaders,
   buildBackendErrorMessage,
+  buildNetworkFailureMessage,
   isUnauthorizedResponse,
   toQueryString,
 } from "./backend-api-core.mjs";
@@ -150,11 +151,17 @@ async function request<T>(url: string, options?: RequestOptions): Promise<T> {
   const token = getAuthToken();
   const headers = buildAuthHeaders(token, authEnabled);
 
-  const response = await fetch(url, {
-    method,
-    headers,
-    body: options?.body === undefined ? undefined : JSON.stringify(options.body),
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers,
+      body: options?.body === undefined ? undefined : JSON.stringify(options.body),
+    });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new BackendApiError(buildNetworkFailureMessage(url, detail), -1, 0);
+  }
 
   let envelope: BackendEnvelope<T> | null = null;
   try {
