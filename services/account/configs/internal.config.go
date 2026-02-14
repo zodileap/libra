@@ -7,6 +7,8 @@ import (
 
 	zbootstrap "git.zodileap.com/taurus/zodileap_go_zbootstrap"
 	zspecs "git.zodileap.com/taurus/zodileap_go_zspecs"
+	tsql "github.com/zodileap/taurus_go/entity"
+	"github.com/zodileap/taurus_go/entity/dialect"
 )
 
 func init() {
@@ -14,7 +16,19 @@ func init() {
 }
 
 var Config = zbootstrap.Config{
-	PostgresEnable: false,
+	PostgresEnable: true,
+	PostgresConfig: []tsql.ConnectionConfig{
+		{
+			Driver:     dialect.PostgreSQL,
+			Tag:        "account",
+			Host:       "localhost",
+			Port:       5432,
+			User:       "postgres",
+			Password:   "",
+			DBName:     "zodileap_account",
+			IsVerifyCa: false,
+		},
+	},
 	RedisEnable:    false,
 	RouterEnable:   true,
 	RouterConfig: []zspecs.RouterConfig{
