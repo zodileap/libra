@@ -5,7 +5,10 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use zodileap_mcp_common::{normalize_segment, McpError, McpResult};
+use zodileap_mcp_common::{
+    normalize_segment, now_millis, McpError, McpResult, ProtocolAssetRecord, ProtocolEventRecord,
+    ProtocolStepRecord, ProtocolStepStatus,
+};
 
 use crate::{ExportModelRequest, ExportModelResult, ModelToolTarget};
 
@@ -36,6 +39,7 @@ pub struct BridgeActionResponse {
 }
 
 pub fn export_current_scene(request: ExportModelRequest) -> McpResult<ExportModelResult> {
+    let started_at = now_millis();
     let output_dir = Path::new(request.output_dir.trim());
     fs::create_dir_all(output_dir).map_err(|err| {
         McpError::new(
@@ -67,6 +71,7 @@ pub fn export_current_scene(request: ExportModelRequest) -> McpResult<ExportMode
             ),
         ));
     }
+    let finished_at = now_millis();
 
     Ok(ExportModelResult {
         exported_file: final_path.clone(),
@@ -75,6 +80,36 @@ pub fn export_current_scene(request: ExportModelRequest) -> McpResult<ExportMode
             request.project_name, request.prompt
         ),
         target: ModelToolTarget::Blender,
+        steps: vec![ProtocolStepRecord {
+            index: 0,
+            code: "export_glb".to_string(),
+            status: ProtocolStepStatus::Success,
+            elapsed_ms: finished_at.saturating_sub(started_at),
+            summary: "当前 Blender 场景导出成功".to_string(),
+            error: None,
+            data: None,
+        }],
+        events: vec![
+            ProtocolEventRecord {
+                event: "step_started".to_string(),
+                step_index: Some(0),
+                timestamp_ms: started_at,
+                message: "action=export_glb started".to_string(),
+            },
+            ProtocolEventRecord {
+                event: "step_finished".to_string(),
+                step_index: Some(0),
+                timestamp_ms: finished_at,
+                message: "action=export_glb finished".to_string(),
+            },
+        ],
+        assets: vec![ProtocolAssetRecord {
+            kind: "exported_model".to_string(),
+            path: final_path,
+            version: 1,
+            meta: Some(json!({"target":"blender"})),
+        }],
+        ui_hint: None,
     })
 }
 

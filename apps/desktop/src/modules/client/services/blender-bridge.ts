@@ -2,6 +2,13 @@ import { invoke } from "@tauri-apps/api/core";
 
 export const DEFAULT_BLENDER_BRIDGE_ADDR = "127.0.0.1:23331";
 
+export interface NormalizedInvokeErrorDetail {
+  code?: string;
+  message: string;
+  suggestion?: string;
+  retryable: boolean;
+}
+
 interface BridgeHealthResponse {
   ok: boolean;
   message: string;
@@ -11,25 +18,53 @@ interface InstallBridgeResponse {
   message: string;
 }
 
-export function normalizeInvokeError(err: unknown): string {
+/// 描述：将 invoke 抛出的任意错误对象转换为统一结构，优先保留协议错误码与建议。
+export function normalizeInvokeErrorDetail(err: unknown): NormalizedInvokeErrorDetail {
   if (typeof err === "string") {
-    return err;
+    return {
+      message: err,
+      retryable: false,
+    };
   }
   if (err instanceof Error) {
-    return err.message;
+    return {
+      message: err.message,
+      retryable: false,
+    };
   }
   if (err && typeof err === "object") {
-    const maybeMessage = (err as { message?: unknown }).message;
-    if (typeof maybeMessage === "string" && maybeMessage.trim()) {
-      return maybeMessage;
-    }
-    try {
-      return JSON.stringify(err);
-    } catch (_jsonErr) {
-      return "未知错误";
-    }
+    const maybe = err as {
+      code?: unknown;
+      message?: unknown;
+      suggestion?: unknown;
+      retryable?: unknown;
+    };
+    const message =
+      typeof maybe.message === "string" && maybe.message.trim()
+        ? maybe.message
+        : (() => {
+            try {
+              return JSON.stringify(err);
+            } catch (_jsonErr) {
+              return "未知错误";
+            }
+          })();
+    return {
+      code: typeof maybe.code === "string" ? maybe.code : undefined,
+      message,
+      suggestion: typeof maybe.suggestion === "string" ? maybe.suggestion : undefined,
+      retryable: Boolean(maybe.retryable),
+    };
   }
-  return "未知错误";
+  return {
+    message: "未知错误",
+    retryable: false,
+  };
+}
+
+/// 描述：兼容旧调用方，将 invoke 错误归一为可展示字符串。
+export function normalizeInvokeError(err: unknown): string {
+  return normalizeInvokeErrorDetail(err).message;
 }
 
 export async function checkBlenderBridge(

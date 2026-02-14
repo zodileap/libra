@@ -80,15 +80,41 @@ export interface AgentLogEvent {
   message: string;
 }
 
+export type ProtocolStepStatus = "success" | "failed" | "skipped" | "manual";
+
+export interface ProtocolError {
+  code: string;
+  message: string;
+  suggestion?: string;
+  retryable: boolean;
+}
+
+export type ProtocolUiHintActionIntent = "primary" | "default" | "danger";
+export type ProtocolUiHintLevel = "info" | "warning" | "danger";
+
+export interface ProtocolUiHintAction {
+  key: string;
+  label: string;
+  intent: ProtocolUiHintActionIntent;
+}
+
+export interface ProtocolUiHint {
+  key: string;
+  level: ProtocolUiHintLevel;
+  title: string;
+  message: string;
+  actions: ProtocolUiHintAction[];
+  context?: Record<string, unknown>;
+}
+
 export interface ModelStepRecord {
   index: number;
-  action: string;
-  input: string;
-  status: string;
+  code: string;
+  status: ProtocolStepStatus;
   elapsed_ms: number;
   summary: string;
-  error?: string;
-  exported_file?: string;
+  error?: ProtocolError;
+  data?: Record<string, unknown>;
 }
 
 export interface ModelEventRecord {
@@ -102,4 +128,5 @@ export interface ModelAssetRecord {
   kind: string;
   path: string;
   version: number;
+  meta?: Record<string, unknown>;
 }

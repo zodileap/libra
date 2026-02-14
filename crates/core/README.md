@@ -14,3 +14,12 @@
 - 各能力包可独立构建、独立发布、独立按需集成。
 - `agent` 可按 feature 选择是否集成 `mcp/code`、`mcp/model`。
 - 平台侧只依赖实际购买/启用的能力包，避免冗余打包。
+
+## 协议与边界
+
+- 对外协议文档：`crates/core/docs/protocol.md`
+- 统一协议类型定义：`core/mcp/common`（`ProtocolStepRecord`、`ProtocolEventRecord`、`ProtocolAssetRecord`、`ProtocolError`、`ProtocolUiHint`）
+- 模型复杂会话规划：`core/mcp/model`（复合步骤、风险分级、一次性确认令牌、恢复提示）
+- `agent` feature 边界：
+  - `with-mcp-model`：启用模型 MCP 能力。
+  - `with-mcp-code`：启用代码 MCP 能力边界（当前阶段以能力预留为主）。

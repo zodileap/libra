@@ -1,8 +1,20 @@
 mod blender_session;
+mod complex_session;
 mod zbrush;
 
 use serde_json::Value;
-use zodileap_mcp_common::{McpError, McpResult};
+use zodileap_mcp_common::{
+    now_millis, McpError, McpResult, ProtocolAssetRecord, ProtocolEventRecord, ProtocolStepRecord,
+    ProtocolStepStatus, ProtocolUiHint,
+};
+
+pub use complex_session::{
+    build_recovery_ui_hint, build_safety_confirmation_token, build_safety_confirmation_ui_hint,
+    build_step_trace_payload, check_capability_for_session_step, plan_model_session_steps,
+    requires_safety_confirmation, validate_safety_confirmation_token, ModelPlanBranch,
+    ModelPlanOperationKind, ModelPlanRiskLevel, ModelSessionCapabilityMatrix,
+    ModelSessionPlannedStep,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelToolTarget {
@@ -24,6 +36,10 @@ pub struct ExportModelResult {
     pub exported_file: String,
     pub summary: String,
     pub target: ModelToolTarget,
+    pub steps: Vec<ProtocolStepRecord>,
+    pub events: Vec<ProtocolEventRecord>,
+    pub assets: Vec<ProtocolAssetRecord>,
+    pub ui_hint: Option<ProtocolUiHint>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,6 +155,10 @@ pub struct ModelToolResult {
     pub message: String,
     pub output_path: Option<String>,
     pub data: Value,
+    pub steps: Vec<ProtocolStepRecord>,
+    pub events: Vec<ProtocolEventRecord>,
+    pub assets: Vec<ProtocolAssetRecord>,
+    pub ui_hint: Option<ProtocolUiHint>,
 }
 
 pub fn export_model(request: ExportModelRequest) -> McpResult<ExportModelResult> {
@@ -179,6 +199,7 @@ pub fn ping_blender_bridge(addr: Option<String>) -> McpResult<String> {
 }
 
 pub fn execute_model_tool(request: ModelToolRequest) -> McpResult<ModelToolResult> {
+    let started_at = now_millis();
     validate_tool_request(&request)?;
     let response = blender_session::invoke_action(
         request.action.as_str(),
@@ -186,11 +207,47 @@ pub fn execute_model_tool(request: ModelToolRequest) -> McpResult<ModelToolResul
         request.blender_bridge_addr,
         request.timeout_secs,
     )?;
+    let finished_at = now_millis();
+    let output_path = response.output_path.clone();
+    let mut assets: Vec<ProtocolAssetRecord> = Vec::new();
+    if let Some(path) = output_path.clone() {
+        assets.push(ProtocolAssetRecord {
+            kind: "model_output".to_string(),
+            path,
+            version: 1,
+            meta: None,
+        });
+    }
     Ok(ModelToolResult {
         action: request.action,
         message: response.message,
-        output_path: response.output_path,
+        output_path,
         data: response.data,
+        steps: vec![ProtocolStepRecord {
+            index: 0,
+            code: request.action.as_str().to_string(),
+            status: ProtocolStepStatus::Success,
+            elapsed_ms: finished_at.saturating_sub(started_at),
+            summary: "模型工具执行成功".to_string(),
+            error: None,
+            data: None,
+        }],
+        events: vec![
+            ProtocolEventRecord {
+                event: "step_started".to_string(),
+                step_index: Some(0),
+                timestamp_ms: started_at,
+                message: format!("action={} started", request.action.as_str()),
+            },
+            ProtocolEventRecord {
+                event: "step_finished".to_string(),
+                step_index: Some(0),
+                timestamp_ms: finished_at,
+                message: format!("action={} finished", request.action.as_str()),
+            },
+        ],
+        assets,
+        ui_hint: None,
     })
 }
 
@@ -348,3 +405,7 @@ mod tests {
         assert!(result.is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "complex_session_test.rs"]
+mod complex_session_tests;

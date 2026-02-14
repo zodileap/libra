@@ -11,10 +11,17 @@ use std::sync::Mutex;
 use std::time::Instant;
 use tauri::Emitter;
 use tauri::Manager;
-use zodileap_agent_core::{run_agent, AgentRunRequest};
+use zodileap_agent_core::{run_agent_with_protocol_error, AgentRunRequest};
+use zodileap_mcp_common::{
+    ProtocolAssetRecord, ProtocolError, ProtocolEventRecord, ProtocolStepRecord, ProtocolStepStatus,
+    ProtocolUiHint, ProtocolUiHintAction, ProtocolUiHintActionIntent, ProtocolUiHintLevel,
+};
 use zodileap_mcp_model::{
-    blender_bridge_addon_script, execute_model_tool, export_model, ping_blender_bridge,
-    ExportModelRequest, ModelToolAction, ModelToolRequest, ModelToolTarget,
+    blender_bridge_addon_script, build_recovery_ui_hint, build_safety_confirmation_ui_hint,
+    build_step_trace_payload, check_capability_for_session_step, execute_model_tool, export_model,
+    ping_blender_bridge, plan_model_session_steps, requires_safety_confirmation,
+    validate_safety_confirmation_token, ExportModelRequest, ModelSessionCapabilityMatrix,
+    ModelSessionPlannedStep, ModelToolAction, ModelToolRequest, ModelToolTarget,
 };
 
 #[derive(Serialize)]
@@ -41,6 +48,29 @@ struct AgentRunResponse {
     message: String,
     actions: Vec<String>,
     exported_file: Option<String>,
+    steps: Vec<ProtocolStepRecord>,
+    events: Vec<ProtocolEventRecord>,
+    assets: Vec<ProtocolAssetRecord>,
+    ui_hint: Option<ProtocolUiHint>,
+}
+
+#[derive(Serialize, Clone)]
+struct DesktopProtocolError {
+    code: String,
+    message: String,
+    suggestion: Option<String>,
+    retryable: bool,
+}
+
+impl From<ProtocolError> for DesktopProtocolError {
+    fn from(value: ProtocolError) -> Self {
+        Self {
+            code: value.code,
+            message: value.message,
+            suggestion: value.suggestion,
+            retryable: value.retryable,
+        }
+    }
 }
 
 #[derive(Deserialize, Clone, Default)]
@@ -54,32 +84,9 @@ struct ModelMcpCapabilities {
     file: Option<bool>,
 }
 
-#[derive(Serialize, Clone)]
-struct ModelStepRecord {
-    index: usize,
-    action: String,
-    input: String,
-    status: String,
-    elapsed_ms: u128,
-    summary: String,
-    error: Option<String>,
-    exported_file: Option<String>,
-}
-
-#[derive(Serialize, Clone)]
-struct ModelEventRecord {
-    event: String,
-    step_index: Option<usize>,
-    timestamp_ms: u128,
-    message: String,
-}
-
-#[derive(Serialize, Clone)]
-struct ModelAssetRecord {
-    kind: String,
-    path: String,
-    version: u64,
-}
+type ModelStepRecord = ProtocolStepRecord;
+type ModelEventRecord = ProtocolEventRecord;
+type ModelAssetRecord = ProtocolAssetRecord;
 
 #[derive(Default)]
 struct ModelSessionState {
@@ -105,6 +112,7 @@ struct ModelSessionRunResponse {
     events: Vec<ModelEventRecord>,
     assets: Vec<ModelAssetRecord>,
     exported_file: Option<String>,
+    ui_hint: Option<ProtocolUiHint>,
 }
 
 #[derive(Serialize, Clone)]
@@ -404,7 +412,7 @@ fn run_agent_command(
     model_export_enabled: Option<bool>,
     blender_bridge_addr: Option<String>,
     output_dir: Option<String>,
-) -> Result<AgentRunResponse, String> {
+) -> Result<AgentRunResponse, DesktopProtocolError> {
     let trace_id = trace_id
         .as_deref()
         .map(str::trim)
@@ -422,8 +430,12 @@ fn run_agent_command(
         let _ = app.emit("agent:log", payload);
     };
 
-    let current_dir =
-        env::current_dir().map_err(|err| format!("read current dir failed: {}", err))?;
+    let current_dir = env::current_dir().map_err(|err| DesktopProtocolError {
+        code: "core.desktop.agent.current_dir_read_failed".to_string(),
+        message: format!("read current dir failed: {}", err),
+        suggestion: None,
+        retryable: false,
+    })?;
     let default_output_dir = app
         .path()
         .app_data_dir()
@@ -458,8 +470,12 @@ fn run_agent_command(
         );
         selected_output_dir = safe_output_dir;
     }
-    fs::create_dir_all(&selected_output_dir)
-        .map_err(|err| format!("create agent output dir failed: {}", err))?;
+    fs::create_dir_all(&selected_output_dir).map_err(|err| DesktopProtocolError {
+        code: "core.desktop.agent.output_dir_create_failed".to_string(),
+        message: format!("create agent output dir failed: {}", err),
+        suggestion: None,
+        retryable: false,
+    })?;
     log(
         "info",
         "request",
@@ -482,7 +498,7 @@ fn run_agent_command(
         format!("output_dir={}", selected_output_dir.to_string_lossy()),
     );
 
-    let result = run_agent(AgentRunRequest {
+    let result = run_agent_with_protocol_error(AgentRunRequest {
         agent_key,
         provider: provider.unwrap_or_else(|| "codex".to_string()),
         prompt,
@@ -511,8 +527,8 @@ fn run_agent_command(
             value
         }
         Err(err) => {
-            log("error", "result", err.clone());
-            return Err(err);
+            log("error", "result", err.to_string());
+            return Err(err.into());
         }
     };
 
@@ -521,6 +537,10 @@ fn run_agent_command(
         message: result.message,
         actions: result.actions,
         exported_file: result.exported_file,
+        steps: result.steps,
+        events: result.events,
+        assets: result.assets,
+        ui_hint: result.ui_hint,
     })
 }
 
@@ -569,6 +589,90 @@ fn now_millis() -> u128 {
         .unwrap_or(0)
 }
 
+/// 描述：将文本错误拆分为协议错误码和消息，优先复用上游返回的 `code: message` 格式。
+fn split_error_code_and_message(raw: &str, fallback_code: &str) -> (String, String) {
+    let normalized = raw.trim();
+    if let Some((left, right)) = normalized.split_once(": ") {
+        let code_like = left
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '.' || ch == '_');
+        if code_like && left.contains('.') && !right.trim().is_empty() {
+            return (left.to_string(), right.trim().to_string());
+        }
+    }
+    (fallback_code.to_string(), normalized.to_string())
+}
+
+/// 描述：将文本错误转换为协议错误对象，便于步骤记录和前端展示共用。
+fn protocol_error_from_text(raw: &str, fallback_code: &str, retryable: bool) -> ProtocolError {
+    let (code, message) = split_error_code_and_message(raw, fallback_code);
+    ProtocolError::new(code, message).with_retryable(retryable)
+}
+
+/// 描述：将文本错误转换为桌面端命令错误，用于 Tauri invoke 结构化回传。
+fn desktop_error_from_text(raw: &str, fallback_code: &str, retryable: bool) -> DesktopProtocolError {
+    let protocol_error = protocol_error_from_text(raw, fallback_code, retryable);
+    DesktopProtocolError::from(protocol_error)
+}
+
+/// 描述：根据协议错误生成桌面端 UI Hint，统一重试、配置修复等动作建议。
+fn build_ui_hint_from_protocol_error(error: &ProtocolError) -> Option<ProtocolUiHint> {
+    let lower_code = error.code.to_lowercase();
+    let lower_message = error.message.to_lowercase();
+
+    if lower_code.contains("invalid_bridge_addr")
+        || lower_code.contains("bridge_connect_failed")
+        || lower_message.contains("blender")
+    {
+        return Some(ProtocolUiHint {
+            key: "restart-blender-bridge".to_string(),
+            level: ProtocolUiHintLevel::Warning,
+            title: "需要检查 Blender Bridge".to_string(),
+            message: error
+                .suggestion
+                .clone()
+                .unwrap_or_else(|| "请确认 Blender 已启动且 MCP Bridge 插件已启用，然后重试。".to_string()),
+            actions: vec![
+                ProtocolUiHintAction {
+                    key: "retry_last_step".to_string(),
+                    label: "我已修复并重试".to_string(),
+                    intent: ProtocolUiHintActionIntent::Primary,
+                },
+                ProtocolUiHintAction {
+                    key: "dismiss".to_string(),
+                    label: "暂不处理".to_string(),
+                    intent: ProtocolUiHintActionIntent::Default,
+                },
+            ],
+            context: None,
+        });
+    }
+
+    if lower_message.contains("导出能力已关闭") || lower_code.contains("capability_disabled") {
+        return Some(ProtocolUiHint {
+            key: "export-capability-disabled".to_string(),
+            level: ProtocolUiHintLevel::Info,
+            title: "导出能力已关闭".to_string(),
+            message: "当前会话仍可执行编辑操作；如需导出，请先在模型设置中开启导出能力。".to_string(),
+            actions: vec![
+                ProtocolUiHintAction {
+                    key: "open_model_settings".to_string(),
+                    label: "打开模型设置".to_string(),
+                    intent: ProtocolUiHintActionIntent::Primary,
+                },
+                ProtocolUiHintAction {
+                    key: "dismiss".to_string(),
+                    label: "知道了".to_string(),
+                    intent: ProtocolUiHintActionIntent::Default,
+                },
+            ],
+            context: None,
+        });
+    }
+
+    None
+}
+
 fn normalize_output_dir_for_model(
     app: &tauri::AppHandle,
     output_dir: Option<String>,
@@ -605,6 +709,19 @@ fn normalize_output_dir_for_model(
 
 fn capability_enabled(value: Option<bool>) -> bool {
     value.unwrap_or(true)
+}
+
+/// 描述：将桌面侧能力配置映射为 Core 复杂会话能力矩阵。
+fn to_core_capability_matrix(capabilities: &ModelMcpCapabilities) -> ModelSessionCapabilityMatrix {
+    ModelSessionCapabilityMatrix {
+        export: capability_enabled(capabilities.export),
+        scene: capability_enabled(capabilities.scene),
+        transform: capability_enabled(capabilities.transform),
+        geometry: capability_enabled(capabilities.geometry),
+        mesh_opt: capability_enabled(capabilities.mesh_opt),
+        material: capability_enabled(capabilities.material),
+        file: capability_enabled(capabilities.file),
+    }
 }
 
 fn parse_first_number(input: &str) -> Option<f64> {
@@ -684,6 +801,7 @@ fn is_add_cube_intent(prompt: &str, lower: &str) -> bool {
     starts_with_create_verb && has_cube_noun
 }
 
+#[allow(dead_code)]
 #[derive(Clone)]
 enum PlannedModelStep {
     Export {
@@ -975,6 +1093,7 @@ fn plan_model_steps(prompt: &str) -> Vec<PlannedModelStep> {
     steps
 }
 
+#[allow(dead_code)]
 fn check_capability_for_step(
     capabilities: &ModelMcpCapabilities,
     step: &PlannedModelStep,
@@ -1076,71 +1195,197 @@ fn run_model_session_command(
     capabilities: Option<ModelMcpCapabilities>,
     output_dir: Option<String>,
     blender_bridge_addr: Option<String>,
-) -> Result<ModelSessionRunResponse, String> {
+    confirmation_token: Option<String>,
+) -> Result<ModelSessionRunResponse, DesktopProtocolError> {
     let trace_id = trace_id.unwrap_or_else(|| format!("trace-{}", now_millis()));
     let normalized_prompt = prompt.trim();
     if normalized_prompt.is_empty() {
-        return Err("prompt cannot be empty".to_string());
+        return Err(DesktopProtocolError {
+            code: "core.desktop.model.prompt_empty".to_string(),
+            message: "prompt cannot be empty".to_string(),
+            suggestion: Some("请输入具体的模型操作指令".to_string()),
+            retryable: false,
+        });
     }
     let capabilities = capabilities.unwrap_or_default();
-    let output_dir = normalize_output_dir_for_model(&app, output_dir)?;
+    let core_capabilities = to_core_capability_matrix(&capabilities);
+    let output_dir = normalize_output_dir_for_model(&app, output_dir)
+        .map_err(|err| desktop_error_from_text(&err, "core.desktop.model.output_dir_invalid", false))?;
     let output_dir_string = output_dir.to_string_lossy().to_string();
-    let planned_steps = plan_model_steps(normalized_prompt);
+    let planned_steps = plan_model_session_steps(normalized_prompt);
     if planned_steps.is_empty() {
         let lower = normalized_prompt.to_lowercase();
         let has_dcc_intent = [
             "blender", "zbrush", "模型", "mcp", "移动", "旋转", "缩放", "颜色", "材质", "导入",
-            "导出", "打开", "保存", "正方体", "立方体", "cube", "box",
+            "导出", "打开", "保存", "正方体", "立方体", "cube", "box", "布尔链", "修改器链",
+            "批量变换", "批量材质", "场景级操作", "scene pipeline", "boolean chain",
         ]
         .iter()
         .any(|keyword| lower.contains(keyword));
         if has_dcc_intent {
-            return Err(
-                "已识别为 DCC 操作，但当前 MCP 暂不支持该具体指令；不会自动替换成其他动作。当前可用：导出、列出对象、选择对象、重命名、层级整理、新建/打开/保存、撤销/重做、对齐原点、统一尺度/方向、添加正方体、加厚、倒角、镜像、阵列、布尔、自动平滑、法线加权、减面、材质槽整理、贴图路径检查、打包贴图。".to_string()
-            );
+            return Err(desktop_error_from_text(
+                "已识别为 DCC 操作，但当前 MCP 暂不支持该具体指令；不会自动替换成其他动作。当前可用：导出、列出对象、选择对象、重命名、层级整理、新建/打开/保存、撤销/重做、对齐原点、统一尺度/方向、添加正方体、加厚、倒角、镜像、阵列、布尔、自动平滑、法线加权、减面、材质槽整理、贴图路径检查、打包贴图。",
+                "core.desktop.model.unsupported_action",
+                false,
+            ));
         }
-        return Err(
-            "未识别到可执行的模型操作。可尝试：导出、打开文件、保存、加厚、倒角、镜像、阵列、减面、自动平滑。"
-                .to_string(),
-        );
+        return Err(desktop_error_from_text(
+            "未识别到可执行的模型操作。可尝试：导出、打开文件、保存、加厚、倒角、镜像、阵列、减面、自动平滑。",
+            "core.desktop.model.unrecognized_step",
+            false,
+        ));
     }
 
     {
         let mut map = store
             .sessions
             .lock()
-            .map_err(|_| "model session store lock poisoned".to_string())?;
+            .map_err(|_| DesktopProtocolError {
+                code: "core.desktop.model.store_lock_failed".to_string(),
+                message: "model session store lock poisoned".to_string(),
+                suggestion: None,
+                retryable: true,
+            })?;
         let session = map.entry(session_id.clone()).or_default();
         session.cancelled = false;
         session.last_prompt = Some(normalized_prompt.to_string());
         session.last_output_dir = Some(output_dir_string.clone());
     }
 
+    if requires_safety_confirmation(&planned_steps) {
+        let valid = confirmation_token
+            .as_deref()
+            .map(|value| validate_safety_confirmation_token(&trace_id, normalized_prompt, value))
+            .unwrap_or(false);
+        if !valid {
+            let base_index = {
+                let map = store
+                    .sessions
+                    .lock()
+                    .map_err(|_| DesktopProtocolError {
+                        code: "core.desktop.model.store_lock_failed".to_string(),
+                        message: "model session store lock poisoned".to_string(),
+                        suggestion: None,
+                        retryable: true,
+                    })?;
+                map.get(&session_id).map(|state| state.steps.len()).unwrap_or(0)
+            };
+            let ui_hint = build_safety_confirmation_ui_hint(&trace_id, normalized_prompt, &planned_steps);
+            let created_steps = vec![ModelStepRecord {
+                index: base_index,
+                code: "safety_confirmation".to_string(),
+                status: ProtocolStepStatus::Manual,
+                elapsed_ms: 0,
+                summary: "检测到高风险复杂操作，等待一次性确认".to_string(),
+                error: None,
+                data: Some(json!({
+                    "trace_id": trace_id,
+                    "step_code": "safety_confirmation",
+                    "operation_kind": "safety",
+                    "branch": "primary",
+                    "risk_level": "high",
+                    "recoverable": false,
+                    "planned_step_count": planned_steps.len(),
+                })),
+            }];
+            let created_events = vec![ModelEventRecord {
+                event: "safety_confirmation_required".to_string(),
+                step_index: Some(base_index),
+                timestamp_ms: now_millis(),
+                message: "complex session requires one-time confirmation token".to_string(),
+            }];
+            let (all_steps, all_events, all_assets) = {
+                let mut map = store
+                    .sessions
+                    .lock()
+                    .map_err(|_| DesktopProtocolError {
+                        code: "core.desktop.model.store_lock_failed".to_string(),
+                        message: "model session store lock poisoned".to_string(),
+                        suggestion: None,
+                        retryable: true,
+                    })?;
+                let session = map.entry(session_id.clone()).or_default();
+                session.steps.extend(created_steps.clone());
+                session.events.extend(created_events.clone());
+                (
+                    session.steps.clone(),
+                    session.events.clone(),
+                    session.assets.clone(),
+                )
+            };
+            return Ok(ModelSessionRunResponse {
+                trace_id,
+                message: "检测到高风险复杂操作，等待你确认后执行一次。".to_string(),
+                steps: all_steps,
+                events: all_events,
+                assets: all_assets,
+                exported_file: None,
+                ui_hint: Some(ui_hint),
+            });
+        }
+    }
+
     let mut created_steps: Vec<ModelStepRecord> = Vec::new();
     let mut created_events: Vec<ModelEventRecord> = Vec::new();
     let mut created_assets: Vec<ModelAssetRecord> = Vec::new();
     let mut exported_file: Option<String> = None;
+    let fallback_steps: Vec<ModelSessionPlannedStep> = planned_steps
+        .iter()
+        .filter(|item| item.branch().as_str() == "fallback")
+        .cloned()
+        .collect();
+    let primary_steps: Vec<ModelSessionPlannedStep> = planned_steps
+        .iter()
+        .filter(|item| item.branch().as_str() == "primary")
+        .cloned()
+        .collect();
 
-    for step in planned_steps {
+    for step in primary_steps {
         {
             let map = store
                 .sessions
                 .lock()
-                .map_err(|_| "model session store lock poisoned".to_string())?;
+                .map_err(|_| DesktopProtocolError {
+                    code: "core.desktop.model.store_lock_failed".to_string(),
+                    message: "model session store lock poisoned".to_string(),
+                    suggestion: None,
+                    retryable: true,
+                })?;
             let session = map
                 .get(&session_id)
-                .ok_or_else(|| "session state not found".to_string())?;
+                .ok_or_else(|| DesktopProtocolError {
+                    code: "core.desktop.model.session_not_found".to_string(),
+                    message: "session state not found".to_string(),
+                    suggestion: None,
+                    retryable: false,
+                })?;
             if session.cancelled {
-                return Err("步骤执行已取消".to_string());
+                return Err(DesktopProtocolError {
+                    code: "core.desktop.model.cancelled".to_string(),
+                    message: "步骤执行已取消".to_string(),
+                    suggestion: Some("如需继续，可点击“重试最近一步”重新执行".to_string()),
+                    retryable: true,
+                });
             }
         }
 
-        check_capability_for_step(&capabilities, &step)?;
+        check_capability_for_session_step(&core_capabilities, &step).map_err(|err| {
+            desktop_error_from_text(
+                &err.to_string(),
+                "core.desktop.model.capability_disabled",
+                false,
+            )
+        })?;
         let next_index = {
             let map = store
                 .sessions
                 .lock()
-                .map_err(|_| "model session store lock poisoned".to_string())?;
+                .map_err(|_| DesktopProtocolError {
+                    code: "core.desktop.model.store_lock_failed".to_string(),
+                    message: "model session store lock poisoned".to_string(),
+                    suggestion: None,
+                    retryable: true,
+                })?;
             map.get(&session_id)
                 .map(|state| state.steps.len())
                 .unwrap_or(0)
@@ -1151,11 +1396,25 @@ fn run_model_session_command(
             timestamp_ms: now_millis(),
             message: format!("step {} started", next_index + 1),
         });
+        created_events.push(ModelEventRecord {
+            event: "branch_selected".to_string(),
+            step_index: Some(next_index),
+            timestamp_ms: now_millis(),
+            message: format!(
+                "operation={} branch={} risk={}",
+                step.operation_kind().as_str(),
+                step.branch().as_str(),
+                step.risk_level().as_str()
+            ),
+        });
         let started = Instant::now();
+        let step_code = step.code();
+        let step_input = step.input().to_string();
+        let step_trace_data = build_step_trace_payload(&step);
 
         let step_result: Result<(String, Option<String>), String> = match &step {
-            PlannedModelStep::Export { .. } => {
-                let result = export_model(ExportModelRequest {
+            ModelSessionPlannedStep::Export { .. } => {
+                export_model(ExportModelRequest {
                     project_name: project_name
                         .as_deref()
                         .map(str::trim)
@@ -1167,13 +1426,15 @@ fn run_model_session_command(
                     blender_bridge_addr: blender_bridge_addr.clone(),
                     target: ModelToolTarget::Blender,
                 })
-                .map_err(|err| err.to_string())?;
-                Ok((
-                    format!("导出成功：{}", result.exported_file),
-                    Some(result.exported_file),
-                ))
+                .map(|result| {
+                    (
+                        format!("导出成功：{}", result.exported_file),
+                        Some(result.exported_file),
+                    )
+                })
+                .map_err(|err| err.to_string())
             }
-            PlannedModelStep::Tool { action, params, .. } => {
+            ModelSessionPlannedStep::Tool { action, params, .. } => {
                 execute_model_tool_with_bridge_upgrade(
                     *action,
                     params.clone(),
@@ -1185,21 +1446,24 @@ fn run_model_session_command(
         let elapsed = started.elapsed().as_millis();
         match step_result {
             Ok((summary, output_path)) => {
+                let mut step_data = step_trace_data.clone();
+                if let Some(raw) = step_data.as_object_mut() {
+                    raw.insert("input".to_string(), json!(step_input));
+                    raw.insert("trace_id".to_string(), json!(trace_id.clone()));
+                }
+                if let Some(path) = output_path.clone() {
+                    if let Some(raw) = step_data.as_object_mut() {
+                        raw.insert("exported_file".to_string(), json!(path.clone()));
+                    }
+                }
                 let step_record = ModelStepRecord {
                     index: next_index,
-                    action: match &step {
-                        PlannedModelStep::Export { .. } => "export_glb".to_string(),
-                        PlannedModelStep::Tool { action, .. } => action.as_str().to_string(),
-                    },
-                    input: match &step {
-                        PlannedModelStep::Export { input } => input.clone(),
-                        PlannedModelStep::Tool { input, .. } => input.clone(),
-                    },
-                    status: "success".to_string(),
+                    code: step_code.clone(),
+                    status: ProtocolStepStatus::Success,
                     elapsed_ms: elapsed,
                     summary: summary.clone(),
                     error: None,
-                    exported_file: output_path.clone(),
+                    data: Some(step_data),
                 };
                 if let Some(path) = output_path.clone() {
                     exported_file = Some(path.clone());
@@ -1207,10 +1471,20 @@ fn run_model_session_command(
                         let mut map = store
                             .sessions
                             .lock()
-                            .map_err(|_| "model session store lock poisoned".to_string())?;
+                            .map_err(|_| DesktopProtocolError {
+                                code: "core.desktop.model.store_lock_failed".to_string(),
+                                message: "model session store lock poisoned".to_string(),
+                                suggestion: None,
+                                retryable: true,
+                            })?;
                         let session = map
                             .get_mut(&session_id)
-                            .ok_or_else(|| "session state not found".to_string())?;
+                            .ok_or_else(|| DesktopProtocolError {
+                                code: "core.desktop.model.session_not_found".to_string(),
+                                message: "session state not found".to_string(),
+                                suggestion: None,
+                                retryable: false,
+                            })?;
                         session.version += 1;
                         session.version
                     };
@@ -1218,6 +1492,7 @@ fn run_model_session_command(
                         kind: "exported_model".to_string(),
                         path,
                         version,
+                        meta: Some(step_trace_data.clone()),
                     });
                 }
                 created_events.push(ModelEventRecord {
@@ -1229,44 +1504,135 @@ fn run_model_session_command(
                 created_steps.push(step_record);
             }
             Err(err) => {
+                let protocol_error =
+                    protocol_error_from_text(&err, "core.desktop.model.step_failed", true);
+                let mut failed_step_data = step_trace_data.clone();
+                if let Some(raw) = failed_step_data.as_object_mut() {
+                    raw.insert("input".to_string(), json!(step_input.clone()));
+                    raw.insert("trace_id".to_string(), json!(trace_id.clone()));
+                    raw.insert("error_code".to_string(), json!(protocol_error.code.clone()));
+                    raw.insert("error_message".to_string(), json!(protocol_error.message.clone()));
+                    raw.insert("error_attribution".to_string(), json!(step.code()));
+                }
                 let step_record = ModelStepRecord {
                     index: next_index,
-                    action: match &step {
-                        PlannedModelStep::Export { .. } => "export_glb".to_string(),
-                        PlannedModelStep::Tool { action, .. } => action.as_str().to_string(),
-                    },
-                    input: match &step {
-                        PlannedModelStep::Export { input } => input.clone(),
-                        PlannedModelStep::Tool { input, .. } => input.clone(),
-                    },
-                    status: "failed".to_string(),
+                    code: step_code.clone(),
+                    status: ProtocolStepStatus::Failed,
                     elapsed_ms: elapsed,
                     summary: "执行失败".to_string(),
-                    error: Some(err.clone()),
-                    exported_file: None,
+                    error: Some(protocol_error.clone()),
+                    data: Some(failed_step_data),
                 };
                 created_events.push(ModelEventRecord {
                     event: "step_failed".to_string(),
                     step_index: Some(next_index),
                     timestamp_ms: now_millis(),
-                    message: err.clone(),
+                    message: protocol_error.message.clone(),
                 });
                 created_steps.push(step_record.clone());
 
-                let mut map = store
-                    .sessions
-                    .lock()
-                    .map_err(|_| "model session store lock poisoned".to_string())?;
-                let session = map.entry(session_id.clone()).or_default();
-                session.steps.extend(created_steps.clone());
-                session.steps.push(step_record);
-                session.events.extend(created_events.clone());
-                session.assets.extend(created_assets.clone());
-                return Err(format!(
-                    "步骤 {} 失败：{}。建议：检查 Bridge 连接、对象选择状态以及参数范围。",
-                    next_index + 1,
-                    err
-                ));
+                let mut recovery_summary = String::new();
+                if step.recoverable() {
+                    created_events.push(ModelEventRecord {
+                        event: "rollback_started".to_string(),
+                        step_index: Some(next_index),
+                        timestamp_ms: now_millis(),
+                        message: "主步骤失败，开始执行自动回滚".to_string(),
+                    });
+                    if let Ok((rollback_msg, _)) = execute_model_tool_with_bridge_upgrade(
+                        ModelToolAction::Undo,
+                        json!({}),
+                        blender_bridge_addr.clone(),
+                    ) {
+                        let rollback_index = next_index + 1;
+                        created_steps.push(ModelStepRecord {
+                            index: rollback_index,
+                            code: "rollback_undo".to_string(),
+                            status: ProtocolStepStatus::Success,
+                            elapsed_ms: 0,
+                            summary: rollback_msg.clone(),
+                            error: None,
+                            data: Some(json!({
+                                "trace_id": trace_id,
+                                "operation_kind": step.operation_kind().as_str(),
+                                "branch": "fallback",
+                                "risk_level": "low",
+                                "recoverable": false,
+                                "rollback_of": step_code,
+                                "condition": "on_primary_failed",
+                            })),
+                        });
+                        created_events.push(ModelEventRecord {
+                            event: "rollback_finished".to_string(),
+                            step_index: Some(rollback_index),
+                            timestamp_ms: now_millis(),
+                            message: "自动回滚完成".to_string(),
+                        });
+                        recovery_summary = "已自动执行 Undo 回滚。".to_string();
+                    } else {
+                        created_events.push(ModelEventRecord {
+                            event: "rollback_failed".to_string(),
+                            step_index: Some(next_index),
+                            timestamp_ms: now_millis(),
+                            message: "自动回滚失败".to_string(),
+                        });
+                    }
+                }
+
+                for fallback_step in fallback_steps.clone() {
+                    if fallback_step.condition() != Some("on_primary_failed") {
+                        continue;
+                    }
+                    if let ModelSessionPlannedStep::Tool { action, params, .. } = fallback_step {
+                        let _ = execute_model_tool_with_bridge_upgrade(
+                            action,
+                            params,
+                            blender_bridge_addr.clone(),
+                        );
+                    }
+                }
+
+                let (all_steps, all_events, all_assets) = {
+                    let mut map = store
+                        .sessions
+                        .lock()
+                        .map_err(|_| DesktopProtocolError {
+                            code: "core.desktop.model.store_lock_failed".to_string(),
+                            message: "model session store lock poisoned".to_string(),
+                            suggestion: None,
+                            retryable: true,
+                        })?;
+                    let session = map.entry(session_id.clone()).or_default();
+                    session.steps.extend(created_steps.clone());
+                    session.events.extend(created_events.clone());
+                    session.assets.extend(created_assets.clone());
+                    (
+                        session.steps.clone(),
+                        session.events.clone(),
+                        session.assets.clone(),
+                    )
+                };
+
+                let ui_hint = if step.recoverable() {
+                    Some(build_recovery_ui_hint(&step, &protocol_error))
+                } else {
+                    build_ui_hint_from_protocol_error(&protocol_error)
+                };
+
+                return Ok(ModelSessionRunResponse {
+                    trace_id,
+                    message: format!(
+                        "工作流在步骤 `{}` 失败：{} {}",
+                        step.code(),
+                        protocol_error.message,
+                        recovery_summary
+                    ),
+                    steps: all_steps,
+                    events: all_events,
+                    assets: all_assets,
+                    exported_file,
+                    ui_hint,
+                });
             }
         }
     }
@@ -1275,7 +1641,12 @@ fn run_model_session_command(
         let mut map = store
             .sessions
             .lock()
-            .map_err(|_| "model session store lock poisoned".to_string())?;
+            .map_err(|_| DesktopProtocolError {
+                code: "core.desktop.model.store_lock_failed".to_string(),
+                message: "model session store lock poisoned".to_string(),
+                suggestion: None,
+                retryable: true,
+            })?;
         let session = map.entry(session_id.clone()).or_default();
         session.steps.extend(created_steps.clone());
         session.events.extend(created_events.clone());
@@ -1292,7 +1663,7 @@ fn run_model_session_command(
         .map(|step| {
             format!(
                 "- [{}] {}（{}ms）",
-                step.action, step.summary, step.elapsed_ms
+                step.code, step.summary, step.elapsed_ms
             )
         })
         .collect::<Vec<_>>()
@@ -1314,6 +1685,7 @@ fn run_model_session_command(
         events: all_events,
         assets: all_assets,
         exported_file,
+        ui_hint: None,
     })
 }
 
@@ -1326,20 +1698,35 @@ fn retry_model_session_last_step(
     project_name: Option<String>,
     capabilities: Option<ModelMcpCapabilities>,
     blender_bridge_addr: Option<String>,
-) -> Result<ModelSessionRunResponse, String> {
+) -> Result<ModelSessionRunResponse, DesktopProtocolError> {
     let (last_prompt, last_output_dir) = {
         let map = store
             .sessions
             .lock()
-            .map_err(|_| "model session store lock poisoned".to_string())?;
+            .map_err(|_| DesktopProtocolError {
+                code: "core.desktop.model.store_lock_failed".to_string(),
+                message: "model session store lock poisoned".to_string(),
+                suggestion: None,
+                retryable: true,
+            })?;
         let state = map
             .get(&session_id)
-            .ok_or_else(|| "会话不存在，无法重试".to_string())?;
+            .ok_or_else(|| DesktopProtocolError {
+                code: "core.desktop.model.session_not_found".to_string(),
+                message: "会话不存在，无法重试".to_string(),
+                suggestion: None,
+                retryable: false,
+            })?;
         (
             state
                 .last_prompt
                 .clone()
-                .ok_or_else(|| "暂无可重试步骤".to_string())?,
+                .ok_or_else(|| DesktopProtocolError {
+                    code: "core.desktop.model.retry_not_available".to_string(),
+                    message: "暂无可重试步骤".to_string(),
+                    suggestion: None,
+                    retryable: false,
+                })?,
             state.last_output_dir.clone(),
         )
     };
@@ -1354,6 +1741,7 @@ fn retry_model_session_last_step(
         capabilities,
         last_output_dir,
         blender_bridge_addr,
+        None,
     )
 }
 
@@ -1364,7 +1752,7 @@ fn undo_model_session_step(
     session_id: String,
     trace_id: Option<String>,
     blender_bridge_addr: Option<String>,
-) -> Result<ModelSessionRunResponse, String> {
+) -> Result<ModelSessionRunResponse, DesktopProtocolError> {
     run_model_session_command(
         app,
         store,
@@ -1378,6 +1766,7 @@ fn undo_model_session_step(
         }),
         None,
         blender_bridge_addr,
+        None,
     )
 }
 
@@ -1414,6 +1803,7 @@ fn get_model_session_records(
         events: session.events.clone(),
         assets: session.assets.clone(),
         exported_file: session.assets.last().map(|item| item.path.clone()),
+        ui_hint: None,
     })
 }
 
@@ -1438,7 +1828,11 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{plan_model_steps, PlannedModelStep};
+    use super::{
+        build_ui_hint_from_protocol_error, plan_model_steps, split_error_code_and_message,
+        PlannedModelStep,
+    };
+    use zodileap_mcp_common::ProtocolError;
 
     #[test]
     fn add_cube_should_not_trigger_export() {
@@ -1464,5 +1858,26 @@ mod tests {
             .iter()
             .any(|step| matches!(step, PlannedModelStep::Export { .. }));
         assert!(has_export, "用户明确要求导出时应触发导出动作");
+    }
+
+    #[test]
+    fn should_split_protocol_error_text() {
+        let (code, message) = split_error_code_and_message(
+            "mcp.model.export.invalid_bridge_addr: invalid bridge addr `127.0.0.1:notaport`",
+            "fallback.code",
+        );
+        assert_eq!(code, "mcp.model.export.invalid_bridge_addr");
+        assert!(message.contains("invalid bridge addr"));
+    }
+
+    #[test]
+    fn should_build_bridge_ui_hint_from_protocol_error() {
+        let error = ProtocolError::new(
+            "mcp.model.export.invalid_bridge_addr",
+            "invalid bridge addr",
+        );
+        let ui_hint = build_ui_hint_from_protocol_error(&error).expect("must have ui hint");
+        assert_eq!(ui_hint.key, "restart-blender-bridge");
+        assert!(!ui_hint.actions.is_empty());
     }
 }
