@@ -11,3 +11,4 @@ with-mcp-code = ["dep:zodileap_mcp_code"]
 [dependencies]
 zodileap_mcp_model = { path = "../mcp/model", optional = true }
 zodileap_mcp_code = { path = "../mcp/code", optional = true }
+zodileap_mcp_common = { path = "../mcp/common" }

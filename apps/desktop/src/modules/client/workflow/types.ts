@@ -1,4 +1,11 @@
-import type { AiKeyItem, ModelMcpCapabilities, ModelAssetRecord, ModelEventRecord, ModelStepRecord } from "../types";
+import type {
+  AiKeyItem,
+  ModelMcpCapabilities,
+  ModelAssetRecord,
+  ModelEventRecord,
+  ModelStepRecord,
+  ProtocolUiHint,
+} from "../types";
 
 export type WorkflowNodeKind =
   | "input"
@@ -10,6 +17,7 @@ export type WorkflowNodeKind =
 
 export type WorkflowUiHintActionKind =
   | "retry_last_step"
+  | "apply_recovery_plan"
   | "open_model_settings"
   | "dismiss"
   | "allow_once"
@@ -73,10 +81,12 @@ export interface WorkflowRunResult {
   referenceImagesDetected: string[];
   uiHint?: WorkflowUiHint;
   modelSession?: {
+    trace_id: string;
     steps: ModelStepRecord[];
     events: ModelEventRecord[];
     assets: ModelAssetRecord[];
     exported_file?: string;
+    ui_hint?: ProtocolUiHint;
   };
 }
 
@@ -91,4 +101,5 @@ export interface WorkflowRunRequest {
   modelMcpCapabilities: ModelMcpCapabilities;
   outputDir?: string;
   allowDangerousAction?: boolean;
+  confirmationToken?: string;
 }

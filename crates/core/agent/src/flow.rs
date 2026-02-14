@@ -4,6 +4,7 @@ pub enum AgentKind {
     Model,
 }
 
+/// 描述：根据智能体类型构建系统提示词，约束模型输出风格与目标。
 pub fn build_system_prompt(agent_kind: AgentKind) -> &'static str {
     match agent_kind {
         AgentKind::Code => {
@@ -17,7 +18,12 @@ pub fn build_system_prompt(agent_kind: AgentKind) -> &'static str {
     }
 }
 
-pub fn compose_prompt(agent_kind: AgentKind, user_prompt: &str, tool_context: Option<&str>) -> String {
+/// 描述：组合最终提示词，在有工具上下文时注入执行结果以支持连续决策。
+pub fn compose_prompt(
+    agent_kind: AgentKind,
+    user_prompt: &str,
+    tool_context: Option<&str>,
+) -> String {
     let system = build_system_prompt(agent_kind);
     match tool_context {
         Some(context) if !context.trim().is_empty() => format!(
@@ -26,3 +32,7 @@ pub fn compose_prompt(agent_kind: AgentKind, user_prompt: &str, tool_context: Op
         _ => format!("{system}\n\n用户输入：\n{user_prompt}"),
     }
 }
+
+#[cfg(test)]
+#[path = "flow_tests.rs"]
+mod tests;

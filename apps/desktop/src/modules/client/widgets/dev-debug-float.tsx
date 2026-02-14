@@ -8,8 +8,9 @@ interface SessionDebugSnapshot {
   agentKey?: string;
   title?: string;
   status?: string;
+  traceRecords?: Array<{ traceId?: string; source?: string; code?: string; message?: string }>;
   workflowStepRecords?: Array<{ name?: string; status?: string; summary?: string }>;
-  stepRecords?: Array<{ action?: string; status?: string; elapsed_ms?: number }>;
+  stepRecords?: Array<{ code?: string; status?: string; elapsed_ms?: number }>;
   eventRecords?: Array<{ event?: string; message?: string }>;
   assetRecords?: Array<{ kind?: string; path?: string; version?: number }>;
   messageCount?: number;
@@ -81,7 +82,7 @@ export function DevDebugFloat() {
             />
             <AriTypography
               variant="caption"
-              value={`消息数=${snapshot?.messageCount ?? 0} workflow=${snapshot?.workflowStepRecords?.length || 0} steps=${snapshot?.stepRecords?.length || 0} events=${snapshot?.eventRecords?.length || 0} assets=${snapshot?.assetRecords?.length || 0}`}
+              value={`消息数=${snapshot?.messageCount ?? 0} trace=${snapshot?.traceRecords?.length || 0} workflow=${snapshot?.workflowStepRecords?.length || 0} steps=${snapshot?.stepRecords?.length || 0} events=${snapshot?.eventRecords?.length || 0} assets=${snapshot?.assetRecords?.length || 0}`}
             />
             <AriContainer className="desk-dev-debug-section">
               <AriTypography variant="caption" value="Agent 日志" />
@@ -108,8 +109,15 @@ export function DevDebugFloat() {
               </div>
             </AriContainer>
             <AriContainer className="desk-dev-debug-section">
-              <AriTypography variant="caption" value="Session 事件/资产" />
+              <AriTypography variant="caption" value="Trace / Session 事件 / 资产" />
               <div className="desk-dev-debug-list">
+                {(snapshot?.traceRecords || []).slice(0, 10).map((item, index) => (
+                  <AriTypography
+                    key={`trace-${item.traceId}-${index}`}
+                    variant="caption"
+                    value={`[trace] ${item.traceId || "-"} · ${item.source || "-"}${item.code ? ` · ${item.code}` : ""} · ${item.message || "-"}`}
+                  />
+                ))}
                 {(snapshot?.eventRecords || []).slice(-6).reverse().map((item, index) => (
                   <AriTypography
                     key={`event-${item.event}-${index}`}
@@ -124,6 +132,11 @@ export function DevDebugFloat() {
                     value={`[asset] ${item.kind || "-"} v${item.version || 0}: ${item.path || "-"}`}
                   />
                 ))}
+                {(snapshot?.traceRecords?.length || 0) === 0
+                && (snapshot?.eventRecords?.length || 0) === 0
+                && (snapshot?.assetRecords?.length || 0) === 0 ? (
+                  <AriTypography variant="caption" value="暂无 session 轨迹记录" />
+                ) : null}
               </div>
             </AriContainer>
           </AriContainer>

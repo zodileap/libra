@@ -1,6 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
-import { normalizeInvokeError } from "../services/blender-bridge";
+import {
+  normalizeInvokeErrorDetail,
+  type NormalizedInvokeErrorDetail,
+} from "../services/blender-bridge";
+import {
+  buildUiHintFromProtocolError,
+  mapProtocolUiHint,
+} from "../services/protocol-ui-hint";
 import { listModelWorkflows } from "./storage";
+import type {
+  ModelAssetRecord,
+  ModelEventRecord,
+  ModelStepRecord,
+  ProtocolUiHint,
+} from "../types";
 import type {
   WorkflowDefinition,
   WorkflowNodeDefinition,
@@ -14,28 +27,11 @@ import type {
 interface ModelSessionRunResponse {
   trace_id: string;
   message: string;
-  steps: Array<{
-    index: number;
-    action: string;
-    input: string;
-    status: string;
-    elapsed_ms: number;
-    summary: string;
-    error?: string;
-    exported_file?: string;
-  }>;
-  events: Array<{
-    event: string;
-    step_index?: number;
-    timestamp_ms: number;
-    message: string;
-  }>;
-  assets: Array<{
-    kind: string;
-    path: string;
-    version: number;
-  }>;
+  steps: ModelStepRecord[];
+  events: ModelEventRecord[];
+  assets: ModelAssetRecord[];
   exported_file?: string;
+  ui_hint?: ProtocolUiHint;
 }
 
 interface WorkflowContext {
@@ -168,65 +164,6 @@ function summarizePrompt(prompt: string) {
   };
 }
 
-function buildUiHintFromError(errorText: string): WorkflowUiHint | undefined {
-  const lower = errorText.toLowerCase();
-
-  if (
-    lower.includes("当前 blender 会话仍是旧版本") ||
-    lower.includes("unsupported action") ||
-    lower.includes("unsupported_action")
-  ) {
-    return {
-      key: "restart-blender-bridge",
-      level: "warning",
-      title: "需要重启 Blender",
-      message: "Bridge 已自动更新，但当前会话仍是旧版本。请重启 Blender 后点击“我已重启并重试”。",
-      actions: [
-        { kind: "retry_last_step", label: "我已重启并重试", intent: "primary" },
-        { kind: "dismiss", label: "暂不处理", intent: "default" },
-      ],
-    };
-  }
-
-  if (lower.includes("导出能力已关闭")) {
-    return {
-      key: "export-capability-disabled",
-      level: "info",
-      title: "导出能力已关闭",
-      message: "当前会话仍可执行新建/打开/编辑等 MCP 操作；如需导出，请在模型设置里开启导出能力。",
-      actions: [
-        { kind: "open_model_settings", label: "打开模型设置", intent: "primary" },
-        { kind: "dismiss", label: "知道了", intent: "default" },
-      ],
-    };
-  }
-
-  return undefined;
-}
-
-function detectDangerousIntent(prompt: string): { matched: boolean; reason: string } {
-  const lower = prompt.toLowerCase();
-  const matchedRules: string[] = [];
-
-  if (["删除", "删掉", "清空", "移除", "remove", "delete"].some((key) => lower.includes(key))) {
-    matchedRules.push("删除/清空类操作");
-  }
-  if (["新建文件", "重置场景", "reset scene", "read_homefile"].some((key) => lower.includes(key))) {
-    matchedRules.push("重置或新建场景");
-  }
-  if (["打开文件", "open file", "open_mainfile", "覆盖保存", "另存为覆盖"].some((key) => lower.includes(key))) {
-    matchedRules.push("打开/覆盖文件");
-  }
-  if (["布尔", "boolean"].some((key) => lower.includes(key))) {
-    matchedRules.push("布尔修改（不可逆风险）");
-  }
-
-  return {
-    matched: matchedRules.length > 0,
-    reason: matchedRules.join("、"),
-  };
-}
-
 async function runNode(
   node: WorkflowNodeDefinition,
   ctx: WorkflowContext,
@@ -312,6 +249,7 @@ async function runNode(
         projectName: request.projectName,
         capabilities: request.modelMcpCapabilities,
         outputDir: request.outputDir,
+        confirmationToken: request.confirmationToken,
       });
       if (!response.steps || response.steps.length === 0) {
         throw new Error("MCP 执行未返回步骤记录");
@@ -348,44 +286,6 @@ export async function runModelWorkflow(request: WorkflowRunRequest): Promise<Wor
     throw new Error("未找到可用工作流，请先在模型设置中创建或选择工作流");
   }
 
-  const dangerous = detectDangerousIntent(request.prompt);
-  if (dangerous.matched && !request.allowDangerousAction) {
-    const entryNodeKind = detectEntryNodeKind(request.prompt, request.referenceImages);
-    return {
-      runId: `run-${Date.now()}`,
-      workflowId: workflow.id,
-      entryNodeKind,
-      message: `检测到可能存在风险的操作（${dangerous.reason}），已暂停执行，等待你确认。`,
-      steps: [
-        {
-          nodeId: "dangerous-check",
-          kind: entryNodeKind,
-          name: "危险操作确认",
-          status: "manual",
-          attempt: 1,
-          elapsedMs: 0,
-          summary: "等待用户确认后执行",
-          error: dangerous.reason,
-        },
-      ],
-      referenceImagesDetected: [],
-      uiHint: {
-        key: "dangerous-operation-confirm",
-        level: "warning",
-        title: "检测到潜在危险操作",
-        message: `本次指令可能修改或覆盖现有模型/文件（${dangerous.reason}）。确认后将仅执行这一次。`,
-        actions: [
-          { kind: "allow_once", label: "允许一次并执行", intent: "primary" },
-          { kind: "deny", label: "取消本次操作", intent: "danger" },
-        ],
-        context: {
-          prompt: request.prompt,
-          reason: dangerous.reason,
-        },
-      },
-    };
-  }
-
   const promptDetectedImages = extractImagePathsFromPrompt(request.prompt);
   const mergedReferenceImages = Array.from(
     new Set([...request.referenceImages, ...promptDetectedImages]),
@@ -407,10 +307,12 @@ export async function runModelWorkflow(request: WorkflowRunRequest): Promise<Wor
   const stepRecords: WorkflowStepRecord[] = [];
   let modelSession: ModelSessionRunResponse | undefined;
   let exportedFile: string | undefined;
+  let mappedUiHint: WorkflowUiHint | undefined;
 
   for (const node of nodes) {
     const maxAttempts = Math.max(1, (node.retryCount || 0) + 1);
     let lastError = "";
+    let lastErrorDetail: NormalizedInvokeErrorDetail | null = null;
     let success = false;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -429,6 +331,9 @@ export async function runModelWorkflow(request: WorkflowRunRequest): Promise<Wor
         });
         if (result.modelSession) {
           modelSession = result.modelSession;
+          if (result.modelSession.ui_hint) {
+            mappedUiHint = mapProtocolUiHint(result.modelSession.ui_hint);
+          }
         }
         if (result.exportedFile) {
           exportedFile = result.exportedFile;
@@ -436,7 +341,8 @@ export async function runModelWorkflow(request: WorkflowRunRequest): Promise<Wor
         success = true;
         break;
       } catch (err) {
-        lastError = normalizeInvokeError(err);
+        lastErrorDetail = normalizeInvokeErrorDetail(err);
+        lastError = lastErrorDetail.message;
         stepRecords.push({
           nodeId: node.id,
           kind: node.kind,
@@ -468,13 +374,18 @@ export async function runModelWorkflow(request: WorkflowRunRequest): Promise<Wor
           });
           if (fallbackResult.modelSession) {
             modelSession = fallbackResult.modelSession;
+            if (fallbackResult.modelSession.ui_hint) {
+              mappedUiHint = mapProtocolUiHint(fallbackResult.modelSession.ui_hint);
+            }
           }
           if (fallbackResult.exportedFile) {
             exportedFile = fallbackResult.exportedFile;
           }
           continue;
         } catch (fallbackErr) {
-          const reason = normalizeInvokeError(fallbackErr);
+          const fallbackErrorDetail = normalizeInvokeErrorDetail(fallbackErr);
+          const reason = fallbackErrorDetail.message;
+          lastErrorDetail = fallbackErrorDetail;
           stepRecords.push({
             nodeId: fallbackNode.id,
             kind: fallbackNode.kind,
@@ -507,7 +418,15 @@ export async function runModelWorkflow(request: WorkflowRunRequest): Promise<Wor
         steps: stepRecords,
         exportedFile,
         referenceImagesDetected: mergedReferenceImages,
-        uiHint: buildUiHintFromError(lastError),
+        uiHint:
+          mappedUiHint
+          || buildUiHintFromProtocolError(
+            lastErrorDetail || {
+              message: lastError,
+              retryable: false,
+            },
+          )
+          || undefined,
         modelSession,
       };
     }
@@ -521,6 +440,7 @@ export async function runModelWorkflow(request: WorkflowRunRequest): Promise<Wor
     steps: stepRecords,
     exportedFile,
     referenceImagesDetected: mergedReferenceImages,
+    uiHint: mappedUiHint,
     modelSession,
   };
 }

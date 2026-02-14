@@ -21,7 +21,13 @@ import {
 import {
   DEFAULT_BLENDER_BRIDGE_ADDR,
   normalizeInvokeError,
+  normalizeInvokeErrorDetail,
+  type NormalizedInvokeErrorDetail,
 } from "../services/blender-bridge";
+import {
+  buildUiHintFromProtocolError,
+  mapProtocolUiHint,
+} from "../services/protocol-ui-hint";
 import type {
   ModelAssetRecord,
   ModelEventRecord,
@@ -30,6 +36,7 @@ import type {
   BlenderBridgeEnsureResult,
   BlenderBridgeRuntime,
   ModelMcpCapabilities,
+  ProtocolUiHint,
 } from "../types";
 import { ChatMarkdown } from "../widgets/chat-markdown";
 import { runModelWorkflow } from "../workflow";
@@ -47,6 +54,10 @@ interface AgentRunResponse {
   message: string;
   actions: string[];
   exported_file?: string;
+  steps: ModelStepRecord[];
+  events: ModelEventRecord[];
+  assets: ModelAssetRecord[];
+  ui_hint?: ProtocolUiHint;
 }
 
 interface ModelSessionRunResponse {
@@ -56,6 +67,7 @@ interface ModelSessionRunResponse {
   events: ModelEventRecord[];
   assets: ModelAssetRecord[];
   exported_file?: string;
+  ui_hint?: ProtocolUiHint;
 }
 
 interface MessageItem {
@@ -102,6 +114,30 @@ function extractOutputDirFromPrompt(prompt: string): string | undefined {
   return undefined;
 }
 
+interface TraceRecord {
+  traceId: string;
+  source: string;
+  code?: string;
+  message: string;
+}
+
+// 描述：格式化复杂 MCP 步骤元数据，供会话记录面板展示分支、风险与回滚信息。
+function formatComplexStepMeta(step: ModelStepRecord): string {
+  const operationKind = typeof step.data?.operation_kind === "string" ? step.data.operation_kind : "";
+  const branch = typeof step.data?.branch === "string" ? step.data.branch : "";
+  const riskLevel = typeof step.data?.risk_level === "string" ? step.data.risk_level : "";
+  const condition = typeof step.data?.condition === "string" ? step.data.condition : "";
+  const rollbackOf = typeof step.data?.rollback_of === "string" ? step.data.rollback_of : "";
+  const parts = [operationKind, branch, riskLevel].filter((item) => item.length > 0);
+  if (condition) {
+    parts.push(`condition=${condition}`);
+  }
+  if (rollbackOf) {
+    parts.push(`rollback_of=${rollbackOf}`);
+  }
+  return parts.length > 0 ? ` · ${parts.join(" · ")}` : "";
+}
+
 export function SessionPage({
   modelMcpCapabilities,
   blenderBridgeRuntime,
@@ -118,7 +154,9 @@ export function SessionPage({
   const [assetRecords, setAssetRecords] = useState<ModelAssetRecord[]>([]);
   const [workflowStepRecords, setWorkflowStepRecords] = useState<WorkflowStepRecord[]>([]);
   const [uiHint, setUiHint] = useState<WorkflowUiHint | null>(null);
+  const [traceRecords, setTraceRecords] = useState<TraceRecord[]>([]);
   const [pendingDangerousPrompt, setPendingDangerousPrompt] = useState("");
+  const [pendingDangerousToken, setPendingDangerousToken] = useState("");
   const [messagesHydrated, setMessagesHydrated] = useState(false);
   const [hydratedSessionKey, setHydratedSessionKey] = useState("");
   const isModelAgent = agentKey === "model";
@@ -152,10 +190,16 @@ export function SessionPage({
     [availableAiKeys, selectedProvider],
   );
 
+  const appendTraceRecord = (input: TraceRecord) => {
+    setTraceRecords((prev) => [input, ...prev].slice(0, 50));
+  };
+
   useEffect(() => {
     const intro = buildIntroMessage(isModelAgent);
     setUiHint(null);
+    setTraceRecords([]);
     setPendingDangerousPrompt("");
+    setPendingDangerousToken("");
     if (!sessionId) {
       setMessages([intro]);
       setMessagesHydrated(true);
@@ -194,6 +238,7 @@ export function SessionPage({
           stepRecords,
           eventRecords,
           assetRecords,
+          traceRecords,
           messageCount: messages.length,
           timestamp: Date.now(),
         },
@@ -207,6 +252,7 @@ export function SessionPage({
     sessionId,
     status,
     stepRecords,
+    traceRecords,
     title,
     workflowStepRecords,
   ]);
@@ -248,12 +294,14 @@ export function SessionPage({
     options?: {
       allowDangerousAction?: boolean;
       appendUserMessage?: boolean;
+      confirmationToken?: string;
     },
   ) => {
     const normalizedContent = content.trim();
     if (!normalizedContent || sending) return;
 
     const allowDangerousAction = Boolean(options?.allowDangerousAction);
+    const confirmationToken = options?.confirmationToken;
     const appendUserMessage = options?.appendUserMessage !== false;
     const provider = selectedAi?.provider || "codex";
     const outputDir = isModelAgent ? extractOutputDirFromPrompt(normalizedContent) : undefined;
@@ -278,11 +326,19 @@ export function SessionPage({
           modelMcpCapabilities,
           outputDir,
           allowDangerousAction,
+          confirmationToken,
         });
         setWorkflowStepRecords(response.steps || []);
         setStepRecords(response.modelSession?.steps || []);
         setEventRecords(response.modelSession?.events || []);
         setAssetRecords(response.modelSession?.assets || []);
+        if (response.modelSession?.trace_id) {
+          appendTraceRecord({
+            traceId: response.modelSession.trace_id,
+            source: "workflow:model_session",
+            message: response.message,
+          });
+        }
         const nextUpdatedAt = new Date().toLocaleString("zh-CN", {
           month: "2-digit",
           day: "2-digit",
@@ -307,9 +363,12 @@ export function SessionPage({
         setUiHint(response.uiHint || null);
         if (response.uiHint?.key === "dangerous-operation-confirm") {
           const hintPrompt = response.uiHint.context?.prompt;
+          const hintToken = response.uiHint.context?.confirmation_token;
           setPendingDangerousPrompt(typeof hintPrompt === "string" ? hintPrompt : normalizedContent);
+          setPendingDangerousToken(typeof hintToken === "string" ? hintToken : "");
         } else {
           setPendingDangerousPrompt("");
+          setPendingDangerousToken("");
         }
         setStatus(
           response.exportedFile
@@ -327,6 +386,16 @@ export function SessionPage({
           blenderBridgeAddr: DEFAULT_BLENDER_BRIDGE_ADDR,
           outputDir,
         });
+        setStepRecords(response.steps || []);
+        setEventRecords(response.events || []);
+        setAssetRecords(response.assets || []);
+        appendTraceRecord({
+          traceId: response.trace_id,
+          source: "agent:run",
+          message: response.message,
+        });
+        setUiHint(response.ui_hint ? mapProtocolUiHint(response.ui_hint) : null);
+        setPendingDangerousToken("");
         setMessages((prev) => [...prev, { role: "assistant", text: response.message }]);
         const actionText =
           response.actions?.length > 0 ? `动作：${response.actions.join(", ")}` : "动作：无";
@@ -337,24 +406,18 @@ export function SessionPage({
         );
       }
     } catch (err) {
-      const reason = normalizeInvokeError(err);
+      const detail = normalizeInvokeErrorDetail(err);
+      const reason = detail.message;
+      setPendingDangerousToken("");
+      appendTraceRecord({
+        traceId: `trace-local-${Date.now()}`,
+        source: "agent:error",
+        code: detail.code,
+        message: reason,
+      });
       setMessages((prev) => [...prev, { role: "assistant", text: `执行失败：${reason}` }]);
       setStatus(`执行失败：${reason}`);
-      if (
-        reason.includes("当前 Blender 会话仍是旧版本")
-        || reason.toLowerCase().includes("unsupported action")
-      ) {
-        setUiHint({
-          key: "restart-blender-bridge",
-          level: "warning",
-          title: "需要重启 Blender",
-          message: "Bridge 已自动更新，但当前会话仍是旧版本。请重启 Blender 后点击“我已重启并重试”。",
-          actions: [
-            { kind: "retry_last_step", label: "我已重启并重试", intent: "primary" },
-            { kind: "dismiss", label: "暂不处理", intent: "default" },
-          ],
-        });
-      }
+      setUiHint(buildUiHintFromProtocolError(detail));
     } finally {
       setSending(false);
     }
@@ -386,6 +449,12 @@ export function SessionPage({
       return;
     }
 
+    if (action.kind === "apply_recovery_plan") {
+      setUiHint(null);
+      await retryLastStep();
+      return;
+    }
+
     if (action.kind === "allow_once") {
       const prompt = pendingDangerousPrompt.trim();
       if (!prompt) {
@@ -394,13 +463,19 @@ export function SessionPage({
       }
       setUiHint(null);
       setPendingDangerousPrompt("");
-      await executePrompt(prompt, { allowDangerousAction: true, appendUserMessage: false });
+      setPendingDangerousToken("");
+      await executePrompt(prompt, {
+        allowDangerousAction: true,
+        appendUserMessage: false,
+        confirmationToken: pendingDangerousToken,
+      });
       return;
     }
 
     if (action.kind === "deny") {
       setUiHint(null);
       setPendingDangerousPrompt("");
+      setPendingDangerousToken("");
       setStatus("已取消本次危险操作");
       setMessages((prev) => [...prev, { role: "assistant", text: "已取消本次危险操作。" }]);
     }
@@ -424,12 +499,28 @@ export function SessionPage({
       setStepRecords(response.steps || []);
       setEventRecords(response.events || []);
       setAssetRecords(response.assets || []);
+      if (response.trace_id) {
+        appendTraceRecord({
+          traceId: response.trace_id,
+          source: "session:retry",
+          message: response.message,
+        });
+      }
+      setUiHint(response.ui_hint ? mapProtocolUiHint(response.ui_hint) : null);
       setMessages((prev) => [...prev, { role: "assistant", text: response.message }]);
       setStatus("重试完成");
     } catch (err) {
+      const detail = normalizeInvokeErrorDetail(err);
       const reason = normalizeInvokeError(err);
+      appendTraceRecord({
+        traceId: `trace-local-${Date.now()}`,
+        source: "session:retry_error",
+        code: detail.code,
+        message: reason,
+      });
       setStatus(`重试失败：${reason}`);
       setMessages((prev) => [...prev, { role: "assistant", text: `重试失败：${reason}` }]);
+      setUiHint(buildUiHintFromProtocolError(detail));
     } finally {
       setSending(false);
     }
@@ -475,9 +566,9 @@ export function SessionPage({
               <div className="desk-model-step-list">
                 {stepRecords.slice().reverse().map((step) => (
                   <AriTypography
-                    key={`${step.index}-${step.action}-${step.elapsed_ms}`}
+                    key={`${step.index}-${step.code}-${step.elapsed_ms}`}
                     variant="caption"
-                    value={`#${step.index + 1} ${step.action} · ${step.status} · ${step.elapsed_ms}ms`}
+                    value={`#${step.index + 1} ${step.code} · ${step.status} · ${step.elapsed_ms}ms${formatComplexStepMeta(step)}${step.error?.message ? ` · ${step.error.message}` : ""}`}
                   />
                 ))}
               </div>
