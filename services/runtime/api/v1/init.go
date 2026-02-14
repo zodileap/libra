@@ -10,9 +10,10 @@ import (
 )
 
 func init() {
-	zapi.Register("runtime", "agent-session", "v1", &AgentSessionAPI{})
-	zapi.Register("runtime", "preview-endpoint", "v1", &PreviewEndpointAPI{})
-	zapi.Register("runtime", "sandbox-instance", "v1", &SandboxInstanceAPI{})
+	zapi.Register("zodileap_runtime", "agent-session", "v1", &AgentSessionAPI{})
+	zapi.Register("zodileap_runtime", "preview-endpoint", "v1", &PreviewEndpointAPI{})
+	zapi.Register("zodileap_runtime", "sandbox-instance", "v1", &SandboxInstanceAPI{})
+	zapi.Register("zodileap_runtime", "workflow", "v1", &WorkflowAPI{})
 }
 
 func defaultCors() gin.HandlerFunc {

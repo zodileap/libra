@@ -28,6 +28,19 @@ export interface LoginUser {
   email: string;
 }
 
+export interface AuthAvailableAgentItem {
+  agentId: string;
+  code: string;
+  name: string;
+  version?: string;
+  agentStatus?: number;
+  remark?: string;
+  accessId: string;
+  accessType?: number;
+  duration?: number;
+  accessStatus?: number;
+}
+
 export interface ModelMcpCapabilities {
   export: boolean;
   scene: boolean;

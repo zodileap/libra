@@ -4,9 +4,20 @@ import { invoke } from "@tauri-apps/api/core";
 import { HashRouter } from "react-router-dom";
 import { DesktopRouter } from "./modules/client/router";
 import { ensureBlenderBridge } from "./modules/client/services/blender-bridge";
+import {
+  clearAuthToken,
+  getAuthToken,
+  getCurrentUser,
+  listAvailableAgents,
+  loginByPassword,
+  logoutCurrentUser,
+  setAuthToken,
+  setUnauthorizedHandler,
+} from "./modules/client/services/backend-api";
 import { DevDebugFloat } from "./modules/client/widgets/dev-debug-float";
 import type {
   AiKeyItem,
+  AuthAvailableAgentItem,
   BlenderBridgeEnsureResult,
   BlenderBridgeRuntime,
   ColorThemeMode,
@@ -31,6 +42,8 @@ const appConfig = setAppConfig({
 
 export default function App() {
   const [user, setUser] = useState<LoginUser | null>(null);
+  const [availableAgents, setAvailableAgents] = useState<AuthAvailableAgentItem[]>([]);
+  const [restoringAuth, setRestoringAuth] = useState(true);
   const [colorThemeMode, setColorThemeMode] = useState<ColorThemeMode>(() => {
     const saved = localStorage.getItem("zodileap.desktop.colorThemeMode");
     if (saved === "light" || saved === "dark" || saved === "system") {
@@ -148,6 +161,42 @@ export default function App() {
     localStorage.setItem("zodileap.desktop.aiKeys", JSON.stringify(aiKeys));
   }, [aiKeys]);
 
+  // 描述：读取当前登录态并同步用户信息与可用智能体。
+  const refreshAuthState = useCallback(async () => {
+    try {
+      const currentUser = await getCurrentUser();
+      setUser(currentUser);
+      const agents = await listAvailableAgents();
+      setAvailableAgents(agents);
+    } catch (_err) {
+      clearAuthToken();
+      setUser(null);
+      setAvailableAgents([]);
+    } finally {
+      setRestoringAuth(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      clearAuthToken();
+      setUser(null);
+      setAvailableAgents([]);
+    });
+    return () => {
+      setUnauthorizedHandler(null);
+    };
+  }, []);
+
+  useEffect(() => {
+    const token = getAuthToken();
+    if (!token) {
+      setRestoringAuth(false);
+      return;
+    }
+    void refreshAuthState();
+  }, [refreshAuthState]);
+
   useEffect(() => {
     const codexEnabled = aiKeys.some((item) => item.provider === "codex" && item.enabled);
     if (!codexEnabled) {
@@ -225,14 +274,25 @@ export default function App() {
   const auth = useMemo(
     () => ({
       user,
-      login: (account: string) => {
-        setUser({
-          id: "u-demo",
-          name: account.split("@")[0] || "demo",
-          email: account || "demo@zodileap.com"
-        });
+      restoringAuth,
+      availableAgents,
+      login: async (account: string, password: string) => {
+        const result = await loginByPassword(account, password);
+        setAuthToken(result.token);
+        setUser(result.user);
+        const agents = await listAvailableAgents();
+        setAvailableAgents(agents);
       },
-      logout: () => setUser(null),
+      logout: async () => {
+        try {
+          await logoutCurrentUser();
+        } catch (_err) {
+          // Ignore logout failures when token is already invalid.
+        }
+        clearAuthToken();
+        setUser(null);
+        setAvailableAgents([]);
+      },
       colorThemeMode,
       setColorThemeMode,
       modelMcpCapabilities,
@@ -244,6 +304,8 @@ export default function App() {
     }),
     [
       user,
+      restoringAuth,
+      availableAgents,
       colorThemeMode,
       modelMcpCapabilities,
       aiKeys,

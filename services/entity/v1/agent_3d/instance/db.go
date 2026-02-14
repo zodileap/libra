@@ -18,7 +18,7 @@ const modelResultEntityName = "model_result"
 const modelTaskEntityName = "model_task"
 
 type Agent3dDB struct {
-	*entity.Agent3d
+	*entity.Agent3D
 }
 
 // 初始化agent_3d数据库
@@ -28,7 +28,7 @@ func InitAgent3dDB(sqlConsole bool) (*Agent3dDB, error) {
 	}
 	tentity.SetConfig(config)
 
-	db, err := entity.NewAgent3d()
+	db, err := entity.NewAgent3D()
 	if err != nil {
 		return nil, zerr.Err_1004002001.New().Sprintf(err.Error())
 	}
@@ -37,7 +37,7 @@ func InitAgent3dDB(sqlConsole bool) (*Agent3dDB, error) {
 
 // 保存改变到数据库。
 func (db *Agent3dDB) Save(ctx context.Context) error {
-	err := db.Agent3d.Save(ctx)
+	err := db.Agent3D.Save(ctx)
 	if err == context.DeadlineExceeded {
 		// 处理超时错误
 		tlog.Print("超时")
@@ -50,7 +50,7 @@ func (db *Agent3dDB) Save(ctx context.Context) error {
 
 // 关闭数据库。每次使用完数据库后都需要调用该方法关闭数据库。
 func (db *Agent3dDB) Close() {
-	db.Agent3d.Close()
+	db.Agent3D.Close()
 }
 
 // DBOpCfg 数据库操作的相关参数

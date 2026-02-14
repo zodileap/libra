@@ -2,12 +2,30 @@ import { useState } from "react";
 import { AriButton, AriCard, AriContainer, AriFlex, AriInput, AriTypography } from "aries_react";
 
 interface LoginPageProps {
-  onLogin: (account: string) => void;
+  onLogin: (account: string, password: string) => Promise<void>;
 }
 
 export function LoginPage({ onLogin }: LoginPageProps) {
   const [account, setAccount] = useState("demo@zodileap.com");
   const [password, setPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  // 描述：提交登录请求并在失败时显示错误提示。
+  const handleSubmit = async () => {
+    if (submitting) {
+      return;
+    }
+    setSubmitting(true);
+    setError("");
+    try {
+      await onLogin(account.trim() || "demo@zodileap.com", password);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "登录失败，请稍后重试");
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <AriContainer className="desk-login">
@@ -31,9 +49,12 @@ export function LoginPage({ onLogin }: LoginPageProps) {
           />
           <AriButton
             color="primary"
-            label="登录"
-            onClick={() => onLogin(account.trim() || "demo@zodileap.com")}
+            label={submitting ? "登录中..." : "登录"}
+            onClick={() => {
+              void handleSubmit();
+            }}
           />
+          {error ? <AriTypography variant="caption" value={error} /> : null}
         </AriFlex>
       </AriCard>
     </AriContainer>

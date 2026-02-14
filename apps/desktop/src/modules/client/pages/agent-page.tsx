@@ -2,29 +2,19 @@ import { useMemo, useState } from "react";
 import { AriButton, AriCard, AriContainer, AriFlex, AriInput, AriTag, AriTypography } from "aries_react";
 import { useNavigate, useParams } from "react-router-dom";
 import { AGENTS, upsertModelProject } from "../data";
-import type { AgentKey, ModelMcpCapabilities } from "../types";
-import { DeskStatusText } from "../widgets/settings-primitives";
+import { createRuntimeSession } from "../services/backend-api";
+import type { AgentKey, LoginUser, ModelMcpCapabilities } from "../types";
 
-// 描述:
-//
-//   - 规范路由参数中的智能体键值，避免非法值导致页面分支异常。
-//
-// Params:
-//
-//   - value: 路由参数中的 agentKey。
-//
-// Returns:
-//
-//   - 标准化后的智能体键值，仅返回 code 或 model。
 function normalizeAgentKey(value: string | undefined): AgentKey {
   return value === "model" ? "model" : "code";
 }
 
 interface AgentPageProps {
   modelMcpCapabilities: ModelMcpCapabilities;
+  currentUser: LoginUser | null;
 }
 
-export function AgentPage({ modelMcpCapabilities: _modelMcpCapabilities }: AgentPageProps) {
+export function AgentPage({ modelMcpCapabilities: _modelMcpCapabilities, currentUser }: AgentPageProps) {
   const params = useParams<{ agentKey: string }>();
   const navigate = useNavigate();
   const [prompt, setPrompt] = useState("");
@@ -37,16 +27,29 @@ export function AgentPage({ modelMcpCapabilities: _modelMcpCapabilities }: Agent
     [agentKey]
   );
 
-  const handleCreateModelProject = () => {
+  // 描述：创建后端会话并进入会话页面。
+  const handleCreateModelProject = async () => {
+    if (!currentUser) {
+      setStatus("用户未登录，无法创建会话。");
+      return;
+    }
     const normalizedProjectName = projectName.trim() || "新建模型项目";
     const normalizedPrompt = prompt.trim();
-    const sessionId = `model-local-${Date.now()}`;
+    let sessionId = `model-local-${Date.now()}`;
     const updatedAt = new Date().toLocaleString("zh-CN", {
       month: "2-digit",
       day: "2-digit",
       hour: "2-digit",
       minute: "2-digit",
     });
+
+    try {
+      const session = await createRuntimeSession(currentUser.id, "model");
+      sessionId = session.id || sessionId;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "创建后端会话失败";
+      setStatus(`${msg}，将使用本地会话 ID 继续。`);
+    }
 
     upsertModelProject({
       id: sessionId,
@@ -58,8 +61,8 @@ export function AgentPage({ modelMcpCapabilities: _modelMcpCapabilities }: Agent
     navigate(`/agents/model/session/${sessionId}`);
   };
 
-  const handleStartAgentFlow = () => {
-    handleCreateModelProject();
+  const handleStartAgentFlow = async () => {
+    await handleCreateModelProject();
   };
 
   return (
@@ -79,14 +82,25 @@ export function AgentPage({ modelMcpCapabilities: _modelMcpCapabilities }: Agent
             onChange={setPrompt}
             placeholder="输入模型需求，例如：打开模型后加厚并倒角；需要时再导出"
           />
-          <AriFlex justify="space-between" align="center" className="desk-prompt-actions">
+          <AriFlex justify="space-between" align="center" style={{ marginTop: 12 }}>
             <AriTag color="brand">Model Agent v1 · MCP（Blender）</AriTag>
             <AriFlex align="center" space={8}>
-              <AriButton label="新建项目" onClick={handleCreateModelProject} />
-              <AriButton color="primary" label="开始对话" onClick={handleStartAgentFlow} />
+              <AriButton
+                label="新建项目"
+                onClick={() => {
+                  void handleCreateModelProject();
+                }}
+              />
+              <AriButton
+                color="primary"
+                label="开始对话"
+                onClick={() => {
+                  void handleStartAgentFlow();
+                }}
+              />
             </AriFlex>
           </AriFlex>
-          {status ? <DeskStatusText value={status} /> : null}
+          {status ? <AriTypography className="desk-inline-status" variant="caption" value={status} /> : null}
         </AriCard>
       ) : (
         <AriCard className="desk-prompt-card">
@@ -95,9 +109,26 @@ export function AgentPage({ modelMcpCapabilities: _modelMcpCapabilities }: Agent
             onChange={setPrompt}
             placeholder="描述你要生成的页面或功能..."
           />
-          <AriFlex justify="space-between" align="center" className="desk-prompt-actions">
+          <AriFlex justify="space-between" align="center" style={{ marginTop: 12 }}>
             <AriTag color="brand">Model: Code Agent v1</AriTag>
-            <AriButton color="primary" label="开始生成" />
+            <AriButton
+              color="primary"
+              label="开始生成"
+              onClick={() => {
+                if (!currentUser) {
+                  setStatus("用户未登录，无法创建会话。");
+                  return;
+                }
+                void createRuntimeSession(currentUser.id, "code")
+                  .then((session) => {
+                    navigate(`/agents/code/session/${session.id}`);
+                  })
+                  .catch((err) => {
+                    const msg = err instanceof Error ? err.message : "创建代码会话失败";
+                    setStatus(msg);
+                  });
+              }}
+            />
           </AriFlex>
         </AriCard>
       )}
