@@ -1,0 +1,158 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Debug Service: account",
+      "type": "shell",
+      "command": "go run -tags dev ./cmd",
+      "options": {
+        "cwd": "${workspaceFolder}/services/account"
+      },
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "services"
+      },
+      "problemMatcher": [
+        "$go"
+      ]
+    },
+    {
+      "label": "Debug Service: runtime",
+      "type": "shell",
+      "command": "go run -tags dev ./cmd",
+      "options": {
+        "cwd": "${workspaceFolder}/services/runtime"
+      },
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "services"
+      },
+      "problemMatcher": [
+        "$go"
+      ]
+    },
+    {
+      "label": "Debug Service: agent_code",
+      "type": "shell",
+      "command": "go run -tags dev ./cmd",
+      "options": {
+        "cwd": "${workspaceFolder}/services/agent_code"
+      },
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "services"
+      },
+      "problemMatcher": [
+        "$go"
+      ]
+    },
+    {
+      "label": "Debug Service: agent_3d",
+      "type": "shell",
+      "command": "go run -tags dev ./cmd",
+      "options": {
+        "cwd": "${workspaceFolder}/services/agent_3d"
+      },
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "services"
+      },
+      "problemMatcher": [
+        "$go"
+      ]
+    },
+    {
+      "label": "Debug Service: license",
+      "type": "shell",
+      "command": "go run -tags dev ./cmd",
+      "options": {
+        "cwd": "${workspaceFolder}/services/license"
+      },
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "services"
+      },
+      "problemMatcher": [
+        "$go"
+      ]
+    },
+    {
+      "label": "Debug Service: billing",
+      "type": "shell",
+      "command": "go run -tags dev ./cmd",
+      "options": {
+        "cwd": "${workspaceFolder}/services/billing"
+      },
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "services"
+      },
+      "problemMatcher": [
+        "$go"
+      ]
+    },
+    {
+      "label": "Debug Service: enterprise",
+      "type": "shell",
+      "command": "go run -tags dev ./cmd",
+      "options": {
+        "cwd": "${workspaceFolder}/services/enterprise"
+      },
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "services"
+      },
+      "problemMatcher": [
+        "$go"
+      ]
+    },
+    {
+      "label": "Debug Services: core(3-runnable)",
+      "dependsOrder": "parallel",
+      "dependsOn": [
+        "Debug Service: account",
+        "Debug Service: runtime",
+        "Debug Service: agent_code"
+      ]
+    },
+    {
+      "label": "Debug Services: all-runnable",
+      "dependsOrder": "parallel",
+      "dependsOn": [
+        "Debug Service: account",
+        "Debug Service: runtime",
+        "Debug Service: agent_code",
+        "Debug Service: license",
+        "Debug Service: billing",
+        "Debug Service: enterprise"
+      ]
+    },
+    {
+      "label": "Debug Services: include-agent_3d(experimental)",
+      "dependsOrder": "parallel",
+      "dependsOn": [
+        "Debug Service: account",
+        "Debug Service: runtime",
+        "Debug Service: agent_code",
+        "Debug Service: agent_3d",
+        "Debug Service: license",
+        "Debug Service: billing",
+        "Debug Service: enterprise"
+      ]
+    }
+  ]
+}

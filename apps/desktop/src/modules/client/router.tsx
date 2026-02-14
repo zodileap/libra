@@ -9,6 +9,7 @@ import { SettingsGeneralPage } from "./pages/settings-general-page";
 import { ModelAgentSettingsPage } from "./pages/model-agent-settings-page";
 import type {
   AiKeyItem,
+  AuthAvailableAgentItem,
   BlenderBridgeEnsureResult,
   BlenderBridgeRuntime,
   ColorThemeMode,
@@ -18,8 +19,10 @@ import type {
 
 interface AuthState {
   user: LoginUser | null;
-  login: (account: string) => void;
-  logout: () => void;
+  restoringAuth: boolean;
+  availableAgents: AuthAvailableAgentItem[];
+  login: (account: string, password: string) => Promise<void>;
+  logout: () => Promise<void>;
   colorThemeMode: ColorThemeMode;
   setColorThemeMode: (value: ColorThemeMode) => void;
   modelMcpCapabilities: ModelMcpCapabilities;
@@ -44,14 +47,18 @@ export function DesktopRouter({ auth }: { auth: AuthState }) {
         path="/"
         element={
           auth.user ? (
-            <DesktopLayout user={auth.user} onLogout={auth.logout} />
+            <DesktopLayout
+              user={auth.user}
+              onLogout={auth.logout}
+              availableAgents={auth.availableAgents}
+            />
           ) : (
             <Navigate to="/login" replace />
           )
         }
       >
         <Route index element={<Navigate to="/home" replace />} />
-        <Route path="home" element={<HomePage />} />
+        <Route path="home" element={<HomePage availableAgents={auth.availableAgents} />} />
         <Route path="settings" element={<Navigate to="/settings/general" replace />} />
         <Route
           path="settings/general"
@@ -68,12 +75,13 @@ export function DesktopRouter({ auth }: { auth: AuthState }) {
         />
         <Route
           path="agents/:agentKey"
-          element={<AgentPage modelMcpCapabilities={auth.modelMcpCapabilities} />}
+          element={<AgentPage modelMcpCapabilities={auth.modelMcpCapabilities} currentUser={auth.user} />}
         />
         <Route
           path="agents/:agentKey/session/:sessionId"
           element={
             <SessionPage
+              currentUser={auth.user}
               modelMcpCapabilities={auth.modelMcpCapabilities}
               blenderBridgeRuntime={auth.blenderBridgeRuntime}
               ensureBlenderBridge={auth.ensureBlenderBridge}
@@ -94,7 +102,10 @@ export function DesktopRouter({ auth }: { auth: AuthState }) {
         />
       </Route>
 
-      <Route path="*" element={<Navigate to={auth.user ? "/home" : "/login"} replace />} />
+      <Route
+        path="*"
+        element={<Navigate to={auth.restoringAuth ? "/login" : auth.user ? "/home" : "/login"} replace />}
+      />
     </Routes>
   );
 }

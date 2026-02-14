@@ -10,8 +10,8 @@ import (
 )
 
 func init() {
-	zapi.Register("license", "activation-record", "v1", &ActivationRecordAPI{})
-	zapi.Register("license", "activation-code", "v1", &ActivationCodeAPI{})
+	zapi.Register("zodileap_license", "activation-record", "v1", &ActivationRecordAPI{})
+	zapi.Register("zodileap_license", "activation-code", "v1", &ActivationCodeAPI{})
 }
 
 func defaultCors() gin.HandlerFunc {

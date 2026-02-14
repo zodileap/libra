@@ -5,25 +5,19 @@ import {
   AriButton,
   AriContainer,
   AriFlex,
-  AriInput,
   AriMenu,
   AriTooltip,
   AriTypography,
 } from "aries_react";
 import { useLocation, useNavigate } from "react-router-dom";
-import {
-  AGENTS,
-  getAgentSessions,
-  isAgentSessionPinned,
-  removeAgentSession,
-  renameAgentSession,
-  togglePinnedAgentSession,
-} from "../../data";
-import type { AgentKey, LoginUser } from "../../types";
+import { AGENTS } from "../../data";
+import { listRuntimeSessions, updateRuntimeSessionStatus } from "../../services/backend-api";
+import type { AgentKey, AgentSession, AuthAvailableAgentItem, LoginUser } from "../../types";
 
 interface ClientSidebarProps {
   user: LoginUser;
-  onLogout: () => void;
+  onLogout: () => Promise<void>;
+  availableAgents: AuthAvailableAgentItem[];
 }
 
 function matchAgentKey(pathname: string): AgentKey | null {
@@ -39,12 +33,30 @@ function matchSidebarMode(pathname: string): "home" | "agent" | "settings" | "ai
   return "home";
 }
 
+// 描述：将 runtime 会话实体转换为前端侧边栏会话项。
+function toAgentSession(agentKey: AgentKey, entity: { id: string; last_at?: string }): AgentSession {
+  const updatedAtText = entity.last_at
+    ? new Date(entity.last_at).toLocaleString("zh-CN", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "-";
+  return {
+    id: entity.id,
+    agentKey,
+    title: `${agentKey === "code" ? "代码" : "模型"}会话 #${entity.id}`,
+    updatedAt: updatedAtText,
+  };
+}
+
 function UserHoverMenu({
   user,
   onLogout,
 }: {
   user: LoginUser;
-  onLogout: () => void;
+  onLogout: () => Promise<void>;
 }) {
   const navigate = useNavigate();
   const menuItems = useMemo(
@@ -69,14 +81,16 @@ function UserHoverMenu({
   );
 
   const content = (
-      <AriMenu
-        items={menuItems}
-        onSelect={(key) => {
-          if (key === "settings") navigate("/settings/general");
-          if (key === "ai-key") navigate("/ai-keys");
-          if (key === "logout") onLogout();
-        }}
-      />
+    <AriMenu
+      items={menuItems}
+      onSelect={(key) => {
+        if (key === "settings") navigate("/settings/general");
+        if (key === "ai-key") navigate("/ai-keys");
+        if (key === "logout") {
+          void onLogout();
+        }
+      }}
+    />
   );
 
   return (
@@ -96,7 +110,7 @@ function UserHoverMenu({
 function SidebarBackHeader({
   onBack,
   label = "Back",
-  rightAction
+  rightAction,
 }: {
   onBack: () => void;
   label?: string;
@@ -113,9 +127,11 @@ function SidebarBackHeader({
 function HomeSidebar({
   user,
   onLogout,
+  availableAgents,
 }: {
   user: LoginUser;
-  onLogout: () => void;
+  onLogout: () => Promise<void>;
+  availableAgents: AuthAvailableAgentItem[];
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -123,13 +139,18 @@ function HomeSidebar({
     ? location.pathname.split("/")[2] || ""
     : "";
 
+  const authorizedCodes = useMemo(
+    () => new Set(availableAgents.map((item) => item.code.toLowerCase())),
+    [availableAgents],
+  );
+
   return (
     <AriContainer className="desk-sidebar">
       <div className="desk-agent-menu">
         <AriMenu
           items={AGENTS.map((agent) => ({
             key: agent.key,
-            label: agent.name,
+            label: `${agent.name}${authorizedCodes.has(agent.key) ? "（已授权）" : "（未授权）"}`,
           }))}
           selectedKey={selectedKey}
           onSelect={(key) => navigate(`/agents/${key}`)}
@@ -148,255 +169,139 @@ function AgentSidebar({
   agentKey,
 }: {
   user: LoginUser;
-  onLogout: () => void;
+  onLogout: () => Promise<void>;
   agentKey: AgentKey;
 }) {
   const navigate = useNavigate();
   const location = useLocation();
-  const [sessionVersion, setSessionVersion] = useState(0);
-  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState("");
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; sessionId: string } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [sessions, setSessions] = useState<AgentSession[]>([]);
 
-  const sessions = useMemo(() => getAgentSessions(agentKey), [agentKey, sessionVersion]);
   const selectedSessionKey = location.pathname.includes("/session/")
     ? location.pathname.split("/").pop() || ""
     : "";
-  const pinnedMap = useMemo(
-    () =>
-      sessions.reduce<Record<string, boolean>>((acc, session) => {
-        acc[session.id] = isAgentSessionPinned(session.id);
-        return acc;
-      }, {}),
-    [sessions],
-  );
+
+  // 描述：拉取当前智能体的会话列表。
+  const refreshSessions = async () => {
+    if (loading) {
+      return;
+    }
+    setLoading(true);
+    try {
+      const list = await listRuntimeSessions(user.id, agentKey);
+      setSessions((list || []).map((item) => toAgentSession(agentKey, item)));
+    } catch (_err) {
+      setSessions([]);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    if (!contextMenu) return;
-    const close = () => setContextMenu(null);
-    window.addEventListener("click", close);
-    window.addEventListener("blur", close);
-    return () => {
-      window.removeEventListener("click", close);
-      window.removeEventListener("blur", close);
-    };
-  }, [contextMenu]);
-
-  const refreshSessions = () => setSessionVersion((value) => value + 1);
-
-  const startRename = (sessionId: string) => {
-    const target = sessions.find((item) => item.id === sessionId);
-    if (!target) return;
-    setRenamingSessionId(sessionId);
-    setRenameValue(target.title);
-  };
-
-  const commitRename = () => {
-    if (!renamingSessionId) return;
-    renameAgentSession(renamingSessionId, renameValue);
-    setRenamingSessionId(null);
-    setRenameValue("");
-    refreshSessions();
-  };
+    void refreshSessions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentKey, user.id]);
 
   return (
     <AriContainer className="desk-sidebar">
       <SidebarBackHeader
         onBack={() => navigate("/home")}
         label="Home"
-        rightAction={<AriButton icon="edit" label="编辑" />}
+        rightAction={
+          <AriButton
+            icon="refresh"
+            label={loading ? "刷新中" : "刷新"}
+            onClick={() => {
+              void refreshSessions();
+            }}
+          />
+        }
       />
 
       <div className="desk-history-menu">
         <AriMenu
           items={sessions.map((item) => ({
             key: item.id,
-            label:
-              renamingSessionId === item.id ? (
-                <AriInput
-                  value={renameValue}
-                  autoFocus
-                  onChange={setRenameValue}
-                  onBlur={commitRename}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      commitRename();
-                    }
-                    if (event.key === "Escape") {
-                      event.preventDefault();
-                      setRenamingSessionId(null);
-                      setRenameValue("");
-                    }
-                  }}
-                />
-              ) : (
-                item.title
-              ),
-            meta: renamingSessionId === item.id ? null : (
-              <AriTypography className="desk-session-item-time" variant="caption" value={item.updatedAt} />
+            label: item.title,
+            meta: <AriTypography className="desk-session-item-time" variant="caption" value={item.updatedAt} />,
+            actions: (
+              <AriButton
+                size="sm"
+                type="text"
+                icon="delete"
+                onClick={() => {
+                  void updateRuntimeSessionStatus(user.id, item.id, 0)
+                    .then(() => refreshSessions())
+                    .catch(() => refreshSessions());
+                }}
+              />
             ),
-            actions:
-              renamingSessionId === item.id ? null : (
-                <AriFlex align="center" space={4}>
-                  <AriButton
-                    size="sm"
-                    type="text"
-                    icon={pinnedMap[item.id] ? "push_pin_fill" : "push_pin"}
-                    onClick={() => {
-                      togglePinnedAgentSession(item.id);
-                      refreshSessions();
-                    }}
-                  />
-                  <AriButton
-                    size="sm"
-                    type="text"
-                    icon="delete"
-                    onClick={() => {
-                      removeAgentSession(agentKey, item.id);
-                      refreshSessions();
-                    }}
-                  />
-                </AriFlex>
-              ),
             showActionsOnHover: true,
-            onContextMenu: (event) => {
-              event.preventDefault();
-              setContextMenu({
-                x: event.clientX,
-                y: event.clientY,
-                sessionId: item.id,
-              });
-            },
           }))}
           selectedKey={selectedSessionKey}
           onSelect={(key) => navigate(`/agents/${agentKey}/session/${key}`)}
         />
       </div>
 
-      {contextMenu ? (
-        <AriContainer
-          className="desk-session-context-menu"
-          style={{
-            position: "fixed",
-            top: contextMenu.y,
-            left: contextMenu.x,
-            zIndex: 9999,
-          }}
-          onClick={(event) => event.stopPropagation()}
-        >
-          <AriMenu
-            items={[
-              {
-                key: "rename",
-                label: "重新命名",
-                icon: "edit",
-              },
-            ]}
-            onSelect={() => {
-              startRename(contextMenu.sessionId);
-              setContextMenu(null);
-            }}
-          />
-        </AriContainer>
-      ) : null}
-
       <div style={{ flex: 1 }} />
-      {agentKey === "model" ? (
-        <AriContainer className="desk-model-settings-trigger">
-          <AriButton
-            icon="tune"
-            label="模型设置"
-            onClick={() => navigate("/agents/model/settings")}
-          />
-        </AriContainer>
-      ) : null}
       <UserHoverMenu user={user} onLogout={onLogout} />
     </AriContainer>
   );
 }
 
-function SettingsSidebar({
-  user,
-  onLogout
-}: {
-  user: LoginUser;
-  onLogout: () => void;
-}) {
+function SettingsSidebar({ user, onLogout }: { user: LoginUser; onLogout: () => Promise<void> }) {
   const navigate = useNavigate();
   const location = useLocation();
-  const selectedKey = location.pathname.includes("/general") ? "general" : "general";
-
   return (
     <AriContainer className="desk-sidebar">
       <SidebarBackHeader onBack={() => navigate("/home")} label="Home" />
-
-      <div className="desk-history-menu">
+      <div className="desk-sidebar-section">
         <AriMenu
           items={[
-            {
-              key: "general",
-              label: "General",
-              icon: "settings"
-            }
+            { key: "general", label: "General" },
+            { key: "model", label: "Model Agent" },
           ]}
-          selectedKey={selectedKey}
-          onSelect={() => navigate("/settings/general")}
+          selectedKey={location.pathname.includes("/agents/model/settings") ? "model" : "general"}
+          onSelect={(key) => navigate(key === "model" ? "/agents/model/settings" : "/settings/general")}
         />
       </div>
-
       <div style={{ flex: 1 }} />
       <UserHoverMenu user={user} onLogout={onLogout} />
     </AriContainer>
   );
 }
 
-function AiKeySidebar({
-  user,
-  onLogout
-}: {
-  user: LoginUser;
-  onLogout: () => void;
-}) {
+function AiKeySidebar({ user, onLogout }: { user: LoginUser; onLogout: () => Promise<void> }) {
   const navigate = useNavigate();
-
   return (
     <AriContainer className="desk-sidebar">
       <SidebarBackHeader onBack={() => navigate("/home")} label="Home" />
-
-      <div className="desk-history-menu">
-        <AriMenu
-          items={[
-            {
-              key: "ai-key-home",
-              label: "AI Key",
-              icon: "vpn_key"
-            }
-          ]}
-          selectedKey="ai-key-home"
-          onSelect={() => navigate("/ai-keys")}
-        />
+      <div className="desk-sidebar-section">
+        <AriTypography variant="h4" value="AI Key 管理" />
+        <AriTypography variant="caption" value="管理本地可用模型提供方密钥。" />
       </div>
-
       <div style={{ flex: 1 }} />
       <UserHoverMenu user={user} onLogout={onLogout} />
     </AriContainer>
   );
 }
 
-export function ClientSidebar({ user, onLogout }: ClientSidebarProps) {
+export function ClientSidebar({ user, onLogout, availableAgents }: ClientSidebarProps) {
   const location = useLocation();
   const mode = matchSidebarMode(location.pathname);
   const agentKey = matchAgentKey(location.pathname);
 
-  if (mode === "agent" && agentKey) {
-    return <AgentSidebar user={user} onLogout={onLogout} agentKey={agentKey} />;
-  }
   if (mode === "settings") {
     return <SettingsSidebar user={user} onLogout={onLogout} />;
   }
+
   if (mode === "ai-key") {
     return <AiKeySidebar user={user} onLogout={onLogout} />;
   }
-  return <HomeSidebar user={user} onLogout={onLogout} />;
+
+  if (mode === "agent" && agentKey) {
+    return <AgentSidebar user={user} onLogout={onLogout} agentKey={agentKey} />;
+  }
+
+  return <HomeSidebar user={user} onLogout={onLogout} availableAgents={availableAgents} />;
 }

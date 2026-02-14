@@ -10,9 +10,9 @@ import (
 )
 
 func init() {
-	zapi.Register("billing", "order-info", "v1", &OrderInfoAPI{})
-	zapi.Register("billing", "order-item", "v1", &OrderItemAPI{})
-	zapi.Register("billing", "subscription", "v1", &SubscriptionAPI{})
+	zapi.Register("zodileap_billing", "order-info", "v1", &OrderInfoAPI{})
+	zapi.Register("zodileap_billing", "order-item", "v1", &OrderItemAPI{})
+	zapi.Register("zodileap_billing", "subscription", "v1", &SubscriptionAPI{})
 }
 
 func defaultCors() gin.HandlerFunc {

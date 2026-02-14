@@ -1,0 +1,101 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Go: account (dev)",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/services/account/cmd",
+      "cwd": "${workspaceFolder}/services/account",
+      "buildFlags": "-tags=dev"
+    },
+    {
+      "name": "Go: runtime (dev)",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/services/runtime/cmd",
+      "cwd": "${workspaceFolder}/services/runtime",
+      "buildFlags": "-tags=dev"
+    },
+    {
+      "name": "Go: agent_code (dev)",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/services/agent_code/cmd",
+      "cwd": "${workspaceFolder}/services/agent_code",
+      "buildFlags": "-tags=dev"
+    },
+    {
+      "name": "Go: agent_3d (dev)",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/services/agent_3d/cmd",
+      "cwd": "${workspaceFolder}/services/agent_3d",
+      "buildFlags": "-tags=dev"
+    },
+    {
+      "name": "Go: license (dev)",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/services/license/cmd",
+      "cwd": "${workspaceFolder}/services/license",
+      "buildFlags": "-tags=dev"
+    },
+    {
+      "name": "Go: billing (dev)",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/services/billing/cmd",
+      "cwd": "${workspaceFolder}/services/billing",
+      "buildFlags": "-tags=dev"
+    },
+    {
+      "name": "Go: enterprise (dev)",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/services/enterprise/cmd",
+      "cwd": "${workspaceFolder}/services/enterprise",
+      "buildFlags": "-tags=dev"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Go Services: core(3-runnable)",
+      "configurations": [
+        "Go: account (dev)",
+        "Go: runtime (dev)",
+        "Go: agent_code (dev)"
+      ]
+    },
+    {
+      "name": "Go Services: all-runnable",
+      "configurations": [
+        "Go: account (dev)",
+        "Go: runtime (dev)",
+        "Go: agent_code (dev)",
+        "Go: license (dev)",
+        "Go: billing (dev)",
+        "Go: enterprise (dev)"
+      ]
+    },
+    {
+      "name": "Go Services: include-agent_3d(experimental)",
+      "configurations": [
+        "Go: account (dev)",
+        "Go: runtime (dev)",
+        "Go: agent_code (dev)",
+        "Go: agent_3d (dev)",
+        "Go: license (dev)",
+        "Go: billing (dev)",
+        "Go: enterprise (dev)"
+      ]
+    }
+  ]
+}
