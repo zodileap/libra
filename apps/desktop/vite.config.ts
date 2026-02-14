@@ -32,7 +32,29 @@ export default defineConfig({
   server: {
     host: "127.0.0.1",
     port: 1420,
-    strictPort: true
+    strictPort: true,
+    proxy: {
+      "/__api/account": {
+        target: "http://127.0.0.1:18080",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/__api\/account/, "")
+      },
+      "/__api/runtime": {
+        target: "http://127.0.0.1:18081",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/__api\/runtime/, "")
+      },
+      "/__api/agent_code": {
+        target: "http://127.0.0.1:18082",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/__api\/agent_code/, "")
+      },
+      "/__api/agent_3d": {
+        target: "http://127.0.0.1:18083",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/__api\/agent_3d/, "")
+      }
+    }
   },
   envPrefix: ["VITE_", "TAURI_"],
   resolve: {

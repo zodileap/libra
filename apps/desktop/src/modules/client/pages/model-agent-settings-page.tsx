@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { AriButton, AriCard, AriContainer, AriFlex, AriInput, AriSelect, AriSwitch, AriTypography } from "aries_react";
+import { AriButton, AriCard, AriContainer, AriFlex, AriInput, AriMessage, AriSelect, AriSwitch, AriTypography } from "aries_react";
 import {
   copyModelWorkflow,
   createModelWorkflowFromTemplate,
@@ -171,7 +171,11 @@ export function ModelAgentSettingsPage({
       setEditingParamsText("{}");
       refreshWorkflows();
     } catch (_err) {
-      window.alert("参数 JSON 格式无效，请修正后再保存。");
+      AriMessage.error({
+        content: "参数 JSON 格式无效，请修正后再保存。",
+        duration: 3500,
+        showClose: true,
+      });
     }
   };
 

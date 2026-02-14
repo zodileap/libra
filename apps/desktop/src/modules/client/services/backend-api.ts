@@ -106,10 +106,21 @@ export class BackendApiError extends Error {
   }
 }
 
-const accountBaseUrl = (import.meta.env.VITE_ACCOUNT_BASE_URL || "http://127.0.0.1:18080").replace(/\/$/, "");
-const runtimeBaseUrl = (import.meta.env.VITE_RUNTIME_BASE_URL || "http://127.0.0.1:18081").replace(/\/$/, "");
-const agentCodeBaseUrl = (import.meta.env.VITE_AGENT_CODE_BASE_URL || "http://127.0.0.1:18082").replace(/\/$/, "");
-const agent3dBaseUrl = (import.meta.env.VITE_AGENT_3D_BASE_URL || "http://127.0.0.1:18083").replace(/\/$/, "");
+// 描述：按运行环境解析后端服务地址，开发态默认走 Vite 同源代理以避免跨域问题。
+function resolveServiceBaseUrl(envValue: string | undefined, devProxyPath: string, fallback: string): string {
+  if (envValue && envValue.trim().length > 0) {
+    return envValue.replace(/\/$/, "");
+  }
+  if (import.meta.env.DEV) {
+    return devProxyPath;
+  }
+  return fallback.replace(/\/$/, "");
+}
+
+const accountBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_ACCOUNT_BASE_URL, "/__api/account", "http://127.0.0.1:18080");
+const runtimeBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_RUNTIME_BASE_URL, "/__api/runtime", "http://127.0.0.1:18081");
+const agentCodeBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_AGENT_CODE_BASE_URL, "/__api/agent_code", "http://127.0.0.1:18082");
+const agent3dBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_AGENT_3D_BASE_URL, "/__api/agent_3d", "http://127.0.0.1:18083");
 
 const authTokenStorageKey = "zodileap.desktop.authToken";
 

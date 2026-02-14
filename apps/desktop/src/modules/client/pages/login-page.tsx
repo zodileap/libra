@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AriButton, AriCard, AriContainer, AriFlex, AriInput, AriTypography } from "aries_react";
+import { AriButton, AriCard, AriContainer, AriFlex, AriInput, AriMessage, AriModal, AriTypography } from "aries_react";
 
 interface LoginPageProps {
   onLogin: (account: string, password: string) => Promise<void>;
@@ -9,18 +9,42 @@ export function LoginPage({ onLogin }: LoginPageProps) {
   const [account, setAccount] = useState("demo@zodileap.com");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [errorModalVisible, setErrorModalVisible] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
 
   // 描述：提交登录请求并在失败时使用弹窗提示错误信息。
   const handleSubmit = async () => {
     if (submitting) {
       return;
     }
+    const normalizedAccount = account.trim() || "demo@zodileap.com";
+    const normalizedPassword = password.trim();
+    console.log("Attempting login with account:", normalizedAccount);
+    console.log("Password length:", normalizedPassword.length);
+    if (!normalizedPassword) {
+      console.warn("Password is empty, prompting user to enter password.");
+      const text = "请输入密码后再登录。";
+      setErrorMessage(text);
+      setErrorModalVisible(true);
+      AriMessage.warning({
+        content: text,
+        duration: 2500,
+      });
+      return;
+    }
+
     setSubmitting(true);
     try {
-      await onLogin(account.trim() || "demo@zodileap.com", password);
+      await onLogin(normalizedAccount, normalizedPassword);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "登录失败，请稍后重试";
-      window.alert(message);
+      const text = err instanceof Error ? err.message : "登录失败，请稍后重试";
+      setErrorMessage(text);
+      setErrorModalVisible(true);
+      AriMessage.error({
+        content: text,
+        duration: 3500,
+        showClose: true,
+      });
     } finally {
       setSubmitting(false);
     }
@@ -55,6 +79,21 @@ export function LoginPage({ onLogin }: LoginPageProps) {
           />
         </AriFlex>
       </AriCard>
+
+      <AriModal
+        visible={errorModalVisible}
+        title="登录失败"
+        onClose={() => setErrorModalVisible(false)}
+        footer={(
+          <AriButton
+            color="primary"
+            label="我知道了"
+            onClick={() => setErrorModalVisible(false)}
+          />
+        )}
+      >
+        <AriTypography variant="body" value={errorMessage || "未知错误"} />
+      </AriModal>
     </AriContainer>
   );
 }

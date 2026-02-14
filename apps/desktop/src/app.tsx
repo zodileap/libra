@@ -1,5 +1,5 @@
 import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AriApp, setAppConfig, setColorTheme } from "aries_react";
+import { AriApp, AriMessage, setAppConfig, setColorTheme } from "aries_react";
 import { invoke } from "@tauri-apps/api/core";
 import { HashRouter } from "react-router-dom";
 import { DesktopRouter } from "./modules/client/router";
@@ -218,7 +218,11 @@ export default function App() {
           codexPopupShownRef.current.add(popupKey);
           const updateHint = "建议执行：pnpm add -g @openai/codex@latest";
           const detail = health.bin_path ? `\n当前路径：${health.bin_path}` : "";
-          window.alert(`${health.message}${detail}\n${updateHint}`);
+          AriMessage.warning({
+            content: `${health.message}${detail}\n${updateHint}`,
+            duration: 5000,
+            showClose: true,
+          });
         }
       } catch (err) {
         if (disposed) {
@@ -229,7 +233,11 @@ export default function App() {
           return;
         }
         codexPopupShownRef.current.add(popupKey);
-        window.alert(`Codex CLI 检测失败：${String(err)}`);
+        AriMessage.error({
+          content: `Codex CLI 检测失败：${String(err)}`,
+          duration: 5000,
+          showClose: true,
+        });
       }
     };
 
