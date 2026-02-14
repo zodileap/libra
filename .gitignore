@@ -10,3 +10,6 @@ coverage/
 !.env.example
 debug/
 apps/desktop/src-tauri/exports/
+services/*/cmd/__debug_bin*
+services/*/cmd/cmd
+services/*/log/
