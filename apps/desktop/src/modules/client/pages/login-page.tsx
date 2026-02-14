@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AriButton, AriCard, AriContainer, AriFlex, AriInput, AriMessage, AriModal, AriTypography } from "aries_react";
+import { AriButton, AriCard, AriContainer, AriFlex, AriInput, AriMessage, AriTypography } from "aries_react";
 
 interface LoginPageProps {
   onLogin: (account: string, password: string) => Promise<void>;
@@ -9,23 +9,35 @@ export function LoginPage({ onLogin }: LoginPageProps) {
   const [account, setAccount] = useState("demo@zodileap.com");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [errorModalVisible, setErrorModalVisible] = useState(false);
-  const [errorMessage, setErrorMessage] = useState("");
+  const [passwordError, setPasswordError] = useState("");
 
-  // 描述：提交登录请求并在失败时使用弹窗提示错误信息。
+  // 描述：处理密码输入并在用户继续编辑时清理密码错误提示。
+  const handlePasswordChange = (value: string) => {
+    setPassword(value);
+    if (passwordError) {
+      setPasswordError("");
+    }
+  };
+
+  // 描述：提交登录请求并使用消息组件反馈输入校验与登录失败信息。
   const handleSubmit = async () => {
     if (submitting) {
       return;
     }
     const normalizedAccount = account.trim() || "demo@zodileap.com";
-    const normalizedPassword = password.trim();
-    console.log("Attempting login with account:", normalizedAccount);
-    console.log("Password length:", normalizedPassword.length);
-    if (!normalizedPassword) {
-      console.warn("Password is empty, prompting user to enter password.");
+    const normalizedPassword = password;
+    if (!normalizedPassword.trim()) {
       const text = "请输入密码后再登录。";
-      setErrorMessage(text);
-      setErrorModalVisible(true);
+      setPasswordError(text);
+      AriMessage.warning({
+        content: text,
+        duration: 2500,
+      });
+      return;
+    }
+    if (normalizedPassword.length < 6) {
+      const text = "密码至少需要 6 位字符。";
+      setPasswordError(text);
       AriMessage.warning({
         content: text,
         duration: 2500,
@@ -33,13 +45,12 @@ export function LoginPage({ onLogin }: LoginPageProps) {
       return;
     }
 
+    setPasswordError("");
     setSubmitting(true);
     try {
       await onLogin(normalizedAccount, normalizedPassword);
     } catch (err) {
       const text = err instanceof Error ? err.message : "登录失败，请稍后重试";
-      setErrorMessage(text);
-      setErrorModalVisible(true);
       AriMessage.error({
         content: text,
         duration: 3500,
@@ -68,8 +79,15 @@ export function LoginPage({ onLogin }: LoginPageProps) {
             value={password}
             type="password"
             placeholder="请输入密码"
-            onChange={setPassword}
+            onChange={handlePasswordChange}
           />
+          {passwordError ? (
+            <AriTypography
+              className="desk-inline-status desk-login-password-error"
+              variant="caption"
+              value={passwordError}
+            />
+          ) : null}
           <AriButton
             color="primary"
             label={submitting ? "登录中..." : "登录"}
@@ -79,21 +97,6 @@ export function LoginPage({ onLogin }: LoginPageProps) {
           />
         </AriFlex>
       </AriCard>
-
-      <AriModal
-        visible={errorModalVisible}
-        title="登录失败"
-        onClose={() => setErrorModalVisible(false)}
-        footer={(
-          <AriButton
-            color="primary"
-            label="我知道了"
-            onClick={() => setErrorModalVisible(false)}
-          />
-        )}
-      >
-        <AriTypography variant="body" value={errorMessage || "未知错误"} />
-      </AriModal>
     </AriContainer>
   );
 }

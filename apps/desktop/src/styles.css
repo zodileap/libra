@@ -718,6 +718,10 @@ html[data-color-theme="dark"] body {
   padding: calc(var(--z-inset) * 1.125);
 }
 
+.desk-login-password-error {
+  color: var(--z-color-danger);
+}
+
 .desk-settings-node-editor-actions {
   margin-top: var(--desk-block-gap-md);
   display: flex;

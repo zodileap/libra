@@ -31,19 +31,24 @@ test("isUnauthorizedResponse should match http status or business code", () => {
   assert.equal(isUnauthorizedResponse(200, 200), false);
 });
 
-// 描述：校验后端错误文案优先使用业务 message。
-test("buildBackendErrorMessage should prefer backend message", () => {
-  assert.equal(buildBackendErrorMessage(5001, "业务失败", "fallback"), "[5001] 业务失败");
+// 描述：校验后端错误文案会映射为用户友好提示。
+test("buildBackendErrorMessage should map backend code to user-friendly message", () => {
+  assert.equal(buildBackendErrorMessage(100001001, "token invalid", "fallback"), "登录状态已失效，请重新登录。");
+  assert.equal(buildBackendErrorMessage(100002001, "email invalid", "fallback"), "邮箱格式不正确，请检查后重试。");
+  assert.equal(buildBackendErrorMessage(100002002, "请求数据不合法", "fallback"), "登录信息不完整或格式不正确，请检查后重试。");
+  assert.equal(buildBackendErrorMessage(1008001004, "参数错误", "fallback"), "登录信息不完整或格式不正确，请检查后重试。");
+});
+
+// 描述：校验后端 message 未命中特殊规则时回退到通用文案。
+test("buildBackendErrorMessage should fallback to generic message", () => {
+  assert.equal(buildBackendErrorMessage(5001, "业务失败", "fallback"), "fallback");
   assert.equal(buildBackendErrorMessage(5001, "   ", "fallback"), "fallback");
 });
 
-// 描述：校验网络错误文案包含请求地址与原始错误信息。
-test("buildNetworkFailureMessage should include url and detail", () => {
+// 描述：校验网络错误文案为用户友好提示，不暴露技术细节。
+test("buildNetworkFailureMessage should return user-friendly text", () => {
   const message = buildNetworkFailureMessage("http://127.0.0.1:18080/auth/v1/login", "Load failed");
-  assert.equal(
-    message,
-    "无法连接后端服务：http://127.0.0.1:18080/auth/v1/login。请确认服务已启动且允许跨域访问。原始错误：Load failed",
-  );
+  assert.equal(message, "无法连接后端服务，请确认服务已启动后重试。");
 });
 
 // 描述：校验查询字符串构造会忽略空值并保留有效字段。

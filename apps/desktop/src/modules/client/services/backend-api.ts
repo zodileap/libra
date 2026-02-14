@@ -192,8 +192,11 @@ async function request<T>(url: string, options?: RequestOptions): Promise<T> {
   }
 
   if (!response.ok || code !== 200) {
+    const fallbackMessage = response.status >= 500
+      ? "服务暂时不可用，请稍后重试。"
+      : "请求失败，请检查输入后重试。";
     throw new BackendApiError(
-      buildBackendErrorMessage(code, message, `请求失败：${response.status}`),
+      buildBackendErrorMessage(code, message, fallbackMessage),
       code,
       response.status,
     );
@@ -216,6 +219,9 @@ export async function loginByPassword(email: string, password: string): Promise<
       body: {
         email,
         password,
+        // 描述：兼容后端字段绑定差异，同时传输首字母大写字段名。
+        Email: email,
+        Password: password,
       },
     },
   );
