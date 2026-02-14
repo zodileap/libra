@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { AriButton, AriCard, AriContainer, AriInput, AriSwitch, AriTypography } from "aries_react";
+import { AriButton, AriCard, AriContainer, AriFlex, AriInput, AriSelect, AriSwitch, AriTypography } from "aries_react";
 import {
   copyModelWorkflow,
   createModelWorkflowFromTemplate,
@@ -14,6 +14,7 @@ import type {
   BlenderBridgeRuntime,
   ModelMcpCapabilities,
 } from "../types";
+import { DeskPageHeader, DeskSectionLabel, DeskSettingsRow } from "../widgets/settings-primitives";
 
 interface ModelAgentSettingsPageProps {
   modelMcpCapabilities: ModelMcpCapabilities;
@@ -22,6 +23,71 @@ interface ModelAgentSettingsPageProps {
   ensureBlenderBridge: () => Promise<BlenderBridgeEnsureResult>;
 }
 
+interface CapabilitySettingItem {
+  key: keyof ModelMcpCapabilities;
+  title: string;
+  description: string;
+}
+
+// 描述:
+//
+//   - 集中维护模型智能体能力开关的展示文案，避免页面结构重复和文案分散。
+const CAPABILITY_SETTING_ITEMS: CapabilitySettingItem[] = [
+  {
+    key: "export",
+    title: "导出模型（Blender）",
+    description: "控制 AI 是否可调用 MCP 导出能力。关闭后会话中无法执行导出。",
+  },
+  {
+    key: "scene",
+    title: "场景与对象能力",
+    description: "列出对象、选择对象、重命名、层级整理。",
+  },
+  {
+    key: "transform",
+    title: "变换能力",
+    description: "对齐原点、统一尺度、旋转方向标准化。",
+  },
+  {
+    key: "geometry",
+    title: "几何编辑能力",
+    description: "加厚、倒角、镜像、阵列、布尔。",
+  },
+  {
+    key: "mesh_opt",
+    title: "网格优化能力",
+    description: "自动平滑、Weighted Normal、Decimate。",
+  },
+  {
+    key: "material",
+    title: "材质与贴图能力",
+    description: "材质槽整理、贴图检查、打包贴图。",
+  },
+  {
+    key: "file",
+    title: "文件能力",
+    description: "新建、打开、保存、撤销与重试。",
+  },
+];
+
+// 描述:
+//
+//   - 生成工作流下拉项显示文案，统一版本号和分享状态表达。
+//
+// Params:
+//
+//   - workflow: 工作流定义。
+//
+// Returns:
+//
+//   - 可读工作流标题。
+function getWorkflowOptionLabel(workflow: WorkflowDefinition): string {
+  return `${workflow.name} (v${workflow.version})${workflow.shared ? " · 已分享" : ""}`;
+}
+
+// 描述:
+//
+//   - 渲染模型智能体设置页面，统一能力开关、Bridge 状态与工作流编辑入口。
 export function ModelAgentSettingsPage({
   modelMcpCapabilities,
   onModelMcpCapabilitiesChange,
@@ -33,11 +99,57 @@ export function ModelAgentSettingsPage({
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
   const [editingParamsText, setEditingParamsText] = useState("{}");
   const workflows = useMemo(() => listModelWorkflows(), [workflowVersion]);
+  const workflowOptions = useMemo(
+    () => workflows.map((workflow) => ({ label: getWorkflowOptionLabel(workflow), value: workflow.id })),
+    [workflows]
+  );
   const selectedWorkflow: WorkflowDefinition | null =
     workflows.find((item) => item.id === selectedWorkflowId) || workflows[0] || null;
 
+  // 描述:
+  //
+  //   - 刷新工作流版本号，触发 useMemo 重新读取本地工作流列表。
   const refreshWorkflows = () => setWorkflowVersion((value) => value + 1);
 
+  // 描述:
+  //
+  //   - 统一更新某个能力开关并回写到页面状态。
+  //
+  // Params:
+  //
+  //   - key: 能力键值。
+  //   - checked: 开关状态。
+  const patchCapability = (key: keyof ModelMcpCapabilities, checked: boolean) => {
+    const next: ModelMcpCapabilities = {
+      ...modelMcpCapabilities,
+      [key]: checked,
+    };
+    onModelMcpCapabilitiesChange(next);
+  };
+
+  // 描述:
+  //
+  //   - 将 AriSelect 的返回值规范化为工作流 ID，避免数组值或 undefined 进入状态。
+  //
+  // Params:
+  //
+  //   - value: AriSelect onChange 返回值。
+  const onWorkflowSelectChange = (value: string | number | (string | number)[] | undefined) => {
+    if (typeof value === "string" || typeof value === "number") {
+      setSelectedWorkflowId(String(value));
+      return;
+    }
+    setSelectedWorkflowId("");
+  };
+
+  // 描述:
+  //
+  //   - 读取并进入节点参数编辑状态，使用格式化 JSON 便于手工修改。
+  //
+  // Params:
+  //
+  //   - workflowId: 工作流 ID。
+  //   - nodeId: 节点 ID。
   const startEditNodeParams = (workflowId: string, nodeId: string) => {
     const workflow = workflows.find((item) => item.id === workflowId);
     const node = workflow?.nodes.find((item) => item.id === nodeId);
@@ -47,6 +159,9 @@ export function ModelAgentSettingsPage({
     setEditingParamsText(JSON.stringify(node.params || {}, null, 2));
   };
 
+  // 描述:
+  //
+  //   - 持久化节点参数编辑结果，并在成功后退出编辑态。
   const saveNodeParams = () => {
     if (!selectedWorkflow || !editingNodeId) return;
     try {
@@ -63,149 +178,51 @@ export function ModelAgentSettingsPage({
   return (
     <AriContainer className="desk-content">
       <div className="desk-settings-shell">
-        <AriTypography variant="h1" value="模型智能体设置" />
-        <AriTypography variant="caption" value="功能" />
+        <DeskPageHeader
+          title="模型智能体设置"
+          description="统一管理模型能力、Blender Bridge 连接状态和可复用工作流。"
+        />
+        <DeskSectionLabel label="功能" />
 
         <div className="desk-settings-panel">
-          <div className="desk-settings-row">
-            <div className="desk-settings-meta">
-              <AriTypography variant="h4" value="导出模型（Blender）" />
-              <AriTypography
-                variant="caption"
-                value="控制 AI 是否可调用 MCP 导出能力。关闭后会话中无法执行导出。"
+          {CAPABILITY_SETTING_ITEMS.map((capability) => (
+            <DeskSettingsRow
+              key={capability.key}
+              title={capability.title}
+              description={capability.description}
+            >
+              <AriSwitch
+                checked={modelMcpCapabilities[capability.key]}
+                onChange={(checked) => patchCapability(capability.key, checked)}
               />
-            </div>
-            <AriSwitch
-              checked={modelMcpCapabilities.export}
-              onChange={(checked) =>
-                onModelMcpCapabilitiesChange({
-                  ...modelMcpCapabilities,
-                  export: checked,
-                })
-              }
-            />
-          </div>
-          <div className="desk-settings-row">
-            <div className="desk-settings-meta">
-              <AriTypography variant="h4" value="场景与对象能力" />
-              <AriTypography variant="caption" value="列出对象、选择对象、重命名、层级整理。" />
-            </div>
-            <AriSwitch
-              checked={modelMcpCapabilities.scene}
-              onChange={(checked) =>
-                onModelMcpCapabilitiesChange({
-                  ...modelMcpCapabilities,
-                  scene: checked,
-                })
-              }
-            />
-          </div>
-          <div className="desk-settings-row">
-            <div className="desk-settings-meta">
-              <AriTypography variant="h4" value="变换能力" />
-              <AriTypography variant="caption" value="对齐原点、统一尺度、旋转方向标准化。" />
-            </div>
-            <AriSwitch
-              checked={modelMcpCapabilities.transform}
-              onChange={(checked) =>
-                onModelMcpCapabilitiesChange({
-                  ...modelMcpCapabilities,
-                  transform: checked,
-                })
-              }
-            />
-          </div>
-          <div className="desk-settings-row">
-            <div className="desk-settings-meta">
-              <AriTypography variant="h4" value="几何编辑能力" />
-              <AriTypography variant="caption" value="加厚、倒角、镜像、阵列、布尔。" />
-            </div>
-            <AriSwitch
-              checked={modelMcpCapabilities.geometry}
-              onChange={(checked) =>
-                onModelMcpCapabilitiesChange({
-                  ...modelMcpCapabilities,
-                  geometry: checked,
-                })
-              }
-            />
-          </div>
-          <div className="desk-settings-row">
-            <div className="desk-settings-meta">
-              <AriTypography variant="h4" value="网格优化能力" />
-              <AriTypography variant="caption" value="自动平滑、Weighted Normal、Decimate。" />
-            </div>
-            <AriSwitch
-              checked={modelMcpCapabilities.mesh_opt}
-              onChange={(checked) =>
-                onModelMcpCapabilitiesChange({
-                  ...modelMcpCapabilities,
-                  mesh_opt: checked,
-                })
-              }
-            />
-          </div>
-          <div className="desk-settings-row">
-            <div className="desk-settings-meta">
-              <AriTypography variant="h4" value="材质与贴图能力" />
-              <AriTypography variant="caption" value="材质槽整理、贴图检查、打包贴图。" />
-            </div>
-            <AriSwitch
-              checked={modelMcpCapabilities.material}
-              onChange={(checked) =>
-                onModelMcpCapabilitiesChange({
-                  ...modelMcpCapabilities,
-                  material: checked,
-                })
-              }
-            />
-          </div>
-          <div className="desk-settings-row">
-            <div className="desk-settings-meta">
-              <AriTypography variant="h4" value="文件能力" />
-              <AriTypography variant="caption" value="新建、打开、保存、撤销与重试。" />
-            </div>
-            <AriSwitch
-              checked={modelMcpCapabilities.file}
-              onChange={(checked) =>
-                onModelMcpCapabilitiesChange({
-                  ...modelMcpCapabilities,
-                  file: checked,
-                })
-              }
-            />
-          </div>
+            </DeskSettingsRow>
+          ))}
         </div>
 
-        <AriTypography variant="caption" value="Blender" />
+        <DeskSectionLabel label="Blender" />
         <div className="desk-settings-panel">
-          <div className="desk-settings-row">
-            <div className="desk-settings-meta">
-              <AriTypography variant="h4" value="Bridge 连接状态" />
-              <AriTypography
-                variant="caption"
-                value={
-                  blenderBridgeRuntime.checking
-                    ? "正在检测并自动修复 Bridge..."
-                    : blenderBridgeRuntime.message
-                }
-              />
-            </div>
+          <DeskSettingsRow
+            title="Bridge 连接状态"
+            description={
+              blenderBridgeRuntime.checking
+                ? "正在检测并自动修复 Bridge..."
+                : blenderBridgeRuntime.message
+            }
+          >
             <AriButton
               label={blenderBridgeRuntime.checking ? "检测中..." : "检测"}
               onClick={() => void ensureBlenderBridge()}
               disabled={blenderBridgeRuntime.checking}
             />
-          </div>
+          </DeskSettingsRow>
         </div>
 
-        <AriTypography variant="caption" value="模型工作流（P1/P2）" />
+        <DeskSectionLabel label="模型工作流（P1/P2）" />
         <div className="desk-settings-panel">
-          <div className="desk-settings-row">
-            <div className="desk-settings-meta">
-              <AriTypography variant="h4" value="工作流模板" />
-              <AriTypography variant="caption" value="支持可插拔、可跳步、可重排、可复用。可创建自定义版本。" />
-            </div>
+          <DeskSettingsRow
+            title="工作流模板"
+            description="支持可插拔、可跳步、可重排、可复用。可创建自定义版本。"
+          >
             <AriButton
               label="新建工作流"
               onClick={() => {
@@ -214,24 +231,22 @@ export function ModelAgentSettingsPage({
                 refreshWorkflows();
               }}
             />
-          </div>
-          <div className="desk-settings-row">
-            <div className="desk-settings-meta">
-              <AriTypography variant="caption" value="当前工作流" />
-              <select
-                className="desk-native-select"
-                value={selectedWorkflow?.id || ""}
-                onChange={(event) => setSelectedWorkflowId(event.target.value)}
-              >
-                {workflows.map((workflow) => (
-                  <option key={workflow.id} value={workflow.id}>
-                    {workflow.name} (v{workflow.version}){workflow.shared ? " · 已分享" : ""}
-                  </option>
-                ))}
-              </select>
-            </div>
+          </DeskSettingsRow>
+          <DeskSettingsRow
+            description="当前工作流"
+            metaSlot={(
+              <AriSelect
+                className="desk-settings-select"
+                placeholder="请选择工作流"
+                value={selectedWorkflow?.id}
+                options={workflowOptions}
+                onChange={onWorkflowSelectChange}
+                disabled={workflowOptions.length === 0}
+              />
+            )}
+          >
             {selectedWorkflow ? (
-              <AriContainer>
+              <AriFlex align="center" space={8}>
                 <AriButton
                   type="text"
                   label="复制"
@@ -249,19 +264,16 @@ export function ModelAgentSettingsPage({
                     refreshWorkflows();
                   }}
                 />
-              </AriContainer>
+              </AriFlex>
             ) : null}
-          </div>
+          </DeskSettingsRow>
           {selectedWorkflow?.nodes.map((node) => (
-            <div key={node.id} className="desk-settings-row">
-              <div className="desk-settings-meta">
-                <AriTypography variant="h4" value={node.name} />
-                <AriTypography
-                  variant="caption"
-                  value={`kind=${node.kind} | retry=${node.retryCount} | fallback=${node.fallbackKind || "-"}`}
-                />
-              </div>
-              <AriContainer>
+            <DeskSettingsRow
+              key={node.id}
+              title={node.name}
+              description={`kind=${node.kind} | retry=${node.retryCount} | fallback=${node.fallbackKind || "-"}`}
+            >
+              <AriFlex align="center" space={8}>
                 <AriSwitch
                   checked={node.enabled}
                   onChange={(checked) => {
@@ -282,8 +294,8 @@ export function ModelAgentSettingsPage({
                   label="参数"
                   onClick={() => startEditNodeParams(selectedWorkflow.id, node.id)}
                 />
-              </AriContainer>
-            </div>
+              </AriFlex>
+            </DeskSettingsRow>
           ))}
         </div>
 
@@ -291,7 +303,7 @@ export function ModelAgentSettingsPage({
           <AriCard className="desk-prompt-card">
             <AriTypography variant="h4" value={`编辑节点参数：${editingNodeId}`} />
             <AriInput value={editingParamsText} onChange={setEditingParamsText} placeholder="{ }" />
-            <AriContainer style={{ marginTop: 12 }}>
+            <AriContainer className="desk-settings-node-editor-actions">
               <AriButton label="取消" onClick={() => setEditingNodeId(null)} />
               <AriButton color="primary" label="保存参数" onClick={saveNodeParams} />
             </AriContainer>

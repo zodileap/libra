@@ -1,12 +1,16 @@
 import { useState } from "react";
-import { AriButton, AriContainer, AriFlex, AriSwitch, AriTypography } from "aries_react";
+import { AriButton, AriContainer, AriFlex, AriSwitch } from "aries_react";
 import type { ColorThemeMode } from "../types";
+import { DeskPageHeader, DeskSectionTitle, DeskSettingsRow } from "../widgets/settings-primitives";
 
 interface SettingsGeneralPageProps {
   colorThemeMode: ColorThemeMode;
   onColorThemeModeChange: (value: ColorThemeMode) => void;
 }
 
+// 描述:
+//
+//   - 渲染通用设置页，统一主题切换与基础交互开关。
 export function SettingsGeneralPage({
   colorThemeMode,
   onColorThemeModeChange,
@@ -17,19 +21,18 @@ export function SettingsGeneralPage({
   return (
     <AriContainer className="desk-content">
       <div className="desk-settings-shell">
-        <AriTypography variant="h1" value="General" />
+        <DeskPageHeader
+          title="General"
+          description="统一管理主题与基础交互偏好。"
+        />
 
-        <AriTypography className="desk-settings-title" variant="h2" value="Appearance" />
+        <DeskSectionTitle title="Appearance" />
 
         <div className="desk-settings-panel">
-          <div className="desk-settings-row">
-            <div className="desk-settings-meta">
-              <AriTypography variant="h4" value="Theme" />
-              <AriTypography
-                variant="caption"
-                value="Use light, dark, or match your system"
-              />
-            </div>
+          <DeskSettingsRow
+            title="Theme"
+            description="Use light, dark, or match your system"
+          >
             <AriFlex className="desk-theme-group" align="center" space={8}>
               <AriButton
                 size="sm"
@@ -53,29 +56,21 @@ export function SettingsGeneralPage({
                 onClick={() => onColorThemeModeChange("system")}
               />
             </AriFlex>
-          </div>
+          </DeskSettingsRow>
 
-          <div className="desk-settings-row">
-            <div className="desk-settings-meta">
-              <AriTypography variant="h4" value="Use opaque window background" />
-              <AriTypography
-                variant="caption"
-                value="Make windows use a solid background rather than system translucency"
-              />
-            </div>
+          <DeskSettingsRow
+            title="Use opaque window background"
+            description="Make windows use a solid background rather than system translucency"
+          >
             <AriSwitch checked={opaqueWindow} onChange={setOpaqueWindow} />
-          </div>
+          </DeskSettingsRow>
 
-          <div className="desk-settings-row">
-            <div className="desk-settings-meta">
-              <AriTypography variant="h4" value="Use pointer cursors" />
-              <AriTypography
-                variant="caption"
-                value="Change the cursor to a pointer when hovering over interactive elements"
-              />
-            </div>
+          <DeskSettingsRow
+            title="Use pointer cursors"
+            description="Change the cursor to a pointer when hovering over interactive elements"
+          >
             <AriSwitch checked={pointerCursor} onChange={setPointerCursor} />
-          </div>
+          </DeskSettingsRow>
         </div>
       </div>
     </AriContainer>

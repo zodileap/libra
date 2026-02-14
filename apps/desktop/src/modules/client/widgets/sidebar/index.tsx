@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   AriAvatar,
@@ -20,6 +20,34 @@ import {
   togglePinnedAgentSession,
 } from "../../data";
 import type { AgentKey, LoginUser } from "../../types";
+
+const CONTEXT_MENU_SAFE_GAP = 8;
+
+// 描述:
+//
+//   - 将右键菜单坐标约束在可视区域内，避免菜单被窗口边缘遮挡。
+//
+// Params:
+//
+//   - x: 原始鼠标横坐标。
+//   - y: 原始鼠标纵坐标。
+//   - width: 菜单宽度。
+//   - height: 菜单高度。
+//
+// Returns:
+//
+//   - 约束后的菜单坐标。
+function clampContextMenuPosition(x: number, y: number, width: number, height: number) {
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const maxX = Math.max(CONTEXT_MENU_SAFE_GAP, viewportWidth - width - CONTEXT_MENU_SAFE_GAP);
+  const maxY = Math.max(CONTEXT_MENU_SAFE_GAP, viewportHeight - height - CONTEXT_MENU_SAFE_GAP);
+
+  return {
+    x: Math.min(Math.max(x, CONTEXT_MENU_SAFE_GAP), maxX),
+    y: Math.min(Math.max(y, CONTEXT_MENU_SAFE_GAP), maxY),
+  };
+}
 
 interface ClientSidebarProps {
   user: LoginUser;
@@ -82,12 +110,12 @@ function UserHoverMenu({
   return (
     <AriTooltip content={content} position="top" matchTriggerWidth>
       <div className="desk-user-trigger-wrap">
-        <AriContainer className="desk-user-trigger">
+        <button type="button" className="desk-user-trigger desk-user-trigger-btn">
           <AriFlex align="center" space={8}>
             <AriAvatar text={user.name.slice(0, 1).toUpperCase()} />
             <AriTypography variant="h4" value={user.name} />
           </AriFlex>
-        </AriContainer>
+        </button>
       </div>
     </AriTooltip>
   );
@@ -125,7 +153,7 @@ function HomeSidebar({
 
   return (
     <AriContainer className="desk-sidebar">
-      <div className="desk-agent-menu">
+      <div className="desk-sidebar-nav desk-agent-menu">
         <AriMenu
           items={AGENTS.map((agent) => ({
             key: agent.key,
@@ -136,7 +164,7 @@ function HomeSidebar({
         />
       </div>
 
-      <div style={{ flex: 1 }} />
+      <div className="desk-sidebar-spacer" />
       <UserHoverMenu user={user} onLogout={onLogout} />
     </AriContainer>
   );
@@ -157,6 +185,7 @@ function AgentSidebar({
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; sessionId: string } | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
 
   const sessions = useMemo(() => getAgentSessions(agentKey), [agentKey, sessionVersion]);
   const selectedSessionKey = location.pathname.includes("/session/")
@@ -171,15 +200,57 @@ function AgentSidebar({
     [sessions],
   );
 
+  // 描述:
+  //
+  //   - 打开会话右键菜单并提前做一次视窗范围约束，减少出现越界闪烁。
+  //
+  // Params:
+  //
+  //   - x: 鼠标横坐标。
+  //   - y: 鼠标纵坐标。
+  //   - sessionId: 会话 ID。
+  const openContextMenu = (x: number, y: number, sessionId: string) => {
+    const estimatedWidth = 180;
+    const estimatedHeight = 120;
+    const next = clampContextMenuPosition(x, y, estimatedWidth, estimatedHeight);
+    setContextMenu({
+      x: next.x,
+      y: next.y,
+      sessionId,
+    });
+  };
+
   useEffect(() => {
     if (!contextMenu) return;
     const close = () => setContextMenu(null);
+    const onKeydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        close();
+      }
+    };
     window.addEventListener("click", close);
     window.addEventListener("blur", close);
+    window.addEventListener("keydown", onKeydown);
     return () => {
       window.removeEventListener("click", close);
       window.removeEventListener("blur", close);
+      window.removeEventListener("keydown", onKeydown);
     };
+  }, [contextMenu]);
+
+  useEffect(() => {
+    // 描述:
+    //
+    //   - 右键菜单位置依赖鼠标坐标，使用 DOM style 属性设置 top/left，
+    //     避免在 JSX 中保留 style 内联对象。
+    if (!contextMenuRef.current || !contextMenu) {
+      return;
+    }
+    const menuElement = contextMenuRef.current;
+    const rect = menuElement.getBoundingClientRect();
+    const nextPosition = clampContextMenuPosition(contextMenu.x, contextMenu.y, rect.width, rect.height);
+    menuElement.style.top = `${nextPosition.y}px`;
+    menuElement.style.left = `${nextPosition.x}px`;
   }, [contextMenu]);
 
   const refreshSessions = () => setSessionVersion((value) => value + 1);
@@ -207,7 +278,7 @@ function AgentSidebar({
         rightAction={<AriButton icon="edit" label="编辑" />}
       />
 
-      <div className="desk-history-menu">
+      <div className="desk-sidebar-nav desk-history-menu">
         <AriMenu
           items={sessions.map((item) => ({
             key: item.id,
@@ -262,11 +333,7 @@ function AgentSidebar({
             showActionsOnHover: true,
             onContextMenu: (event) => {
               event.preventDefault();
-              setContextMenu({
-                x: event.clientX,
-                y: event.clientY,
-                sessionId: item.id,
-              });
+              openContextMenu(event.clientX, event.clientY, item.id);
             },
           }))}
           selectedKey={selectedSessionKey}
@@ -275,33 +342,30 @@ function AgentSidebar({
       </div>
 
       {contextMenu ? (
-        <AriContainer
-          className="desk-session-context-menu"
-          style={{
-            position: "fixed",
-            top: contextMenu.y,
-            left: contextMenu.x,
-            zIndex: 9999,
-          }}
+        <div
+          ref={contextMenuRef}
+          className="desk-session-context-menu-floating"
           onClick={(event) => event.stopPropagation()}
         >
-          <AriMenu
-            items={[
-              {
-                key: "rename",
-                label: "重新命名",
-                icon: "edit",
-              },
-            ]}
-            onSelect={() => {
-              startRename(contextMenu.sessionId);
-              setContextMenu(null);
-            }}
-          />
-        </AriContainer>
+          <AriContainer className="desk-session-context-menu">
+            <AriMenu
+              items={[
+                {
+                  key: "rename",
+                  label: "重新命名",
+                  icon: "edit",
+                },
+              ]}
+              onSelect={() => {
+                startRename(contextMenu.sessionId);
+                setContextMenu(null);
+              }}
+            />
+          </AriContainer>
+        </div>
       ) : null}
 
-      <div style={{ flex: 1 }} />
+      <div className="desk-sidebar-spacer" />
       {agentKey === "model" ? (
         <AriContainer className="desk-model-settings-trigger">
           <AriButton
@@ -331,7 +395,7 @@ function SettingsSidebar({
     <AriContainer className="desk-sidebar">
       <SidebarBackHeader onBack={() => navigate("/home")} label="Home" />
 
-      <div className="desk-history-menu">
+      <div className="desk-sidebar-nav desk-history-menu">
         <AriMenu
           items={[
             {
@@ -345,7 +409,7 @@ function SettingsSidebar({
         />
       </div>
 
-      <div style={{ flex: 1 }} />
+      <div className="desk-sidebar-spacer" />
       <UserHoverMenu user={user} onLogout={onLogout} />
     </AriContainer>
   );
@@ -364,7 +428,7 @@ function AiKeySidebar({
     <AriContainer className="desk-sidebar">
       <SidebarBackHeader onBack={() => navigate("/home")} label="Home" />
 
-      <div className="desk-history-menu">
+      <div className="desk-sidebar-nav desk-history-menu">
         <AriMenu
           items={[
             {
@@ -378,7 +442,7 @@ function AiKeySidebar({
         />
       </div>
 
-      <div style={{ flex: 1 }} />
+      <div className="desk-sidebar-spacer" />
       <UserHoverMenu user={user} onLogout={onLogout} />
     </AriContainer>
   );

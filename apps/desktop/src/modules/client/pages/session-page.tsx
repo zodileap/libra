@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { KeyboardEvent } from "react";
 import {
   AriButton,
   AriCard,
@@ -32,8 +33,14 @@ import type {
   ModelMcpCapabilities,
 } from "../types";
 import { ChatMarkdown } from "../widgets/chat-markdown";
+import { DeskFeedbackState } from "../widgets/feedback-states";
 import { runModelWorkflow } from "../workflow";
 import type { WorkflowStepRecord, WorkflowUiHint } from "../workflow";
+import {
+  buildIntroMessage,
+  extractOutputDirFromPrompt,
+} from "./session-page.utils";
+import type { MessageItem } from "./session-page.utils";
 
 interface SessionPageProps {
   modelMcpCapabilities: ModelMcpCapabilities;
@@ -58,50 +65,9 @@ interface ModelSessionRunResponse {
   exported_file?: string;
 }
 
-interface MessageItem {
-  role: "user" | "assistant";
-  text: string;
-}
-
-function buildIntroMessage(isModelAgent: boolean): MessageItem {
-  return {
-    role: "assistant",
-    text: isModelAgent
-      ? "已进入模型智能体会话。可直接通过自然语言调用 MCP 执行新建、打开、编辑、导出等操作（当前默认 Blender，ZBrush 预留）。"
-      : "已进入代码智能体会话。请直接输入任务目标。",
-  };
-}
-
-const OUTPUT_DIR_QUOTED_REGEX =
-  /(?:导出到|导出至|输出到|保存到|export\s+to|save\s+to)\s*[“"']([^"”']+)[”"']/i;
-const OUTPUT_DIR_PLAIN_REGEX =
-  /(?:导出到|导出至|输出到|保存到|export\s+to|save\s+to)\s*(\/[^\s`"'，。；！？]+|[a-zA-Z]:\\[^\s`"'，。；！？]+)/i;
-
-function trimOutputSuffix(path: string): string {
-  let result = path.trim().replace(/[，。；！？、]+$/u, "");
-  result = result.replace(/[)"'`”]+$/u, "");
-  if ((result.startsWith("/") || /^[a-zA-Z]:\\/.test(result)) && /[中里]$/.test(result)) {
-    result = result.slice(0, -1);
-  }
-  return result;
-}
-
-function extractOutputDirFromPrompt(prompt: string): string | undefined {
-  const quotedMatch = prompt.match(OUTPUT_DIR_QUOTED_REGEX);
-  if (quotedMatch?.[1]) {
-    const normalized = trimOutputSuffix(quotedMatch[1]);
-    return normalized || undefined;
-  }
-
-  const plainMatch = prompt.match(OUTPUT_DIR_PLAIN_REGEX);
-  if (plainMatch?.[1]) {
-    const normalized = trimOutputSuffix(plainMatch[1]);
-    return normalized || undefined;
-  }
-
-  return undefined;
-}
-
+// 描述:
+//
+//   - 渲染会话页，承载消息流、工作流记录、提示动作与输入工具栏。
 export function SessionPage({
   modelMcpCapabilities,
   blenderBridgeRuntime,
@@ -119,6 +85,7 @@ export function SessionPage({
   const [workflowStepRecords, setWorkflowStepRecords] = useState<WorkflowStepRecord[]>([]);
   const [uiHint, setUiHint] = useState<WorkflowUiHint | null>(null);
   const [pendingDangerousPrompt, setPendingDangerousPrompt] = useState("");
+  const [copiedMessageKey, setCopiedMessageKey] = useState("");
   const [messagesHydrated, setMessagesHydrated] = useState(false);
   const [hydratedSessionKey, setHydratedSessionKey] = useState("");
   const isModelAgent = agentKey === "model";
@@ -150,6 +117,14 @@ export function SessionPage({
   const selectedAi = useMemo(
     () => availableAiKeys.find((item) => item.provider === selectedProvider) || availableAiKeys[0] || null,
     [availableAiKeys, selectedProvider],
+  );
+  const hasModelRecords = useMemo(
+    () => workflowStepRecords.length > 0 || stepRecords.length > 0 || eventRecords.length > 0 || assetRecords.length > 0,
+    [assetRecords.length, eventRecords.length, stepRecords.length, workflowStepRecords.length]
+  );
+  const hasErrorStatus = useMemo(
+    () => status.startsWith("执行失败") || status.startsWith("重试失败"),
+    [status]
   );
 
   useEffect(() => {
@@ -360,12 +335,54 @@ export function SessionPage({
     }
   };
 
+  // 描述:
+  //
+  //   - 发送当前输入框消息，触发智能体执行。
   const sendMessage = async () => {
     const content = input.trim();
     if (!content || sending) {
       return;
     }
     await executePrompt(content, { allowDangerousAction: false, appendUserMessage: true });
+  };
+
+  // 描述:
+  //
+  //   - 键盘增强：在会话输入框按 Enter 发送，按 Escape 关闭提示浮层。
+  //
+  // Params:
+  //
+  //   - event: 键盘事件。
+  const handlePromptInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void sendMessage();
+      return;
+    }
+    if (event.key === "Escape") {
+      setUiHint(null);
+    }
+  };
+
+  // 描述:
+  //
+  //   - 复制消息文本并给出可见反馈，便于长文本/代码说明快速复用。
+  //
+  // Params:
+  //
+  //   - messageText: 消息内容。
+  //   - messageKey: 消息唯一键值。
+  const copyMessageText = async (messageText: string, messageKey: string) => {
+    try {
+      await navigator.clipboard.writeText(messageText);
+      setCopiedMessageKey(messageKey);
+      setStatus("消息内容已复制");
+      window.setTimeout(() => {
+        setCopiedMessageKey((prev) => (prev === messageKey ? "" : prev));
+      }, 1500);
+    } catch (_error) {
+      setStatus("复制失败，请检查系统剪贴板权限");
+    }
   };
 
   const handleUiHintAction = async (action: WorkflowUiHint["actions"][number]) => {
@@ -454,6 +471,28 @@ export function SessionPage({
         </div>
 
         <div className="desk-session-thread-wrap">
+          {isModelAgent && sending && !hasModelRecords ? (
+            <DeskFeedbackState
+              kind="loading"
+              title="正在执行模型工作流"
+              message="任务进行中，可在下方消息区查看实时反馈。"
+            />
+          ) : null}
+          {isModelAgent && !sending && !hasModelRecords ? (
+            <DeskFeedbackState
+              kind="empty"
+              title="暂无执行记录"
+              message="输入需求后会自动写入工作流与执行记录。"
+            />
+          ) : null}
+          {hasErrorStatus ? (
+            <DeskFeedbackState
+              kind="error"
+              title="执行出现异常"
+              message={status}
+            />
+          ) : null}
+
           {isModelAgent && workflowStepRecords.length > 0 ? (
             <AriCard className="desk-msg">
               <AriTypography variant="caption" value="工作流执行记录（自动识别起点）" />
@@ -486,7 +525,18 @@ export function SessionPage({
           <div className="desk-thread">
             {messages.map((message, index) => (
               <AriCard key={`${message.role}-${index}`} className={`desk-msg ${message.role === "user" ? "user" : ""}`}>
-                <AriTypography variant="caption" value={message.role === "user" ? "你" : "智能体"} />
+                <AriFlex justify="space-between" align="center" className="desk-msg-head">
+                  <AriTypography variant="caption" value={message.role === "user" ? "你" : "智能体"} />
+                  <AriButton
+                    size="sm"
+                    type="text"
+                    icon={copiedMessageKey === `${message.role}-${index}` ? "check" : "content_copy"}
+                    label={copiedMessageKey === `${message.role}-${index}` ? "已复制" : "复制"}
+                    onClick={() => {
+                      void copyMessageText(message.text, `${message.role}-${index}`);
+                    }}
+                  />
+                </AriFlex>
                 <ChatMarkdown content={message.text} />
               </AriCard>
             ))}
@@ -516,6 +566,7 @@ export function SessionPage({
             <AriInput
               value={input}
               onChange={setInput}
+              onKeyDown={handlePromptInputKeyDown}
               placeholder={isModelAgent ? "输入需求，例如：打开模型并加厚；或导出当前模型到 exports" : "继续提问，或要求智能体修改结果..."}
             />
             <AriTypography className="desk-prompt-status" variant="caption" value={status || ""} />

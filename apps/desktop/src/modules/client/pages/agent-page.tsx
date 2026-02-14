@@ -3,7 +3,19 @@ import { AriButton, AriCard, AriContainer, AriFlex, AriInput, AriTag, AriTypogra
 import { useNavigate, useParams } from "react-router-dom";
 import { AGENTS, upsertModelProject } from "../data";
 import type { AgentKey, ModelMcpCapabilities } from "../types";
+import { DeskStatusText } from "../widgets/settings-primitives";
 
+// 描述:
+//
+//   - 规范路由参数中的智能体键值，避免非法值导致页面分支异常。
+//
+// Params:
+//
+//   - value: 路由参数中的 agentKey。
+//
+// Returns:
+//
+//   - 标准化后的智能体键值，仅返回 code 或 model。
 function normalizeAgentKey(value: string | undefined): AgentKey {
   return value === "model" ? "model" : "code";
 }
@@ -67,14 +79,14 @@ export function AgentPage({ modelMcpCapabilities: _modelMcpCapabilities }: Agent
             onChange={setPrompt}
             placeholder="输入模型需求，例如：打开模型后加厚并倒角；需要时再导出"
           />
-          <AriFlex justify="space-between" align="center" style={{ marginTop: 12 }}>
+          <AriFlex justify="space-between" align="center" className="desk-prompt-actions">
             <AriTag color="brand">Model Agent v1 · MCP（Blender）</AriTag>
             <AriFlex align="center" space={8}>
               <AriButton label="新建项目" onClick={handleCreateModelProject} />
               <AriButton color="primary" label="开始对话" onClick={handleStartAgentFlow} />
             </AriFlex>
           </AriFlex>
-          {status ? <AriTypography className="desk-inline-status" variant="caption" value={status} /> : null}
+          {status ? <DeskStatusText value={status} /> : null}
         </AriCard>
       ) : (
         <AriCard className="desk-prompt-card">
@@ -83,7 +95,7 @@ export function AgentPage({ modelMcpCapabilities: _modelMcpCapabilities }: Agent
             onChange={setPrompt}
             placeholder="描述你要生成的页面或功能..."
           />
-          <AriFlex justify="space-between" align="center" style={{ marginTop: 12 }}>
+          <AriFlex justify="space-between" align="center" className="desk-prompt-actions">
             <AriTag color="brand">Model: Code Agent v1</AriTag>
             <AriButton color="primary" label="开始生成" />
           </AriFlex>

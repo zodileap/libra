@@ -1,6 +1,22 @@
 import { AriCard, AriContainer, AriFlex, AriTypography } from "aries_react";
 import { SHORTCUTS } from "../data";
 
+// 描述:
+//
+//   - 首页“近 7 天请求量”柱图的高度档位 class，避免在 JSX 中硬编码内联样式。
+const USAGE_BAR_CLASS_NAMES = [
+  "desk-bar-size-1",
+  "desk-bar-size-2",
+  "desk-bar-size-3",
+  "desk-bar-size-4",
+  "desk-bar-size-5",
+  "desk-bar-size-6",
+  "desk-bar-size-7",
+];
+
+// 描述:
+//
+//   - 渲染 Desktop 首页，包括快捷入口与使用情况展示。
 export function HomePage() {
   return (
     <AriContainer className="desk-content">
@@ -29,13 +45,9 @@ export function HomePage() {
         <AriCard className="desk-usage-card">
           <AriTypography variant="caption" value="近 7 天请求量" />
           <div className="desk-bars">
-            <div className="desk-bar" style={{ height: 26 }} />
-            <div className="desk-bar" style={{ height: 38 }} />
-            <div className="desk-bar" style={{ height: 18 }} />
-            <div className="desk-bar" style={{ height: 52 }} />
-            <div className="desk-bar" style={{ height: 36 }} />
-            <div className="desk-bar" style={{ height: 42 }} />
-            <div className="desk-bar" style={{ height: 64 }} />
+            {USAGE_BAR_CLASS_NAMES.map((className) => (
+              <div key={className} className={`desk-bar ${className}`} />
+            ))}
           </div>
         </AriCard>
       </section>

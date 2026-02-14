@@ -12,7 +12,9 @@ export default function App() {
   return (
     <StrictMode>
       <AriApp appConfig={appConfig}>
-        <AppRouter />
+        <div className="web-app-root">
+          <AppRouter />
+        </div>
       </AriApp>
     </StrictMode>
   );

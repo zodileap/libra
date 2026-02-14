@@ -107,9 +107,12 @@ function mapHeadingClass(level: number): string {
 }
 
 function codeBlockHeight(code: string): string {
+  // 描述:
+  //
+  //   - 根据代码行数返回编辑器高度，统一使用主题变量避免硬编码像素。
   const lineCount = Math.max(code.split("\n").length, 1);
-  const px = Math.min(Math.max(120, lineCount * 24 + 24), 420);
-  return `${px}px`;
+  const blockUnits = Math.min(Math.max(lineCount + 2, 8), 26);
+  return `calc(var(--z-inset) * ${blockUnits})`;
 }
 
 function renderTextBlock(text: string, blockIndex: number): ReactNode {
@@ -239,4 +242,3 @@ export function ChatMarkdown({ content, className }: ChatMarkdownProps) {
     </div>
   );
 }
-

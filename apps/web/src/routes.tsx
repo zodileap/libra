@@ -13,7 +13,7 @@ export function AppRouter() {
   }, [t]);
 
   return (
-    <Suspense fallback={<div style={{ padding: 20 }}>Loading...</div>}>
+    <Suspense fallback={<div className="web-route-loading">Loading...</div>}>
       <RouterProvider router={router} future={{ v7_startTransition: true }} />
     </Suspense>
   );

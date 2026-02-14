@@ -1,4 +1,4 @@
-import { AriContainer } from "aries_react";
+import { AriContainer, AriTypography } from "aries_react";
 import type { CodeMessage } from "../../types";
 
 interface MessageListProps {
@@ -7,23 +7,19 @@ interface MessageListProps {
 
 export function MessageList({ messages }: MessageListProps) {
   return (
-    <AriContainer style={{ display: "grid", gap: 12 }}>
+    <AriContainer className="web-message-list">
       {messages.map((msg) => {
         const user = msg.role === "user";
         return (
           <div
             key={msg.id}
-            style={{
-              border: "1px solid #e5e7eb",
-              borderRadius: 10,
-              background: user ? "#f8fbff" : "#ffffff",
-              padding: 12
-            }}
+            className={`web-message-card ${user ? "user" : ""}`.trim()}
           >
-            <div style={{ fontSize: 12, opacity: 0.65, marginBottom: 6 }}>
-              {user ? "你" : "代码智能体"} · {msg.createdAt}
-            </div>
-            <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{msg.content}</div>
+            <AriTypography
+              variant="caption"
+              value={`${user ? "你" : "代码智能体"} · ${msg.createdAt}`}
+            />
+            <div className="web-message-content">{msg.content}</div>
           </div>
         );
       })}

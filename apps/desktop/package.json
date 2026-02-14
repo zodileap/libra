@@ -6,6 +6,7 @@
   "scripts": {
     "dev:ui": "node ./scripts/dev-ui.mjs",
     "build:ui": "vite build",
+    "test:ui": "node --test ./tests/*_test.mjs",
     "dev": "pnpm exec tauri dev",
     "build": "pnpm exec tauri build"
   },

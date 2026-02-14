@@ -1,4 +1,4 @@
-import { AriCallout, AriContainer } from "aries_react";
+import { AriButton, AriCallout, AriContainer } from "aries_react";
 
 interface PreviewPanelProps {
   previewUrl: string;
@@ -9,24 +9,22 @@ interface PreviewPanelProps {
 
 export function PreviewPanel({ previewUrl, previewInput, onInput, onApply }: PreviewPanelProps) {
   return (
-    <AriContainer style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 10, height: "100%" }}>
-      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+    <AriContainer className="web-panel">
+      <div className="web-inline-row">
         <input
           value={previewInput}
           onChange={(e) => onInput(e.target.value)}
           placeholder="输入 sandbox 预览地址，如 http://127.0.0.1:5173"
-          style={{ flex: 1, borderRadius: 8, border: "1px solid #d1d5db", padding: "8px 10px" }}
+          className="web-form-field compact"
         />
-        <button onClick={onApply} style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #111827", background: "#111827", color: "#fff" }}>
-          加载
-        </button>
+        <AriButton type="default" label="加载" onClick={onApply} />
       </div>
 
       {previewUrl ? (
         <iframe
           src={previewUrl}
           title="web-preview"
-          style={{ width: "100%", height: "calc(100% - 50px)", border: "1px solid #e5e7eb", borderRadius: 8 }}
+          className="web-preview-frame"
         />
       ) : (
         <AriCallout type="tip" title="预览未连接">

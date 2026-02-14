@@ -1,4 +1,4 @@
-import { AriCallout, AriContainer } from "aries_react";
+import { AriButton, AriCallout, AriContainer, AriTypography } from "aries_react";
 import { useState } from "react";
 import type { ModelTask } from "../types";
 
@@ -17,6 +17,9 @@ function nextStatus(status: ModelTask["status"]): ModelTask["status"] {
   return status;
 }
 
+// 描述:
+//
+//   - 渲染模型智能体 Web 页面，提供任务创建、状态推进与查看器占位。
 export function ModelAgentPage() {
   const [tasks, setTasks] = useState<ModelTask[]>(initialTasks);
   const [prompt, setPrompt] = useState("");
@@ -41,56 +44,49 @@ export function ModelAgentPage() {
   };
 
   return (
-    <AriContainer style={{ padding: 16 }}>
-      <h2 style={{ marginTop: 0 }}>三维模型智能体</h2>
+    <AriContainer className="web-page">
+      <AriTypography className="web-page-title" variant="h2" value="三维模型智能体" />
       <AriCallout type="tip" title="端能力差异">
         Web 端当前用于任务提交和结果展示；Desktop 端后续补充 Blender 与 ZBrush 联动操作。
       </AriCallout>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 12, marginTop: 12 }}>
-        <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 10 }}>
-          <h3 style={{ marginTop: 0 }}>任务创建</h3>
+      <div className="web-model-layout">
+        <div className="web-panel">
+          <AriTypography className="web-page-title" variant="h3" value="任务创建" />
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             placeholder="输入建模需求描述..."
-            style={{ width: "100%", minHeight: 120, borderRadius: 8, border: "1px solid #d1d5db", padding: 10 }}
+            className="web-form-field textarea"
           />
-          <div style={{ marginTop: 8, display: "flex", justifyContent: "flex-end" }}>
-            <button onClick={submitTask} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #2f6fdd", background: "#2f6fdd", color: "#fff" }}>
-              提交任务
-            </button>
+          <div className="web-inline-row end">
+            <AriButton color="primary" label="提交任务" onClick={submitTask} />
           </div>
 
-          <h3>任务列表</h3>
-          <div style={{ display: "grid", gap: 8 }}>
+          <AriTypography variant="h3" value="任务列表" />
+          <div className="web-assets-list">
             {tasks.map((task) => (
-              <div key={task.id} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 8 }}>
-                <div style={{ fontWeight: 600 }}>{task.prompt}</div>
-                <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>{task.createdAt}</div>
-                <div style={{ marginTop: 6, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span>状态：{task.status}</span>
-                  <button onClick={() => progressTask(task.id)} style={{ borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", padding: "4px 8px" }}>
-                    推进状态
-                  </button>
+              <div key={task.id} className="web-asset-card">
+                <AriTypography variant="h4" value={task.prompt} />
+                <AriTypography variant="caption" value={task.createdAt} />
+                <div className="web-inline-row between">
+                  <AriTypography variant="caption" value={`状态：${task.status}`} />
+                  <AriButton
+                    size="sm"
+                    type="default"
+                    label="推进状态"
+                    onClick={() => progressTask(task.id)}
+                  />
                 </div>
               </div>
             ))}
           </div>
         </div>
 
-        <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 10 }}>
-          <h3 style={{ marginTop: 0 }}>模型查看器</h3>
-          <div style={{
-            height: 420,
-            border: "1px dashed #cbd5e1",
-            borderRadius: 8,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "#64748b"
-          }}>
-            WebGL Viewer 占位（后续接 glb/fbx/obj）
+        <div className="web-panel">
+          <AriTypography className="web-page-title" variant="h3" value="模型查看器" />
+          <div className="web-viewer-placeholder">
+            <AriTypography variant="caption" value="WebGL Viewer 占位（后续接 glb/fbx/obj）" />
           </div>
         </div>
       </div>

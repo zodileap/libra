@@ -1,59 +1,56 @@
-import { AriContainer, AriFlex } from "aries_react";
+import { AriContainer, AriFlex, AriTypography } from "aries_react";
 import { useNavigate } from "react-router-dom";
 import { usePlatformContext } from "../context";
 
-export function MenuPanel() {
+interface MenuPanelProps {
+  onNavigate?: () => void;
+}
+
+// 描述:
+//
+//   - 渲染平台左侧菜单，统一入口卡片状态与窄屏下的导航收起行为。
+export function MenuPanel({ onNavigate }: MenuPanelProps) {
   const navigate = useNavigate();
   const { menuItems, currentPath } = usePlatformContext();
+  const goto = (path: string) => {
+    navigate(path);
+    onNavigate?.();
+  };
 
   return (
-    <AriContainer style={{ padding: 12, borderRight: "1px solid #e5e7eb", height: "100%" }}>
-      <div style={{ padding: "6px 4px 14px" }}>
-        <div style={{ fontWeight: 700 }}>Zodileap Agen</div>
-        <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>平台入口 + 模块化智能体</div>
+    <AriContainer className="web-menu-panel web-scroll">
+      <div className="web-menu-header">
+        <AriTypography variant="h3" value="Zodileap Agen" />
+        <AriTypography variant="caption" value="平台入口 + 模块化智能体" />
       </div>
 
-      <AriFlex direction="column" gap={8}>
+      <AriFlex direction="column" className="web-menu-list">
         <button
-          onClick={() => navigate("/")}
-          style={{
-            textAlign: "left",
-            padding: "10px 12px",
-            borderRadius: 8,
-            border: currentPath === "/" ? "1px solid #2f6fdd" : "1px solid #d9d9d9",
-            background: currentPath === "/" ? "#eff5ff" : "#fff",
-            cursor: "pointer"
-          }}
+          type="button"
+          className={`web-menu-button ${currentPath === "/" ? "is-active" : ""}`.trim()}
+          onClick={() => goto("/")}
         >
-          <div style={{ fontWeight: 600 }}>平台总览</div>
-          <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>订阅、授权、模块入口</div>
+          <AriTypography variant="h4" value="平台总览" />
+          <AriTypography variant="caption" value="订阅、授权、模块入口" />
         </button>
 
         {menuItems.map((item) => {
           const active = currentPath.startsWith(item.path);
           return (
             <button
+              type="button"
               key={item.key}
-              onClick={() => navigate(item.path)}
-              style={{
-                textAlign: "left",
-                padding: "10px 12px",
-                borderRadius: 8,
-                border: active ? "1px solid #2f6fdd" : "1px solid #d9d9d9",
-                background: active ? "#eff5ff" : "#fff",
-                cursor: "pointer"
-              }}
+              className={`web-menu-button ${active ? "is-active" : ""}`.trim()}
+              onClick={() => goto(item.path)}
             >
-              <div style={{ fontWeight: 600 }}>{item.label}</div>
-              <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>{item.description}</div>
+              <AriTypography variant="h4" value={item.label} />
+              <AriTypography variant="caption" value={item.description} />
             </button>
           );
         })}
       </AriFlex>
 
-      <div style={{ marginTop: 14, borderTop: "1px solid #e5e7eb", paddingTop: 10, fontSize: 12, opacity: 0.75 }}>
-        当前用户：demo@zodileap.com
-      </div>
+      <AriTypography className="web-menu-footer" variant="caption" value="当前用户：demo@zodileap.com" />
     </AriContainer>
   );
 }

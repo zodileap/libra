@@ -1,4 +1,4 @@
-import { AriCallout, AriContainer } from "aries_react";
+import { AriCallout, AriContainer, AriTypography } from "aries_react";
 import { AssetsPanel } from "../components/code-agent/assets-panel";
 import { Composer } from "../components/code-agent/composer";
 import { MessageList } from "../components/code-agent/message-list";
@@ -22,22 +22,22 @@ export function CodeAgentPage() {
   } = useCodeAgent();
 
   return (
-    <AriContainer style={{ padding: 16, height: "100%" }}>
-      <h2 style={{ marginTop: 0 }}>代码智能体</h2>
+    <AriContainer className="web-page web-page-full">
+      <AriTypography className="web-page-title" variant="h2" value="代码智能体" />
       <AriCallout type="info" title="Web 预览说明">
         预览依赖后端 sandbox 提供的运行地址。当前可先手工输入预览 URL 进行联调。
       </AriCallout>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 12, marginTop: 12, minHeight: 640 }}>
-        <div style={{ display: "grid", gap: 10, gridTemplateRows: "1fr auto" }}>
-          <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 10, overflow: "auto" }}>
+      <div className="web-workbench">
+        <div className="web-workbench-main">
+          <div className="web-panel web-panel-scroll web-scroll">
             <MessageList messages={state.messages} />
           </div>
           <Composer value={input} onChange={setInput} onSend={sendMessage} />
         </div>
 
-        <div style={{ display: "grid", gap: 10, gridTemplateRows: "1fr auto" }}>
-          <div style={{ minHeight: 340 }}>
+        <div className="web-workbench-side">
+          <div className="web-panel-scroll">
             <PreviewPanel
               previewUrl={state.previewUrl}
               previewInput={previewInput}

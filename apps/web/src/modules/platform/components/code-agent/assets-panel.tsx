@@ -1,4 +1,4 @@
-import { AriContainer } from "aries_react";
+import { AriButton, AriContainer, AriTypography } from "aries_react";
 import type { AssetKind, ConstraintAsset } from "../../types";
 
 interface AssetsPanelProps {
@@ -20,18 +20,26 @@ function titleOf(kind: AssetKind): string {
 }
 
 export function AssetsPanel({ assetDraft, onDraftChange, onAdd, onRemove, groupedAssets }: AssetsPanelProps) {
+  // 描述:
+  //
+  //   - 更新资产草稿字段，保持表单状态单一入口。
+  //
+  // Params:
+  //
+  //   - key: 字段名。
+  //   - value: 字段值。
   const setField = (key: keyof Omit<ConstraintAsset, "id">, value: string) => {
     onDraftChange({ ...assetDraft, [key]: value });
   };
 
   return (
-    <AriContainer style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 10 }}>
-      <h3 style={{ marginTop: 0 }}>资产约束</h3>
-      <div style={{ display: "grid", gap: 8, marginBottom: 10 }}>
+    <AriContainer className="web-panel">
+      <AriTypography className="web-page-title" variant="h3" value="资产约束" />
+      <div className="web-assets-list">
         <select
           value={assetDraft.kind}
           onChange={(e) => setField("kind", e.target.value as AssetKind)}
-          style={{ borderRadius: 8, border: "1px solid #d1d5db", padding: "8px 10px" }}
+          className="web-form-field compact"
         >
           <option value="framework">框架</option>
           <option value="component">组件</option>
@@ -41,40 +49,43 @@ export function AssetsPanel({ assetDraft, onDraftChange, onAdd, onRemove, groupe
           value={assetDraft.name}
           onChange={(e) => setField("name", e.target.value)}
           placeholder="名称"
-          style={{ borderRadius: 8, border: "1px solid #d1d5db", padding: "8px 10px" }}
+          className="web-form-field compact"
         />
         <input
           value={assetDraft.source}
           onChange={(e) => setField("source", e.target.value)}
           placeholder="来源（Git 地址/上传标识）"
-          style={{ borderRadius: 8, border: "1px solid #d1d5db", padding: "8px 10px" }}
+          className="web-form-field compact"
         />
         <textarea
           value={assetDraft.description}
           onChange={(e) => setField("description", e.target.value)}
           placeholder="描述"
-          style={{ borderRadius: 8, border: "1px solid #d1d5db", padding: "8px 10px", minHeight: 70, resize: "vertical" }}
+          className="web-form-field textarea"
         />
-        <button onClick={onAdd} style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #2f6fdd", background: "#2f6fdd", color: "#fff" }}>
-          添加资产
-        </button>
+        <AriButton color="primary" label="添加资产" onClick={onAdd} />
       </div>
 
       {(Object.keys(groupedAssets) as AssetKind[]).map((kind) => (
-        <div key={kind} style={{ marginTop: 10 }}>
-          <div style={{ fontWeight: 600, marginBottom: 6 }}>{titleOf(kind)}</div>
-          {groupedAssets[kind].length === 0 && <div style={{ fontSize: 12, opacity: 0.65 }}>暂无</div>}
-          <div style={{ display: "grid", gap: 6 }}>
+        <div key={kind} className="web-assets-group">
+          <AriTypography variant="h4" value={titleOf(kind)} />
+          {groupedAssets[kind].length === 0 ? <AriTypography variant="caption" value="暂无" /> : null}
+          <div className="web-assets-list">
             {groupedAssets[kind].map((asset) => (
-              <div key={asset.id} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 8 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                  <strong>{asset.name}</strong>
-                  <button onClick={() => onRemove(asset.id)} style={{ border: 0, background: "transparent", color: "#b91c1c", cursor: "pointer" }}>
-                    删除
-                  </button>
+              <div key={asset.id} className="web-asset-card">
+                <div className="web-inline-row between">
+                  <AriTypography variant="h4" value={asset.name} />
+                  <AriButton
+                    type="text"
+                    color="danger"
+                    label="删除"
+                    onClick={() => onRemove(asset.id)}
+                  />
                 </div>
-                <div style={{ fontSize: 12, opacity: 0.7 }}>{asset.source || "未填写来源"}</div>
-                {asset.description && <div style={{ marginTop: 4, fontSize: 12 }}>{asset.description}</div>}
+                <AriTypography variant="caption" value={asset.source || "未填写来源"} />
+                {asset.description ? (
+                  <AriTypography variant="caption" value={asset.description} />
+                ) : null}
               </div>
             ))}
           </div>
