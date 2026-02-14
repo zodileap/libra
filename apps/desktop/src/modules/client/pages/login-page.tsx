@@ -6,8 +6,8 @@ interface LoginPageProps {
 }
 
 export function LoginPage({ onLogin }: LoginPageProps) {
-  const [account, setAccount] = useState("demo@zodileap.com");
-  const [password, setPassword] = useState("");
+  const [account, setAccount] = useState("test@zodileap.com");
+  const [password, setPassword] = useState("Test@123456");
   const [submitting, setSubmitting] = useState(false);
   const [passwordError, setPasswordError] = useState("");
 
