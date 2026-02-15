@@ -364,6 +364,7 @@ pub fn check_capability_for_session_step(
                 | ModelToolAction::Decimate => capabilities.mesh_opt,
                 ModelToolAction::TidyMaterialSlots
                 | ModelToolAction::CheckTexturePaths
+                | ModelToolAction::ApplyTextureImage
                 | ModelToolAction::PackTextures => capabilities.material,
                 ModelToolAction::NewFile
                 | ModelToolAction::OpenFile
@@ -490,6 +491,20 @@ fn plan_explicit_complex_steps(prompt: &str, lower: &str) -> Vec<ModelSessionPla
                 risk: ModelPlanRiskLevel::Low,
                 condition: None,
             });
+        }
+        if let Some(path) = parse_path_in_prompt(prompt) {
+            if is_apply_texture_intent(prompt, lower, path.as_str()) {
+                steps.push(ModelSessionPlannedStep::Tool {
+                    action: ModelToolAction::ApplyTextureImage,
+                    input: format!("批量材质：应用贴图 {}", path),
+                    params: json!({ "path": path }),
+                    operation_kind: ModelPlanOperationKind::BatchMaterial,
+                    branch: ModelPlanBranch::Primary,
+                    recoverable: true,
+                    risk: ModelPlanRiskLevel::Low,
+                    condition: None,
+                });
+            }
         }
     }
 
@@ -908,6 +923,20 @@ fn plan_basic_steps(prompt: &str, lower: &str) -> Vec<ModelSessionPlannedStep> {
             condition: None,
         });
     }
+    if let Some(path) = parse_path_in_prompt(prompt) {
+        if is_apply_texture_intent(prompt, lower, path.as_str()) {
+            steps.push(ModelSessionPlannedStep::Tool {
+                action: ModelToolAction::ApplyTextureImage,
+                input: format!("应用贴图 {}", path),
+                params: json!({ "path": path }),
+                operation_kind: ModelPlanOperationKind::BatchMaterial,
+                branch: ModelPlanBranch::Primary,
+                recoverable: true,
+                risk: ModelPlanRiskLevel::Low,
+                condition: None,
+            });
+        }
+    }
     if ["打包贴图", "pack textures"]
         .iter()
         .any(|key| lower.contains(key))
@@ -995,6 +1024,28 @@ fn parse_path_in_prompt(prompt: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// 描述：识别“将图片贴图应用到当前对象”的意图，避免误把普通文件路径解析为材质操作。
+fn is_apply_texture_intent(prompt: &str, lower: &str, path: &str) -> bool {
+    let has_texture_keyword = ["贴图", "纹理", "材质", "texture", "image", "base color"]
+        .iter()
+        .any(|keyword| lower.contains(keyword));
+    let has_apply_verb = ["添加", "替换", "设置", "应用", "assign", "apply", "set", "use"]
+        .iter()
+        .any(|keyword| lower.contains(keyword));
+    let lower_path = path.to_lowercase();
+    let is_image_file = [".png", ".jpg", ".jpeg", ".tga", ".bmp", ".tif", ".tiff", ".exr"]
+        .iter()
+        .any(|suffix| lower_path.ends_with(suffix));
+    let trimmed_prompt = prompt.trim_start();
+    let starts_with_material_instruction =
+        ["贴图", "纹理", "材质", "texture", "image", "material"]
+            .iter()
+            .any(|prefix| trimmed_prompt.to_lowercase().starts_with(prefix));
+
+    (has_texture_keyword && has_apply_verb && is_image_file)
+        || (starts_with_material_instruction && is_image_file)
 }
 
 /// 描述：识别“添加正方体/立方体”的显式意图，避免误判普通对话。

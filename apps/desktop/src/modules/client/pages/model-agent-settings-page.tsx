@@ -62,7 +62,7 @@ const CAPABILITY_SETTING_ITEMS: CapabilitySettingItem[] = [
   {
     key: "material",
     title: "材质与贴图能力",
-    description: "材质槽整理、贴图检查、打包贴图。",
+    description: "材质槽整理、贴图检查、应用贴图图片、打包贴图。",
   },
   {
     key: "file",

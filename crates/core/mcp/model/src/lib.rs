@@ -62,6 +62,7 @@ pub enum ModelToolAction {
     Decimate,
     TidyMaterialSlots,
     CheckTexturePaths,
+    ApplyTextureImage,
     PackTextures,
     NewFile,
     OpenFile,
@@ -91,6 +92,7 @@ impl ModelToolAction {
             ModelToolAction::Decimate => "decimate",
             ModelToolAction::TidyMaterialSlots => "tidy_material_slots",
             ModelToolAction::CheckTexturePaths => "check_texture_paths",
+            ModelToolAction::ApplyTextureImage => "apply_texture_image",
             ModelToolAction::PackTextures => "pack_textures",
             ModelToolAction::NewFile => "new_file",
             ModelToolAction::OpenFile => "open_file",
@@ -130,6 +132,7 @@ impl std::str::FromStr for ModelToolAction {
             "decimate" => Ok(Self::Decimate),
             "tidy_material_slots" => Ok(Self::TidyMaterialSlots),
             "check_texture_paths" => Ok(Self::CheckTexturePaths),
+            "apply_texture_image" => Ok(Self::ApplyTextureImage),
             "pack_textures" => Ok(Self::PackTextures),
             "new_file" => Ok(Self::NewFile),
             "open_file" => Ok(Self::OpenFile),
@@ -358,6 +361,20 @@ fn validate_tool_request(request: &ModelToolRequest) -> McpResult<()> {
                 return Err(McpError::new(
                     "mcp.model.tool.open_file_missing_path",
                     "open_file requires non-empty `path`",
+                ));
+            }
+        }
+        ModelToolAction::ApplyTextureImage => {
+            let path = request
+                .params
+                .get("path")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .unwrap_or("");
+            if path.is_empty() {
+                return Err(McpError::new(
+                    "mcp.model.tool.apply_texture_missing_path",
+                    "apply_texture_image requires non-empty `path`",
                 ));
             }
         }

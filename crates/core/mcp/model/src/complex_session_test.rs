@@ -122,3 +122,20 @@ fn TestShouldParseOpenFilePathWithChineseQuotes() {
     });
     assert!(has_open_file);
 }
+
+#[allow(non_snake_case)]
+/// 描述：验证“贴图 + 图片路径”会规划为应用贴图动作。
+#[test]
+fn TestShouldPlanApplyTextureImageStep() {
+    let steps = plan_model_session_steps("我发现场景地板的贴图缺失了，能用“/Users/yoho/Downloads/image.png”添加吗");
+    let has_apply_texture = steps.iter().any(|item| {
+        matches!(
+            item,
+            ModelSessionPlannedStep::Tool {
+                action: ModelToolAction::ApplyTextureImage,
+                ..
+            }
+        )
+    });
+    assert!(has_apply_texture);
+}
