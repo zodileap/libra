@@ -12,6 +12,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::Emitter;
 use tauri::Manager;
+use zodileap_agent_core::llm::{call_model, parse_provider};
 use zodileap_agent_core::{run_agent_with_protocol_error, AgentRunRequest};
 use zodileap_mcp_common::{
     ProtocolAssetRecord, ProtocolError, ProtocolEventRecord, ProtocolStepRecord, ProtocolStepStatus,
@@ -20,9 +21,9 @@ use zodileap_mcp_common::{
 use zodileap_mcp_model::{
     blender_bridge_addon_script, blender_bridge_extension_manifest, build_recovery_ui_hint,
     build_safety_confirmation_ui_hint, build_step_trace_payload, check_capability_for_session_step,
-    execute_model_tool, export_model, ping_blender_bridge, plan_model_session_steps,
-    requires_safety_confirmation,
-    validate_safety_confirmation_token, ExportModelRequest, ModelSessionCapabilityMatrix,
+    execute_model_tool, export_model, ping_blender_bridge, requires_safety_confirmation,
+    validate_safety_confirmation_token, ExportModelRequest,
+    ModelPlanBranch, ModelPlanOperationKind, ModelPlanRiskLevel, ModelSessionCapabilityMatrix,
     ModelSessionPlannedStep, ModelToolAction, ModelToolRequest, ModelToolTarget,
 };
 
@@ -100,6 +101,7 @@ struct ModelSessionState {
     events: Vec<ModelEventRecord>,
     assets: Vec<ModelAssetRecord>,
     last_prompt: Option<String>,
+    last_provider: Option<String>,
     last_output_dir: Option<String>,
     version: u64,
     cancelled: bool,
@@ -137,6 +139,26 @@ struct CodexCliHealthResponse {
     minimum_version: String,
     bin_path: String,
     message: String,
+}
+
+#[derive(Deserialize)]
+struct LlmModelPlanResponse {
+    steps: Vec<LlmModelPlanStep>,
+    reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct LlmModelPlanStep {
+    #[serde(rename = "type")]
+    step_type: String,
+    action: Option<String>,
+    input: Option<String>,
+    params: Option<serde_json::Value>,
+    operation_kind: Option<String>,
+    branch: Option<String>,
+    recoverable: Option<bool>,
+    risk: Option<String>,
+    condition: Option<String>,
 }
 
 fn resolve_blender_bin(preferred: Option<String>) -> String {
@@ -1072,6 +1094,258 @@ fn to_core_capability_matrix(capabilities: &ModelMcpCapabilities) -> ModelSessio
     }
 }
 
+/// 描述：根据当前能力开关列出允许的 MCP 动作，供 AI 规划约束。
+fn planner_allowed_actions(capabilities: &ModelMcpCapabilities) -> Vec<&'static str> {
+    let mut actions: Vec<&'static str> = Vec::new();
+    if capability_enabled(capabilities.scene) {
+        actions.extend([
+            "list_objects",
+            "select_objects",
+            "rename_object",
+            "organize_hierarchy",
+        ]);
+    }
+    if capability_enabled(capabilities.transform) {
+        actions.extend(["align_origin", "normalize_scale", "normalize_axis"]);
+    }
+    if capability_enabled(capabilities.geometry) {
+        actions.extend(["add_cube", "solidify", "bevel", "mirror", "array", "boolean"]);
+    }
+    if capability_enabled(capabilities.mesh_opt) {
+        actions.extend(["auto_smooth", "weighted_normal", "decimate"]);
+    }
+    if capability_enabled(capabilities.material) {
+        actions.extend([
+            "tidy_material_slots",
+            "check_texture_paths",
+            "apply_texture_image",
+            "pack_textures",
+        ]);
+    }
+    if capability_enabled(capabilities.file) {
+        actions.extend(["new_file", "open_file", "save_file", "undo", "redo"]);
+    }
+    actions
+}
+
+/// 描述：构建“仅输出 JSON” 的模型步骤规划提示词，禁止规则兜底。
+fn build_model_plan_prompt(prompt: &str, capabilities: &ModelMcpCapabilities) -> String {
+    let allowed_actions = planner_allowed_actions(capabilities).join(", ");
+    let export_enabled = capability_enabled(capabilities.export);
+    format!(
+        r#"你是模型 MCP 规划器。请把用户自然语言转换为可执行步骤。
+
+强约束：
+1) 只能输出 JSON，不要 Markdown，不要解释文字。
+2) JSON 格式必须是：
+{{
+  "steps": [
+    {{
+      "type": "tool" | "export",
+      "action": "仅当 type=tool 时必填，且必须来自允许动作列表",
+      "input": "步骤说明",
+      "params": {{ }},
+      "operation_kind": "basic|boolean_chain|modifier_chain|batch_transform|batch_material|scene_file_ops",
+      "branch": "primary|fallback",
+      "recoverable": true,
+      "risk": "low|medium|high",
+      "condition": null
+    }}
+  ],
+  "reason": "可选：无法规划时说明原因"
+}}
+3) 如果无法规划，返回 {{"steps":[],"reason":"具体原因"}}。
+4) 不允许臆造文件路径；用户给了路径就原样写入 params.path。
+5) 本次不允许规则兜底，必须给出结构化步骤或空步骤原因。
+
+允许动作列表：
+{allowed_actions}
+
+导出能力是否可用：{export_enabled}
+
+用户输入：
+{prompt}"#
+    )
+}
+
+/// 描述：从 LLM 文本中提取 JSON 对象，兼容模型意外输出前后缀文本。
+fn extract_json_object(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.starts_with('{') && trimmed.ends_with('}') {
+        return Some(trimmed.to_string());
+    }
+    let start = trimmed.find('{')?;
+    let end = trimmed.rfind('}')?;
+    if end <= start {
+        return None;
+    }
+    Some(trimmed[start..=end].to_string())
+}
+
+/// 描述：解析步骤分支字符串，默认主分支。
+fn parse_plan_branch(raw: Option<&str>) -> Result<ModelPlanBranch, String> {
+    match raw.unwrap_or("primary").trim().to_lowercase().as_str() {
+        "primary" => Ok(ModelPlanBranch::Primary),
+        "fallback" => Ok(ModelPlanBranch::Fallback),
+        value => Err(format!("invalid branch: {}", value)),
+    }
+}
+
+/// 描述：解析步骤风险等级字符串，默认 low。
+fn parse_plan_risk(raw: Option<&str>) -> Result<ModelPlanRiskLevel, String> {
+    match raw.unwrap_or("low").trim().to_lowercase().as_str() {
+        "low" => Ok(ModelPlanRiskLevel::Low),
+        "medium" => Ok(ModelPlanRiskLevel::Medium),
+        "high" => Ok(ModelPlanRiskLevel::High),
+        value => Err(format!("invalid risk: {}", value)),
+    }
+}
+
+/// 描述：根据动作推断默认操作类型，避免模型遗漏字段时无法执行。
+fn infer_operation_kind_for_action(action: ModelToolAction) -> ModelPlanOperationKind {
+    match action {
+        ModelToolAction::ListObjects
+        | ModelToolAction::SelectObjects
+        | ModelToolAction::RenameObject
+        | ModelToolAction::OrganizeHierarchy
+        | ModelToolAction::AddCube
+        | ModelToolAction::Undo
+        | ModelToolAction::Redo => ModelPlanOperationKind::Basic,
+        ModelToolAction::AlignOrigin
+        | ModelToolAction::NormalizeScale
+        | ModelToolAction::NormalizeAxis => ModelPlanOperationKind::BatchTransform,
+        ModelToolAction::Solidify
+        | ModelToolAction::Bevel
+        | ModelToolAction::Mirror
+        | ModelToolAction::Array
+        | ModelToolAction::AutoSmooth
+        | ModelToolAction::WeightedNormal
+        | ModelToolAction::Decimate => ModelPlanOperationKind::ModifierChain,
+        ModelToolAction::Boolean => ModelPlanOperationKind::BooleanChain,
+        ModelToolAction::TidyMaterialSlots
+        | ModelToolAction::CheckTexturePaths
+        | ModelToolAction::ApplyTextureImage
+        | ModelToolAction::PackTextures => ModelPlanOperationKind::BatchMaterial,
+        ModelToolAction::NewFile | ModelToolAction::OpenFile | ModelToolAction::SaveFile => {
+            ModelPlanOperationKind::SceneFileOps
+        }
+    }
+}
+
+/// 描述：解析操作类型字符串；未提供时按动作推断，导出步骤默认 scene_file_ops。
+fn parse_operation_kind(
+    raw: Option<&str>,
+    action: Option<ModelToolAction>,
+    is_export: bool,
+) -> Result<ModelPlanOperationKind, String> {
+    let value = raw.map(|item| item.trim().to_lowercase());
+    match value.as_deref() {
+        Some("basic") => Ok(ModelPlanOperationKind::Basic),
+        Some("boolean_chain") => Ok(ModelPlanOperationKind::BooleanChain),
+        Some("modifier_chain") => Ok(ModelPlanOperationKind::ModifierChain),
+        Some("batch_transform") => Ok(ModelPlanOperationKind::BatchTransform),
+        Some("batch_material") => Ok(ModelPlanOperationKind::BatchMaterial),
+        Some("scene_file_ops") => Ok(ModelPlanOperationKind::SceneFileOps),
+        Some(other) => Err(format!("invalid operation_kind: {}", other)),
+        None => {
+            if is_export {
+                Ok(ModelPlanOperationKind::SceneFileOps)
+            } else if let Some(tool_action) = action {
+                Ok(infer_operation_kind_for_action(tool_action))
+            } else {
+                Ok(ModelPlanOperationKind::Basic)
+            }
+        }
+    }
+}
+
+/// 描述：解析 AI 返回的结构化计划 JSON，转换为模型会话步骤。
+fn parse_llm_model_plan(raw: &str) -> Result<(Vec<ModelSessionPlannedStep>, Option<String>), String> {
+    let json_text = extract_json_object(raw).ok_or_else(|| "LLM 未返回有效 JSON".to_string())?;
+    let parsed: LlmModelPlanResponse = serde_json::from_str(&json_text)
+        .map_err(|err| format!("解析规划 JSON 失败: {}", err))?;
+
+    let mut steps: Vec<ModelSessionPlannedStep> = Vec::new();
+    for item in parsed.steps {
+        let step_type = item.step_type.trim().to_lowercase();
+        match step_type.as_str() {
+            "export" => {
+                let operation_kind =
+                    parse_operation_kind(item.operation_kind.as_deref(), None, true)?;
+                let branch = parse_plan_branch(item.branch.as_deref())?;
+                let risk = parse_plan_risk(item.risk.as_deref())?;
+                steps.push(ModelSessionPlannedStep::Export {
+                    input: item.input.unwrap_or_else(|| "导出 GLB".to_string()),
+                    operation_kind,
+                    branch,
+                    recoverable: item.recoverable.unwrap_or(false),
+                    risk,
+                    condition: item.condition,
+                });
+            }
+            "tool" => {
+                let action_raw = item
+                    .action
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| "tool 步骤缺少 action".to_string())?;
+                let action = action_raw
+                    .parse::<ModelToolAction>()
+                    .map_err(|err| format!("无效 action `{}`: {}", action_raw, err))?;
+                let operation_kind = parse_operation_kind(
+                    item.operation_kind.as_deref(),
+                    Some(action),
+                    false,
+                )?;
+                let branch = parse_plan_branch(item.branch.as_deref())?;
+                let risk = parse_plan_risk(item.risk.as_deref())?;
+                steps.push(ModelSessionPlannedStep::Tool {
+                    action,
+                    input: item.input.unwrap_or_else(|| action.as_str().to_string()),
+                    params: item.params.unwrap_or_else(|| json!({})),
+                    operation_kind,
+                    branch,
+                    recoverable: item.recoverable.unwrap_or(true),
+                    risk,
+                    condition: item.condition,
+                });
+            }
+            other => {
+                return Err(format!("未知步骤类型: {}", other));
+            }
+        }
+    }
+
+    Ok((steps, parsed.reason))
+}
+
+/// 描述：使用 AI 进行模型步骤规划；不允许规则兜底，失败时直接返回错误。
+fn plan_model_session_steps_with_llm(
+    provider: Option<&str>,
+    prompt: &str,
+    capabilities: &ModelMcpCapabilities,
+    workdir: Option<&str>,
+) -> Result<Vec<ModelSessionPlannedStep>, DesktopProtocolError> {
+    let planner_prompt = build_model_plan_prompt(prompt, capabilities);
+    let parsed_provider = parse_provider(provider.unwrap_or("codex"));
+    let raw_plan = call_model(parsed_provider, planner_prompt.as_str(), workdir).map_err(|err| {
+        DesktopProtocolError::from(err.to_protocol_error())
+    })?;
+    let (steps, reason) = parse_llm_model_plan(raw_plan.as_str())
+        .map_err(|err| desktop_error_from_text(&err, "core.desktop.model.plan_parse_failed", false))?;
+
+    if steps.is_empty() {
+        let reason = reason.unwrap_or_else(|| "AI 未给出可执行步骤".to_string());
+        return Err(desktop_error_from_text(
+            reason.as_str(),
+            "core.desktop.model.plan_empty",
+            false,
+        ));
+    }
+    Ok(steps)
+}
+
 fn parse_first_number(input: &str) -> Option<f64> {
     let mut buf = String::new();
     let mut started = false;
@@ -1093,9 +1367,8 @@ fn parse_first_number(input: &str) -> Option<f64> {
 }
 
 fn parse_path_in_prompt(prompt: &str) -> Option<String> {
-    let trimmed = prompt.trim();
-    for token in trimmed.split_whitespace() {
-        let candidate = token.trim_matches(|value| {
+    let normalize_candidate = |raw: &str| -> Option<String> {
+        let trimmed = raw.trim_matches(|value| {
             value == '"'
                 || value == '\''
                 || value == '`'
@@ -1104,14 +1377,8 @@ fn parse_path_in_prompt(prompt: &str) -> Option<String> {
                 || value == '‘'
                 || value == '’'
         });
-        if candidate.starts_with('/') || candidate.contains(":\\") {
-            return Some(candidate.to_string());
-        }
-    }
-    if let Some(start) = trimmed.find('/') {
-        let remaining = &trimmed[start..];
-        let end = remaining
-            .find(|value: char| {
+        let head = trimmed
+            .split(|value: char| {
                 value.is_whitespace()
                     || value == '"'
                     || value == '\''
@@ -1126,10 +1393,41 @@ fn parse_path_in_prompt(prompt: &str) -> Option<String> {
                     || value == '！'
                     || value == '？'
             })
-            .unwrap_or(remaining.len());
-        let candidate = remaining[..end].trim();
-        if !candidate.is_empty() {
-            return Some(candidate.to_string());
+            .next()
+            .unwrap_or("")
+            .trim_matches(|value| {
+                value == '"'
+                    || value == '\''
+                    || value == '`'
+                    || value == '“'
+                    || value == '”'
+                    || value == '‘'
+                    || value == '’'
+                    || value == '，'
+                    || value == '。'
+                    || value == '；'
+                    || value == '！'
+                    || value == '？'
+                    || value == ')'
+                    || value == ']'
+                    || value == '}'
+            });
+        if head.starts_with('/') || head.contains(":\\") {
+            return Some(head.to_string());
+        }
+        None
+    };
+
+    let trimmed = prompt.trim();
+    for token in trimmed.split_whitespace() {
+        if let Some(candidate) = normalize_candidate(token) {
+            return Some(candidate);
+        }
+    }
+    if let Some(start) = trimmed.find('/') {
+        let remaining = &trimmed[start..];
+        if let Some(candidate) = normalize_candidate(remaining) {
+            return Some(candidate);
         }
     }
     None
@@ -1663,6 +1961,7 @@ fn run_model_session_command(
     store: tauri::State<ModelSessionStore>,
     session_id: String,
     prompt: String,
+    provider: Option<String>,
     trace_id: Option<String>,
     project_name: Option<String>,
     capabilities: Option<ModelMcpCapabilities>,
@@ -1685,29 +1984,20 @@ fn run_model_session_command(
     let output_dir = normalize_output_dir_for_model(&app, output_dir)
         .map_err(|err| desktop_error_from_text(&err, "core.desktop.model.output_dir_invalid", false))?;
     let output_dir_string = output_dir.to_string_lossy().to_string();
-    let planned_steps = plan_model_session_steps(normalized_prompt);
-    if planned_steps.is_empty() {
-        let lower = normalized_prompt.to_lowercase();
-        let has_dcc_intent = [
-            "blender", "zbrush", "模型", "mcp", "移动", "旋转", "缩放", "颜色", "材质", "导入",
-            "导出", "打开", "保存", "正方体", "立方体", "cube", "box", "布尔链", "修改器链",
-            "批量变换", "批量材质", "场景级操作", "scene pipeline", "boolean chain",
-        ]
-        .iter()
-        .any(|keyword| lower.contains(keyword));
-        if has_dcc_intent {
-            return Err(desktop_error_from_text(
-                "已识别为 DCC 操作，但当前 MCP 暂不支持该具体指令；不会自动替换成其他动作。当前可用：导出、列出对象、选择对象、重命名、层级整理、新建/打开/保存、撤销/重做、对齐原点、统一尺度/方向、添加正方体、加厚、倒角、镜像、阵列、布尔、自动平滑、法线加权、减面、材质槽整理、贴图路径检查、应用贴图图片、打包贴图。",
-                "core.desktop.model.unsupported_action",
-                false,
-            ));
-        }
-        return Err(desktop_error_from_text(
-            "未识别到可执行的模型操作。可尝试：导出、打开文件、保存、加厚、倒角、镜像、阵列、减面、自动平滑。",
-            "core.desktop.model.unrecognized_step",
-            false,
-        ));
-    }
+    let current_dir = env::current_dir()
+        .ok()
+        .map(|path| path.to_string_lossy().to_string());
+    let normalized_provider = provider
+        .clone()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "codex".to_string());
+    let planned_steps = plan_model_session_steps_with_llm(
+        Some(normalized_provider.as_str()),
+        normalized_prompt,
+        &capabilities,
+        current_dir.as_deref(),
+    )?;
 
     {
         let mut map = store
@@ -1722,6 +2012,7 @@ fn run_model_session_command(
         let session = map.entry(session_id.clone()).or_default();
         session.cancelled = false;
         session.last_prompt = Some(normalized_prompt.to_string());
+        session.last_provider = Some(normalized_provider.clone());
         session.last_output_dir = Some(output_dir_string.clone());
     }
 
@@ -2172,7 +2463,7 @@ fn retry_model_session_last_step(
     capabilities: Option<ModelMcpCapabilities>,
     blender_bridge_addr: Option<String>,
 ) -> Result<ModelSessionRunResponse, DesktopProtocolError> {
-    let (last_prompt, last_output_dir) = {
+    let (last_prompt, last_provider, last_output_dir) = {
         let map = store
             .sessions
             .lock()
@@ -2200,6 +2491,7 @@ fn retry_model_session_last_step(
                     suggestion: None,
                     retryable: false,
                 })?,
+            state.last_provider.clone(),
             state.last_output_dir.clone(),
         )
     };
@@ -2209,6 +2501,7 @@ fn retry_model_session_last_step(
         store,
         session_id,
         last_prompt,
+        last_provider,
         trace_id,
         project_name,
         capabilities,
@@ -2231,6 +2524,7 @@ fn undo_model_session_step(
         store,
         session_id,
         "撤销".to_string(),
+        None,
         trace_id,
         Some("undo-operation".to_string()),
         Some(ModelMcpCapabilities {
@@ -2303,8 +2597,9 @@ fn main() {
 mod tests {
     use super::{
         blender_series_supports_extension, bridge_boot_script_content, bridge_enable_and_save_expr,
-        build_ui_hint_from_protocol_error, is_bridge_unavailable_error, plan_model_steps,
-        split_error_code_and_message, PlannedModelStep,
+        build_model_plan_prompt, build_ui_hint_from_protocol_error, is_bridge_unavailable_error,
+        parse_llm_model_plan, plan_model_steps, split_error_code_and_message, ModelMcpCapabilities,
+        PlannedModelStep,
     };
     use zodileap_mcp_common::ProtocolError;
 
@@ -2395,5 +2690,50 @@ mod tests {
             )
         });
         assert!(has_apply_texture, "贴图补图请求应路由到 apply_texture_image 动作");
+    }
+
+    #[test]
+    fn should_plan_apply_texture_image_step_with_quoted_space_path() {
+        let steps = plan_model_steps("我发现场景地板的贴图缺失了，能用“ /Users/yoho/Downloads/image.png”添加吗");
+        let has_apply_texture = steps.iter().any(|step| {
+            matches!(
+                step,
+                PlannedModelStep::Tool { action, .. } if action.as_str() == "apply_texture_image"
+            )
+        });
+        assert!(has_apply_texture, "带空格引号路径也应路由到 apply_texture_image 动作");
+    }
+
+    #[test]
+    fn should_parse_llm_model_plan_json() {
+        let raw = r#"{
+          "steps": [
+            {
+              "type": "tool",
+              "action": "apply_texture_image",
+              "input": "应用贴图",
+              "params": {"path": "/Users/yoho/Downloads/image.png"},
+              "operation_kind": "batch_material",
+              "branch": "primary",
+              "recoverable": true,
+              "risk": "low",
+              "condition": null
+            }
+          ]
+        }"#;
+        let (steps, reason) = parse_llm_model_plan(raw).expect("plan should parse");
+        assert!(reason.is_none());
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].code(), "apply_texture_image");
+    }
+
+    #[test]
+    fn planner_prompt_should_require_json_only() {
+        let prompt = build_model_plan_prompt(
+            "给地板补贴图 /Users/yoho/Downloads/image.png",
+            &ModelMcpCapabilities::default(),
+        );
+        assert!(prompt.contains("只能输出 JSON"));
+        assert!(prompt.contains("不允许规则兜底"));
     }
 }

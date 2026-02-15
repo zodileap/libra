@@ -94,6 +94,7 @@ export interface WorkflowRunRequest {
   sessionId: string;
   projectName: string;
   prompt: string;
+  provider: string;
   workflowId: string;
   referenceImages: string[];
   styleImages: string[];

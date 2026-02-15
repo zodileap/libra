@@ -245,6 +245,7 @@ async function runNode(
       const response = await invoke<ModelSessionRunResponse>("run_model_session_command", {
         sessionId: request.sessionId,
         prompt: ctx.prompt,
+        provider: request.provider,
         traceId: `trace-${Date.now()}`,
         projectName: request.projectName,
         capabilities: request.modelMcpCapabilities,

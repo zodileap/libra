@@ -139,3 +139,20 @@ fn TestShouldPlanApplyTextureImageStep() {
     });
     assert!(has_apply_texture);
 }
+
+#[allow(non_snake_case)]
+/// 描述：验证引号后含空格且尾部跟随文案时，仍可正确提取贴图路径并规划动作。
+#[test]
+fn TestShouldPlanApplyTextureImageStepWithQuotedSpacePath() {
+    let steps = plan_model_session_steps("我发现场景地板的贴图缺失了，能用“ /Users/yoho/Downloads/image.png”添加吗");
+    let has_apply_texture = steps.iter().any(|item| {
+        matches!(
+            item,
+            ModelSessionPlannedStep::Tool {
+                action: ModelToolAction::ApplyTextureImage,
+                ..
+            }
+        )
+    });
+    assert!(has_apply_texture);
+}

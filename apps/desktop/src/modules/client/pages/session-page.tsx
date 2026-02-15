@@ -322,6 +322,7 @@ export function SessionPage({
           sessionId: sessionId || "model-session",
           projectName: title,
           prompt: normalizedContent,
+          provider,
           workflowId: "wf-model-full-v1",
           referenceImages: [],
           styleImages: [],
