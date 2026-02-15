@@ -268,13 +268,6 @@ export function SessionPage({
   }, [availableAiKeys, selectedProvider]);
 
   useEffect(() => {
-    if (!isModelAgent) {
-      return;
-    }
-    void ensureBlenderBridge();
-  }, [isModelAgent, sessionId, ensureBlenderBridge]);
-
-  useEffect(() => {
     if (!isModelAgent || !sessionId) {
       return;
     }
@@ -315,6 +308,15 @@ export function SessionPage({
 
     try {
       if (isModelAgent) {
+        const bridgeEnsureResult = await ensureBlenderBridge();
+        if (!bridgeEnsureResult.ok) {
+          appendTraceRecord({
+            traceId: `trace-local-${Date.now()}`,
+            source: "bridge:ensure",
+            message: bridgeEnsureResult.message,
+          });
+          setStatus("Bridge 未就绪，正在尝试自动拉起 Blender 并重试...");
+        }
         const response = await runModelWorkflow({
           sessionId: sessionId || "model-session",
           projectName: title,
@@ -532,34 +534,9 @@ export function SessionPage({
         <div className="desk-session-head">
           <AriTypography variant="h1" value={title} />
           <AriTypography variant="caption" value={`最近更新：${updatedAt}`} />
-          {isModelAgent ? (
-            <AriTypography
-              variant="caption"
-              value={
-                blenderBridgeRuntime.checking
-                  ? "Bridge 检测中..."
-                  : blenderBridgeRuntime.message
-              }
-            />
-          ) : null}
         </div>
 
         <div className="desk-session-thread-wrap">
-          {isModelAgent && workflowStepRecords.length > 0 ? (
-            <AriCard className="desk-msg">
-              <AriTypography variant="caption" value="工作流执行记录（自动识别起点）" />
-              <div className="desk-model-step-list">
-                {workflowStepRecords.map((step, index) => (
-                  <AriTypography
-                    key={`${step.nodeId}-${index}`}
-                    variant="caption"
-                    value={`#${index + 1} ${step.name} · ${step.status} · ${step.summary}`}
-                  />
-                ))}
-              </div>
-            </AriCard>
-          ) : null}
-
           {isModelAgent && stepRecords.length > 0 ? (
             <AriCard className="desk-msg">
               <AriTypography variant="caption" value="执行记录" />

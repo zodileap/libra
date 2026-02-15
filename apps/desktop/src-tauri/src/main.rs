@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tauri::Emitter;
 use tauri::Manager;
 use zodileap_agent_core::{run_agent_with_protocol_error, AgentRunRequest};
@@ -1149,6 +1149,46 @@ fn is_unsupported_action_error(message: &str) -> bool {
         || lower.contains("mcp.model.bridge.rejected")
 }
 
+/// 描述：判断错误是否属于 Bridge 不可用（未启动或端口未就绪）类别。
+fn is_bridge_unavailable_error(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    lower.contains("bridge_connect_failed")
+        || lower.contains("invalid_bridge_addr")
+        || lower.contains("cannot connect blender bridge")
+        || lower.contains("connection refused")
+}
+
+/// 描述：按动作类型尝试自动拉起 Blender；当为 OpenFile 时优先带文件路径启动。
+fn launch_blender_for_action(action: ModelToolAction, params: &serde_json::Value) -> Result<(), String> {
+    let blender_bin = resolve_blender_bin(None);
+    let mut command = Command::new(&blender_bin);
+    if matches!(action, ModelToolAction::OpenFile) {
+        if let Some(path) = params
+            .get("path")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            command.arg(path);
+        }
+    }
+    command
+        .spawn()
+        .map_err(|err| format!("auto launch blender failed: {}", err))?;
+    Ok(())
+}
+
+/// 描述：轮询检测 Bridge 可用性，等待 Blender 启动并加载插件。
+fn wait_for_bridge_ready(blender_bridge_addr: Option<String>, attempts: u32, interval_ms: u64) -> bool {
+    for _ in 0..attempts {
+        if ping_blender_bridge(blender_bridge_addr.clone()).is_ok() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(interval_ms));
+    }
+    false
+}
+
 fn execute_model_tool_with_bridge_upgrade(
     action: ModelToolAction,
     params: serde_json::Value,
@@ -1168,6 +1208,28 @@ fn execute_model_tool_with_bridge_upgrade(
     match run_once() {
         Ok(result) => Ok(result),
         Err(first_err) => {
+            if is_bridge_unavailable_error(&first_err) {
+                let _ = install_blender_bridge(None);
+                if let Err(launch_err) = launch_blender_for_action(action, &params) {
+                    return Err(format!(
+                        "{}。Bridge 不可用且自动启动 Blender 失败：{}",
+                        first_err, launch_err
+                    ));
+                }
+                if !wait_for_bridge_ready(blender_bridge_addr.clone(), 12, 1000) {
+                    return Err(format!(
+                        "{}。已尝试自动启动 Blender，但 Bridge 仍不可用；请确认插件 `Zodileap MCP Bridge` 已启用。",
+                        first_err
+                    ));
+                }
+                return run_once().map_err(|second_err| {
+                    format!(
+                        "{}。Bridge 已就绪但动作仍失败：{}",
+                        first_err, second_err
+                    )
+                });
+            }
+
             if !is_unsupported_action_error(&first_err) {
                 return Err(first_err);
             }
@@ -1829,8 +1891,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_ui_hint_from_protocol_error, plan_model_steps, split_error_code_and_message,
-        PlannedModelStep,
+        build_ui_hint_from_protocol_error, is_bridge_unavailable_error, plan_model_steps,
+        split_error_code_and_message, PlannedModelStep,
     };
     use zodileap_mcp_common::ProtocolError;
 
@@ -1879,5 +1941,13 @@ mod tests {
         let ui_hint = build_ui_hint_from_protocol_error(&error).expect("must have ui hint");
         assert_eq!(ui_hint.key, "restart-blender-bridge");
         assert!(!ui_hint.actions.is_empty());
+    }
+
+    #[test]
+    fn should_detect_bridge_unavailable_error() {
+        assert!(is_bridge_unavailable_error(
+            "mcp.model.export.bridge_connect_failed: cannot connect blender bridge"
+        ));
+        assert!(!is_bridge_unavailable_error("mcp.model.bridge.action_failed: unsupported action"));
     }
 }

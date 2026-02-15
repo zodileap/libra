@@ -105,3 +105,20 @@ fn TestShouldBuildSafetyConfirmationUiHintContext() {
     assert!(context.get("confirmation_token").is_some());
     assert!(context.get("risk_reasons").is_some());
 }
+
+#[allow(non_snake_case)]
+/// 描述：验证中文引号路径可被识别为 OpenFile 步骤。
+#[test]
+fn TestShouldParseOpenFilePathWithChineseQuotes() {
+    let steps = plan_model_session_steps("打开模型“/Users/yoho/Downloads/demo.blend”");
+    let has_open_file = steps.iter().any(|item| {
+        matches!(
+            item,
+            ModelSessionPlannedStep::Tool {
+                action: ModelToolAction::OpenFile,
+                ..
+            }
+        )
+    });
+    assert!(has_open_file);
+}
