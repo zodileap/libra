@@ -178,16 +178,38 @@ impl ModelSessionPlannedStep {
             if let Some(raw) = payload.as_object_mut() {
                 raw.insert("action".to_string(), json!(action.as_str()));
                 if let Some(scope) = params.get("selection_scope").and_then(|value| value.as_str()) {
+                    let target_names = params
+                        .get("target_names")
+                        .and_then(|value| value.as_array())
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(|item| item.as_str())
+                                .map(str::trim)
+                                .filter(|name| !name.is_empty())
+                                .map(|name| name.to_string())
+                                .collect::<Vec<String>>()
+                        })
+                        .unwrap_or_default();
+                    let target_mode = params
+                        .get("target_mode")
+                        .and_then(|value| value.as_str())
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| derive_target_mode(scope, &target_names).to_string());
+                    let require_selection = params
+                        .get("require_selection")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(scope != "all");
                     raw.insert("selection_scope".to_string(), json!(scope));
+                    raw.insert("target_mode".to_string(), json!(target_mode));
+                    raw.insert("require_selection".to_string(), json!(require_selection));
                     let trace_scope = match scope {
                         "active" => "active",
                         "all" => "all",
                         "selected" => {
-                            let name_count = params
-                                .get("target_names")
-                                .and_then(|value| value.as_array())
-                                .map(|items| items.len())
-                                .unwrap_or(0);
+                            let name_count = target_names.len();
                             if name_count <= 1 {
                                 "single"
                             } else {
@@ -793,19 +815,10 @@ fn plan_basic_steps(prompt: &str, lower: &str) -> Vec<ModelSessionPlannedStep> {
     }
     if is_translate_intent(lower) {
         let delta = parse_translate_delta(prompt, lower);
-        let selection_scope = derive_selection_scope(lower);
-        let selected_only = selection_scope != "all";
-        let target_names = parse_target_names_in_prompt(prompt, lower);
         let mut params = json!({
             "delta": [delta.0, delta.1, delta.2],
-            "selection_scope": selection_scope,
-            "selected_only": selected_only,
         });
-        if !target_names.is_empty() {
-            if let Some(raw) = params.as_object_mut() {
-                raw.insert("target_names".to_string(), json!(target_names));
-            }
-        }
+        enrich_transform_target_params(&mut params, prompt, lower);
         steps.push(ModelSessionPlannedStep::Tool {
             action: ModelToolAction::TranslateObjects,
             input: "平移对象".to_string(),
@@ -819,19 +832,10 @@ fn plan_basic_steps(prompt: &str, lower: &str) -> Vec<ModelSessionPlannedStep> {
     }
     if is_rotate_intent(lower) {
         let delta = parse_rotate_delta(prompt, lower);
-        let selection_scope = derive_selection_scope(lower);
-        let selected_only = selection_scope != "all";
-        let target_names = parse_target_names_in_prompt(prompt, lower);
         let mut params = json!({
             "delta_euler": [delta.0, delta.1, delta.2],
-            "selection_scope": selection_scope,
-            "selected_only": selected_only,
         });
-        if !target_names.is_empty() {
-            if let Some(raw) = params.as_object_mut() {
-                raw.insert("target_names".to_string(), json!(target_names));
-            }
-        }
+        enrich_transform_target_params(&mut params, prompt, lower);
         steps.push(ModelSessionPlannedStep::Tool {
             action: ModelToolAction::RotateObjects,
             input: "旋转对象".to_string(),
@@ -845,19 +849,10 @@ fn plan_basic_steps(prompt: &str, lower: &str) -> Vec<ModelSessionPlannedStep> {
     }
     if is_scale_intent(lower) {
         let factor = parse_scale_factor(prompt);
-        let selection_scope = derive_selection_scope(lower);
-        let selected_only = selection_scope != "all";
-        let target_names = parse_target_names_in_prompt(prompt, lower);
         let mut params = json!({
             "factor": factor,
-            "selection_scope": selection_scope,
-            "selected_only": selected_only,
         });
-        if !target_names.is_empty() {
-            if let Some(raw) = params.as_object_mut() {
-                raw.insert("target_names".to_string(), json!(target_names));
-            }
-        }
+        enrich_transform_target_params(&mut params, prompt, lower);
         steps.push(ModelSessionPlannedStep::Tool {
             action: ModelToolAction::ScaleObjects,
             input: "缩放对象".to_string(),
@@ -1397,6 +1392,66 @@ fn parse_target_names_in_prompt(prompt: &str, lower: &str) -> Vec<String> {
         }
     }
     deduped
+}
+
+/// 描述：从参数读取目标对象名，仅保留非空字符串项。
+fn extract_target_names_from_params(params: &Value) -> Vec<String> {
+    params
+        .get("target_names")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(|name| name.to_string())
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default()
+}
+
+/// 描述：根据作用域与对象名过滤推断结构化目标模式。
+fn derive_target_mode(selection_scope: &str, target_names: &[String]) -> &'static str {
+    if !target_names.is_empty() {
+        return "named";
+    }
+    match selection_scope {
+        "active" => "active",
+        "all" => "all",
+        _ => "selected",
+    }
+}
+
+/// 描述：统一补齐 transform 参数中的目标结构化字段，便于追踪与回放。
+fn enrich_transform_target_params(params: &mut Value, prompt: &str, lower: &str) {
+    if !params.is_object() {
+        *params = json!({});
+    }
+    let selection_scope = params
+        .get("selection_scope")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| matches!(*value, "active" | "selected" | "all"))
+        .unwrap_or_else(|| derive_selection_scope(lower))
+        .to_string();
+    let mut target_names = extract_target_names_from_params(params);
+    if target_names.is_empty() {
+        target_names = parse_target_names_in_prompt(prompt, lower);
+    }
+    let target_mode = derive_target_mode(selection_scope.as_str(), &target_names);
+    let require_selection = selection_scope != "all";
+    if let Some(raw) = params.as_object_mut() {
+        raw.insert("selection_scope".to_string(), json!(selection_scope));
+        raw.insert("selected_only".to_string(), json!(selection_scope != "all"));
+        raw.insert("target_mode".to_string(), json!(target_mode));
+        if target_names.is_empty() {
+            raw.remove("target_names");
+        } else {
+            raw.insert("target_names".to_string(), json!(target_names));
+        }
+        raw.insert("require_selection".to_string(), json!(require_selection));
+    }
 }
 
 /// 描述：从自然语言中提取路径参数，支持绝对路径和 Windows 路径。

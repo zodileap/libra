@@ -1200,9 +1200,9 @@ fn build_model_plan_prompt(prompt: &str, capabilities: &ModelMcpCapabilities) ->
 8) 工具动作参数必须完整：
    - select_objects: params.names 必须是非空数组
    - rename_object: params.old_name 与 params.new_name 必须非空
-   - translate_objects: params.delta 必须是长度为3的数组；当用户提到“这个物体/选中对象”时必须设置 params.selection_scope=active|selected；如需按名称过滤可传 params.target_names（非空字符串数组）
-   - rotate_objects: params.delta_euler 必须是长度为3的数组；遵循同样的 selection_scope / target_names 规则
-   - scale_objects: params.factor 必须是数字或长度为3数组；遵循同样的 selection_scope / target_names 规则
+   - translate_objects: params.delta 必须是长度为3的数组；当用户提到“这个物体/选中对象”时必须设置 params.selection_scope=active|selected；可选 params.target_names（非空字符串数组）；并补充 params.target_mode 与 params.require_selection
+   - rotate_objects: params.delta_euler 必须是长度为3的数组；遵循同样的 selection_scope / target_names / target_mode / require_selection 规则
+   - scale_objects: params.factor 必须是数字或长度为3数组；遵循同样的 selection_scope / target_names / target_mode / require_selection 规则
    - open_file: params.path 必须非空
    - apply_texture_image: params.path 必须非空
 
@@ -1451,6 +1451,61 @@ fn validate_llm_model_plan_steps(
         }
         Ok(())
     };
+    let ensure_target_fields = |params: &serde_json::Value, action_name: &str| -> Result<(), String> {
+        let scope = resolve_selection_scope_from_params(params);
+        if let Some(target_mode) = params
+            .get("target_mode")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if !matches!(target_mode, "active" | "selected" | "all" | "named") {
+                return Err(format!(
+                    "{} 的 target_mode 非法，必须是 active|selected|all|named",
+                    action_name
+                ));
+            }
+            if target_mode == "named" {
+                let name_count = params
+                    .get("target_names")
+                    .and_then(|value| value.as_array())
+                    .map(|items| items.len())
+                    .unwrap_or(0);
+                if name_count == 0 {
+                    return Err(format!(
+                        "{} 的 target_mode=named 时，target_names 不能为空",
+                        action_name
+                    ));
+                }
+            }
+        }
+        if params.get("require_selection").is_some()
+            && params
+                .get("require_selection")
+                .and_then(|value| value.as_bool())
+                .is_none()
+        {
+            return Err(format!("{} 的 require_selection 必须是布尔值", action_name));
+        }
+        if let Some(require_selection) = params
+            .get("require_selection")
+            .and_then(|value| value.as_bool())
+        {
+            if require_selection && scope == "all" {
+                return Err(format!(
+                    "{} 的 require_selection=true 与 selection_scope=all 冲突",
+                    action_name
+                ));
+            }
+            if !require_selection && scope != "all" {
+                return Err(format!(
+                    "{} 的 require_selection=false 与 selection_scope={} 冲突",
+                    action_name, scope
+                ));
+            }
+        }
+        Ok(())
+    };
 
     for step in steps {
         let ModelSessionPlannedStep::Tool { action, params, .. } = step else {
@@ -1505,6 +1560,7 @@ fn validate_llm_model_plan_steps(
                 }
                 ensure_selection_scoped(params, "translate_objects")?;
                 ensure_target_names(params, "translate_objects")?;
+                ensure_target_fields(params, "translate_objects")?;
             }
             ModelToolAction::RotateObjects => {
                 let delta = params
@@ -1516,6 +1572,7 @@ fn validate_llm_model_plan_steps(
                 }
                 ensure_selection_scoped(params, "rotate_objects")?;
                 ensure_target_names(params, "rotate_objects")?;
+                ensure_target_fields(params, "rotate_objects")?;
             }
             ModelToolAction::ScaleObjects => {
                 let factor = params
@@ -1531,6 +1588,7 @@ fn validate_llm_model_plan_steps(
                 }
                 ensure_selection_scoped(params, "scale_objects")?;
                 ensure_target_names(params, "scale_objects")?;
+                ensure_target_fields(params, "scale_objects")?;
             }
             ModelToolAction::OpenFile => {
                 let path = params
@@ -1600,6 +1658,8 @@ fn plan_model_session_steps_with_llm(
                 ));
             }
         };
+        let mut steps = steps;
+        enrich_transform_targets_for_steps(&mut steps, prompt);
 
         if steps.is_empty() {
             last_error = reason.unwrap_or_else(|| "AI 未给出可执行步骤".to_string());
@@ -1791,6 +1851,85 @@ fn required_selection_scope_for_step(
         None
     } else {
         Some(scope)
+    }
+}
+
+/// 描述：从步骤参数读取目标对象名列表，仅保留非空字符串项。
+fn extract_target_names_from_params(params: &serde_json::Value) -> Vec<String> {
+    params
+        .get("target_names")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(|name| name.to_string())
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default()
+}
+
+/// 描述：根据选择范围与名称过滤参数推断结构化目标模式。
+fn derive_target_mode(selection_scope: &str, target_names: &[String]) -> &'static str {
+    if !target_names.is_empty() {
+        return "named";
+    }
+    match selection_scope {
+        "active" => "active",
+        "all" => "all",
+        _ => "selected",
+    }
+}
+
+/// 描述：统一补齐 transform 参数中的结构化目标字段，便于规划结果和 trace 一致消费。
+fn enrich_transform_target_params(params: &mut serde_json::Value, prompt: &str, lower: &str) {
+    if !params.is_object() {
+        *params = json!({});
+    }
+    let has_explicit_scope = params.get("selection_scope").is_some() || params.get("selected_only").is_some();
+    let selection_scope = if has_explicit_scope {
+        resolve_selection_scope_from_params(params)
+    } else {
+        derive_selection_scope(lower)
+    };
+    let mut target_names = extract_target_names_from_params(params);
+    if target_names.is_empty() {
+        target_names = parse_target_names_in_prompt(prompt, lower);
+    }
+    let target_mode = derive_target_mode(selection_scope, &target_names);
+    let require_selection = selection_scope != "all";
+
+    if let Some(raw) = params.as_object_mut() {
+        raw.insert("selection_scope".to_string(), json!(selection_scope));
+        raw.insert(
+            "selected_only".to_string(),
+            json!(selection_scope != "all"),
+        );
+        raw.insert("target_mode".to_string(), json!(target_mode));
+        if target_names.is_empty() {
+            raw.remove("target_names");
+        } else {
+            raw.insert("target_names".to_string(), json!(target_names));
+        }
+        raw.insert("require_selection".to_string(), json!(require_selection));
+    }
+}
+
+/// 描述：在 AI 计划执行前补齐 transform 步骤目标字段，降低模型漏填导致的歧义。
+fn enrich_transform_targets_for_steps(steps: &mut [ModelSessionPlannedStep], prompt: &str) {
+    let lower = prompt.to_lowercase();
+    for step in steps {
+        let ModelSessionPlannedStep::Tool { action, params, .. } = step else {
+            continue;
+        };
+        if matches!(
+            action,
+            ModelToolAction::TranslateObjects | ModelToolAction::RotateObjects | ModelToolAction::ScaleObjects
+        ) {
+            enrich_transform_target_params(params, prompt, lower.as_str());
+        }
     }
 }
 
@@ -2353,19 +2492,10 @@ fn plan_model_steps(prompt: &str) -> Vec<PlannedModelStep> {
     }
     if is_translate_intent(&lower) {
         let delta = parse_translate_delta(prompt, &lower);
-        let selection_scope = derive_selection_scope(&lower);
-        let selected_only = selection_scope != "all";
-        let target_names = parse_target_names_in_prompt(prompt, &lower);
         let mut params = json!({
             "delta": [delta.0, delta.1, delta.2],
-            "selection_scope": selection_scope,
-            "selected_only": selected_only,
         });
-        if !target_names.is_empty() {
-            if let Some(raw) = params.as_object_mut() {
-                raw.insert("target_names".to_string(), json!(target_names));
-            }
-        }
+        enrich_transform_target_params(&mut params, prompt, &lower);
         steps.push(PlannedModelStep::Tool {
             action: ModelToolAction::TranslateObjects,
             input: "平移对象".to_string(),
@@ -2374,19 +2504,10 @@ fn plan_model_steps(prompt: &str) -> Vec<PlannedModelStep> {
     }
     if is_rotate_intent(&lower) {
         let delta = parse_rotate_delta(prompt, &lower);
-        let selection_scope = derive_selection_scope(&lower);
-        let selected_only = selection_scope != "all";
-        let target_names = parse_target_names_in_prompt(prompt, &lower);
         let mut params = json!({
             "delta_euler": [delta.0, delta.1, delta.2],
-            "selection_scope": selection_scope,
-            "selected_only": selected_only,
         });
-        if !target_names.is_empty() {
-            if let Some(raw) = params.as_object_mut() {
-                raw.insert("target_names".to_string(), json!(target_names));
-            }
-        }
+        enrich_transform_target_params(&mut params, prompt, &lower);
         steps.push(PlannedModelStep::Tool {
             action: ModelToolAction::RotateObjects,
             input: "旋转对象".to_string(),
@@ -2395,19 +2516,10 @@ fn plan_model_steps(prompt: &str) -> Vec<PlannedModelStep> {
     }
     if is_scale_intent(&lower) {
         let factor = parse_scale_factor(prompt);
-        let selection_scope = derive_selection_scope(&lower);
-        let selected_only = selection_scope != "all";
-        let target_names = parse_target_names_in_prompt(prompt, &lower);
         let mut params = json!({
             "factor": factor,
-            "selection_scope": selection_scope,
-            "selected_only": selected_only,
         });
-        if !target_names.is_empty() {
-            if let Some(raw) = params.as_object_mut() {
-                raw.insert("target_names".to_string(), json!(target_names));
-            }
-        }
+        enrich_transform_target_params(&mut params, prompt, &lower);
         steps.push(PlannedModelStep::Tool {
             action: ModelToolAction::ScaleObjects,
             input: "缩放对象".to_string(),
@@ -3668,6 +3780,11 @@ mod tests {
                         .and_then(|value| value.as_array())
                         .map(|items| items.len() == 2)
                         .unwrap_or(false)
+                    && params.get("target_mode").and_then(|value| value.as_str()) == Some("named")
+                    && params
+                        .get("require_selection")
+                        .and_then(|value| value.as_bool())
+                        == Some(true)
             )
         });
         assert!(has_target_filter, "名词过滤场景应输出 translate_objects.target_names");
@@ -3772,6 +3889,23 @@ mod tests {
         let err = validate_llm_model_plan_steps(&steps, "对名为 Cube 的物体平移")
             .expect_err("invalid target_names should be rejected");
         assert!(err.contains("target_names"));
+    }
+
+    #[test]
+    fn should_reject_transform_with_conflicted_require_selection() {
+        let steps = vec![ModelSessionPlannedStep::Tool {
+            action: ModelToolAction::ScaleObjects,
+            input: "缩放".to_string(),
+            params: json!({"factor":1.2,"selection_scope":"all","require_selection":true}),
+            operation_kind: ModelPlanOperationKind::BatchTransform,
+            branch: ModelPlanBranch::Primary,
+            recoverable: true,
+            risk: ModelPlanRiskLevel::Low,
+            condition: None,
+        }];
+        let err = validate_llm_model_plan_steps(&steps, "把所有物体缩放到1.2")
+            .expect_err("conflicted require_selection should be rejected");
+        assert!(err.contains("require_selection=true"));
     }
 
     #[test]

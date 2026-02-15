@@ -223,7 +223,18 @@ fn TestShouldPlanTranslateObjectsWithTargetNames() {
                 .and_then(|value| value.as_array())
                 .map(|items| items.len())
                 .unwrap_or(0);
-            return *action == ModelToolAction::TranslateObjects && names == 2;
+            let target_mode = params
+                .get("target_mode")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let require_selection = params
+                .get("require_selection")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            return *action == ModelToolAction::TranslateObjects
+                && names == 2
+                && target_mode == "named"
+                && require_selection;
         }
         false
     });
@@ -262,5 +273,19 @@ fn TestShouldBuildSelectionScopeTracePayload() {
             .and_then(|value| value.as_str())
             .unwrap_or(""),
         "multi"
+    );
+    assert_eq!(
+        trace
+            .get("target_mode")
+            .and_then(|value| value.as_str())
+            .unwrap_or(""),
+        "named"
+    );
+    assert_eq!(
+        trace
+            .get("require_selection")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false),
+        true
     );
 }
