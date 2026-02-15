@@ -81,14 +81,20 @@ export async function installBlenderBridge(): Promise<string> {
 }
 
 export async function ensureBlenderBridge(
-  blenderBridgeAddr = DEFAULT_BLENDER_BRIDGE_ADDR
+  blenderBridgeAddr = DEFAULT_BLENDER_BRIDGE_ADDR,
+  options: { forceInstall?: boolean } = {}
 ): Promise<{ ok: boolean; message: string }> {
   let firstReason = "";
+  let installMessage = "";
+  let bridgeHealthyAtFirstCheck = false;
 
   try {
     const health = await checkBlenderBridge(blenderBridgeAddr);
     if (health.ok) {
-      return { ok: true, message: health.message };
+      bridgeHealthyAtFirstCheck = true;
+      if (!options.forceInstall) {
+        return { ok: true, message: health.message };
+      }
     }
     firstReason = health.message;
   } catch (err) {
@@ -96,7 +102,7 @@ export async function ensureBlenderBridge(
   }
 
   try {
-    await installBlenderBridge();
+    installMessage = await installBlenderBridge();
   } catch (err) {
     const installReason = normalizeInvokeError(err);
     return {
@@ -108,17 +114,24 @@ export async function ensureBlenderBridge(
   try {
     const health = await checkBlenderBridge(blenderBridgeAddr);
     if (health.ok) {
-      return { ok: true, message: health.message };
+      const installDetail = installMessage ? `；安装结果：${installMessage}` : "";
+      return { ok: true, message: `${health.message}${installDetail}` };
     }
+    const installDetail = installMessage ? `；安装结果：${installMessage}` : "";
     return {
       ok: false,
-      message: `Bridge 仍不可用：${health.message}`,
+      message: `Bridge 仍不可用：${health.message}${installDetail}`,
     };
   } catch (err) {
     const secondReason = normalizeInvokeError(err);
+    const installDetail = installMessage ? `；安装结果：${installMessage}` : "";
+    const firstCheckDetail = firstReason ? `（初次检测：${firstReason}）` : "";
+    const forceDetail = options.forceInstall && bridgeHealthyAtFirstCheck
+      ? "（初次检测可用，但强制迁移后仍未连通）"
+      : "";
     return {
       ok: false,
-      message: `Bridge 仍不可用：${secondReason}${firstReason ? `（初次检测：${firstReason}）` : ""}`,
+      message: `Bridge 仍不可用：${secondReason}${firstCheckDetail}${forceDetail}${installDetail}`,
     };
   }
 }

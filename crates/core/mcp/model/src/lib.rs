@@ -194,6 +194,11 @@ pub fn blender_bridge_addon_script() -> &'static str {
     include_str!("../assets/blender_bridge_addon.py")
 }
 
+/// 描述：返回 Blender Extension 安装包需要的 manifest 内容。
+pub fn blender_bridge_extension_manifest() -> &'static str {
+    include_str!("../assets/blender_extension_manifest.toml")
+}
+
 pub fn ping_blender_bridge(addr: Option<String>) -> McpResult<String> {
     blender_session::ping_bridge(addr)
 }
@@ -403,6 +408,29 @@ mod tests {
             target: ModelToolTarget::Blender,
         });
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn addon_script_should_persist_user_preferences() {
+        let script = blender_bridge_addon_script();
+        assert!(script.contains("save_userpref"));
+        assert!(script.contains("_persist_user_preferences"));
+    }
+
+    #[test]
+    fn bridge_script_should_persist_user_preferences() {
+        let script = blender_bridge_script();
+        assert!(script.contains("save_userpref"));
+        assert!(script.contains("_persist_user_preferences"));
+    }
+
+    #[test]
+    fn extension_manifest_should_contain_required_fields() {
+        let manifest = blender_bridge_extension_manifest();
+        assert!(manifest.contains("schema_version"));
+        assert!(manifest.contains("id = \"zodileap_mcp_bridge\""));
+        assert!(manifest.contains("type = \"add-on\""));
+        assert!(manifest.contains("blender_version_min = \"4.2.0\""));
     }
 }
 
