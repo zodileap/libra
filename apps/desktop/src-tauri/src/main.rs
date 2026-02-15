@@ -1157,6 +1157,13 @@ fn build_model_plan_prompt(prompt: &str, capabilities: &ModelMcpCapabilities) ->
 3) 如果无法规划，返回 {{"steps":[],"reason":"具体原因"}}。
 4) 不允许臆造文件路径；用户给了路径就原样写入 params.path。
 5) 本次不允许规则兜底，必须给出结构化步骤或空步骤原因。
+6) 除非用户明确要求，否则不要输出 select_objects 和 rename_object。
+7) 如果用户要求“新建正方体并贴图”，优先输出 add_cube + apply_texture_image(path)。
+8) 工具动作参数必须完整：
+   - select_objects: params.names 必须是非空数组
+   - rename_object: params.old_name 与 params.new_name 必须非空
+   - open_file: params.path 必须非空
+   - apply_texture_image: params.path 必须非空
 
 允许动作列表：
 {allowed_actions}
@@ -1165,6 +1172,25 @@ fn build_model_plan_prompt(prompt: &str, capabilities: &ModelMcpCapabilities) ->
 
 用户输入：
 {prompt}"#
+    )
+}
+
+/// 描述：构建重规划提示词，把上次规划错误反馈给 AI，要求只返回修正后的 JSON。
+fn build_model_plan_retry_prompt(
+    prompt: &str,
+    capabilities: &ModelMcpCapabilities,
+    plan_error: &str,
+    raw_plan: &str,
+) -> String {
+    let base = build_model_plan_prompt(prompt, capabilities);
+    format!(
+        r#"{base}
+
+上一次规划结果存在错误，必须修复后重试：
+- 错误原因：{plan_error}
+- 上次输出：{raw_plan}
+
+请重新输出一份全新的 JSON 计划，严格满足约束。"#,
     )
 }
 
@@ -1320,6 +1346,84 @@ fn parse_llm_model_plan(raw: &str) -> Result<(Vec<ModelSessionPlannedStep>, Opti
     Ok((steps, parsed.reason))
 }
 
+/// 描述：校验 AI 规划步骤的结构完整性与基本意图一致性，失败时触发 AI 重规划。
+fn validate_llm_model_plan_steps(
+    steps: &[ModelSessionPlannedStep],
+    prompt: &str,
+) -> Result<(), String> {
+    let lower = prompt.to_lowercase();
+    let rename_intent = ["重命名", "rename"].iter().any(|key| lower.contains(key));
+    let select_intent = ["选择", "选中", "select"].iter().any(|key| lower.contains(key));
+
+    for step in steps {
+        let ModelSessionPlannedStep::Tool { action, params, .. } = step else {
+            continue;
+        };
+        match action {
+            ModelToolAction::SelectObjects => {
+                let valid = params
+                    .get("names")
+                    .and_then(|value| value.as_array())
+                    .map(|items| {
+                        items.iter().any(|item| {
+                            item.as_str()
+                                .map(str::trim)
+                                .map(|value| !value.is_empty())
+                                .unwrap_or(false)
+                        })
+                    })
+                    .unwrap_or(false);
+                if !valid {
+                    return Err("select_objects 缺少有效的 params.names".to_string());
+                }
+                if !select_intent {
+                    return Err("用户未明确要求选择对象，不应规划 select_objects".to_string());
+                }
+            }
+            ModelToolAction::RenameObject => {
+                let old_name = params
+                    .get("old_name")
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    .unwrap_or("");
+                let new_name = params
+                    .get("new_name")
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    .unwrap_or("");
+                if old_name.is_empty() || new_name.is_empty() {
+                    return Err("rename_object 缺少 old_name/new_name".to_string());
+                }
+                if !rename_intent {
+                    return Err("用户未明确要求重命名，不应规划 rename_object".to_string());
+                }
+            }
+            ModelToolAction::OpenFile => {
+                let path = params
+                    .get("path")
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    .unwrap_or("");
+                if path.is_empty() {
+                    return Err("open_file 缺少 path".to_string());
+                }
+            }
+            ModelToolAction::ApplyTextureImage => {
+                let path = params
+                    .get("path")
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    .unwrap_or("");
+                if path.is_empty() {
+                    return Err("apply_texture_image 缺少 path".to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// 描述：使用 AI 进行模型步骤规划；不允许规则兜底，失败时直接返回错误。
 fn plan_model_session_steps_with_llm(
     provider: Option<&str>,
@@ -1327,23 +1431,74 @@ fn plan_model_session_steps_with_llm(
     capabilities: &ModelMcpCapabilities,
     workdir: Option<&str>,
 ) -> Result<Vec<ModelSessionPlannedStep>, DesktopProtocolError> {
-    let planner_prompt = build_model_plan_prompt(prompt, capabilities);
     let parsed_provider = parse_provider(provider.unwrap_or("codex"));
-    let raw_plan = call_model(parsed_provider, planner_prompt.as_str(), workdir).map_err(|err| {
-        DesktopProtocolError::from(err.to_protocol_error())
-    })?;
-    let (steps, reason) = parse_llm_model_plan(raw_plan.as_str())
-        .map_err(|err| desktop_error_from_text(&err, "core.desktop.model.plan_parse_failed", false))?;
+    let mut last_error = String::new();
+    let mut previous_raw_plan = String::new();
 
-    if steps.is_empty() {
-        let reason = reason.unwrap_or_else(|| "AI 未给出可执行步骤".to_string());
-        return Err(desktop_error_from_text(
-            reason.as_str(),
-            "core.desktop.model.plan_empty",
-            false,
-        ));
+    for attempt in 1..=2 {
+        let planner_prompt = if attempt == 1 {
+            build_model_plan_prompt(prompt, capabilities)
+        } else {
+            build_model_plan_retry_prompt(
+                prompt,
+                capabilities,
+                last_error.as_str(),
+                previous_raw_plan.as_str(),
+            )
+        };
+        let raw_plan = call_model(parsed_provider, planner_prompt.as_str(), workdir).map_err(|err| {
+            DesktopProtocolError::from(err.to_protocol_error())
+        })?;
+        previous_raw_plan = raw_plan.clone();
+
+        let parsed = parse_llm_model_plan(raw_plan.as_str());
+        let (steps, reason) = match parsed {
+            Ok(value) => value,
+            Err(err) => {
+                last_error = format!("规划 JSON 非法: {}", err);
+                if attempt == 1 {
+                    continue;
+                }
+                return Err(desktop_error_from_text(
+                    last_error.as_str(),
+                    "core.desktop.model.plan_parse_failed",
+                    false,
+                ));
+            }
+        };
+
+        if steps.is_empty() {
+            last_error = reason.unwrap_or_else(|| "AI 未给出可执行步骤".to_string());
+            if attempt == 1 {
+                continue;
+            }
+            return Err(desktop_error_from_text(
+                last_error.as_str(),
+                "core.desktop.model.plan_empty",
+                false,
+            ));
+        }
+
+        if let Err(err) = validate_llm_model_plan_steps(&steps, prompt) {
+            last_error = format!("规划步骤校验失败: {}", err);
+            if attempt == 1 {
+                continue;
+            }
+            return Err(desktop_error_from_text(
+                last_error.as_str(),
+                "core.desktop.model.plan_invalid",
+                false,
+            ));
+        }
+
+        return Ok(steps);
     }
-    Ok(steps)
+
+    Err(desktop_error_from_text(
+        "模型步骤规划失败",
+        "core.desktop.model.plan_failed",
+        false,
+    ))
 }
 
 fn parse_first_number(input: &str) -> Option<f64> {
@@ -2595,12 +2750,14 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
     use super::{
         blender_series_supports_extension, bridge_boot_script_content, bridge_enable_and_save_expr,
         build_model_plan_prompt, build_ui_hint_from_protocol_error, is_bridge_unavailable_error,
-        parse_llm_model_plan, plan_model_steps, split_error_code_and_message, ModelMcpCapabilities,
-        PlannedModelStep,
+        parse_llm_model_plan, plan_model_steps, split_error_code_and_message,
+        validate_llm_model_plan_steps, ModelMcpCapabilities, PlannedModelStep,
     };
+    use zodileap_mcp_model::{ModelPlanBranch, ModelPlanOperationKind, ModelPlanRiskLevel, ModelSessionPlannedStep, ModelToolAction};
     use zodileap_mcp_common::ProtocolError;
 
     #[test]
@@ -2735,5 +2892,22 @@ mod tests {
         );
         assert!(prompt.contains("只能输出 JSON"));
         assert!(prompt.contains("不允许规则兜底"));
+    }
+
+    #[test]
+    fn should_reject_unrequested_rename_step_in_plan_validation() {
+        let steps = vec![ModelSessionPlannedStep::Tool {
+            action: ModelToolAction::RenameObject,
+            input: "rename".to_string(),
+            params: json!({"old_name":"Cube","new_name":"Cube_A"}),
+            operation_kind: ModelPlanOperationKind::Basic,
+            branch: ModelPlanBranch::Primary,
+            recoverable: true,
+            risk: ModelPlanRiskLevel::Low,
+            condition: None,
+        }];
+        let err = validate_llm_model_plan_steps(&steps, "创建一个正方体并贴图 /Users/yoho/Downloads/image.png")
+            .expect_err("rename without user intent should be rejected");
+        assert!(err.contains("不应规划 rename_object"));
     }
 }
