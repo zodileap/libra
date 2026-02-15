@@ -1805,6 +1805,51 @@ fn derive_selection_scope(lower: &str) -> &'static str {
     "selected"
 }
 
+/// 描述：识别“引用当前对象”且包含破坏性编辑语义的请求，用于规划前选择集预检查。
+fn is_destructive_selection_intent(lower: &str) -> bool {
+    if !has_selection_reference_intent(lower) {
+        return false;
+    }
+    is_translate_intent(lower)
+        || is_rotate_intent(lower)
+        || is_scale_intent(lower)
+        || [
+            "加厚",
+            "倒角",
+            "镜像",
+            "阵列",
+            "布尔",
+            "自动平滑",
+            "法线加权",
+            "减面",
+            "贴图",
+            "材质",
+            "solidify",
+            "bevel",
+            "mirror",
+            "array",
+            "boolean",
+            "smooth",
+            "weighted normal",
+            "decimate",
+            "texture",
+            "material",
+        ]
+        .iter()
+        .any(|key| lower.contains(key))
+}
+
+/// 描述：判断是否应在规划阶段阻断破坏性步骤（当引用对象但当前无 active/selected）。
+fn should_block_destructive_plan_for_empty_selection(
+    prompt_lower: &str,
+    snapshot: &SelectionContextSnapshot,
+) -> bool {
+    if !is_destructive_selection_intent(prompt_lower) {
+        return false;
+    }
+    snapshot.active_object.is_none() && snapshot.selected_objects.is_empty()
+}
+
 /// 描述：从步骤参数推断选择范围，兼容新旧参数（selection_scope / selected_only）。
 fn resolve_selection_scope_from_params(params: &serde_json::Value) -> &'static str {
     if let Some(scope) = params
@@ -2850,6 +2895,18 @@ fn execute_model_tool_with_bridge_upgrade(
         .map(|result| (result.message, result.output_path))
 }
 
+/// 描述：在规划前读取当前选择上下文，供“这个物体”类指令做安全预检查。
+fn fetch_selection_context_snapshot(
+    blender_bridge_addr: Option<String>,
+) -> Result<SelectionContextSnapshot, String> {
+    let result = execute_model_tool_result_with_bridge_upgrade(
+        ModelToolAction::GetSelectionContext,
+        json!({}),
+        blender_bridge_addr,
+    )?;
+    Ok(parse_selection_context_snapshot(&result.data))
+}
+
 #[tauri::command]
 fn run_model_session_command(
     app: tauri::AppHandle,
@@ -2887,12 +2944,7 @@ fn run_model_session_command(
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "codex".to_string());
-    let planned_steps = plan_model_session_steps_with_llm(
-        Some(normalized_provider.as_str()),
-        normalized_prompt,
-        &capabilities,
-        current_dir.as_deref(),
-    )?;
+    let prompt_lower = normalized_prompt.to_lowercase();
 
     {
         let mut map = store
@@ -2910,6 +2962,181 @@ fn run_model_session_command(
         session.last_provider = Some(normalized_provider.clone());
         session.last_output_dir = Some(output_dir_string.clone());
     }
+
+    if is_destructive_selection_intent(prompt_lower.as_str()) {
+        let required_scope = if has_active_reference_intent(prompt_lower.as_str()) {
+            "active"
+        } else {
+            "selected"
+        };
+        let snapshot = fetch_selection_context_snapshot(blender_bridge_addr.clone());
+        match snapshot {
+            Ok(snapshot)
+                if should_block_destructive_plan_for_empty_selection(prompt_lower.as_str(), &snapshot) =>
+            {
+                let snapshot_active = snapshot.active_object.clone();
+                let snapshot_selected = snapshot.selected_objects.clone();
+                let snapshot_selected_count = snapshot_selected.len();
+                let base_index = {
+                    let map = store
+                        .sessions
+                        .lock()
+                        .map_err(|_| DesktopProtocolError {
+                            code: "core.desktop.model.store_lock_failed".to_string(),
+                            message: "model session store lock poisoned".to_string(),
+                            suggestion: None,
+                            retryable: true,
+                        })?;
+                    map.get(&session_id).map(|state| state.steps.len()).unwrap_or(0)
+                };
+                let blocked_error = ProtocolError::new(
+                    "core.desktop.model.selection_required",
+                    "你引用了“这个物体/选中对象”，但当前没有可用选择目标。",
+                )
+                .with_suggestion("请先在 Blender 中选择目标对象，再点击“重试最近一步”");
+                let created_steps = vec![ModelStepRecord {
+                    index: base_index,
+                    code: "selection_target_confirmation".to_string(),
+                    status: ProtocolStepStatus::Manual,
+                    elapsed_ms: 0,
+                    summary: "执行前检查：需要先选择目标对象".to_string(),
+                    error: Some(blocked_error.clone()),
+                    data: Some(json!({
+                        "trace_id": trace_id,
+                        "step_code": "selection_target_confirmation",
+                        "operation_kind": "safety",
+                        "branch": "primary",
+                        "risk_level": "medium",
+                        "recoverable": false,
+                        "target_mode": required_scope,
+                        "target_names": [],
+                        "require_selection": true,
+                        "selection_snapshot": {
+                            "active_object": snapshot_active,
+                            "selected_objects": snapshot_selected,
+                            "selected_count": snapshot_selected_count,
+                        },
+                    })),
+                }];
+                let created_events = vec![ModelEventRecord {
+                    event: "selection_target_confirmation_required".to_string(),
+                    step_index: Some(base_index),
+                    timestamp_ms: now_millis(),
+                    message: "selection context missing for destructive prompt".to_string(),
+                }];
+                let ui_hint = build_selection_required_ui_hint(required_scope, &snapshot);
+                let (all_steps, all_events, all_assets) = {
+                    let mut map = store
+                        .sessions
+                        .lock()
+                        .map_err(|_| DesktopProtocolError {
+                            code: "core.desktop.model.store_lock_failed".to_string(),
+                            message: "model session store lock poisoned".to_string(),
+                            suggestion: None,
+                            retryable: true,
+                        })?;
+                    let session = map.entry(session_id.clone()).or_default();
+                    session.steps.extend(created_steps.clone());
+                    session.events.extend(created_events.clone());
+                    (
+                        session.steps.clone(),
+                        session.events.clone(),
+                        session.assets.clone(),
+                    )
+                };
+                return Ok(ModelSessionRunResponse {
+                    trace_id,
+                    message: "检测到你引用了当前对象，但尚未选择目标对象，请先选择后重试。".to_string(),
+                    steps: all_steps,
+                    events: all_events,
+                    assets: all_assets,
+                    exported_file: None,
+                    ui_hint: Some(ui_hint),
+                });
+            }
+            Err(err_text) => {
+                let protocol_error = protocol_error_from_text(
+                    err_text.as_str(),
+                    "core.desktop.model.selection_context_unavailable",
+                    true,
+                );
+                let ui_hint = build_ui_hint_from_protocol_error(&protocol_error);
+                let base_index = {
+                    let map = store
+                        .sessions
+                        .lock()
+                        .map_err(|_| DesktopProtocolError {
+                            code: "core.desktop.model.store_lock_failed".to_string(),
+                            message: "model session store lock poisoned".to_string(),
+                            suggestion: None,
+                            retryable: true,
+                        })?;
+                    map.get(&session_id).map(|state| state.steps.len()).unwrap_or(0)
+                };
+                let created_steps = vec![ModelStepRecord {
+                    index: base_index,
+                    code: "selection_context_unavailable".to_string(),
+                    status: ProtocolStepStatus::Manual,
+                    elapsed_ms: 0,
+                    summary: "无法读取当前选择上下文".to_string(),
+                    error: Some(protocol_error.clone()),
+                    data: Some(json!({
+                        "trace_id": trace_id,
+                        "step_code": "selection_context_unavailable",
+                        "operation_kind": "safety",
+                        "branch": "primary",
+                        "risk_level": "medium",
+                        "recoverable": true,
+                        "target_mode": required_scope,
+                        "target_names": [],
+                        "require_selection": true,
+                    })),
+                }];
+                let created_events = vec![ModelEventRecord {
+                    event: "selection_context_unavailable".to_string(),
+                    step_index: Some(base_index),
+                    timestamp_ms: now_millis(),
+                    message: protocol_error.message.clone(),
+                }];
+                let (all_steps, all_events, all_assets) = {
+                    let mut map = store
+                        .sessions
+                        .lock()
+                        .map_err(|_| DesktopProtocolError {
+                            code: "core.desktop.model.store_lock_failed".to_string(),
+                            message: "model session store lock poisoned".to_string(),
+                            suggestion: None,
+                            retryable: true,
+                        })?;
+                    let session = map.entry(session_id.clone()).or_default();
+                    session.steps.extend(created_steps.clone());
+                    session.events.extend(created_events.clone());
+                    (
+                        session.steps.clone(),
+                        session.events.clone(),
+                        session.assets.clone(),
+                    )
+                };
+                return Ok(ModelSessionRunResponse {
+                    trace_id,
+                    message: "无法确认当前选择上下文，请先确认 Blender Bridge 可用后再重试。".to_string(),
+                    steps: all_steps,
+                    events: all_events,
+                    assets: all_assets,
+                    exported_file: None,
+                    ui_hint,
+                });
+            }
+            Ok(_) => {}
+        }
+    }
+
+    let planned_steps = plan_model_session_steps_with_llm(
+        Some(normalized_provider.as_str()),
+        normalized_prompt,
+        &capabilities,
+        current_dir.as_deref(),
+    )?;
 
     if requires_safety_confirmation(&planned_steps) {
         let valid = confirmation_token
@@ -2998,7 +3225,6 @@ fn run_model_session_command(
         .filter(|item| item.branch().as_str() == "primary")
         .cloned()
         .collect();
-    let prompt_lower = normalized_prompt.to_lowercase();
     let mut selection_context_cache: Option<SelectionContextSnapshot> = None;
 
     for step in primary_steps {
@@ -3584,8 +3810,9 @@ mod tests {
     use super::{
         blender_series_supports_extension, bridge_boot_script_content, bridge_enable_and_save_expr,
         build_model_plan_prompt, build_ui_hint_from_protocol_error, is_bridge_unavailable_error,
-        parse_llm_model_plan, parse_selection_context_snapshot, parse_target_names_in_prompt,
-        plan_model_steps, required_selection_scope_for_step, selection_context_meets_scope,
+        is_destructive_selection_intent, parse_llm_model_plan, parse_selection_context_snapshot,
+        parse_target_names_in_prompt, plan_model_steps, required_selection_scope_for_step,
+        selection_context_meets_scope, should_block_destructive_plan_for_empty_selection,
         split_error_code_and_message, validate_llm_model_plan_steps, ModelMcpCapabilities,
         PlannedModelStep, SelectionContextSnapshot,
     };
@@ -3946,5 +4173,29 @@ mod tests {
         };
         assert!(selection_context_meets_scope(&selected, "selected"));
         assert!(selection_context_meets_scope(&selected, "active"));
+    }
+
+    #[test]
+    fn should_detect_destructive_selection_intent() {
+        assert!(is_destructive_selection_intent("对这个物体平移 1"));
+        assert!(!is_destructive_selection_intent("这个物体叫什么名字"));
+    }
+
+    #[test]
+    fn should_block_destructive_plan_when_selection_is_empty() {
+        let empty = SelectionContextSnapshot::default();
+        assert!(should_block_destructive_plan_for_empty_selection(
+            "对这个物体旋转 10 度",
+            &empty
+        ));
+
+        let selected = SelectionContextSnapshot {
+            active_object: Some("Cube".to_string()),
+            selected_objects: vec!["Cube".to_string()],
+        };
+        assert!(!should_block_destructive_plan_for_empty_selection(
+            "对这个物体旋转 10 度",
+            &selected
+        ));
     }
 }
