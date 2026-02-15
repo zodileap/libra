@@ -985,8 +985,8 @@ fn parse_first_number(input: &str) -> Option<f64> {
 
 /// 描述：从自然语言中提取路径参数，支持绝对路径和 Windows 路径。
 fn parse_path_in_prompt(prompt: &str) -> Option<String> {
-    for token in prompt.trim().split_whitespace() {
-        let candidate = token.trim_matches(|value| {
+    let normalize_candidate = |raw: &str| -> Option<String> {
+        let trimmed = raw.trim_matches(|value| {
             value == '"'
                 || value == '\''
                 || value == '`'
@@ -995,14 +995,8 @@ fn parse_path_in_prompt(prompt: &str) -> Option<String> {
                 || value == '‘'
                 || value == '’'
         });
-        if candidate.starts_with('/') || candidate.contains(":\\") {
-            return Some(candidate.to_string());
-        }
-    }
-    if let Some(start) = prompt.find('/') {
-        let remaining = &prompt[start..];
-        let end = remaining
-            .find(|value: char| {
+        let head = trimmed
+            .split(|value: char| {
                 value.is_whitespace()
                     || value == '"'
                     || value == '\''
@@ -1017,10 +1011,40 @@ fn parse_path_in_prompt(prompt: &str) -> Option<String> {
                     || value == '！'
                     || value == '？'
             })
-            .unwrap_or(remaining.len());
-        let candidate = remaining[..end].trim();
-        if !candidate.is_empty() {
-            return Some(candidate.to_string());
+            .next()
+            .unwrap_or("")
+            .trim_matches(|value| {
+                value == '"'
+                    || value == '\''
+                    || value == '`'
+                    || value == '“'
+                    || value == '”'
+                    || value == '‘'
+                    || value == '’'
+                    || value == '，'
+                    || value == '。'
+                    || value == '；'
+                    || value == '！'
+                    || value == '？'
+                    || value == ')'
+                    || value == ']'
+                    || value == '}'
+            });
+        if head.starts_with('/') || head.contains(":\\") {
+            return Some(head.to_string());
+        }
+        None
+    };
+
+    for token in prompt.trim().split_whitespace() {
+        if let Some(candidate) = normalize_candidate(token) {
+            return Some(candidate);
+        }
+    }
+    if let Some(start) = prompt.find('/') {
+        let remaining = &prompt[start..];
+        if let Some(candidate) = normalize_candidate(remaining) {
+            return Some(candidate);
         }
     }
     None
