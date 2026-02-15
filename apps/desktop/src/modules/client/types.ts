@@ -73,6 +73,10 @@ export interface BlenderBridgeEnsureResult {
   message: string;
 }
 
+export interface BlenderBridgeEnsureOptions {
+  forceInstall?: boolean;
+}
+
 export interface AgentLogEvent {
   trace_id: string;
   level: string;

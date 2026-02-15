@@ -611,8 +611,17 @@ def stop_bridge():
     print("[zodileap] blender bridge stopped")
 
 
+def _persist_user_preferences():
+    try:
+        if hasattr(bpy.ops.wm, "save_userpref"):
+            bpy.ops.wm.save_userpref()
+    except Exception as err:
+        print(f"[zodileap] save user preferences failed: {err}")
+
+
 def register():
     start_bridge()
+    _persist_user_preferences()
 
 
 def unregister():

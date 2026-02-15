@@ -33,6 +33,7 @@ import type {
   ModelEventRecord,
   ModelStepRecord,
   AiKeyItem,
+  BlenderBridgeEnsureOptions,
   BlenderBridgeEnsureResult,
   BlenderBridgeRuntime,
   ModelMcpCapabilities,
@@ -45,7 +46,7 @@ import type { WorkflowStepRecord, WorkflowUiHint } from "../workflow";
 interface SessionPageProps {
   modelMcpCapabilities: ModelMcpCapabilities;
   blenderBridgeRuntime: BlenderBridgeRuntime;
-  ensureBlenderBridge: () => Promise<BlenderBridgeEnsureResult>;
+  ensureBlenderBridge: (options?: BlenderBridgeEnsureOptions) => Promise<BlenderBridgeEnsureResult>;
   aiKeys: AiKeyItem[];
 }
 

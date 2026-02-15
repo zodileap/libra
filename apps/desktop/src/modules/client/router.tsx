@@ -9,6 +9,7 @@ import { SettingsGeneralPage } from "./pages/settings-general-page";
 import { ModelAgentSettingsPage } from "./pages/model-agent-settings-page";
 import type {
   AiKeyItem,
+  BlenderBridgeEnsureOptions,
   AuthAvailableAgentItem,
   BlenderBridgeEnsureResult,
   BlenderBridgeRuntime,
@@ -30,7 +31,7 @@ interface AuthState {
   aiKeys: AiKeyItem[];
   setAiKeys: (value: AiKeyItem[]) => void;
   blenderBridgeRuntime: BlenderBridgeRuntime;
-  ensureBlenderBridge: () => Promise<BlenderBridgeEnsureResult>;
+  ensureBlenderBridge: (options?: BlenderBridgeEnsureOptions) => Promise<BlenderBridgeEnsureResult>;
 }
 
 export function DesktopRouter({ auth }: { auth: AuthState }) {

@@ -10,6 +10,7 @@ import {
 } from "../workflow";
 import type { WorkflowDefinition } from "../workflow";
 import type {
+  BlenderBridgeEnsureOptions,
   BlenderBridgeEnsureResult,
   BlenderBridgeRuntime,
   ModelMcpCapabilities,
@@ -20,7 +21,7 @@ interface ModelAgentSettingsPageProps {
   modelMcpCapabilities: ModelMcpCapabilities;
   onModelMcpCapabilitiesChange: (value: ModelMcpCapabilities) => void;
   blenderBridgeRuntime: BlenderBridgeRuntime;
-  ensureBlenderBridge: () => Promise<BlenderBridgeEnsureResult>;
+  ensureBlenderBridge: (options?: BlenderBridgeEnsureOptions) => Promise<BlenderBridgeEnsureResult>;
 }
 
 interface CapabilitySettingItem {
@@ -214,8 +215,8 @@ export function ModelAgentSettingsPage({
             }
           >
             <AriButton
-              label={blenderBridgeRuntime.checking ? "检测中..." : "检测"}
-              onClick={() => void ensureBlenderBridge()}
+              label={blenderBridgeRuntime.checking ? "处理中..." : "检测并迁移到 Extension"}
+              onClick={() => void ensureBlenderBridge({ forceInstall: true })}
               disabled={blenderBridgeRuntime.checking}
             />
           </DeskSettingsRow>

@@ -17,6 +17,7 @@ import {
 import { DevDebugFloat } from "./modules/client/widgets/dev-debug-float";
 import type {
   AiKeyItem,
+  BlenderBridgeEnsureOptions,
   AuthAvailableAgentItem,
   BlenderBridgeEnsureResult,
   BlenderBridgeRuntime,
@@ -248,7 +249,7 @@ export default function App() {
     };
   }, [aiKeys]);
 
-  const ensureBlenderBridgeRuntime = useCallback(async () => {
+  const ensureBlenderBridgeRuntime = useCallback(async (options?: BlenderBridgeEnsureOptions) => {
     if (bridgeTaskRef.current) {
       return bridgeTaskRef.current;
     }
@@ -260,7 +261,7 @@ export default function App() {
         message: "正在检测 Blender Bridge...",
       });
 
-      const result = await ensureBlenderBridge();
+      const result = await ensureBlenderBridge(undefined, options);
       setBlenderBridgeRuntime({
         checking: false,
         ok: result.ok,

@@ -15,3 +15,4 @@ serde_json = "1"
 zodileap_mcp_model = { path = "../../../crates/core/mcp/model" }
 zodileap_agent_core = { path = "../../../crates/core/agent", features = ["with-mcp-model"] }
 zodileap_mcp_common = { path = "../../../crates/core/mcp/common" }
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
