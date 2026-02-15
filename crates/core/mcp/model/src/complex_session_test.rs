@@ -210,3 +210,57 @@ fn TestShouldPlanScaleObjectsWithAllScope() {
     });
     assert!(has_scale_all);
 }
+
+#[allow(non_snake_case)]
+/// 描述：验证“名为 A/B 的物体平移”会在 transform 参数中包含 target_names 过滤列表。
+#[test]
+fn TestShouldPlanTranslateObjectsWithTargetNames() {
+    let steps = plan_model_session_steps("对名为“Cube”和“Sphere”的物体平移 1");
+    let has_target_names = steps.iter().any(|item| {
+        if let ModelSessionPlannedStep::Tool { action, params, .. } = item {
+            let names = params
+                .get("target_names")
+                .and_then(|value| value.as_array())
+                .map(|items| items.len())
+                .unwrap_or(0);
+            return *action == ModelToolAction::TranslateObjects && names == 2;
+        }
+        false
+    });
+    assert!(has_target_names);
+}
+
+#[allow(non_snake_case)]
+/// 描述：验证 transform 步骤 trace 会补充 selection_scope 与 single/multi/all 观测字段。
+#[test]
+fn TestShouldBuildSelectionScopeTracePayload() {
+    let step = ModelSessionPlannedStep::Tool {
+        action: ModelToolAction::TranslateObjects,
+        input: "平移".to_string(),
+        params: json!({
+            "delta": [0.2, 0.0, 0.0],
+            "selection_scope": "selected",
+            "target_names": ["Cube", "Sphere"]
+        }),
+        operation_kind: ModelPlanOperationKind::BatchTransform,
+        branch: ModelPlanBranch::Primary,
+        recoverable: true,
+        risk: ModelPlanRiskLevel::Low,
+        condition: None,
+    };
+    let trace = step.trace_payload();
+    assert_eq!(
+        trace
+            .get("selection_scope")
+            .and_then(|value| value.as_str())
+            .unwrap_or(""),
+        "selected"
+    );
+    assert_eq!(
+        trace
+            .get("selection_scope_trace")
+            .and_then(|value| value.as_str())
+            .unwrap_or(""),
+        "multi"
+    );
+}

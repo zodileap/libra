@@ -46,6 +46,30 @@ def _editable_objects(selected_only=False):
     return [obj for obj in objects if obj.type == "MESH"]
 
 
+def _parse_target_names(payload):
+    if not isinstance(payload, dict):
+        return []
+    raw_names = payload.get("target_names")
+    if raw_names is None:
+        return []
+    if not isinstance(raw_names, (list, tuple)):
+        raise BridgeError(
+            "invalid_args",
+            "target_names must be a non-empty string array",
+        )
+    names = []
+    for item in raw_names:
+        name = str(item or "").strip()
+        if name:
+            names.append(name)
+    if not names:
+        raise BridgeError(
+            "invalid_args",
+            "target_names must be a non-empty string array",
+        )
+    return names
+
+
 def _resolve_transform_targets(payload):
     if not isinstance(payload, dict):
         payload = {}
@@ -59,32 +83,47 @@ def _resolve_transform_targets(payload):
     if scope == "active":
         active = bpy.context.view_layer.objects.active
         if active and active.type == "MESH":
-            return [active], scope
-        selected = [obj for obj in bpy.context.selected_objects if obj.type == "MESH"]
-        if selected:
-            return [selected[0]], scope
-        raise BridgeError(
-            "no_target_object",
-            "no active mesh object found for selection_scope=active",
-            "请先在 Blender 中激活一个可编辑对象",
-        )
-    if scope == "selected":
+            targets = [active]
+        else:
+            selected = [obj for obj in bpy.context.selected_objects if obj.type == "MESH"]
+            if selected:
+                targets = [selected[0]]
+            else:
+                raise BridgeError(
+                    "no_target_object",
+                    "no active mesh object found for selection_scope=active",
+                    "请先在 Blender 中激活一个可编辑对象",
+                )
+    elif scope == "selected":
         targets = [obj for obj in bpy.context.selected_objects if obj.type == "MESH"]
-        if targets:
-            return targets, scope
-        raise BridgeError(
-            "no_target_object",
-            "no selected mesh objects found for selection_scope=selected",
-            "请先在 Blender 中选中需要操作的对象",
-        )
-    if scope == "all":
+        if not targets:
+            raise BridgeError(
+                "no_target_object",
+                "no selected mesh objects found for selection_scope=selected",
+                "请先在 Blender 中选中需要操作的对象",
+            )
+    elif scope == "all":
         targets = [obj for obj in bpy.data.objects if obj.type == "MESH"]
-        if targets:
-            return targets, scope
-        raise BridgeError("no_target_object", "no mesh objects found in current scene")
+        if not targets:
+            raise BridgeError("no_target_object", "no mesh objects found in current scene")
+    else:
+        raise BridgeError(
+            "invalid_args",
+            f"invalid selection_scope `{scope}`, expected active/selected/all",
+        )
+
+    target_names = _parse_target_names(payload)
+    if not target_names:
+        return targets, scope
+
+    target_set = set(target_names)
+    filtered = [obj for obj in targets if obj.name in target_set]
+    if filtered:
+        return filtered, scope
     raise BridgeError(
-        "invalid_args",
-        f"invalid selection_scope `{scope}`, expected active/selected/all",
+        "no_target_object",
+        f"none of target_names matched under selection_scope={scope}",
+        "请确认 target_names 中的对象名称，并检查选择范围是否正确",
     )
 
 

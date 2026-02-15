@@ -328,6 +328,39 @@ fn validate_tool_request(request: &ModelToolRequest) -> McpResult<()> {
         Ok(())
     };
 
+    // 描述：校验可选目标对象名数组，确保每项均为非空字符串。
+    let validate_target_names = || -> McpResult<()> {
+        let Some(value) = request.params.get("target_names") else {
+            return Ok(());
+        };
+        let names = value.as_array().ok_or_else(|| {
+            McpError::new(
+                "mcp.model.tool.target_names_invalid",
+                "target_names must be an array of non-empty strings",
+            )
+        })?;
+        if names.is_empty() {
+            return Err(McpError::new(
+                "mcp.model.tool.target_names_empty",
+                "target_names cannot be empty when provided",
+            ));
+        }
+        for item in names {
+            let valid = item
+                .as_str()
+                .map(str::trim)
+                .map(|name| !name.is_empty())
+                .unwrap_or(false);
+            if !valid {
+                return Err(McpError::new(
+                    "mcp.model.tool.target_names_invalid",
+                    "target_names must contain only non-empty strings",
+                ));
+            }
+        }
+        Ok(())
+    };
+
     match request.action {
         ModelToolAction::AddCube => {
             let size = request
@@ -420,10 +453,12 @@ fn validate_tool_request(request: &ModelToolRequest) -> McpResult<()> {
         }
         ModelToolAction::TranslateObjects => {
             validate_selection_scope()?;
+            validate_target_names()?;
             validate_vec3("delta", -10000.0, 10000.0, "mcp.model.tool.translate_delta")?;
         }
         ModelToolAction::RotateObjects => {
             validate_selection_scope()?;
+            validate_target_names()?;
             validate_vec3(
                 "delta_euler",
                 -3600.0,
@@ -433,6 +468,7 @@ fn validate_tool_request(request: &ModelToolRequest) -> McpResult<()> {
         }
         ModelToolAction::ScaleObjects => {
             validate_selection_scope()?;
+            validate_target_names()?;
             let factor = request.params.get("factor").ok_or_else(|| {
                 McpError::new(
                     "mcp.model.tool.scale_factor_missing",
@@ -634,6 +670,30 @@ mod tests {
         let ok = validate_tool_request(&ModelToolRequest {
             action: ModelToolAction::ScaleObjects,
             params: serde_json::json!({ "factor": [1.1, 1.0, 0.9], "selection_scope": "selected" }),
+            blender_bridge_addr: None,
+            timeout_secs: None,
+        });
+        assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn transform_tool_should_validate_target_names() {
+        let err = validate_tool_request(&ModelToolRequest {
+            action: ModelToolAction::TranslateObjects,
+            params: serde_json::json!({ "delta": [0.1, 0.0, 0.0], "target_names": [] }),
+            blender_bridge_addr: None,
+            timeout_secs: None,
+        })
+        .expect_err("target_names empty should fail");
+        assert!(err.to_string().contains("target_names"));
+
+        let ok = validate_tool_request(&ModelToolRequest {
+            action: ModelToolAction::RotateObjects,
+            params: serde_json::json!({
+                "delta_euler": [0.1, 0.0, 0.0],
+                "selection_scope": "selected",
+                "target_names": ["Cube", "Cube.001"]
+            }),
             blender_bridge_addr: None,
             timeout_secs: None,
         });

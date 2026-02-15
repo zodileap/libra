@@ -1200,9 +1200,9 @@ fn build_model_plan_prompt(prompt: &str, capabilities: &ModelMcpCapabilities) ->
 8) 工具动作参数必须完整：
    - select_objects: params.names 必须是非空数组
    - rename_object: params.old_name 与 params.new_name 必须非空
-   - translate_objects: params.delta 必须是长度为3的数组；当用户提到“这个物体/选中对象”时必须设置 params.selection_scope=active|selected
-   - rotate_objects: params.delta_euler 必须是长度为3的数组；遵循同样的 selection_scope 规则
-   - scale_objects: params.factor 必须是数字或长度为3数组；遵循同样的 selection_scope 规则
+   - translate_objects: params.delta 必须是长度为3的数组；当用户提到“这个物体/选中对象”时必须设置 params.selection_scope=active|selected；如需按名称过滤可传 params.target_names（非空字符串数组）
+   - rotate_objects: params.delta_euler 必须是长度为3的数组；遵循同样的 selection_scope / target_names 规则
+   - scale_objects: params.factor 必须是数字或长度为3数组；遵循同样的 selection_scope / target_names 规则
    - open_file: params.path 必须非空
    - apply_texture_image: params.path 必须非空
 
@@ -1427,6 +1427,30 @@ fn validate_llm_model_plan_steps(
         }
         Ok(())
     };
+    let ensure_target_names = |params: &serde_json::Value, action_name: &str| -> Result<(), String> {
+        let Some(value) = params.get("target_names") else {
+            return Ok(());
+        };
+        let names = value
+            .as_array()
+            .ok_or_else(|| format!("{} 的 params.target_names 必须是非空字符串数组", action_name))?;
+        if names.is_empty() {
+            return Err(format!("{} 的 params.target_names 不能为空数组", action_name));
+        }
+        let valid = names.iter().all(|item| {
+            item.as_str()
+                .map(str::trim)
+                .map(|name| !name.is_empty())
+                .unwrap_or(false)
+        });
+        if !valid {
+            return Err(format!(
+                "{} 的 params.target_names 必须全部为非空字符串",
+                action_name
+            ));
+        }
+        Ok(())
+    };
 
     for step in steps {
         let ModelSessionPlannedStep::Tool { action, params, .. } = step else {
@@ -1480,6 +1504,7 @@ fn validate_llm_model_plan_steps(
                     return Err("translate_objects 的 params.delta 必须是长度为3的数字数组".to_string());
                 }
                 ensure_selection_scoped(params, "translate_objects")?;
+                ensure_target_names(params, "translate_objects")?;
             }
             ModelToolAction::RotateObjects => {
                 let delta = params
@@ -1490,6 +1515,7 @@ fn validate_llm_model_plan_steps(
                     return Err("rotate_objects 的 params.delta_euler 必须是长度为3的数字数组".to_string());
                 }
                 ensure_selection_scoped(params, "rotate_objects")?;
+                ensure_target_names(params, "rotate_objects")?;
             }
             ModelToolAction::ScaleObjects => {
                 let factor = params
@@ -1504,6 +1530,7 @@ fn validate_llm_model_plan_steps(
                     return Err("scale_objects 的 params.factor 必须是数字或长度为3的数字数组".to_string());
                 }
                 ensure_selection_scoped(params, "scale_objects")?;
+                ensure_target_names(params, "scale_objects")?;
             }
             ModelToolAction::OpenFile => {
                 let path = params
@@ -1929,6 +1956,122 @@ fn parse_scale_factor(prompt: &str) -> f64 {
     parse_first_number(prompt).unwrap_or(1.1).clamp(0.001, 1000.0)
 }
 
+/// 描述：从文本中提取被引号包裹的片段，供目标对象名解析复用。
+fn collect_wrapped_segments(prompt: &str, open: char, close: char) -> Vec<String> {
+    let mut result: Vec<String> = Vec::new();
+    let mut cursor = prompt;
+    while let Some(start_idx) = cursor.find(open) {
+        let after_open_idx = start_idx + open.len_utf8();
+        let after_open = &cursor[after_open_idx..];
+        if let Some(end_idx) = after_open.find(close) {
+            let candidate = after_open[..end_idx].trim();
+            if !candidate.is_empty() {
+                result.push(candidate.to_string());
+            }
+            let next_idx = end_idx + close.len_utf8();
+            cursor = &after_open[next_idx..];
+            continue;
+        }
+        break;
+    }
+    result
+}
+
+/// 描述：从自然语言中提取“按名称过滤”的对象名列表，命中 `名为/叫做/named` 或引号片段时生效。
+fn parse_target_names_in_prompt(prompt: &str, lower: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    let markers = ["名为", "叫做", "named "];
+    for marker in markers {
+        if let Some(start) = lower.find(marker) {
+            let mut segment = prompt[start + marker.len()..].to_string();
+            for stop in ["，", "。", "；", "!", "！", "?", "？", "\n"] {
+                if let Some(idx) = segment.find(stop) {
+                    segment = segment[..idx].to_string();
+                }
+            }
+            let normalized = segment
+                .replace("和", ",")
+                .replace("、", ",")
+                .replace("，", ",")
+                .replace("及", ",")
+                .replace("与", ",")
+                .replace("/", ",");
+            for raw_part in normalized.split(',') {
+                let mut candidate = raw_part
+                    .trim_matches(|ch| {
+                        ch == '"'
+                            || ch == '\''
+                            || ch == '`'
+                            || ch == '“'
+                            || ch == '”'
+                            || ch == '「'
+                            || ch == '」'
+                    })
+                    .trim()
+                    .to_string();
+                for suffix in [
+                    "的物体",
+                    "的对象",
+                    "物体",
+                    "对象",
+                    "进行",
+                    "执行",
+                    "平移",
+                    "旋转",
+                    "缩放",
+                    "move",
+                    "translate",
+                    "rotate",
+                    "scale",
+                ] {
+                    if let Some(idx) = candidate.to_lowercase().find(suffix) {
+                        candidate = candidate[..idx].trim().to_string();
+                    }
+                }
+                candidate = candidate
+                    .trim_matches(|ch| {
+                        ch == '"'
+                            || ch == '\''
+                            || ch == '`'
+                            || ch == '“'
+                            || ch == '”'
+                            || ch == '「'
+                            || ch == '」'
+                    })
+                    .trim()
+                    .to_string();
+                if !candidate.is_empty() && !candidate.contains('/') && !candidate.contains('\\') {
+                    names.push(candidate);
+                }
+            }
+        }
+    }
+
+    if names.is_empty() {
+        let mut quoted = Vec::new();
+        quoted.extend(collect_wrapped_segments(prompt, '“', '”'));
+        quoted.extend(collect_wrapped_segments(prompt, '「', '」'));
+        quoted.extend(collect_wrapped_segments(prompt, '"', '"'));
+        quoted.extend(collect_wrapped_segments(prompt, '\'', '\''));
+        quoted.extend(collect_wrapped_segments(prompt, '`', '`'));
+        for candidate in quoted {
+            let trimmed = candidate.trim();
+            if trimmed.is_empty() || trimmed.contains('/') || trimmed.contains('\\') {
+                continue;
+            }
+            names.push(trimmed.to_string());
+        }
+    }
+
+    let mut deduped: Vec<String> = Vec::new();
+    for name in names {
+        if !deduped.iter().any(|existing| existing == &name) {
+            deduped.push(name);
+        }
+    }
+    deduped
+}
+
 fn parse_path_in_prompt(prompt: &str) -> Option<String> {
     let normalize_candidate = |raw: &str| -> Option<String> {
         let trimmed = raw.trim_matches(|value| {
@@ -2212,42 +2355,63 @@ fn plan_model_steps(prompt: &str) -> Vec<PlannedModelStep> {
         let delta = parse_translate_delta(prompt, &lower);
         let selection_scope = derive_selection_scope(&lower);
         let selected_only = selection_scope != "all";
+        let target_names = parse_target_names_in_prompt(prompt, &lower);
+        let mut params = json!({
+            "delta": [delta.0, delta.1, delta.2],
+            "selection_scope": selection_scope,
+            "selected_only": selected_only,
+        });
+        if !target_names.is_empty() {
+            if let Some(raw) = params.as_object_mut() {
+                raw.insert("target_names".to_string(), json!(target_names));
+            }
+        }
         steps.push(PlannedModelStep::Tool {
             action: ModelToolAction::TranslateObjects,
             input: "平移对象".to_string(),
-            params: json!({
-                "delta": [delta.0, delta.1, delta.2],
-                "selection_scope": selection_scope,
-                "selected_only": selected_only,
-            }),
+            params,
         });
     }
     if is_rotate_intent(&lower) {
         let delta = parse_rotate_delta(prompt, &lower);
         let selection_scope = derive_selection_scope(&lower);
         let selected_only = selection_scope != "all";
+        let target_names = parse_target_names_in_prompt(prompt, &lower);
+        let mut params = json!({
+            "delta_euler": [delta.0, delta.1, delta.2],
+            "selection_scope": selection_scope,
+            "selected_only": selected_only,
+        });
+        if !target_names.is_empty() {
+            if let Some(raw) = params.as_object_mut() {
+                raw.insert("target_names".to_string(), json!(target_names));
+            }
+        }
         steps.push(PlannedModelStep::Tool {
             action: ModelToolAction::RotateObjects,
             input: "旋转对象".to_string(),
-            params: json!({
-                "delta_euler": [delta.0, delta.1, delta.2],
-                "selection_scope": selection_scope,
-                "selected_only": selected_only,
-            }),
+            params,
         });
     }
     if is_scale_intent(&lower) {
         let factor = parse_scale_factor(prompt);
         let selection_scope = derive_selection_scope(&lower);
         let selected_only = selection_scope != "all";
+        let target_names = parse_target_names_in_prompt(prompt, &lower);
+        let mut params = json!({
+            "factor": factor,
+            "selection_scope": selection_scope,
+            "selected_only": selected_only,
+        });
+        if !target_names.is_empty() {
+            if let Some(raw) = params.as_object_mut() {
+                raw.insert("target_names".to_string(), json!(target_names));
+            }
+        }
         steps.push(PlannedModelStep::Tool {
             action: ModelToolAction::ScaleObjects,
             input: "缩放对象".to_string(),
-            params: json!({
-                "factor": factor,
-                "selection_scope": selection_scope,
-                "selected_only": selected_only,
-            }),
+            params,
         });
     }
     if ["统一尺度", "normalize scale", "应用缩放"]
@@ -3308,8 +3472,8 @@ mod tests {
     use super::{
         blender_series_supports_extension, bridge_boot_script_content, bridge_enable_and_save_expr,
         build_model_plan_prompt, build_ui_hint_from_protocol_error, is_bridge_unavailable_error,
-        parse_llm_model_plan, parse_selection_context_snapshot, plan_model_steps,
-        required_selection_scope_for_step, selection_context_meets_scope,
+        parse_llm_model_plan, parse_selection_context_snapshot, parse_target_names_in_prompt,
+        plan_model_steps, required_selection_scope_for_step, selection_context_meets_scope,
         split_error_code_and_message, validate_llm_model_plan_steps, ModelMcpCapabilities,
         PlannedModelStep, SelectionContextSnapshot,
     };
@@ -3486,6 +3650,30 @@ mod tests {
     }
 
     #[test]
+    fn should_parse_target_names_in_prompt() {
+        let names = parse_target_names_in_prompt("对名为“Cube”和“Sphere”的物体平移 1", "对名为“cube”和“sphere”的物体平移 1");
+        assert_eq!(names, vec!["Cube".to_string(), "Sphere".to_string()]);
+    }
+
+    #[test]
+    fn should_plan_translate_with_target_names_filter() {
+        let steps = plan_model_steps("对名为“Cube”和“Sphere”的物体平移 1");
+        let has_target_filter = steps.iter().any(|step| {
+            matches!(
+                step,
+                PlannedModelStep::Tool { action, params, .. }
+                if action.as_str() == "translate_objects"
+                    && params
+                        .get("target_names")
+                        .and_then(|value| value.as_array())
+                        .map(|items| items.len() == 2)
+                        .unwrap_or(false)
+            )
+        });
+        assert!(has_target_filter, "名词过滤场景应输出 translate_objects.target_names");
+    }
+
+    #[test]
     fn should_parse_llm_model_plan_json() {
         let raw = r#"{
           "steps": [
@@ -3567,6 +3755,23 @@ mod tests {
         let err = validate_llm_model_plan_steps(&steps, "对这个物体旋转 30 度")
             .expect_err("rotate with selection_scope=all should be rejected");
         assert!(err.contains("selection_scope=all"));
+    }
+
+    #[test]
+    fn should_reject_transform_with_invalid_target_names() {
+        let steps = vec![ModelSessionPlannedStep::Tool {
+            action: ModelToolAction::TranslateObjects,
+            input: "平移".to_string(),
+            params: json!({"delta":[0.5,0,0],"selection_scope":"selected","target_names":["", 1]}),
+            operation_kind: ModelPlanOperationKind::BatchTransform,
+            branch: ModelPlanBranch::Primary,
+            recoverable: true,
+            risk: ModelPlanRiskLevel::Low,
+            condition: None,
+        }];
+        let err = validate_llm_model_plan_steps(&steps, "对名为 Cube 的物体平移")
+            .expect_err("invalid target_names should be rejected");
+        assert!(err.contains("target_names"));
     }
 
     #[test]

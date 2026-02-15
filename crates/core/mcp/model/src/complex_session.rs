@@ -166,14 +166,44 @@ impl ModelSessionPlannedStep {
 
     /// 描述：构建步骤观测数据，用于 trace、调试面板和日志一致展示。
     pub fn trace_payload(&self) -> Value {
-        json!({
+        let mut payload = json!({
             "step_code": self.code(),
             "operation_kind": self.operation_kind().as_str(),
             "branch": self.branch().as_str(),
             "risk_level": self.risk_level().as_str(),
             "recoverable": self.recoverable(),
             "condition": self.condition(),
-        })
+        });
+        if let Self::Tool { action, params, .. } = self {
+            if let Some(raw) = payload.as_object_mut() {
+                raw.insert("action".to_string(), json!(action.as_str()));
+                if let Some(scope) = params.get("selection_scope").and_then(|value| value.as_str()) {
+                    raw.insert("selection_scope".to_string(), json!(scope));
+                    let trace_scope = match scope {
+                        "active" => "active",
+                        "all" => "all",
+                        "selected" => {
+                            let name_count = params
+                                .get("target_names")
+                                .and_then(|value| value.as_array())
+                                .map(|items| items.len())
+                                .unwrap_or(0);
+                            if name_count <= 1 {
+                                "single"
+                            } else {
+                                "multi"
+                            }
+                        }
+                        _ => "single",
+                    };
+                    raw.insert("selection_scope_trace".to_string(), json!(trace_scope));
+                }
+                if let Some(names) = params.get("target_names") {
+                    raw.insert("target_names".to_string(), names.clone());
+                }
+            }
+        }
+        payload
     }
 }
 
@@ -765,14 +795,21 @@ fn plan_basic_steps(prompt: &str, lower: &str) -> Vec<ModelSessionPlannedStep> {
         let delta = parse_translate_delta(prompt, lower);
         let selection_scope = derive_selection_scope(lower);
         let selected_only = selection_scope != "all";
+        let target_names = parse_target_names_in_prompt(prompt, lower);
+        let mut params = json!({
+            "delta": [delta.0, delta.1, delta.2],
+            "selection_scope": selection_scope,
+            "selected_only": selected_only,
+        });
+        if !target_names.is_empty() {
+            if let Some(raw) = params.as_object_mut() {
+                raw.insert("target_names".to_string(), json!(target_names));
+            }
+        }
         steps.push(ModelSessionPlannedStep::Tool {
             action: ModelToolAction::TranslateObjects,
             input: "平移对象".to_string(),
-            params: json!({
-                "delta": [delta.0, delta.1, delta.2],
-                "selection_scope": selection_scope,
-                "selected_only": selected_only,
-            }),
+            params,
             operation_kind: ModelPlanOperationKind::BatchTransform,
             branch: ModelPlanBranch::Primary,
             recoverable: true,
@@ -784,14 +821,21 @@ fn plan_basic_steps(prompt: &str, lower: &str) -> Vec<ModelSessionPlannedStep> {
         let delta = parse_rotate_delta(prompt, lower);
         let selection_scope = derive_selection_scope(lower);
         let selected_only = selection_scope != "all";
+        let target_names = parse_target_names_in_prompt(prompt, lower);
+        let mut params = json!({
+            "delta_euler": [delta.0, delta.1, delta.2],
+            "selection_scope": selection_scope,
+            "selected_only": selected_only,
+        });
+        if !target_names.is_empty() {
+            if let Some(raw) = params.as_object_mut() {
+                raw.insert("target_names".to_string(), json!(target_names));
+            }
+        }
         steps.push(ModelSessionPlannedStep::Tool {
             action: ModelToolAction::RotateObjects,
             input: "旋转对象".to_string(),
-            params: json!({
-                "delta_euler": [delta.0, delta.1, delta.2],
-                "selection_scope": selection_scope,
-                "selected_only": selected_only,
-            }),
+            params,
             operation_kind: ModelPlanOperationKind::BatchTransform,
             branch: ModelPlanBranch::Primary,
             recoverable: true,
@@ -803,14 +847,21 @@ fn plan_basic_steps(prompt: &str, lower: &str) -> Vec<ModelSessionPlannedStep> {
         let factor = parse_scale_factor(prompt);
         let selection_scope = derive_selection_scope(lower);
         let selected_only = selection_scope != "all";
+        let target_names = parse_target_names_in_prompt(prompt, lower);
+        let mut params = json!({
+            "factor": factor,
+            "selection_scope": selection_scope,
+            "selected_only": selected_only,
+        });
+        if !target_names.is_empty() {
+            if let Some(raw) = params.as_object_mut() {
+                raw.insert("target_names".to_string(), json!(target_names));
+            }
+        }
         steps.push(ModelSessionPlannedStep::Tool {
             action: ModelToolAction::ScaleObjects,
             input: "缩放对象".to_string(),
-            params: json!({
-                "factor": factor,
-                "selection_scope": selection_scope,
-                "selected_only": selected_only,
-            }),
+            params,
             operation_kind: ModelPlanOperationKind::BatchTransform,
             branch: ModelPlanBranch::Primary,
             recoverable: true,
@@ -1231,6 +1282,121 @@ fn is_scale_intent(lower: &str) -> bool {
 /// 描述：提取统一缩放因子，未提供时使用默认值。
 fn parse_scale_factor(prompt: &str) -> f64 {
     parse_first_number(prompt).unwrap_or(1.1).clamp(0.001, 1000.0)
+}
+
+/// 描述：提取被指定符号包裹的片段，用于对象名解析。
+fn collect_wrapped_segments(prompt: &str, open: char, close: char) -> Vec<String> {
+    let mut result: Vec<String> = Vec::new();
+    let mut cursor = prompt;
+    while let Some(start_idx) = cursor.find(open) {
+        let after_open_idx = start_idx + open.len_utf8();
+        let after_open = &cursor[after_open_idx..];
+        if let Some(end_idx) = after_open.find(close) {
+            let candidate = after_open[..end_idx].trim();
+            if !candidate.is_empty() {
+                result.push(candidate.to_string());
+            }
+            let next_idx = end_idx + close.len_utf8();
+            cursor = &after_open[next_idx..];
+            continue;
+        }
+        break;
+    }
+    result
+}
+
+/// 描述：从提示词中解析按名称过滤目标对象列表，支持“名为/叫做/named”和引号片段。
+fn parse_target_names_in_prompt(prompt: &str, lower: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for marker in ["名为", "叫做", "named "] {
+        if let Some(start) = lower.find(marker) {
+            let mut segment = prompt[start + marker.len()..].to_string();
+            for stop in ["，", "。", "；", "!", "！", "?", "？", "\n"] {
+                if let Some(idx) = segment.find(stop) {
+                    segment = segment[..idx].to_string();
+                }
+            }
+            let normalized = segment
+                .replace("和", ",")
+                .replace("、", ",")
+                .replace("，", ",")
+                .replace("及", ",")
+                .replace("与", ",")
+                .replace("/", ",");
+            for raw_part in normalized.split(',') {
+                let mut candidate = raw_part
+                    .trim_matches(|ch| {
+                        ch == '"'
+                            || ch == '\''
+                            || ch == '`'
+                            || ch == '“'
+                            || ch == '”'
+                            || ch == '「'
+                            || ch == '」'
+                    })
+                    .trim()
+                    .to_string();
+                for suffix in [
+                    "的物体",
+                    "的对象",
+                    "物体",
+                    "对象",
+                    "进行",
+                    "执行",
+                    "平移",
+                    "旋转",
+                    "缩放",
+                    "move",
+                    "translate",
+                    "rotate",
+                    "scale",
+                ] {
+                    if let Some(idx) = candidate.to_lowercase().find(suffix) {
+                        candidate = candidate[..idx].trim().to_string();
+                    }
+                }
+                candidate = candidate
+                    .trim_matches(|ch| {
+                        ch == '"'
+                            || ch == '\''
+                            || ch == '`'
+                            || ch == '“'
+                            || ch == '”'
+                            || ch == '「'
+                            || ch == '」'
+                    })
+                    .trim()
+                    .to_string();
+                if !candidate.is_empty() && !candidate.contains('/') && !candidate.contains('\\') {
+                    names.push(candidate);
+                }
+            }
+        }
+    }
+
+    if names.is_empty() {
+        let mut quoted = Vec::new();
+        quoted.extend(collect_wrapped_segments(prompt, '“', '”'));
+        quoted.extend(collect_wrapped_segments(prompt, '「', '」'));
+        quoted.extend(collect_wrapped_segments(prompt, '"', '"'));
+        quoted.extend(collect_wrapped_segments(prompt, '\'', '\''));
+        quoted.extend(collect_wrapped_segments(prompt, '`', '`'));
+        for candidate in quoted {
+            let trimmed = candidate.trim();
+            if trimmed.is_empty() || trimmed.contains('/') || trimmed.contains('\\') {
+                continue;
+            }
+            names.push(trimmed.to_string());
+        }
+    }
+
+    let mut deduped: Vec<String> = Vec::new();
+    for name in names {
+        if !deduped.iter().any(|existing| existing == &name) {
+            deduped.push(name);
+        }
+    }
+    deduped
 }
 
 /// 描述：从自然语言中提取路径参数，支持绝对路径和 Windows 路径。
