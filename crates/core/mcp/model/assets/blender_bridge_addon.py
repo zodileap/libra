@@ -372,6 +372,95 @@ def _check_texture_paths(payload):
     }
 
 
+def _apply_texture_image(payload):
+    path = str(payload.get("path") or "").strip()
+    if not path:
+        raise BridgeError("invalid_args", "apply_texture_image requires `path`")
+    abs_path = os.path.abspath(path)
+    if not os.path.exists(abs_path):
+        raise BridgeError("file_not_found", f"file not found: {abs_path}")
+
+    object_name = str(payload.get("object") or "").strip()
+    if object_name:
+        obj = _find_object(object_name)
+    else:
+        obj = _find_object(_active_or_selected_name(payload))
+    if obj.type != "MESH":
+        raise BridgeError("invalid_target", f"object `{obj.name}` is not mesh")
+
+    image = bpy.data.images.load(abs_path, check_existing=True)
+
+    material = obj.active_material
+    if material is None:
+        material = bpy.data.materials.new(name=f"ZL_Auto_{obj.name}")
+        if obj.data.materials:
+            obj.data.materials[0] = material
+        else:
+            obj.data.materials.append(material)
+
+    material.use_nodes = True
+    nodes = material.node_tree.nodes
+    links = material.node_tree.links
+
+    bsdf = nodes.get("Principled BSDF")
+    if bsdf is None:
+        for node in nodes:
+            if node.type == "BSDF_PRINCIPLED":
+                bsdf = node
+                break
+    if bsdf is None:
+        bsdf = nodes.new(type="ShaderNodeBsdfPrincipled")
+        bsdf.location = (0, 0)
+
+    output = nodes.get("Material Output")
+    if output is None:
+        for node in nodes:
+            if node.type == "OUTPUT_MATERIAL":
+                output = node
+                break
+    if output is None:
+        output = nodes.new(type="ShaderNodeOutputMaterial")
+        output.location = (300, 0)
+
+    if bsdf.outputs.get("BSDF") and output.inputs.get("Surface"):
+        has_surface_link = False
+        for link in links:
+            if (
+                link.from_node == bsdf
+                and link.to_node == output
+                and link.to_socket == output.inputs.get("Surface")
+            ):
+                has_surface_link = True
+                break
+        if not has_surface_link:
+            links.new(bsdf.outputs.get("BSDF"), output.inputs.get("Surface"))
+
+    texture_node = None
+    for node in nodes:
+        if node.type == "TEX_IMAGE" and node.label == "ZL_BaseColorTexture":
+            texture_node = node
+            break
+    if texture_node is None:
+        texture_node = nodes.new(type="ShaderNodeTexImage")
+        texture_node.label = "ZL_BaseColorTexture"
+        texture_node.name = "ZL_BaseColorTexture"
+        texture_node.location = (-360, 0)
+    texture_node.image = image
+
+    base_color = bsdf.inputs.get("Base Color")
+    color_output = texture_node.outputs.get("Color")
+    if base_color and color_output:
+        for link in list(base_color.links):
+            links.remove(link)
+        links.new(color_output, base_color)
+
+    return {
+        "ok": True,
+        "message": f"applied texture `{abs_path}` to `{obj.name}`",
+        "data": {"object": obj.name, "material": material.name, "path": abs_path},
+    }
+
+
 def _pack_textures(_payload):
     bpy.ops.file.pack_all()
     return {"ok": True, "message": "packed all textures", "data": {}}
@@ -471,6 +560,7 @@ ACTION_HANDLERS = {
     "decimate": _decimate,
     "tidy_material_slots": _tidy_material_slots,
     "check_texture_paths": _check_texture_paths,
+    "apply_texture_image": _apply_texture_image,
     "pack_textures": _pack_textures,
     "new_file": _new_file,
     "open_file": _open_file,

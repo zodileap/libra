@@ -1095,12 +1095,65 @@ fn parse_first_number(input: &str) -> Option<f64> {
 fn parse_path_in_prompt(prompt: &str) -> Option<String> {
     let trimmed = prompt.trim();
     for token in trimmed.split_whitespace() {
-        let candidate = token.trim_matches(|value| value == '"' || value == '\'' || value == '`');
+        let candidate = token.trim_matches(|value| {
+            value == '"'
+                || value == '\''
+                || value == '`'
+                || value == '“'
+                || value == '”'
+                || value == '‘'
+                || value == '’'
+        });
         if candidate.starts_with('/') || candidate.contains(":\\") {
             return Some(candidate.to_string());
         }
     }
+    if let Some(start) = trimmed.find('/') {
+        let remaining = &trimmed[start..];
+        let end = remaining
+            .find(|value: char| {
+                value.is_whitespace()
+                    || value == '"'
+                    || value == '\''
+                    || value == '`'
+                    || value == '“'
+                    || value == '”'
+                    || value == '‘'
+                    || value == '’'
+                    || value == '，'
+                    || value == '。'
+                    || value == '；'
+                    || value == '！'
+                    || value == '？'
+            })
+            .unwrap_or(remaining.len());
+        let candidate = remaining[..end].trim();
+        if !candidate.is_empty() {
+            return Some(candidate.to_string());
+        }
+    }
     None
+}
+
+/// 描述：识别“将图片贴图应用到对象”的用户意图，避免把普通路径误判为材质指令。
+fn is_apply_texture_intent(prompt: &str, lower: &str, path: &str) -> bool {
+    let has_texture_keyword = ["贴图", "纹理", "材质", "texture", "image", "base color"]
+        .iter()
+        .any(|keyword| lower.contains(keyword));
+    let has_apply_verb = ["添加", "替换", "设置", "应用", "assign", "apply", "set", "use"]
+        .iter()
+        .any(|keyword| lower.contains(keyword));
+    let lower_path = path.to_lowercase();
+    let is_image_file = [".png", ".jpg", ".jpeg", ".tga", ".bmp", ".tif", ".tiff", ".exr"]
+        .iter()
+        .any(|suffix| lower_path.ends_with(suffix));
+    let starts_with_material_instruction =
+        ["贴图", "纹理", "材质", "texture", "image", "material"]
+            .iter()
+            .any(|prefix| prompt.trim_start().to_lowercase().starts_with(prefix));
+
+    (has_texture_keyword && has_apply_verb && is_image_file)
+        || (starts_with_material_instruction && is_image_file)
 }
 
 fn is_add_cube_intent(prompt: &str, lower: &str) -> bool {
@@ -1428,6 +1481,15 @@ fn plan_model_steps(prompt: &str) -> Vec<PlannedModelStep> {
             params: json!({}),
         });
     }
+    if let Some(path) = parse_path_in_prompt(prompt) {
+        if is_apply_texture_intent(prompt, lower.as_str(), path.as_str()) {
+            steps.push(PlannedModelStep::Tool {
+                action: ModelToolAction::ApplyTextureImage,
+                input: format!("应用贴图 {}", path),
+                params: json!({ "path": path }),
+            });
+        }
+    }
     if ["打包贴图", "pack textures"]
         .iter()
         .any(|key| lower.contains(key))
@@ -1472,6 +1534,7 @@ fn check_capability_for_step(
                 | ModelToolAction::Decimate => capability_enabled(capabilities.mesh_opt),
                 ModelToolAction::TidyMaterialSlots
                 | ModelToolAction::CheckTexturePaths
+                | ModelToolAction::ApplyTextureImage
                 | ModelToolAction::PackTextures => capability_enabled(capabilities.material),
                 ModelToolAction::NewFile
                 | ModelToolAction::OpenFile
@@ -1634,7 +1697,7 @@ fn run_model_session_command(
         .any(|keyword| lower.contains(keyword));
         if has_dcc_intent {
             return Err(desktop_error_from_text(
-                "已识别为 DCC 操作，但当前 MCP 暂不支持该具体指令；不会自动替换成其他动作。当前可用：导出、列出对象、选择对象、重命名、层级整理、新建/打开/保存、撤销/重做、对齐原点、统一尺度/方向、添加正方体、加厚、倒角、镜像、阵列、布尔、自动平滑、法线加权、减面、材质槽整理、贴图路径检查、打包贴图。",
+                "已识别为 DCC 操作，但当前 MCP 暂不支持该具体指令；不会自动替换成其他动作。当前可用：导出、列出对象、选择对象、重命名、层级整理、新建/打开/保存、撤销/重做、对齐原点、统一尺度/方向、添加正方体、加厚、倒角、镜像、阵列、布尔、自动平滑、法线加权、减面、材质槽整理、贴图路径检查、应用贴图图片、打包贴图。",
                 "core.desktop.model.unsupported_action",
                 false,
             ));
@@ -2320,5 +2383,17 @@ mod tests {
         assert!(!blender_series_supports_extension("4.1"));
         assert!(blender_series_supports_extension("4.2"));
         assert!(blender_series_supports_extension("5.0"));
+    }
+
+    #[test]
+    fn should_plan_apply_texture_image_step() {
+        let steps = plan_model_steps("我发现场景地板的贴图缺失了，能用“/Users/yoho/Downloads/image.png”添加吗");
+        let has_apply_texture = steps.iter().any(|step| {
+            matches!(
+                step,
+                PlannedModelStep::Tool { action, .. } if action.as_str() == "apply_texture_image"
+            )
+        });
+        assert!(has_apply_texture, "贴图补图请求应路由到 apply_texture_image 动作");
     }
 }
