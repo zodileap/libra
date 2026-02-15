@@ -46,6 +46,48 @@ def _editable_objects(selected_only=False):
     return [obj for obj in objects if obj.type == "MESH"]
 
 
+def _resolve_transform_targets(payload):
+    if not isinstance(payload, dict):
+        payload = {}
+
+    if "selection_scope" in payload:
+        scope = str(payload.get("selection_scope") or "selected").strip().lower()
+    else:
+        selected_only = bool(payload.get("selected_only", True))
+        scope = "selected" if selected_only else "all"
+
+    if scope == "active":
+        active = bpy.context.view_layer.objects.active
+        if active and active.type == "MESH":
+            return [active], scope
+        selected = [obj for obj in bpy.context.selected_objects if obj.type == "MESH"]
+        if selected:
+            return [selected[0]], scope
+        raise BridgeError(
+            "no_target_object",
+            "no active mesh object found for selection_scope=active",
+            "请先在 Blender 中激活一个可编辑对象",
+        )
+    if scope == "selected":
+        targets = [obj for obj in bpy.context.selected_objects if obj.type == "MESH"]
+        if targets:
+            return targets, scope
+        raise BridgeError(
+            "no_target_object",
+            "no selected mesh objects found for selection_scope=selected",
+            "请先在 Blender 中选中需要操作的对象",
+        )
+    if scope == "all":
+        targets = [obj for obj in bpy.data.objects if obj.type == "MESH"]
+        if targets:
+            return targets, scope
+        raise BridgeError("no_target_object", "no mesh objects found in current scene")
+    raise BridgeError(
+        "invalid_args",
+        f"invalid selection_scope `{scope}`, expected active/selected/all",
+    )
+
+
 def _set_object_mode():
     if bpy.ops.object.mode_set.poll():
         bpy.ops.object.mode_set(mode="OBJECT")
@@ -148,6 +190,88 @@ def _align_origin(payload):
         "ok": True,
         "message": f"aligned {len(objs)} object(s) to origin",
         "data": {"count": len(objs)},
+    }
+
+
+def _translate_objects(payload):
+    raw_delta = payload.get("delta", [0.0, 0.0, 0.0]) if isinstance(payload, dict) else [0.0, 0.0, 0.0]
+    if not isinstance(raw_delta, (list, tuple)) or len(raw_delta) != 3:
+        raise BridgeError("invalid_args", "translate_objects requires `delta` with 3 numbers")
+    dx, dy, dz = float(raw_delta[0]), float(raw_delta[1]), float(raw_delta[2])
+
+    objs, scope = _resolve_transform_targets(payload)
+
+    for obj in objs:
+        obj.location = (
+            float(obj.location.x + dx),
+            float(obj.location.y + dy),
+            float(obj.location.z + dz),
+        )
+
+    return {
+        "ok": True,
+        "message": f"translated {len(objs)} object(s)",
+        "data": {
+            "count": len(objs),
+            "objects": [obj.name for obj in objs],
+            "delta": [dx, dy, dz],
+            "selection_scope": scope,
+        },
+    }
+
+
+def _rotate_objects(payload):
+    raw_delta = payload.get("delta_euler", [0.0, 0.0, 0.0]) if isinstance(payload, dict) else [0.0, 0.0, 0.0]
+    if not isinstance(raw_delta, (list, tuple)) or len(raw_delta) != 3:
+        raise BridgeError("invalid_args", "rotate_objects requires `delta_euler` with 3 numbers")
+    dx, dy, dz = float(raw_delta[0]), float(raw_delta[1]), float(raw_delta[2])
+
+    objs, scope = _resolve_transform_targets(payload)
+    for obj in objs:
+        obj.rotation_euler.x += dx
+        obj.rotation_euler.y += dy
+        obj.rotation_euler.z += dz
+
+    return {
+        "ok": True,
+        "message": f"rotated {len(objs)} object(s)",
+        "data": {
+            "count": len(objs),
+            "objects": [obj.name for obj in objs],
+            "delta_euler": [dx, dy, dz],
+            "selection_scope": scope,
+        },
+    }
+
+
+def _scale_objects(payload):
+    if not isinstance(payload, dict):
+        payload = {}
+    factor = payload.get("factor", 1.0)
+    if isinstance(factor, (int, float)):
+        sx = sy = sz = float(factor)
+    elif isinstance(factor, (list, tuple)) and len(factor) == 3:
+        sx, sy, sz = float(factor[0]), float(factor[1]), float(factor[2])
+    else:
+        raise BridgeError("invalid_args", "scale_objects requires numeric `factor` or [x,y,z]")
+
+    objs, scope = _resolve_transform_targets(payload)
+    for obj in objs:
+        obj.scale = (
+            float(obj.scale.x * sx),
+            float(obj.scale.y * sy),
+            float(obj.scale.z * sz),
+        )
+
+    return {
+        "ok": True,
+        "message": f"scaled {len(objs)} object(s)",
+        "data": {
+            "count": len(objs),
+            "objects": [obj.name for obj in objs],
+            "factor": [sx, sy, sz],
+            "selection_scope": scope,
+        },
     }
 
 
@@ -546,6 +670,9 @@ ACTION_HANDLERS = {
     "select_objects": _select_objects,
     "rename_object": _rename_object,
     "organize_hierarchy": _organize_hierarchy,
+    "translate_objects": _translate_objects,
+    "rotate_objects": _rotate_objects,
+    "scale_objects": _scale_objects,
     "align_origin": _align_origin,
     "normalize_scale": _normalize_scale,
     "normalize_axis": _normalize_axis,

@@ -350,7 +350,10 @@ pub fn check_capability_for_session_step(
                 | ModelToolAction::SelectObjects
                 | ModelToolAction::RenameObject
                 | ModelToolAction::OrganizeHierarchy => capabilities.scene,
-                ModelToolAction::AlignOrigin
+                ModelToolAction::TranslateObjects
+                | ModelToolAction::RotateObjects
+                | ModelToolAction::ScaleObjects
+                | ModelToolAction::AlignOrigin
                 | ModelToolAction::NormalizeScale
                 | ModelToolAction::NormalizeAxis => capabilities.transform,
                 ModelToolAction::Solidify
@@ -449,15 +452,42 @@ fn plan_explicit_complex_steps(prompt: &str, lower: &str) -> Vec<ModelSessionPla
     }
 
     if lower.contains("批量变换") || lower.contains("batch transform") {
-        for (action, input) in [
-            (ModelToolAction::AlignOrigin, "批量变换：对齐原点"),
-            (ModelToolAction::NormalizeScale, "批量变换：统一尺度"),
-            (ModelToolAction::NormalizeAxis, "批量变换：统一坐标方向"),
+        for (action, input, params) in [
+            (
+                ModelToolAction::TranslateObjects,
+                "批量变换：平移对象",
+                json!({"delta":[0.2,0.0,0.0], "selection_scope":"selected", "selected_only": true}),
+            ),
+            (
+                ModelToolAction::RotateObjects,
+                "批量变换：旋转对象",
+                json!({"delta_euler":[0.0,0.0,0.1745329252], "selection_scope":"selected", "selected_only": true}),
+            ),
+            (
+                ModelToolAction::ScaleObjects,
+                "批量变换：缩放对象",
+                json!({"factor":1.05, "selection_scope":"selected", "selected_only": true}),
+            ),
+            (
+                ModelToolAction::AlignOrigin,
+                "批量变换：对齐原点",
+                json!({"selected_only": true}),
+            ),
+            (
+                ModelToolAction::NormalizeScale,
+                "批量变换：统一尺度",
+                json!({"selected_only": true}),
+            ),
+            (
+                ModelToolAction::NormalizeAxis,
+                "批量变换：统一坐标方向",
+                json!({"selected_only": true}),
+            ),
         ] {
             steps.push(ModelSessionPlannedStep::Tool {
                 action,
                 input: input.to_string(),
-                params: json!({"selected_only": true}),
+                params,
                 operation_kind: ModelPlanOperationKind::BatchTransform,
                 branch: ModelPlanBranch::Primary,
                 recoverable: true,
@@ -730,6 +760,63 @@ fn plan_basic_steps(prompt: &str, lower: &str) -> Vec<ModelSessionPlannedStep> {
             condition: None,
         });
     }
+    if is_translate_intent(lower) {
+        let delta = parse_translate_delta(prompt, lower);
+        let selection_scope = derive_selection_scope(lower);
+        let selected_only = selection_scope != "all";
+        steps.push(ModelSessionPlannedStep::Tool {
+            action: ModelToolAction::TranslateObjects,
+            input: "平移对象".to_string(),
+            params: json!({
+                "delta": [delta.0, delta.1, delta.2],
+                "selection_scope": selection_scope,
+                "selected_only": selected_only,
+            }),
+            operation_kind: ModelPlanOperationKind::BatchTransform,
+            branch: ModelPlanBranch::Primary,
+            recoverable: true,
+            risk: ModelPlanRiskLevel::Low,
+            condition: None,
+        });
+    }
+    if is_rotate_intent(lower) {
+        let delta = parse_rotate_delta(prompt, lower);
+        let selection_scope = derive_selection_scope(lower);
+        let selected_only = selection_scope != "all";
+        steps.push(ModelSessionPlannedStep::Tool {
+            action: ModelToolAction::RotateObjects,
+            input: "旋转对象".to_string(),
+            params: json!({
+                "delta_euler": [delta.0, delta.1, delta.2],
+                "selection_scope": selection_scope,
+                "selected_only": selected_only,
+            }),
+            operation_kind: ModelPlanOperationKind::BatchTransform,
+            branch: ModelPlanBranch::Primary,
+            recoverable: true,
+            risk: ModelPlanRiskLevel::Low,
+            condition: None,
+        });
+    }
+    if is_scale_intent(lower) {
+        let factor = parse_scale_factor(prompt);
+        let selection_scope = derive_selection_scope(lower);
+        let selected_only = selection_scope != "all";
+        steps.push(ModelSessionPlannedStep::Tool {
+            action: ModelToolAction::ScaleObjects,
+            input: "缩放对象".to_string(),
+            params: json!({
+                "factor": factor,
+                "selection_scope": selection_scope,
+                "selected_only": selected_only,
+            }),
+            operation_kind: ModelPlanOperationKind::BatchTransform,
+            branch: ModelPlanBranch::Primary,
+            recoverable: true,
+            risk: ModelPlanRiskLevel::Low,
+            condition: None,
+        });
+    }
     if ["统一尺度", "normalize scale", "应用缩放"]
         .iter()
         .any(|key| lower.contains(key))
@@ -981,6 +1068,168 @@ fn parse_first_number(input: &str) -> Option<f64> {
     } else {
         buf.parse::<f64>().ok()
     }
+}
+
+/// 描述：从文本中提取最多三个数字，用于平移/旋转/缩放等向量参数。
+fn parse_first_three_numbers(input: &str) -> Vec<f64> {
+    let mut numbers: Vec<f64> = Vec::new();
+    let mut buf = String::new();
+    for ch in input.chars() {
+        if ch.is_ascii_digit() || ch == '.' || (ch == '-' && buf.is_empty()) {
+            buf.push(ch);
+            continue;
+        }
+        if !buf.is_empty() {
+            if let Ok(value) = buf.parse::<f64>() {
+                numbers.push(value);
+                if numbers.len() >= 3 {
+                    break;
+                }
+            }
+            buf.clear();
+        }
+    }
+    if numbers.len() < 3 && !buf.is_empty() {
+        if let Ok(value) = buf.parse::<f64>() {
+            numbers.push(value);
+        }
+    }
+    numbers
+}
+
+/// 描述：识别“平移/移动对象”意图，支持中英文关键词。
+fn is_translate_intent(lower: &str) -> bool {
+    ["平移", "移动", "translate", "move"]
+        .iter()
+        .any(|key| lower.contains(key))
+}
+
+/// 描述：识别“这个物体/当前物体”等单对象指代语义，默认映射到 active 对象。
+fn has_active_reference_intent(lower: &str) -> bool {
+    [
+        "这个物体",
+        "当前物体",
+        "这个对象",
+        "当前对象",
+        "active object",
+        "current object",
+        "this object",
+    ]
+    .iter()
+    .any(|key| lower.contains(key))
+}
+
+/// 描述：识别“选中对象”语义，映射到 selected 作用域。
+fn has_selected_reference_intent(lower: &str) -> bool {
+    [
+        "选中的物体",
+        "选中对象",
+        "当前选中对象",
+        "selected object",
+        "selected objects",
+    ]
+    .iter()
+    .any(|key| lower.contains(key))
+}
+
+/// 描述：识别“所有对象”语义，映射到 all 作用域。
+fn has_all_objects_intent(lower: &str) -> bool {
+    [
+        "所有对象",
+        "全部对象",
+        "所有物体",
+        "全部物体",
+        "整个场景",
+        "all objects",
+        "all meshes",
+        "entire scene",
+    ]
+    .iter()
+    .any(|key| lower.contains(key))
+}
+
+/// 描述：根据自然语言意图推断选择范围，控制动作只影响期望对象集合。
+fn derive_selection_scope(lower: &str) -> &'static str {
+    if has_all_objects_intent(lower) {
+        return "all";
+    }
+    if has_active_reference_intent(lower) {
+        return "active";
+    }
+    if has_selected_reference_intent(lower) || lower.contains("选中") {
+        return "selected";
+    }
+    "selected"
+}
+
+/// 描述：提取平移向量；若用户只提供单值则按 X 轴平移，未提供则使用默认步长。
+fn parse_translate_delta(prompt: &str, lower: &str) -> (f64, f64, f64) {
+    let numbers = parse_first_three_numbers(prompt);
+    if numbers.len() >= 3 {
+        return (numbers[0], numbers[1], numbers[2]);
+    }
+    if numbers.len() == 1 {
+        let value = numbers[0];
+        if lower.contains("y轴") || lower.contains(" y ") {
+            return (0.0, value, 0.0);
+        }
+        if lower.contains("z轴") || lower.contains(" z ") {
+            return (0.0, 0.0, value);
+        }
+        return (value, 0.0, 0.0);
+    }
+    (0.2, 0.0, 0.0)
+}
+
+/// 描述：识别旋转意图，支持中英文关键词。
+fn is_rotate_intent(lower: &str) -> bool {
+    ["旋转", "rotate"]
+        .iter()
+        .any(|key| lower.contains(key))
+}
+
+/// 描述：将角度输入归一为弧度；明显超过 2π 的值视为角度输入。
+fn normalize_angle_to_radian(value: f64) -> f64 {
+    if value.abs() > std::f64::consts::TAU {
+        value.to_radians()
+    } else {
+        value
+    }
+}
+
+/// 描述：提取旋转向量（弧度）；单值时按轴向关键词分配。
+fn parse_rotate_delta(prompt: &str, lower: &str) -> (f64, f64, f64) {
+    let numbers = parse_first_three_numbers(prompt);
+    if numbers.len() >= 3 {
+        return (
+            normalize_angle_to_radian(numbers[0]),
+            normalize_angle_to_radian(numbers[1]),
+            normalize_angle_to_radian(numbers[2]),
+        );
+    }
+    if numbers.len() == 1 {
+        let value = normalize_angle_to_radian(numbers[0]);
+        if lower.contains("y轴") || lower.contains(" y ") {
+            return (0.0, value, 0.0);
+        }
+        if lower.contains("z轴") || lower.contains(" z ") {
+            return (0.0, 0.0, value);
+        }
+        return (value, 0.0, 0.0);
+    }
+    (0.0, 0.0, 0.1745329252)
+}
+
+/// 描述：识别缩放意图，支持中英文关键词。
+fn is_scale_intent(lower: &str) -> bool {
+    ["缩放", "scale"]
+        .iter()
+        .any(|key| lower.contains(key))
+}
+
+/// 描述：提取统一缩放因子，未提供时使用默认值。
+fn parse_scale_factor(prompt: &str) -> f64 {
+    parse_first_number(prompt).unwrap_or(1.1).clamp(0.001, 1000.0)
 }
 
 /// 描述：从自然语言中提取路径参数，支持绝对路径和 Windows 路径。

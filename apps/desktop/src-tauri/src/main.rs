@@ -1106,7 +1106,14 @@ fn planner_allowed_actions(capabilities: &ModelMcpCapabilities) -> Vec<&'static 
         ]);
     }
     if capability_enabled(capabilities.transform) {
-        actions.extend(["align_origin", "normalize_scale", "normalize_axis"]);
+        actions.extend([
+            "translate_objects",
+            "rotate_objects",
+            "scale_objects",
+            "align_origin",
+            "normalize_scale",
+            "normalize_axis",
+        ]);
     }
     if capability_enabled(capabilities.geometry) {
         actions.extend(["add_cube", "solidify", "bevel", "mirror", "array", "boolean"]);
@@ -1162,6 +1169,9 @@ fn build_model_plan_prompt(prompt: &str, capabilities: &ModelMcpCapabilities) ->
 8) 工具动作参数必须完整：
    - select_objects: params.names 必须是非空数组
    - rename_object: params.old_name 与 params.new_name 必须非空
+   - translate_objects: params.delta 必须是长度为3的数组；当用户提到“这个物体/选中对象”时必须设置 params.selection_scope=active|selected
+   - rotate_objects: params.delta_euler 必须是长度为3的数组；遵循同样的 selection_scope 规则
+   - scale_objects: params.factor 必须是数字或长度为3数组；遵循同样的 selection_scope 规则
    - open_file: params.path 必须非空
    - apply_texture_image: params.path 必须非空
 
@@ -1237,7 +1247,10 @@ fn infer_operation_kind_for_action(action: ModelToolAction) -> ModelPlanOperatio
         | ModelToolAction::AddCube
         | ModelToolAction::Undo
         | ModelToolAction::Redo => ModelPlanOperationKind::Basic,
-        ModelToolAction::AlignOrigin
+        ModelToolAction::TranslateObjects
+        | ModelToolAction::RotateObjects
+        | ModelToolAction::ScaleObjects
+        | ModelToolAction::AlignOrigin
         | ModelToolAction::NormalizeScale
         | ModelToolAction::NormalizeAxis => ModelPlanOperationKind::BatchTransform,
         ModelToolAction::Solidify
@@ -1354,6 +1367,34 @@ fn validate_llm_model_plan_steps(
     let lower = prompt.to_lowercase();
     let rename_intent = ["重命名", "rename"].iter().any(|key| lower.contains(key));
     let select_intent = ["选择", "选中", "select"].iter().any(|key| lower.contains(key));
+    let selection_reference_intent = has_selection_reference_intent(&lower);
+    let ensure_selection_scoped = |params: &serde_json::Value, action_name: &str| -> Result<(), String> {
+        let scope = params
+            .get("selection_scope")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                params
+                    .get("selected_only")
+                    .and_then(|value| value.as_bool())
+                    .map(|selected_only| if selected_only { "selected" } else { "all" })
+            })
+            .unwrap_or("selected");
+        if !matches!(scope, "active" | "selected" | "all") {
+            return Err(format!(
+                "{} 的 selection_scope 非法，必须是 active|selected|all",
+                action_name
+            ));
+        }
+        if selection_reference_intent && scope == "all" {
+            return Err(format!(
+                "用户明确引用选中对象时，{} 不允许 selection_scope=all",
+                action_name
+            ));
+        }
+        Ok(())
+    };
 
     for step in steps {
         let ModelSessionPlannedStep::Tool { action, params, .. } = step else {
@@ -1397,6 +1438,40 @@ fn validate_llm_model_plan_steps(
                 if !rename_intent {
                     return Err("用户未明确要求重命名，不应规划 rename_object".to_string());
                 }
+            }
+            ModelToolAction::TranslateObjects => {
+                let delta = params
+                    .get("delta")
+                    .and_then(|value| value.as_array())
+                    .ok_or_else(|| "translate_objects 缺少 params.delta".to_string())?;
+                if delta.len() != 3 || !delta.iter().all(|value| value.as_f64().is_some()) {
+                    return Err("translate_objects 的 params.delta 必须是长度为3的数字数组".to_string());
+                }
+                ensure_selection_scoped(params, "translate_objects")?;
+            }
+            ModelToolAction::RotateObjects => {
+                let delta = params
+                    .get("delta_euler")
+                    .and_then(|value| value.as_array())
+                    .ok_or_else(|| "rotate_objects 缺少 params.delta_euler".to_string())?;
+                if delta.len() != 3 || !delta.iter().all(|value| value.as_f64().is_some()) {
+                    return Err("rotate_objects 的 params.delta_euler 必须是长度为3的数字数组".to_string());
+                }
+                ensure_selection_scoped(params, "rotate_objects")?;
+            }
+            ModelToolAction::ScaleObjects => {
+                let factor = params
+                    .get("factor")
+                    .ok_or_else(|| "scale_objects 缺少 params.factor".to_string())?;
+                let valid = factor.as_f64().is_some()
+                    || factor
+                        .as_array()
+                        .map(|items| items.len() == 3 && items.iter().all(|item| item.as_f64().is_some()))
+                        .unwrap_or(false);
+                if !valid {
+                    return Err("scale_objects 的 params.factor 必须是数字或长度为3的数字数组".to_string());
+                }
+                ensure_selection_scoped(params, "scale_objects")?;
             }
             ModelToolAction::OpenFile => {
                 let path = params
@@ -1519,6 +1594,173 @@ fn parse_first_number(input: &str) -> Option<f64> {
     } else {
         buf.parse::<f64>().ok()
     }
+}
+
+/// 描述：从文本中提取最多三个数字，用于向量参数（如平移）。
+fn parse_first_three_numbers(input: &str) -> Vec<f64> {
+    let mut numbers: Vec<f64> = Vec::new();
+    let mut buf = String::new();
+    for ch in input.chars() {
+        if ch.is_ascii_digit() || ch == '.' || (ch == '-' && buf.is_empty()) {
+            buf.push(ch);
+            continue;
+        }
+        if !buf.is_empty() {
+            if let Ok(value) = buf.parse::<f64>() {
+                numbers.push(value);
+                if numbers.len() >= 3 {
+                    break;
+                }
+            }
+            buf.clear();
+        }
+    }
+    if numbers.len() < 3 && !buf.is_empty() {
+        if let Ok(value) = buf.parse::<f64>() {
+            numbers.push(value);
+        }
+    }
+    numbers
+}
+
+/// 描述：识别“这个物体/当前物体”等单对象指代语义，默认映射 active 对象。
+fn has_active_reference_intent(lower: &str) -> bool {
+    [
+        "这个物体",
+        "当前物体",
+        "这个对象",
+        "当前对象",
+        "active object",
+        "current object",
+        "this object",
+    ]
+    .iter()
+    .any(|key| lower.contains(key))
+}
+
+/// 描述：识别“选中对象”语义，映射 selected 作用域。
+fn has_selected_reference_intent(lower: &str) -> bool {
+    [
+        "选中的物体",
+        "选中对象",
+        "当前选中对象",
+        "selected object",
+        "selected objects",
+    ]
+    .iter()
+    .any(|key| lower.contains(key))
+}
+
+/// 描述：识别“所有对象”语义，映射 all 作用域。
+fn has_all_objects_intent(lower: &str) -> bool {
+    [
+        "所有对象",
+        "全部对象",
+        "所有物体",
+        "全部物体",
+        "整个场景",
+        "all objects",
+        "all meshes",
+        "entire scene",
+    ]
+    .iter()
+    .any(|key| lower.contains(key))
+}
+
+/// 描述：统一判断是否引用了选择对象，供规则校验阶段复用。
+fn has_selection_reference_intent(lower: &str) -> bool {
+    has_active_reference_intent(lower) || has_selected_reference_intent(lower)
+}
+
+/// 描述：根据语义推断选择作用域。
+fn derive_selection_scope(lower: &str) -> &'static str {
+    if has_all_objects_intent(lower) {
+        return "all";
+    }
+    if has_active_reference_intent(lower) {
+        return "active";
+    }
+    if has_selected_reference_intent(lower) || lower.contains("选中") {
+        return "selected";
+    }
+    "selected"
+}
+
+/// 描述：识别“平移/移动”意图，支持中英文关键词。
+fn is_translate_intent(lower: &str) -> bool {
+    ["平移", "移动", "translate", "move"]
+        .iter()
+        .any(|key| lower.contains(key))
+}
+
+/// 描述：提取平移向量；只给单值时默认按 X 轴平移，未给值时使用默认步长。
+fn parse_translate_delta(prompt: &str, lower: &str) -> (f64, f64, f64) {
+    let numbers = parse_first_three_numbers(prompt);
+    if numbers.len() >= 3 {
+        return (numbers[0], numbers[1], numbers[2]);
+    }
+    if numbers.len() == 1 {
+        let value = numbers[0];
+        if lower.contains("y轴") || lower.contains(" y ") {
+            return (0.0, value, 0.0);
+        }
+        if lower.contains("z轴") || lower.contains(" z ") {
+            return (0.0, 0.0, value);
+        }
+        return (value, 0.0, 0.0);
+    }
+    (0.2, 0.0, 0.0)
+}
+
+/// 描述：识别“旋转”意图，支持中英文关键词。
+fn is_rotate_intent(lower: &str) -> bool {
+    ["旋转", "rotate"]
+        .iter()
+        .any(|key| lower.contains(key))
+}
+
+/// 描述：角度归一化为弧度；当数值明显超过 2π 时视为“度”输入。
+fn normalize_angle_to_radian(value: f64) -> f64 {
+    if value.abs() > std::f64::consts::TAU {
+        value.to_radians()
+    } else {
+        value
+    }
+}
+
+/// 描述：提取旋转向量（弧度）；单值场景按轴关键词分配。
+fn parse_rotate_delta(prompt: &str, lower: &str) -> (f64, f64, f64) {
+    let numbers = parse_first_three_numbers(prompt);
+    if numbers.len() >= 3 {
+        return (
+            normalize_angle_to_radian(numbers[0]),
+            normalize_angle_to_radian(numbers[1]),
+            normalize_angle_to_radian(numbers[2]),
+        );
+    }
+    if numbers.len() == 1 {
+        let value = normalize_angle_to_radian(numbers[0]);
+        if lower.contains("y轴") || lower.contains(" y ") {
+            return (0.0, value, 0.0);
+        }
+        if lower.contains("z轴") || lower.contains(" z ") {
+            return (0.0, 0.0, value);
+        }
+        return (value, 0.0, 0.0);
+    }
+    (0.0, 0.0, 0.1745329252)
+}
+
+/// 描述：识别“缩放”意图，支持中英文关键词。
+fn is_scale_intent(lower: &str) -> bool {
+    ["缩放", "scale"]
+        .iter()
+        .any(|key| lower.contains(key))
+}
+
+/// 描述：提取统一缩放因子，未提供时使用默认值。
+fn parse_scale_factor(prompt: &str) -> f64 {
+    parse_first_number(prompt).unwrap_or(1.1).clamp(0.001, 1000.0)
 }
 
 fn parse_path_in_prompt(prompt: &str) -> Option<String> {
@@ -1800,6 +2042,48 @@ fn plan_model_steps(prompt: &str) -> Vec<PlannedModelStep> {
             params: json!({ "selected_only": true }),
         });
     }
+    if is_translate_intent(&lower) {
+        let delta = parse_translate_delta(prompt, &lower);
+        let selection_scope = derive_selection_scope(&lower);
+        let selected_only = selection_scope != "all";
+        steps.push(PlannedModelStep::Tool {
+            action: ModelToolAction::TranslateObjects,
+            input: "平移对象".to_string(),
+            params: json!({
+                "delta": [delta.0, delta.1, delta.2],
+                "selection_scope": selection_scope,
+                "selected_only": selected_only,
+            }),
+        });
+    }
+    if is_rotate_intent(&lower) {
+        let delta = parse_rotate_delta(prompt, &lower);
+        let selection_scope = derive_selection_scope(&lower);
+        let selected_only = selection_scope != "all";
+        steps.push(PlannedModelStep::Tool {
+            action: ModelToolAction::RotateObjects,
+            input: "旋转对象".to_string(),
+            params: json!({
+                "delta_euler": [delta.0, delta.1, delta.2],
+                "selection_scope": selection_scope,
+                "selected_only": selected_only,
+            }),
+        });
+    }
+    if is_scale_intent(&lower) {
+        let factor = parse_scale_factor(prompt);
+        let selection_scope = derive_selection_scope(&lower);
+        let selected_only = selection_scope != "all";
+        steps.push(PlannedModelStep::Tool {
+            action: ModelToolAction::ScaleObjects,
+            input: "缩放对象".to_string(),
+            params: json!({
+                "factor": factor,
+                "selection_scope": selection_scope,
+                "selected_only": selected_only,
+            }),
+        });
+    }
     if ["统一尺度", "normalize scale", "应用缩放"]
         .iter()
         .any(|key| lower.contains(key))
@@ -1973,7 +2257,10 @@ fn check_capability_for_step(
                 | ModelToolAction::SelectObjects
                 | ModelToolAction::RenameObject
                 | ModelToolAction::OrganizeHierarchy => capability_enabled(capabilities.scene),
-                ModelToolAction::AlignOrigin
+                ModelToolAction::TranslateObjects
+                | ModelToolAction::RotateObjects
+                | ModelToolAction::ScaleObjects
+                | ModelToolAction::AlignOrigin
                 | ModelToolAction::NormalizeScale
                 | ModelToolAction::NormalizeAxis => capability_enabled(capabilities.transform),
                 ModelToolAction::Solidify
@@ -2862,6 +3149,63 @@ mod tests {
     }
 
     #[test]
+    fn should_plan_translate_selected_object_step() {
+        let steps = plan_model_steps("对这个物体平移 0.5");
+        let has_translate_selected_scope = steps.iter().any(|step| {
+            matches!(
+                step,
+                PlannedModelStep::Tool { action, params, .. }
+                if action.as_str() == "translate_objects"
+                    && matches!(
+                        params.get("selection_scope").and_then(|value| value.as_str()),
+                        Some("active" | "selected")
+                    )
+            )
+        });
+        assert!(
+            has_translate_selected_scope,
+            "引用“这个物体”时应路由到 selection_scope=active|selected 的 translate_objects"
+        );
+    }
+
+    #[test]
+    fn should_plan_rotate_selected_object_step() {
+        let steps = plan_model_steps("对这个物体旋转30度");
+        let has_rotate_selected_scope = steps.iter().any(|step| {
+            matches!(
+                step,
+                PlannedModelStep::Tool { action, params, .. }
+                if action.as_str() == "rotate_objects"
+                    && matches!(
+                        params.get("selection_scope").and_then(|value| value.as_str()),
+                        Some("active" | "selected")
+                    )
+            )
+        });
+        assert!(
+            has_rotate_selected_scope,
+            "引用“这个物体”时应路由到 selection_scope=active|selected 的 rotate_objects"
+        );
+    }
+
+    #[test]
+    fn should_plan_scale_all_objects_step() {
+        let steps = plan_model_steps("把所有物体缩放到1.2倍");
+        let has_scale_all_scope = steps.iter().any(|step| {
+            matches!(
+                step,
+                PlannedModelStep::Tool { action, params, .. }
+                if action.as_str() == "scale_objects"
+                    && params.get("selection_scope").and_then(|value| value.as_str()) == Some("all")
+            )
+        });
+        assert!(
+            has_scale_all_scope,
+            "引用“所有物体”时应路由到 selection_scope=all 的 scale_objects"
+        );
+    }
+
+    #[test]
     fn should_parse_llm_model_plan_json() {
         let raw = r#"{
           "steps": [
@@ -2909,5 +3253,39 @@ mod tests {
         let err = validate_llm_model_plan_steps(&steps, "创建一个正方体并贴图 /Users/yoho/Downloads/image.png")
             .expect_err("rename without user intent should be rejected");
         assert!(err.contains("不应规划 rename_object"));
+    }
+
+    #[test]
+    fn should_reject_translate_without_selected_scope_when_prompt_refs_selected_object() {
+        let steps = vec![ModelSessionPlannedStep::Tool {
+            action: ModelToolAction::TranslateObjects,
+            input: "平移".to_string(),
+            params: json!({"delta":[0.5,0,0],"selection_scope":"all"}),
+            operation_kind: ModelPlanOperationKind::BatchTransform,
+            branch: ModelPlanBranch::Primary,
+            recoverable: true,
+            risk: ModelPlanRiskLevel::Low,
+            condition: None,
+        }];
+        let err = validate_llm_model_plan_steps(&steps, "对这个物体平移 0.5")
+            .expect_err("translate with selection_scope=all should be rejected");
+        assert!(err.contains("selection_scope=all"));
+    }
+
+    #[test]
+    fn should_reject_rotate_with_all_scope_when_prompt_refs_selected_object() {
+        let steps = vec![ModelSessionPlannedStep::Tool {
+            action: ModelToolAction::RotateObjects,
+            input: "旋转".to_string(),
+            params: json!({"delta_euler":[0.0,0.0,0.5],"selection_scope":"all"}),
+            operation_kind: ModelPlanOperationKind::BatchTransform,
+            branch: ModelPlanBranch::Primary,
+            recoverable: true,
+            risk: ModelPlanRiskLevel::Low,
+            condition: None,
+        }];
+        let err = validate_llm_model_plan_steps(&steps, "对这个物体旋转 30 度")
+            .expect_err("rotate with selection_scope=all should be rejected");
+        assert!(err.contains("selection_scope=all"));
     }
 }

@@ -48,6 +48,9 @@ pub enum ModelToolAction {
     SelectObjects,
     RenameObject,
     OrganizeHierarchy,
+    TranslateObjects,
+    RotateObjects,
+    ScaleObjects,
     AlignOrigin,
     NormalizeScale,
     NormalizeAxis,
@@ -78,6 +81,9 @@ impl ModelToolAction {
             ModelToolAction::SelectObjects => "select_objects",
             ModelToolAction::RenameObject => "rename_object",
             ModelToolAction::OrganizeHierarchy => "organize_hierarchy",
+            ModelToolAction::TranslateObjects => "translate_objects",
+            ModelToolAction::RotateObjects => "rotate_objects",
+            ModelToolAction::ScaleObjects => "scale_objects",
             ModelToolAction::AlignOrigin => "align_origin",
             ModelToolAction::NormalizeScale => "normalize_scale",
             ModelToolAction::NormalizeAxis => "normalize_axis",
@@ -118,6 +124,9 @@ impl std::str::FromStr for ModelToolAction {
             "select_objects" => Ok(Self::SelectObjects),
             "rename_object" => Ok(Self::RenameObject),
             "organize_hierarchy" => Ok(Self::OrganizeHierarchy),
+            "translate_objects" => Ok(Self::TranslateObjects),
+            "rotate_objects" => Ok(Self::RotateObjects),
+            "scale_objects" => Ok(Self::ScaleObjects),
             "align_origin" => Ok(Self::AlignOrigin),
             "normalize_scale" => Ok(Self::NormalizeScale),
             "normalize_axis" => Ok(Self::NormalizeAxis),
@@ -260,6 +269,62 @@ pub fn execute_model_tool(request: ModelToolRequest) -> McpResult<ModelToolResul
 }
 
 fn validate_tool_request(request: &ModelToolRequest) -> McpResult<()> {
+    // 描述：校验选择范围参数，仅允许 active/selected/all，保持与 Blender Bridge 语义一致。
+    let validate_selection_scope = || -> McpResult<()> {
+        let scope = request
+            .params
+            .get("selection_scope")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("selected");
+        if !matches!(scope, "active" | "selected" | "all") {
+            return Err(McpError::new(
+                "mcp.model.tool.invalid_selection_scope",
+                "selection_scope must be one of: active, selected, all",
+            ));
+        }
+        Ok(())
+    };
+
+    // 描述：校验三维向量参数，确保是 3 个数字且处于合理范围。
+    let validate_vec3 = |key: &str, min: f64, max: f64, code_prefix: &str| -> McpResult<()> {
+        let vec = request
+            .params
+            .get(key)
+            .and_then(|value| value.as_array())
+            .ok_or_else(|| {
+                McpError::new(
+                    format!("{}.missing", code_prefix),
+                    format!("{} requires `{}` array with 3 numeric values", request.action, key),
+                )
+            })?;
+        if vec.len() != 3 {
+            return Err(McpError::new(
+                format!("{}.invalid", code_prefix),
+                format!("{} `{}` must contain exactly 3 values", request.action, key),
+            ));
+        }
+        for value in vec {
+            let number = value.as_f64().ok_or_else(|| {
+                McpError::new(
+                    format!("{}.invalid", code_prefix),
+                    format!("{} `{}` must be numeric", request.action, key),
+                )
+            })?;
+            if !(min..=max).contains(&number) {
+                return Err(McpError::new(
+                    format!("{}.out_of_range", code_prefix),
+                    format!(
+                        "{} `{}` item must be in range [{}, {}]",
+                        request.action, key, min, max
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    };
+
     match request.action {
         ModelToolAction::AddCube => {
             let size = request
@@ -347,6 +412,62 @@ fn validate_tool_request(request: &ModelToolRequest) -> McpResult<()> {
                 return Err(McpError::new(
                     "mcp.model.tool.boolean_times_out_of_range",
                     "boolean times must be in range [1, 8]",
+                ));
+            }
+        }
+        ModelToolAction::TranslateObjects => {
+            validate_selection_scope()?;
+            validate_vec3("delta", -10000.0, 10000.0, "mcp.model.tool.translate_delta")?;
+        }
+        ModelToolAction::RotateObjects => {
+            validate_selection_scope()?;
+            validate_vec3(
+                "delta_euler",
+                -3600.0,
+                3600.0,
+                "mcp.model.tool.rotate_delta_euler",
+            )?;
+        }
+        ModelToolAction::ScaleObjects => {
+            validate_selection_scope()?;
+            let factor = request.params.get("factor").ok_or_else(|| {
+                McpError::new(
+                    "mcp.model.tool.scale_factor_missing",
+                    "scale_objects requires `factor` as number or [x,y,z]",
+                )
+            })?;
+            if let Some(value) = factor.as_f64() {
+                if !(0.001..=1000.0).contains(&value) {
+                    return Err(McpError::new(
+                        "mcp.model.tool.scale_factor_out_of_range",
+                        "scale_objects factor must be in range [0.001, 1000.0]",
+                    ));
+                }
+            } else if let Some(vec) = factor.as_array() {
+                if vec.len() != 3 {
+                    return Err(McpError::new(
+                        "mcp.model.tool.scale_factor_invalid",
+                        "scale_objects factor array must contain exactly 3 values",
+                    ));
+                }
+                for item in vec {
+                    let value = item.as_f64().ok_or_else(|| {
+                        McpError::new(
+                            "mcp.model.tool.scale_factor_invalid",
+                            "scale_objects factor array must be numeric",
+                        )
+                    })?;
+                    if !(0.001..=1000.0).contains(&value) {
+                        return Err(McpError::new(
+                            "mcp.model.tool.scale_factor_out_of_range",
+                            "scale_objects factor item must be in range [0.001, 1000.0]",
+                        ));
+                    }
+                }
+            } else {
+                return Err(McpError::new(
+                    "mcp.model.tool.scale_factor_invalid",
+                    "scale_objects factor must be number or [x,y,z]",
                 ));
             }
         }
@@ -443,6 +564,7 @@ mod tests {
         assert!(script.contains("_persist_user_preferences"));
         assert!(script.contains("view_layer"));
         assert!(script.contains("_RestrictContext"));
+        assert!(script.contains("translate_objects"));
     }
 
     #[test]
@@ -452,6 +574,66 @@ mod tests {
         assert!(manifest.contains("id = \"zodileap_mcp_bridge\""));
         assert!(manifest.contains("type = \"add-on\""));
         assert!(manifest.contains("blender_version_min = \"4.2.0\""));
+    }
+
+    #[test]
+    fn translate_tool_should_require_valid_delta() {
+        let err = validate_tool_request(&ModelToolRequest {
+            action: ModelToolAction::TranslateObjects,
+            params: serde_json::json!({}),
+            blender_bridge_addr: None,
+            timeout_secs: None,
+        })
+        .expect_err("translate without delta should fail");
+        assert!(err.to_string().contains("translate_objects requires"));
+
+        let ok = validate_tool_request(&ModelToolRequest {
+            action: ModelToolAction::TranslateObjects,
+            params: serde_json::json!({ "delta": [0.1, 0.0, -0.2], "selected_only": true }),
+            blender_bridge_addr: None,
+            timeout_secs: None,
+        });
+        assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn rotate_tool_should_require_delta_euler_and_valid_scope() {
+        let err = validate_tool_request(&ModelToolRequest {
+            action: ModelToolAction::RotateObjects,
+            params: serde_json::json!({ "delta_euler": [30, 0, 0], "selection_scope": "invalid" }),
+            blender_bridge_addr: None,
+            timeout_secs: None,
+        })
+        .expect_err("rotate with invalid scope should fail");
+        assert!(err.to_string().contains("selection_scope"));
+
+        let ok = validate_tool_request(&ModelToolRequest {
+            action: ModelToolAction::RotateObjects,
+            params: serde_json::json!({ "delta_euler": [15, 0, -5], "selection_scope": "active" }),
+            blender_bridge_addr: None,
+            timeout_secs: None,
+        });
+        assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn scale_tool_should_require_factor() {
+        let err = validate_tool_request(&ModelToolRequest {
+            action: ModelToolAction::ScaleObjects,
+            params: serde_json::json!({ "selection_scope": "selected" }),
+            blender_bridge_addr: None,
+            timeout_secs: None,
+        })
+        .expect_err("scale without factor should fail");
+        assert!(err.to_string().contains("factor"));
+
+        let ok = validate_tool_request(&ModelToolRequest {
+            action: ModelToolAction::ScaleObjects,
+            params: serde_json::json!({ "factor": [1.1, 1.0, 0.9], "selection_scope": "selected" }),
+            blender_bridge_addr: None,
+            timeout_secs: None,
+        });
+        assert!(ok.is_ok());
     }
 }
 

@@ -156,3 +156,57 @@ fn TestShouldPlanApplyTextureImageStepWithQuotedSpacePath() {
     });
     assert!(has_apply_texture);
 }
+
+#[allow(non_snake_case)]
+/// 描述：验证“这个物体平移”会规划为仅作用于选中对象的 translate_objects 步骤。
+#[test]
+fn TestShouldPlanTranslateObjectsStepWithSelectionScope() {
+    let steps = plan_model_session_steps("对这个物体平移 0.5");
+    let has_translate_scoped = steps.iter().any(|item| {
+        if let ModelSessionPlannedStep::Tool { action, params, .. } = item {
+            let scope = params
+                .get("selection_scope")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            return *action == ModelToolAction::TranslateObjects && matches!(scope, "active" | "selected");
+        }
+        false
+    });
+    assert!(has_translate_scoped);
+}
+
+#[allow(non_snake_case)]
+/// 描述：验证“这个物体旋转”会规划为 rotate_objects，且作用域为 active 或 selected。
+#[test]
+fn TestShouldPlanRotateObjectsStepWithSelectionScope() {
+    let steps = plan_model_session_steps("对这个物体旋转 30");
+    let has_rotate_scoped = steps.iter().any(|item| {
+        if let ModelSessionPlannedStep::Tool { action, params, .. } = item {
+            let scope = params
+                .get("selection_scope")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            return *action == ModelToolAction::RotateObjects && matches!(scope, "active" | "selected");
+        }
+        false
+    });
+    assert!(has_rotate_scoped);
+}
+
+#[allow(non_snake_case)]
+/// 描述：验证“所有对象缩放”会规划为 all 作用域，避免误判为仅选中对象。
+#[test]
+fn TestShouldPlanScaleObjectsWithAllScope() {
+    let steps = plan_model_session_steps("对所有对象缩放 1.2");
+    let has_scale_all = steps.iter().any(|item| {
+        if let ModelSessionPlannedStep::Tool { action, params, .. } = item {
+            let scope = params
+                .get("selection_scope")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            return *action == ModelToolAction::ScaleObjects && scope == "all";
+        }
+        false
+    });
+    assert!(has_scale_all);
+}
