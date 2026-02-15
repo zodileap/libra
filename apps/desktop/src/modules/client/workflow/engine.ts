@@ -281,6 +281,26 @@ function findFallbackNode(
   return workflow.nodes.find((item) => item.kind === fallbackKind && item.enabled) || null;
 }
 
+// 描述：统计模型会话内成功的 MCP 步骤数，用于和工作流节点数分开展示，避免口径混淆。
+function countModelSessionSuccessSteps(modelSession?: ModelSessionRunResponse): number {
+  if (!modelSession?.steps?.length) {
+    return 0;
+  }
+  return modelSession.steps.filter((item) => item.status === "success").length;
+}
+
+// 描述：构建工作流执行完成文案，同时展示“工作流节点”与“MCP步骤”两个维度。
+function buildWorkflowCompletionMessage(
+  entryNodeKind: WorkflowNodeKind,
+  workflowSuccessCount: number,
+  modelSessionSuccessCount: number,
+): string {
+  if (modelSessionSuccessCount > 0) {
+    return `自动识别起点为「${entryNodeKind}」，工作流执行完成（工作流节点成功 ${workflowSuccessCount} 个，MCP 步骤成功 ${modelSessionSuccessCount} 个）。`;
+  }
+  return `自动识别起点为「${entryNodeKind}」，工作流执行完成（工作流节点成功 ${workflowSuccessCount} 个）。`;
+}
+
 export async function runModelWorkflow(request: WorkflowRunRequest): Promise<WorkflowRunResult> {
   const workflow = listModelWorkflows().find((item) => item.id === request.workflowId);
   if (!workflow) {
@@ -437,7 +457,11 @@ export async function runModelWorkflow(request: WorkflowRunRequest): Promise<Wor
     runId,
     workflowId: workflow.id,
     entryNodeKind,
-    message: `自动识别起点为「${entryNodeKind}」，工作流执行完成，共 ${stepRecords.filter((item) => item.status === "success").length} 个成功步骤。`,
+    message: buildWorkflowCompletionMessage(
+      entryNodeKind,
+      stepRecords.filter((item) => item.status === "success").length,
+      countModelSessionSuccessSteps(modelSession),
+    ),
     steps: stepRecords,
     exportedFile,
     referenceImagesDetected: mergedReferenceImages,

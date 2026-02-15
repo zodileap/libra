@@ -309,13 +309,11 @@ export function SessionPage({
 
     try {
       if (isModelAgent) {
+        let bridgePrecheckWarning = "";
         const bridgeEnsureResult = await ensureBlenderBridge();
         if (!bridgeEnsureResult.ok) {
-          appendTraceRecord({
-            traceId: `trace-local-${Date.now()}`,
-            source: "bridge:ensure",
-            message: bridgeEnsureResult.message,
-          });
+          // 描述：Bridge 预检失败不立即作为错误 trace 写入，避免后续自动恢复成功时形成误导。
+          bridgePrecheckWarning = bridgeEnsureResult.message;
           setStatus("Bridge 未就绪，正在尝试自动拉起 Blender 并重试...");
         }
         const response = await runModelWorkflow({
@@ -341,6 +339,13 @@ export function SessionPage({
             traceId: response.modelSession.trace_id,
             source: "workflow:model_session",
             message: response.message,
+          });
+        }
+        if (bridgePrecheckWarning) {
+          appendTraceRecord({
+            traceId: `trace-local-${Date.now()}`,
+            source: "bridge:ensure",
+            message: `Bridge 预检未通过，但执行阶段已自动恢复并完成。预检详情：${bridgePrecheckWarning}`,
           });
         }
         const nextUpdatedAt = new Date().toLocaleString("zh-CN", {

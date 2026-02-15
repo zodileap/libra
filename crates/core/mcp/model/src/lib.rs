@@ -432,6 +432,8 @@ mod tests {
         let script = blender_bridge_addon_script();
         assert!(script.contains("save_userpref"));
         assert!(script.contains("_persist_user_preferences"));
+        assert!(script.contains("view_layer"));
+        assert!(script.contains("_RestrictContext"));
     }
 
     #[test]
@@ -439,6 +441,8 @@ mod tests {
         let script = blender_bridge_script();
         assert!(script.contains("save_userpref"));
         assert!(script.contains("_persist_user_preferences"));
+        assert!(script.contains("view_layer"));
+        assert!(script.contains("_RestrictContext"));
     }
 
     #[test]

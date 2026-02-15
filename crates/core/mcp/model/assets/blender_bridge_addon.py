@@ -702,10 +702,19 @@ def stop_bridge():
 
 
 def _persist_user_preferences():
+    context = getattr(bpy, "context", None)
+    if context is None:
+        return
+    # 描述：Blender Extension 安装流程可能运行在受限上下文（_RestrictContext），
+    # 此时强行保存用户偏好会抛错并导致误导日志；这里直接跳过。
+    if getattr(context, "view_layer", None) is None:
+        return
     try:
         if hasattr(bpy.ops.wm, "save_userpref"):
             bpy.ops.wm.save_userpref()
     except Exception as err:
+        if "_RestrictContext" in str(err) and "view_layer" in str(err):
+            return
         print(f"[zodileap] save user preferences failed: {err}")
 
 
