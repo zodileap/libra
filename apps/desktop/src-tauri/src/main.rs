@@ -24,7 +24,7 @@ use zodileap_mcp_model::{
     execute_model_tool, export_model, ping_blender_bridge, requires_safety_confirmation,
     validate_safety_confirmation_token, ExportModelRequest,
     ModelPlanBranch, ModelPlanOperationKind, ModelPlanRiskLevel, ModelSessionCapabilityMatrix,
-    ModelSessionPlannedStep, ModelToolAction, ModelToolRequest, ModelToolTarget,
+    ModelSessionPlannedStep, ModelToolAction, ModelToolRequest, ModelToolResult, ModelToolTarget,
 };
 
 #[derive(Serialize)]
@@ -110,6 +110,12 @@ struct ModelSessionState {
 #[derive(Default)]
 struct ModelSessionStore {
     sessions: Mutex<HashMap<String, ModelSessionState>>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SelectionContextSnapshot {
+    active_object: Option<String>,
+    selected_objects: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -1018,6 +1024,31 @@ fn build_ui_hint_from_protocol_error(error: &ProtocolError) -> Option<ProtocolUi
         });
     }
 
+    if lower_message.contains("no_target_object")
+        || lower_message.contains("no selected mesh objects")
+        || lower_message.contains("no active mesh object")
+    {
+        return Some(ProtocolUiHint {
+            key: "selection-required".to_string(),
+            level: ProtocolUiHintLevel::Warning,
+            title: "需要先选择对象".to_string(),
+            message: "当前未检测到可操作对象。请先在 Blender 中选中目标对象后再重试。".to_string(),
+            actions: vec![
+                ProtocolUiHintAction {
+                    key: "retry_last_step".to_string(),
+                    label: "我已选择，重试".to_string(),
+                    intent: ProtocolUiHintActionIntent::Primary,
+                },
+                ProtocolUiHintAction {
+                    key: "dismiss".to_string(),
+                    label: "暂不处理".to_string(),
+                    intent: ProtocolUiHintActionIntent::Default,
+                },
+            ],
+            context: None,
+        });
+    }
+
     if lower_message.contains("导出能力已关闭") || lower_code.contains("capability_disabled") {
         return Some(ProtocolUiHint {
             key: "export-capability-disabled".to_string(),
@@ -1241,6 +1272,7 @@ fn parse_plan_risk(raw: Option<&str>) -> Result<ModelPlanRiskLevel, String> {
 fn infer_operation_kind_for_action(action: ModelToolAction) -> ModelPlanOperationKind {
     match action {
         ModelToolAction::ListObjects
+        | ModelToolAction::GetSelectionContext
         | ModelToolAction::SelectObjects
         | ModelToolAction::RenameObject
         | ModelToolAction::OrganizeHierarchy
@@ -1684,6 +1716,140 @@ fn derive_selection_scope(lower: &str) -> &'static str {
         return "selected";
     }
     "selected"
+}
+
+/// 描述：从步骤参数推断选择范围，兼容新旧参数（selection_scope / selected_only）。
+fn resolve_selection_scope_from_params(params: &serde_json::Value) -> &'static str {
+    if let Some(scope) = params
+        .get("selection_scope")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if scope == "active" {
+            return "active";
+        }
+        if scope == "selected" {
+            return "selected";
+        }
+        if scope == "all" {
+            return "all";
+        }
+    }
+    if let Some(selected_only) = params.get("selected_only").and_then(|value| value.as_bool()) {
+        return if selected_only { "selected" } else { "all" };
+    }
+    "selected"
+}
+
+/// 描述：判断步骤是否需要“选中对象”预检查；仅在用户显式引用“这个物体/选中对象”时启用。
+fn required_selection_scope_for_step(
+    prompt_lower: &str,
+    step: &ModelSessionPlannedStep,
+) -> Option<&'static str> {
+    if !has_selection_reference_intent(prompt_lower) {
+        return None;
+    }
+    let ModelSessionPlannedStep::Tool { action, params, .. } = step else {
+        return None;
+    };
+    if !matches!(
+        action,
+        ModelToolAction::TranslateObjects | ModelToolAction::RotateObjects | ModelToolAction::ScaleObjects
+    ) {
+        return None;
+    }
+    let scope = resolve_selection_scope_from_params(params);
+    if scope == "all" {
+        None
+    } else {
+        Some(scope)
+    }
+}
+
+/// 描述：解析 `get_selection_context` 动作结果，提取当前 active 与 selected 对象信息。
+fn parse_selection_context_snapshot(data: &serde_json::Value) -> SelectionContextSnapshot {
+    let active_object = data
+        .get("active_object")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
+    let selected_objects = data
+        .get("selected_objects")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| value.to_string())
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default();
+    SelectionContextSnapshot {
+        active_object,
+        selected_objects,
+    }
+}
+
+/// 描述：检查当前选择上下文是否满足步骤作用域要求。
+fn selection_context_meets_scope(snapshot: &SelectionContextSnapshot, required_scope: &str) -> bool {
+    match required_scope {
+        "active" => snapshot.active_object.is_some() || !snapshot.selected_objects.is_empty(),
+        "selected" => !snapshot.selected_objects.is_empty(),
+        _ => true,
+    }
+}
+
+/// 描述：构建“需要先选择对象”场景的 UI Hint，指导用户手动完成选择后重试。
+fn build_selection_required_ui_hint(
+    required_scope: &str,
+    snapshot: &SelectionContextSnapshot,
+) -> ProtocolUiHint {
+    let message = if required_scope == "active" {
+        "你当前没有激活可编辑对象。请先在 Blender 里激活（或至少选中）一个网格对象后重试。"
+    } else {
+        "你当前没有选中可编辑对象。请先在 Blender 里选中目标网格对象后重试。"
+    };
+    ProtocolUiHint {
+        key: "selection-required".to_string(),
+        level: ProtocolUiHintLevel::Warning,
+        title: "需要先选择对象".to_string(),
+        message: message.to_string(),
+        actions: vec![
+            ProtocolUiHintAction {
+                key: "retry_last_step".to_string(),
+                label: "我已选择，重试".to_string(),
+                intent: ProtocolUiHintActionIntent::Primary,
+            },
+            ProtocolUiHintAction {
+                key: "dismiss".to_string(),
+                label: "暂不处理".to_string(),
+                intent: ProtocolUiHintActionIntent::Default,
+            },
+        ],
+        context: Some(json!({
+            "required_scope": required_scope,
+            "active_object": snapshot.active_object,
+            "selected_objects": snapshot.selected_objects,
+            "selected_count": snapshot.selected_objects.len(),
+        })),
+    }
+}
+
+/// 描述：判断步骤成功后是否应失效已缓存的选择上下文，避免后续步骤读取过期状态。
+fn should_invalidate_selection_context_cache(step: &ModelSessionPlannedStep) -> bool {
+    match step {
+        ModelSessionPlannedStep::Tool { action, .. } => !matches!(
+            action,
+            ModelToolAction::TranslateObjects
+                | ModelToolAction::RotateObjects
+                | ModelToolAction::ScaleObjects
+        ),
+        ModelSessionPlannedStep::Export { .. } => false,
+    }
 }
 
 /// 描述：识别“平移/移动”意图，支持中英文关键词。
@@ -2254,6 +2420,7 @@ fn check_capability_for_step(
         PlannedModelStep::Tool { action, .. } => {
             let allowed = match action {
                 ModelToolAction::ListObjects
+                | ModelToolAction::GetSelectionContext
                 | ModelToolAction::SelectObjects
                 | ModelToolAction::RenameObject
                 | ModelToolAction::OrganizeHierarchy => capability_enabled(capabilities.scene),
@@ -2340,11 +2507,12 @@ fn wait_for_bridge_ready(blender_bridge_addr: Option<String>, attempts: u32, int
     false
 }
 
-fn execute_model_tool_with_bridge_upgrade(
+/// 描述：执行模型动作并自动处理 Bridge 自动拉起与脚本升级，返回完整动作结果数据。
+fn execute_model_tool_result_with_bridge_upgrade(
     action: ModelToolAction,
     params: serde_json::Value,
     blender_bridge_addr: Option<String>,
-) -> Result<(String, Option<String>), String> {
+) -> Result<ModelToolResult, String> {
     let run_once = || {
         execute_model_tool(ModelToolRequest {
             action,
@@ -2352,7 +2520,6 @@ fn execute_model_tool_with_bridge_upgrade(
             blender_bridge_addr: blender_bridge_addr.clone(),
             timeout_secs: Some(45),
         })
-        .map(|result| (result.message, result.output_path))
         .map_err(|err| err.to_string())
     };
 
@@ -2395,6 +2562,16 @@ fn execute_model_tool_with_bridge_upgrade(
             }
         }
     }
+}
+
+/// 描述：执行模型动作并返回消息与输出路径，兼容现有流程调用。
+fn execute_model_tool_with_bridge_upgrade(
+    action: ModelToolAction,
+    params: serde_json::Value,
+    blender_bridge_addr: Option<String>,
+) -> Result<(String, Option<String>), String> {
+    execute_model_tool_result_with_bridge_upgrade(action, params, blender_bridge_addr)
+        .map(|result| (result.message, result.output_path))
 }
 
 #[tauri::command]
@@ -2545,6 +2722,8 @@ fn run_model_session_command(
         .filter(|item| item.branch().as_str() == "primary")
         .cloned()
         .collect();
+    let prompt_lower = normalized_prompt.to_lowercase();
+    let mut selection_context_cache: Option<SelectionContextSnapshot> = None;
 
     for step in primary_steps {
         {
@@ -2617,6 +2796,91 @@ fn run_model_session_command(
         let step_code = step.code();
         let step_input = step.input().to_string();
         let step_trace_data = build_step_trace_payload(&step);
+
+        if let Some(required_scope) = required_selection_scope_for_step(prompt_lower.as_str(), &step) {
+            if selection_context_cache.is_none() {
+                if let Ok(selection_result) = execute_model_tool_result_with_bridge_upgrade(
+                    ModelToolAction::GetSelectionContext,
+                    json!({}),
+                    blender_bridge_addr.clone(),
+                ) {
+                    selection_context_cache =
+                        Some(parse_selection_context_snapshot(&selection_result.data));
+                }
+            }
+            if let Some(snapshot) = selection_context_cache.as_ref() {
+                if !selection_context_meets_scope(snapshot, required_scope) {
+                    let mut blocked_step_data = step_trace_data.clone();
+                    if let Some(raw) = blocked_step_data.as_object_mut() {
+                        raw.insert("input".to_string(), json!(step_input.clone()));
+                        raw.insert("trace_id".to_string(), json!(trace_id.clone()));
+                        raw.insert(
+                            "selection_guard".to_string(),
+                            json!({
+                                "required_scope": required_scope,
+                                "active_object": snapshot.active_object,
+                                "selected_objects": snapshot.selected_objects,
+                                "selected_count": snapshot.selected_objects.len(),
+                            }),
+                        );
+                    }
+                    let blocked_message = if required_scope == "active" {
+                        "当前没有激活可编辑对象，请先在 Blender 中激活（或选中）目标对象。"
+                    } else {
+                        "当前没有选中可编辑对象，请先在 Blender 中选中目标对象。"
+                    };
+                    let blocked_error = ProtocolError::new(
+                        "core.desktop.model.selection_required",
+                        blocked_message,
+                    )
+                    .with_suggestion("先在 Blender 里完成选择，再点击重试最近一步");
+                    created_steps.push(ModelStepRecord {
+                        index: next_index,
+                        code: step_code.clone(),
+                        status: ProtocolStepStatus::Manual,
+                        elapsed_ms: started.elapsed().as_millis(),
+                        summary: "执行前检查未通过：需要先选择对象".to_string(),
+                        error: Some(blocked_error.clone()),
+                        data: Some(blocked_step_data),
+                    });
+                    created_events.push(ModelEventRecord {
+                        event: "step_blocked".to_string(),
+                        step_index: Some(next_index),
+                        timestamp_ms: now_millis(),
+                        message: blocked_error.message.clone(),
+                    });
+                    let (all_steps, all_events, all_assets) = {
+                        let mut map = store
+                            .sessions
+                            .lock()
+                            .map_err(|_| DesktopProtocolError {
+                                code: "core.desktop.model.store_lock_failed".to_string(),
+                                message: "model session store lock poisoned".to_string(),
+                                suggestion: None,
+                                retryable: true,
+                            })?;
+                        let session = map.entry(session_id.clone()).or_default();
+                        session.steps.extend(created_steps.clone());
+                        session.events.extend(created_events.clone());
+                        session.assets.extend(created_assets.clone());
+                        (
+                            session.steps.clone(),
+                            session.events.clone(),
+                            session.assets.clone(),
+                        )
+                    };
+                    return Ok(ModelSessionRunResponse {
+                        trace_id,
+                        message: blocked_error.message,
+                        steps: all_steps,
+                        events: all_events,
+                        assets: all_assets,
+                        exported_file,
+                        ui_hint: Some(build_selection_required_ui_hint(required_scope, snapshot)),
+                    });
+                }
+            }
+        }
 
         let step_result: Result<(String, Option<String>), String> = match &step {
             ModelSessionPlannedStep::Export { .. } => {
@@ -2708,6 +2972,9 @@ fn run_model_session_command(
                     message: summary,
                 });
                 created_steps.push(step_record);
+                if should_invalidate_selection_context_cache(&step) {
+                    selection_context_cache = None;
+                }
             }
             Err(err) => {
                 let protocol_error =
@@ -3041,8 +3308,10 @@ mod tests {
     use super::{
         blender_series_supports_extension, bridge_boot_script_content, bridge_enable_and_save_expr,
         build_model_plan_prompt, build_ui_hint_from_protocol_error, is_bridge_unavailable_error,
-        parse_llm_model_plan, plan_model_steps, split_error_code_and_message,
-        validate_llm_model_plan_steps, ModelMcpCapabilities, PlannedModelStep,
+        parse_llm_model_plan, parse_selection_context_snapshot, plan_model_steps,
+        required_selection_scope_for_step, selection_context_meets_scope,
+        split_error_code_and_message, validate_llm_model_plan_steps, ModelMcpCapabilities,
+        PlannedModelStep, SelectionContextSnapshot,
     };
     use zodileap_mcp_model::{ModelPlanBranch, ModelPlanOperationKind, ModelPlanRiskLevel, ModelSessionPlannedStep, ModelToolAction};
     use zodileap_mcp_common::ProtocolError;
@@ -3091,6 +3360,17 @@ mod tests {
         );
         let ui_hint = build_ui_hint_from_protocol_error(&error).expect("must have ui hint");
         assert_eq!(ui_hint.key, "restart-blender-bridge");
+        assert!(!ui_hint.actions.is_empty());
+    }
+
+    #[test]
+    fn should_build_selection_required_ui_hint_from_protocol_error() {
+        let error = ProtocolError::new(
+            "core.desktop.model.step_failed",
+            "[no_target_object] translate_objects: no selected mesh objects found",
+        );
+        let ui_hint = build_ui_hint_from_protocol_error(&error).expect("must have ui hint");
+        assert_eq!(ui_hint.key, "selection-required");
         assert!(!ui_hint.actions.is_empty());
     }
 
@@ -3287,5 +3567,45 @@ mod tests {
         let err = validate_llm_model_plan_steps(&steps, "对这个物体旋转 30 度")
             .expect_err("rotate with selection_scope=all should be rejected");
         assert!(err.contains("selection_scope=all"));
+    }
+
+    #[test]
+    fn should_parse_selection_context_snapshot() {
+        let snapshot = parse_selection_context_snapshot(&json!({
+            "active_object": "Cube",
+            "selected_objects": ["Cube", "Cube.001"],
+        }));
+        assert_eq!(snapshot.active_object.as_deref(), Some("Cube"));
+        assert_eq!(snapshot.selected_objects.len(), 2);
+    }
+
+    #[test]
+    fn should_require_selection_scope_for_selected_reference_step() {
+        let step = ModelSessionPlannedStep::Tool {
+            action: ModelToolAction::TranslateObjects,
+            input: "平移".to_string(),
+            params: json!({"delta":[0.1,0.0,0.0],"selection_scope":"selected"}),
+            operation_kind: ModelPlanOperationKind::BatchTransform,
+            branch: ModelPlanBranch::Primary,
+            recoverable: true,
+            risk: ModelPlanRiskLevel::Low,
+            condition: None,
+        };
+        let required = required_selection_scope_for_step("对这个物体平移", &step);
+        assert_eq!(required, Some("selected"));
+    }
+
+    #[test]
+    fn should_validate_selection_context_scope_readiness() {
+        let empty = SelectionContextSnapshot::default();
+        assert!(!selection_context_meets_scope(&empty, "selected"));
+        assert!(!selection_context_meets_scope(&empty, "active"));
+
+        let selected = SelectionContextSnapshot {
+            active_object: None,
+            selected_objects: vec!["Cube".to_string()],
+        };
+        assert!(selection_context_meets_scope(&selected, "selected"));
+        assert!(selection_context_meets_scope(&selected, "active"));
     }
 }

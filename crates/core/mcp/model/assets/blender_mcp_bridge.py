@@ -107,6 +107,8 @@ def _active_or_selected_name(payload):
 
 
 def _list_objects(_payload):
+    active = bpy.context.view_layer.objects.active
+    active_name = active.name if active else None
     data = []
     for obj in bpy.data.objects:
         data.append(
@@ -115,12 +117,28 @@ def _list_objects(_payload):
                 "type": obj.type,
                 "parent": obj.parent.name if obj.parent else None,
                 "selected": bool(obj.select_get()),
+                "active": bool(active_name and obj.name == active_name),
             }
         )
     return {
         "ok": True,
         "message": f"listed {len(data)} objects",
         "data": {"objects": data},
+    }
+
+
+def _get_selection_context(_payload):
+    active = bpy.context.view_layer.objects.active
+    active_mesh_name = active.name if active and active.type == "MESH" else None
+    selected_mesh_names = [obj.name for obj in bpy.context.selected_objects if obj.type == "MESH"]
+    return {
+        "ok": True,
+        "message": f"selection ready: active={active_mesh_name or 'none'}, selected={len(selected_mesh_names)}",
+        "data": {
+            "active_object": active_mesh_name,
+            "selected_objects": selected_mesh_names,
+            "selected_count": len(selected_mesh_names),
+        },
     }
 
 
@@ -667,6 +685,7 @@ def _export_glb(payload):
 ACTION_HANDLERS = {
     "ping": lambda _payload: {"ok": True, "message": "bridge is reachable", "data": {}},
     "list_objects": _list_objects,
+    "get_selection_context": _get_selection_context,
     "select_objects": _select_objects,
     "rename_object": _rename_object,
     "organize_hierarchy": _organize_hierarchy,

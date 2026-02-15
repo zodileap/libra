@@ -347,6 +347,7 @@ pub fn check_capability_for_session_step(
         ModelSessionPlannedStep::Tool { action, .. } => {
             let allowed = match action {
                 ModelToolAction::ListObjects
+                | ModelToolAction::GetSelectionContext
                 | ModelToolAction::SelectObjects
                 | ModelToolAction::RenameObject
                 | ModelToolAction::OrganizeHierarchy => capabilities.scene,

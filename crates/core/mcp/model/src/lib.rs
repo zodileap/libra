@@ -45,6 +45,7 @@ pub struct ExportModelResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelToolAction {
     ListObjects,
+    GetSelectionContext,
     SelectObjects,
     RenameObject,
     OrganizeHierarchy,
@@ -78,6 +79,7 @@ impl ModelToolAction {
     pub fn as_str(&self) -> &'static str {
         match self {
             ModelToolAction::ListObjects => "list_objects",
+            ModelToolAction::GetSelectionContext => "get_selection_context",
             ModelToolAction::SelectObjects => "select_objects",
             ModelToolAction::RenameObject => "rename_object",
             ModelToolAction::OrganizeHierarchy => "organize_hierarchy",
@@ -121,6 +123,7 @@ impl std::str::FromStr for ModelToolAction {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value.trim().to_lowercase().as_str() {
             "list_objects" => Ok(Self::ListObjects),
+            "get_selection_context" => Ok(Self::GetSelectionContext),
             "select_objects" => Ok(Self::SelectObjects),
             "rename_object" => Ok(Self::RenameObject),
             "organize_hierarchy" => Ok(Self::OrganizeHierarchy),
@@ -565,6 +568,7 @@ mod tests {
         assert!(script.contains("view_layer"));
         assert!(script.contains("_RestrictContext"));
         assert!(script.contains("translate_objects"));
+        assert!(script.contains("get_selection_context"));
     }
 
     #[test]
