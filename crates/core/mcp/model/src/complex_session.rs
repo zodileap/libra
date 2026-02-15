@@ -957,8 +957,40 @@ fn parse_first_number(input: &str) -> Option<f64> {
 /// 描述：从自然语言中提取路径参数，支持绝对路径和 Windows 路径。
 fn parse_path_in_prompt(prompt: &str) -> Option<String> {
     for token in prompt.trim().split_whitespace() {
-        let candidate = token.trim_matches(|value| value == '"' || value == '\'' || value == '`');
+        let candidate = token.trim_matches(|value| {
+            value == '"'
+                || value == '\''
+                || value == '`'
+                || value == '“'
+                || value == '”'
+                || value == '‘'
+                || value == '’'
+        });
         if candidate.starts_with('/') || candidate.contains(":\\") {
+            return Some(candidate.to_string());
+        }
+    }
+    if let Some(start) = prompt.find('/') {
+        let remaining = &prompt[start..];
+        let end = remaining
+            .find(|value: char| {
+                value.is_whitespace()
+                    || value == '"'
+                    || value == '\''
+                    || value == '`'
+                    || value == '“'
+                    || value == '”'
+                    || value == '‘'
+                    || value == '’'
+                    || value == '，'
+                    || value == '。'
+                    || value == '；'
+                    || value == '！'
+                    || value == '？'
+            })
+            .unwrap_or(remaining.len());
+        let candidate = remaining[..end].trim();
+        if !candidate.is_empty() {
             return Some(candidate.to_string());
         }
     }
