@@ -8,22 +8,25 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::Emitter;
 use tauri::Manager;
 use zodileap_agent_core::llm::{call_model, parse_provider};
-use zodileap_agent_core::{run_agent_with_protocol_error, AgentRunRequest};
+use zodileap_agent_core::{
+    run_agent_with_protocol_error_stream, AgentRunRequest, AgentStreamEvent,
+};
 use zodileap_mcp_common::{
-    ProtocolAssetRecord, ProtocolError, ProtocolEventRecord, ProtocolStepRecord, ProtocolStepStatus,
-    ProtocolUiHint, ProtocolUiHintAction, ProtocolUiHintActionIntent, ProtocolUiHintLevel,
+    ProtocolAssetRecord, ProtocolError, ProtocolEventRecord, ProtocolStepRecord,
+    ProtocolStepStatus, ProtocolUiHint, ProtocolUiHintAction, ProtocolUiHintActionIntent,
+    ProtocolUiHintLevel,
 };
 use zodileap_mcp_model::{
     blender_bridge_addon_script, blender_bridge_extension_manifest, build_recovery_ui_hint,
     build_safety_confirmation_ui_hint, build_step_trace_payload, check_capability_for_session_step,
     execute_model_tool, export_model, ping_blender_bridge, requires_safety_confirmation,
-    validate_safety_confirmation_token, ExportModelRequest,
-    ModelPlanBranch, ModelPlanOperationKind, ModelPlanRiskLevel, ModelSessionCapabilityMatrix,
+    validate_safety_confirmation_token, ExportModelFormat, ExportModelRequest, ModelPlanBranch,
+    ModelPlanOperationKind, ModelPlanRiskLevel, ModelSessionCapabilityMatrix,
     ModelSessionPlannedStep, ModelToolAction, ModelToolRequest, ModelToolResult, ModelToolTarget,
 };
 
@@ -107,9 +110,9 @@ struct ModelSessionState {
     cancelled: bool,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct ModelSessionStore {
-    sessions: Mutex<HashMap<String, ModelSessionState>>,
+    sessions: Arc<Mutex<HashMap<String, ModelSessionState>>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -137,6 +140,58 @@ struct AgentLogEvent {
     message: String,
 }
 
+#[derive(Serialize, Clone)]
+struct AgentTextStreamEvent {
+    trace_id: String,
+    session_id: Option<String>,
+    kind: String,
+    message: String,
+    delta: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+struct ModelSessionStreamEvent {
+    session_id: String,
+    trace_id: String,
+    status: String,
+    message: String,
+    step: Option<ModelStepRecord>,
+    event: Option<ModelEventRecord>,
+}
+
+#[derive(Serialize, Clone)]
+struct ModelDebugTraceEvent {
+    session_id: String,
+    trace_id: String,
+    stage: String,
+    title: String,
+    detail: String,
+    timestamp_ms: u128,
+}
+
+#[derive(Serialize)]
+struct ModelSessionAiSummaryResponse {
+    summary: String,
+    prompt: String,
+    raw_response: String,
+    provider: String,
+}
+
+/// 描述：向前端派发通用智能体文本流事件，供代码会话逐字渲染。
+fn emit_agent_text_stream_event(app: &tauri::AppHandle, payload: AgentTextStreamEvent) {
+    let _ = app.emit("agent:text_stream", payload);
+}
+
+/// 描述：向前端派发模型会话流式事件，供会话页实时渲染中间过程。
+fn emit_model_session_stream_event(app: &tauri::AppHandle, payload: ModelSessionStreamEvent) {
+    let _ = app.emit("model:session_stream", payload);
+}
+
+/// 描述：向前端派发模型会话调试事件，包含规划 prompt、原始返回与解析结果等关键信息。
+fn emit_model_debug_trace_event(app: &tauri::AppHandle, payload: ModelDebugTraceEvent) {
+    let _ = app.emit("model:debug_trace", payload);
+}
+
 #[derive(Serialize)]
 struct CodexCliHealthResponse {
     available: bool,
@@ -159,6 +214,8 @@ struct LlmModelPlanStep {
     step_type: String,
     action: Option<String>,
     input: Option<String>,
+    #[serde(alias = "export_format")]
+    format: Option<String>,
     params: Option<serde_json::Value>,
     operation_kind: Option<String>,
     branch: Option<String>,
@@ -374,7 +431,9 @@ fn run_blender_extension_command(
         .map_err(|err| format!("run extension command failed: {}", err))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let joined = format!("{} {}", stdout.trim(), stderr.trim()).trim().to_string();
+    let joined = format!("{} {}", stdout.trim(), stderr.trim())
+        .trim()
+        .to_string();
 
     if !output.status.success() {
         return Err(format!(
@@ -551,7 +610,10 @@ fn install_blender_bridge_by_extension(blender_bin: &str) -> Result<String, Stri
     match cleanup_result {
         Ok(removed_paths) => {
             if !removed_paths.is_empty() {
-                message.push_str(&format!("。已清理 Legacy 文件：{}", removed_paths.join(" | ")));
+                message.push_str(&format!(
+                    "。已清理 Legacy 文件：{}",
+                    removed_paths.join(" | ")
+                ));
             }
         }
         Err(err) => {
@@ -689,10 +751,7 @@ fn install_blender_bridge_legacy(blender_bin: &str) -> Result<String, String> {
         installed_paths.join(" | ")
     );
     if let Some(warning) = persist_warning {
-        message.push_str(&format!(
-            "。已尝试自动持久化启用插件但失败：{}",
-            warning
-        ));
+        message.push_str(&format!("。已尝试自动持久化启用插件但失败：{}", warning));
     } else {
         message.push_str("。已自动执行插件持久化启用。");
     }
@@ -700,7 +759,14 @@ fn install_blender_bridge_legacy(blender_bin: &str) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn install_blender_bridge(blender_bin: Option<String>) -> Result<InstallBridgeResponse, String> {
+async fn install_blender_bridge(blender_bin: Option<String>) -> Result<InstallBridgeResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || install_blender_bridge_inner(blender_bin))
+        .await
+        .map_err(|err| format!("install blender bridge task join failed: {}", err))?
+}
+
+/// 描述：执行 Bridge 安装主流程，包含 extension 优先与 legacy 回退策略。
+fn install_blender_bridge_inner(blender_bin: Option<String>) -> Result<InstallBridgeResponse, String> {
     let blender_bin = resolve_blender_bin(blender_bin);
     if blender_supports_extension_install(&blender_bin) {
         match install_blender_bridge_by_extension(&blender_bin) {
@@ -721,13 +787,21 @@ fn install_blender_bridge(blender_bin: Option<String>) -> Result<InstallBridgeRe
 
     let message = install_blender_bridge_legacy(&blender_bin)?;
 
-    Ok(InstallBridgeResponse {
-        message,
-    })
+    Ok(InstallBridgeResponse { message })
 }
 
 #[tauri::command]
-fn check_blender_bridge(blender_bridge_addr: Option<String>) -> BridgeHealthResponse {
+async fn check_blender_bridge(blender_bridge_addr: Option<String>) -> BridgeHealthResponse {
+    tauri::async_runtime::spawn_blocking(move || check_blender_bridge_inner(blender_bridge_addr))
+        .await
+        .unwrap_or_else(|err| BridgeHealthResponse {
+            ok: false,
+            message: format!("check blender bridge task join failed: {}", err),
+        })
+}
+
+/// 描述：执行 Bridge 健康检查的阻塞逻辑，避免在 UI 事件循环线程中直接进行网络连接。
+fn check_blender_bridge_inner(blender_bridge_addr: Option<String>) -> BridgeHealthResponse {
     match ping_blender_bridge(blender_bridge_addr) {
         Ok(message) => BridgeHealthResponse { ok: true, message },
         Err(err) => BridgeHealthResponse {
@@ -738,12 +812,39 @@ fn check_blender_bridge(blender_bridge_addr: Option<String>) -> BridgeHealthResp
 }
 
 #[tauri::command]
-fn export_model_command(
+async fn export_model_command(
     project_name: String,
     prompt: String,
     output_dir: Option<String>,
     blender_bridge_addr: Option<String>,
     target: Option<String>,
+    export_format: Option<String>,
+    export_params: Option<serde_json::Value>,
+) -> Result<ExportModelResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        export_model_command_inner(
+            project_name,
+            prompt,
+            output_dir,
+            blender_bridge_addr,
+            target,
+            export_format,
+            export_params,
+        )
+    })
+    .await
+    .map_err(|err| format!("export model task join failed: {}", err))?
+}
+
+/// 描述：执行模型导出的阻塞逻辑，供异步命令包装器在后台线程调用。
+fn export_model_command_inner(
+    project_name: String,
+    prompt: String,
+    output_dir: Option<String>,
+    blender_bridge_addr: Option<String>,
+    target: Option<String>,
+    export_format: Option<String>,
+    export_params: Option<serde_json::Value>,
 ) -> Result<ExportModelResponse, String> {
     let target = match target.as_deref() {
         Some("zbrush") => ModelToolTarget::ZBrush,
@@ -758,10 +859,18 @@ fn export_model_command(
             .unwrap_or(output_dir)
     };
 
+    let export_format = export_format
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.parse::<ExportModelFormat>())
+        .transpose()?;
     let result = export_model(ExportModelRequest {
         project_name,
         prompt,
         output_dir,
+        export_format,
+        export_params,
         blender_bridge_addr,
         target,
     })
@@ -778,9 +887,45 @@ fn export_model_command(
 }
 
 #[tauri::command]
-fn run_agent_command(
+async fn run_agent_command(
     app: tauri::AppHandle,
     agent_key: String,
+    session_id: Option<String>,
+    provider: Option<String>,
+    prompt: String,
+    trace_id: Option<String>,
+    project_name: Option<String>,
+    model_export_enabled: Option<bool>,
+    blender_bridge_addr: Option<String>,
+    output_dir: Option<String>,
+) -> Result<AgentRunResponse, DesktopProtocolError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        run_agent_command_inner(
+            app,
+            agent_key,
+            session_id,
+            provider,
+            prompt,
+            trace_id,
+            project_name,
+            model_export_enabled,
+            blender_bridge_addr,
+            output_dir,
+        )
+    })
+    .await
+    .map_err(|err| DesktopProtocolError {
+        code: "core.desktop.agent.task_join_failed".to_string(),
+        message: format!("agent command task join failed: {}", err),
+        suggestion: Some("请重试一次；如仍失败请重启应用".to_string()),
+        retryable: true,
+    })?
+}
+
+fn run_agent_command_inner(
+    app: tauri::AppHandle,
+    agent_key: String,
+    session_id: Option<String>,
     provider: Option<String>,
     prompt: String,
     trace_id: Option<String>,
@@ -874,16 +1019,67 @@ fn run_agent_command(
         format!("output_dir={}", selected_output_dir.to_string_lossy()),
     );
 
-    let result = run_agent_with_protocol_error(AgentRunRequest {
-        agent_key,
-        provider: provider.unwrap_or_else(|| "codex".to_string()),
-        prompt,
-        project_name,
-        model_export_enabled: model_export_enabled.unwrap_or(false),
-        blender_bridge_addr,
-        output_dir: Some(selected_output_dir.to_string_lossy().to_string()),
-        workdir: Some(current_dir.to_string_lossy().to_string()),
-    });
+    emit_agent_text_stream_event(
+        &app,
+        AgentTextStreamEvent {
+            trace_id: trace_id.clone(),
+            session_id: session_id.clone(),
+            kind: "started".to_string(),
+            message: "LLM 执行已开始".to_string(),
+            delta: None,
+        },
+    );
+
+    let result = run_agent_with_protocol_error_stream(
+        AgentRunRequest {
+            agent_key,
+            provider: provider.unwrap_or_else(|| "codex".to_string()),
+            prompt,
+            project_name,
+            model_export_enabled: model_export_enabled.unwrap_or(false),
+            blender_bridge_addr,
+            output_dir: Some(selected_output_dir.to_string_lossy().to_string()),
+            workdir: Some(current_dir.to_string_lossy().to_string()),
+        },
+        |stream_event| match stream_event {
+            AgentStreamEvent::LlmStarted { provider } => {
+                emit_agent_text_stream_event(
+                    &app,
+                    AgentTextStreamEvent {
+                        trace_id: trace_id.clone(),
+                        session_id: session_id.clone(),
+                        kind: "llm_started".to_string(),
+                        message: format!("provider={} started", provider),
+                        delta: None,
+                    },
+                );
+            }
+            AgentStreamEvent::LlmDelta { content } => {
+                emit_agent_text_stream_event(
+                    &app,
+                    AgentTextStreamEvent {
+                        trace_id: trace_id.clone(),
+                        session_id: session_id.clone(),
+                        kind: "delta".to_string(),
+                        message: "chunk".to_string(),
+                        delta: Some(content),
+                    },
+                );
+            }
+            AgentStreamEvent::LlmFinished { provider } => {
+                emit_agent_text_stream_event(
+                    &app,
+                    AgentTextStreamEvent {
+                        trace_id: trace_id.clone(),
+                        session_id: session_id.clone(),
+                        kind: "llm_finished".to_string(),
+                        message: format!("provider={} finished", provider),
+                        delta: None,
+                    },
+                );
+            }
+        },
+    );
 
     let result = match result {
         Ok(value) => {
@@ -904,9 +1100,30 @@ fn run_agent_command(
         }
         Err(err) => {
             log("error", "result", err.to_string());
+            emit_agent_text_stream_event(
+                &app,
+                AgentTextStreamEvent {
+                    trace_id: trace_id.clone(),
+                    session_id: session_id.clone(),
+                    kind: "error".to_string(),
+                    message: err.message.clone(),
+                    delta: None,
+                },
+            );
             return Err(err.into());
         }
     };
+
+    emit_agent_text_stream_event(
+        &app,
+        AgentTextStreamEvent {
+            trace_id: trace_id.clone(),
+            session_id,
+            kind: "finished".to_string(),
+            message: "智能体执行完成".to_string(),
+            delta: None,
+        },
+    );
 
     Ok(AgentRunResponse {
         trace_id,
@@ -921,7 +1138,21 @@ fn run_agent_command(
 }
 
 #[tauri::command]
-fn check_codex_cli_health(minimum_version: Option<String>) -> CodexCliHealthResponse {
+async fn check_codex_cli_health(minimum_version: Option<String>) -> CodexCliHealthResponse {
+    tauri::async_runtime::spawn_blocking(move || check_codex_cli_health_inner(minimum_version))
+        .await
+        .unwrap_or_else(|err| CodexCliHealthResponse {
+            available: false,
+            outdated: true,
+            version: "".to_string(),
+            minimum_version: "0.91.0".to_string(),
+            bin_path: "".to_string(),
+            message: format!("check codex health task join failed: {}", err),
+        })
+}
+
+/// 描述：执行 Codex CLI 健康检查，包含命令行探测与版本比较逻辑。
+fn check_codex_cli_health_inner(minimum_version: Option<String>) -> CodexCliHealthResponse {
     let minimum_version = minimum_version
         .or_else(|| env::var("ZODILEAP_CODEX_MIN_VERSION").ok())
         .unwrap_or_else(|| "0.91.0".to_string());
@@ -979,14 +1210,116 @@ fn split_error_code_and_message(raw: &str, fallback_code: &str) -> (String, Stri
     (fallback_code.to_string(), normalized.to_string())
 }
 
+/// 描述：按错误码与错误文本做高频失败原因分类，便于统一用户提示与 trace 归因。
+fn classify_model_error_category(code: &str, message: &str) -> &'static str {
+    let lower_code = code.to_lowercase();
+    let lower_message = message.to_lowercase();
+    if lower_code.contains("bridge")
+        || lower_message.contains("bridge")
+        || lower_message.contains("connection refused")
+        || lower_message.contains("cannot connect blender")
+    {
+        return "bridge";
+    }
+    if lower_message.contains("permission denied")
+        || lower_message.contains("operation not permitted")
+        || lower_message.contains("access denied")
+        || lower_message.contains("read-only")
+        || lower_message.contains("readonly")
+    {
+        return "permission";
+    }
+    if lower_message.contains("unsupported action")
+        || lower_message.contains("not supported")
+        || lower_message.contains("version")
+        || lower_code.contains("version")
+    {
+        return "version_compat";
+    }
+    if lower_message.contains("no_target_object")
+        || lower_message.contains("no selected mesh objects")
+        || lower_message.contains("no active mesh object")
+        || lower_message.contains("object_not_found")
+        || lower_message.contains("selection")
+        || lower_message.contains("undo_unavailable")
+        || lower_message.contains("redo_unavailable")
+    {
+        return "scene_state";
+    }
+    if lower_code.contains("invalid")
+        || lower_code.contains("missing")
+        || lower_code.contains("out_of_range")
+        || lower_message.contains("invalid")
+        || lower_message.contains("requires")
+        || lower_message.contains("must be")
+        || lower_message.contains("缺少")
+        || lower_message.contains("不能为空")
+    {
+        return "parameter";
+    }
+    "unknown"
+}
+
+/// 描述：根据分类结果构建用户友好错误文案，避免直接暴露底层技术细节。
+fn build_user_friendly_model_error(
+    category: &str,
+    default_retryable: bool,
+) -> (String, Option<String>, bool) {
+    match category {
+        "bridge" => (
+            "无法连接 Blender 会话桥接服务。".to_string(),
+            Some(
+                "请确认 Blender 已启动，并在插件中启用 `Zodileap MCP Bridge` 后重试。".to_string(),
+            ),
+            true,
+        ),
+        "parameter" => (
+            "本次操作参数无效或不完整。".to_string(),
+            Some("请检查路径、对象名与参数范围后重试。".to_string()),
+            false,
+        ),
+        "scene_state" => (
+            "当前场景状态不满足执行条件。".to_string(),
+            Some("请先选择可编辑对象，并确认目标对象存在且可操作后重试。".to_string()),
+            true,
+        ),
+        "permission" => (
+            "当前环境权限不足，无法完成操作。".to_string(),
+            Some("请检查文件/目录权限，或更换有权限的路径后重试。".to_string()),
+            false,
+        ),
+        "version_compat" => (
+            "当前 Blender/Bridge 版本与该操作不兼容。".to_string(),
+            Some("请升级到受支持版本并重启 Blender 后重试。".to_string()),
+            false,
+        ),
+        _ => (
+            "操作执行失败，请检查当前步骤配置后重试。".to_string(),
+            None,
+            default_retryable,
+        ),
+    }
+}
+
 /// 描述：将文本错误转换为协议错误对象，便于步骤记录和前端展示共用。
 fn protocol_error_from_text(raw: &str, fallback_code: &str, retryable: bool) -> ProtocolError {
     let (code, message) = split_error_code_and_message(raw, fallback_code);
-    ProtocolError::new(code, message).with_retryable(retryable)
+    let category = classify_model_error_category(code.as_str(), message.as_str());
+    let (friendly_message, suggestion, friendly_retryable) =
+        build_user_friendly_model_error(category, retryable);
+    let mut error = ProtocolError::new(code, friendly_message).with_retryable(friendly_retryable);
+    if let Some(hint) = suggestion {
+        error = error.with_suggestion(hint);
+    }
+    error
 }
 
 /// 描述：将文本错误转换为桌面端命令错误，用于 Tauri invoke 结构化回传。
-fn desktop_error_from_text(raw: &str, fallback_code: &str, retryable: bool) -> DesktopProtocolError {
+fn desktop_error_from_text(
+    raw: &str,
+    fallback_code: &str,
+    retryable: bool,
+) -> DesktopProtocolError {
     let protocol_error = protocol_error_from_text(raw, fallback_code, retryable);
     DesktopProtocolError::from(protocol_error)
 }
@@ -995,36 +1328,14 @@ fn desktop_error_from_text(raw: &str, fallback_code: &str, retryable: bool) -> D
 fn build_ui_hint_from_protocol_error(error: &ProtocolError) -> Option<ProtocolUiHint> {
     let lower_code = error.code.to_lowercase();
     let lower_message = error.message.to_lowercase();
+    let lower_suggestion = error.suggestion.as_deref().unwrap_or("").to_lowercase();
 
-    if lower_code.contains("invalid_bridge_addr")
-        || lower_code.contains("bridge_connect_failed")
-        || lower_message.contains("blender")
-    {
-        return Some(ProtocolUiHint {
-            key: "restart-blender-bridge".to_string(),
-            level: ProtocolUiHintLevel::Warning,
-            title: "需要检查 Blender Bridge".to_string(),
-            message: error
-                .suggestion
-                .clone()
-                .unwrap_or_else(|| "请确认 Blender 已启动且 MCP Bridge 插件已启用，然后重试。".to_string()),
-            actions: vec![
-                ProtocolUiHintAction {
-                    key: "retry_last_step".to_string(),
-                    label: "我已修复并重试".to_string(),
-                    intent: ProtocolUiHintActionIntent::Primary,
-                },
-                ProtocolUiHintAction {
-                    key: "dismiss".to_string(),
-                    label: "暂不处理".to_string(),
-                    intent: ProtocolUiHintActionIntent::Default,
-                },
-            ],
-            context: None,
-        });
-    }
-
-    if lower_message.contains("no_target_object")
+    if lower_code.contains("selection_required")
+        || lower_suggestion.contains("选择可编辑对象")
+        || lower_suggestion.contains("选中目标对象")
+        || lower_message.contains("场景状态不满足执行条件")
+        || lower_message.contains("scene state")
+        || lower_message.contains("no_target_object")
         || lower_message.contains("no selected mesh objects")
         || lower_message.contains("no active mesh object")
     {
@@ -1032,7 +1343,9 @@ fn build_ui_hint_from_protocol_error(error: &ProtocolError) -> Option<ProtocolUi
             key: "selection-required".to_string(),
             level: ProtocolUiHintLevel::Warning,
             title: "需要先选择对象".to_string(),
-            message: "当前未检测到可操作对象。请先在 Blender 中选中目标对象后再重试。".to_string(),
+            message: error.suggestion.clone().unwrap_or_else(|| {
+                "当前未检测到可操作对象。请先在 Blender 中选中目标对象后再重试。".to_string()
+            }),
             actions: vec![
                 ProtocolUiHintAction {
                     key: "retry_last_step".to_string(),
@@ -1049,12 +1362,116 @@ fn build_ui_hint_from_protocol_error(error: &ProtocolError) -> Option<ProtocolUi
         });
     }
 
-    if lower_message.contains("导出能力已关闭") || lower_code.contains("capability_disabled") {
+    if lower_code.contains("invalid_bridge_addr")
+        || lower_code.contains("bridge_connect_failed")
+        || (lower_code.contains("bridge") && !lower_suggestion.contains("选择可编辑对象"))
+        || lower_message.contains("blender")
+    {
+        return Some(ProtocolUiHint {
+            key: "restart-blender-bridge".to_string(),
+            level: ProtocolUiHintLevel::Warning,
+            title: "需要检查 Blender Bridge".to_string(),
+            message: error.suggestion.clone().unwrap_or_else(|| {
+                "请确认 Blender 已启动且 MCP Bridge 插件已启用，然后重试。".to_string()
+            }),
+            actions: vec![
+                ProtocolUiHintAction {
+                    key: "retry_last_step".to_string(),
+                    label: "我已修复并重试".to_string(),
+                    intent: ProtocolUiHintActionIntent::Primary,
+                },
+                ProtocolUiHintAction {
+                    key: "dismiss".to_string(),
+                    label: "暂不处理".to_string(),
+                    intent: ProtocolUiHintActionIntent::Default,
+                },
+            ],
+            context: None,
+        });
+    }
+
+    if lower_message.contains("参数无效")
+        || lower_message.contains("参数")
+        || lower_suggestion.contains("参数范围")
+    {
+        return Some(ProtocolUiHint {
+            key: "check-params".to_string(),
+            level: ProtocolUiHintLevel::Warning,
+            title: "请检查参数".to_string(),
+            message: error
+                .suggestion
+                .clone()
+                .unwrap_or_else(|| "请检查路径、对象名与参数范围后重试。".to_string()),
+            actions: vec![
+                ProtocolUiHintAction {
+                    key: "retry_last_step".to_string(),
+                    label: "我已修正，重试".to_string(),
+                    intent: ProtocolUiHintActionIntent::Primary,
+                },
+                ProtocolUiHintAction {
+                    key: "dismiss".to_string(),
+                    label: "暂不处理".to_string(),
+                    intent: ProtocolUiHintActionIntent::Default,
+                },
+            ],
+            context: None,
+        });
+    }
+
+    if lower_message.contains("权限不足") || lower_suggestion.contains("权限") {
+        return Some(ProtocolUiHint {
+            key: "check-permission".to_string(),
+            level: ProtocolUiHintLevel::Warning,
+            title: "需要文件权限".to_string(),
+            message: error
+                .suggestion
+                .clone()
+                .unwrap_or_else(|| "请检查文件/目录权限，或更换有权限的路径后重试。".to_string()),
+            actions: vec![
+                ProtocolUiHintAction {
+                    key: "retry_last_step".to_string(),
+                    label: "我已处理，重试".to_string(),
+                    intent: ProtocolUiHintActionIntent::Primary,
+                },
+                ProtocolUiHintAction {
+                    key: "dismiss".to_string(),
+                    label: "暂不处理".to_string(),
+                    intent: ProtocolUiHintActionIntent::Default,
+                },
+            ],
+            context: None,
+        });
+    }
+
+    if lower_message.contains("版本")
+        || lower_message.contains("不兼容")
+        || lower_suggestion.contains("受支持版本")
+    {
+        return Some(ProtocolUiHint {
+            key: "version-incompatible".to_string(),
+            level: ProtocolUiHintLevel::Info,
+            title: "版本兼容性检查".to_string(),
+            message: error
+                .suggestion
+                .clone()
+                .unwrap_or_else(|| "请升级到受支持版本并重启 Blender 后重试。".to_string()),
+            actions: vec![ProtocolUiHintAction {
+                key: "dismiss".to_string(),
+                label: "知道了".to_string(),
+                intent: ProtocolUiHintActionIntent::Default,
+            }],
+            context: None,
+        });
+    }
+
+    if lower_message.contains("导出能力已关闭") || lower_code.contains("capability_disabled")
+    {
         return Some(ProtocolUiHint {
             key: "export-capability-disabled".to_string(),
             level: ProtocolUiHintLevel::Info,
             title: "导出能力已关闭".to_string(),
-            message: "当前会话仍可执行编辑操作；如需导出，请先在模型设置中开启导出能力。".to_string(),
+            message: "当前会话仍可执行编辑操作；如需导出，请先在模型设置中开启导出能力。"
+                .to_string(),
             actions: vec![
                 ProtocolUiHintAction {
                     key: "open_model_settings".to_string(),
@@ -1147,7 +1564,9 @@ fn planner_allowed_actions(capabilities: &ModelMcpCapabilities) -> Vec<&'static 
         ]);
     }
     if capability_enabled(capabilities.geometry) {
-        actions.extend(["add_cube", "solidify", "bevel", "mirror", "array", "boolean"]);
+        actions.extend([
+            "add_cube", "solidify", "bevel", "mirror", "array", "boolean",
+        ]);
     }
     if capability_enabled(capabilities.mesh_opt) {
         actions.extend(["auto_smooth", "weighted_normal", "decimate"]);
@@ -1170,6 +1589,7 @@ fn planner_allowed_actions(capabilities: &ModelMcpCapabilities) -> Vec<&'static 
 fn build_model_plan_prompt(prompt: &str, capabilities: &ModelMcpCapabilities) -> String {
     let allowed_actions = planner_allowed_actions(capabilities).join(", ");
     let export_enabled = capability_enabled(capabilities.export);
+    let selection_few_shot = model_plan_selection_few_shot_examples();
     format!(
         r#"你是模型 MCP 规划器。请把用户自然语言转换为可执行步骤。
 
@@ -1182,7 +1602,8 @@ fn build_model_plan_prompt(prompt: &str, capabilities: &ModelMcpCapabilities) ->
       "type": "tool" | "export",
       "action": "仅当 type=tool 时必填，且必须来自允许动作列表",
       "input": "步骤说明",
-      "params": {{ }},
+      "format": "仅当 type=export 时可填，支持 glb|fbx|obj，默认 glb",
+      "params": {{ "导出时为导出参数对象；工具步骤为动作参数对象" }},
       "operation_kind": "basic|boolean_chain|modifier_chain|batch_transform|batch_material|scene_file_ops",
       "branch": "primary|fallback",
       "recoverable": true,
@@ -1197,39 +1618,95 @@ fn build_model_plan_prompt(prompt: &str, capabilities: &ModelMcpCapabilities) ->
 5) 本次不允许规则兜底，必须给出结构化步骤或空步骤原因。
 6) 除非用户明确要求，否则不要输出 select_objects 和 rename_object。
 7) 如果用户要求“新建正方体并贴图”，优先输出 add_cube + apply_texture_image(path)。
-8) 工具动作参数必须完整：
+8) 导出步骤规则：
+   - export 默认 format=glb；如果用户明确提到 fbx/obj，必须填写对应 format
+   - export 的 params 必须是对象；可选 params.use_selection (bool)、params.apply_modifiers (bool)、params.export_apply (bool)
+9) 工具动作参数必须完整：
    - select_objects: params.names 必须是非空数组
    - rename_object: params.old_name 与 params.new_name 必须非空
    - translate_objects: params.delta 必须是长度为3的数组；当用户提到“这个物体/选中对象”时必须设置 params.selection_scope=active|selected；可选 params.target_names（非空字符串数组）；并补充 params.target_mode 与 params.require_selection
    - rotate_objects: params.delta_euler 必须是长度为3的数组；遵循同样的 selection_scope / target_names / target_mode / require_selection 规则
    - scale_objects: params.factor 必须是数字或长度为3数组；遵循同样的 selection_scope / target_names / target_mode / require_selection 规则
    - open_file: params.path 必须非空
-   - apply_texture_image: params.path 必须非空
+   - apply_texture_image: 至少提供一个非空贴图路径参数：params.path（兼容旧字段）或 params.base_color_path 或 params.normal_path 或 params.roughness_path 或 params.metallic_path；可选 params.object（单对象）或 params.objects（非空字符串数组）用于批量贴图；当用户提到“这个物体/选中对象”且未给 object/objects 时，必须补充 selection_scope / target_mode / require_selection
 
 允许动作列表：
 {allowed_actions}
 
 导出能力是否可用：{export_enabled}
 
+选择集语义 few-shot（必须遵循）：
+{selection_few_shot}
+
 用户输入：
 {prompt}"#
     )
 }
 
-/// 描述：构建重规划提示词，把上次规划错误反馈给 AI，要求只返回修正后的 JSON。
+/// 描述：提供选择集语义 few-shot，约束“这个物体/选中对象”类请求的目标定位行为。
+fn model_plan_selection_few_shot_examples() -> &'static str {
+    r#"- 示例1
+  用户：对这个物体平移 0.5
+  输出：tool=translate_objects，params.delta=[0.5,0,0]，params.selection_scope="active"，params.target_mode="active"，params.require_selection=true
+- 示例2
+  用户：对这个物体旋转30度
+  输出：tool=rotate_objects，params.delta_euler=[0,0,0.5235987756]，params.selection_scope="active"，params.target_mode="active"，params.require_selection=true
+- 示例3
+  用户：对这个物体缩放到1.2倍
+  输出：tool=scale_objects，params.factor=1.2，params.selection_scope="active"，params.target_mode="active"，params.require_selection=true
+- 示例4
+  用户：对选中的物体平移 1
+  输出：tool=translate_objects，params.delta=[1,0,0]，params.selection_scope="selected"，params.target_mode="selected"，params.require_selection=true
+- 示例5
+  用户：把所有物体缩放到 0.9
+  输出：tool=scale_objects，params.factor=0.9，params.selection_scope="all"，params.target_mode="all"，params.require_selection=false"#
+}
+
+/// 描述：将当前选择上下文格式化为 JSON 字符串，便于重规划提示词附带消歧信息。
+fn format_selection_context_for_retry_prompt(snapshot: &SelectionContextSnapshot) -> String {
+    let payload = json!({
+        "active_object": snapshot.active_object,
+        "selected_objects": snapshot.selected_objects,
+        "selected_count": snapshot.selected_objects.len(),
+    });
+    serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string())
+}
+
+/// 描述：构建重规划提示词，把上次规划错误反馈给 AI，必要时附带选择上下文进行目标消歧。
 fn build_model_plan_retry_prompt(
     prompt: &str,
     capabilities: &ModelMcpCapabilities,
     plan_error: &str,
     raw_plan: &str,
+    selection_snapshot: Option<&SelectionContextSnapshot>,
+    require_target_disambiguation: bool,
 ) -> String {
     let base = build_model_plan_prompt(prompt, capabilities);
+    let selection_context = selection_snapshot
+        .map(format_selection_context_for_retry_prompt)
+        .unwrap_or_default();
+    let selection_context_block = if selection_context.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n当前 Blender 选择上下文（用于目标消歧，必须参考）：\n{}\n",
+            selection_context
+        )
+    };
+    let disambiguation_constraint = if require_target_disambiguation {
+        "\n额外约束：你上次规划的目标对象不明确；本次必须让 transform 步骤目标唯一且可解释。\n- 当用户说“这个物体/当前物体/this object”且 active_object 非空时，selection_scope 必须为 active。\n- 当用户说“选中的物体/selected objects”时，selection_scope 必须为 selected。\n- 当 selected_count=0 且步骤依赖选择集时，返回空步骤并填写 reason。"
+            .to_string()
+    } else {
+        String::new()
+    };
     format!(
         r#"{base}
 
 上一次规划结果存在错误，必须修复后重试：
 - 错误原因：{plan_error}
 - 上次输出：{raw_plan}
+{selection_context_block}
+{disambiguation_constraint}
 
 请重新输出一份全新的 JSON 计划，严格满足约束。"#,
     )
@@ -1268,6 +1745,52 @@ fn parse_plan_risk(raw: Option<&str>) -> Result<ModelPlanRiskLevel, String> {
     }
 }
 
+/// 描述：根据文本推断导出格式，优先识别 fbx/obj，其余默认 glb。
+fn infer_export_format_from_text(raw: &str) -> ExportModelFormat {
+    let lower = raw.to_lowercase();
+    let normalized = lower.replace(
+        ['，', ',', '。', '：', ':', '/', '\\', '-', '_', '(', ')'],
+        " ",
+    );
+    let has_token = |token: &str| normalized.split_whitespace().any(|item| item == token);
+    if lower.contains(".fbx") || has_token("fbx") {
+        ExportModelFormat::Fbx
+    } else if lower.contains(".obj") || has_token("obj") {
+        ExportModelFormat::Obj
+    } else {
+        ExportModelFormat::Glb
+    }
+}
+
+/// 描述：解析导出步骤格式，支持 `format` 字段、`params.format` 与输入文案推断。
+fn parse_export_format(
+    raw_format: Option<&str>,
+    params: Option<&serde_json::Value>,
+    input: Option<&str>,
+) -> Result<ExportModelFormat, String> {
+    if let Some(raw) = raw_format.map(str::trim).filter(|value| !value.is_empty()) {
+        return raw
+            .parse::<ExportModelFormat>()
+            .map_err(|err| format!("invalid export format `{}`: {}", raw, err));
+    }
+    if let Some(format_from_params) = params
+        .and_then(|value| value.get("format"))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return format_from_params
+            .parse::<ExportModelFormat>()
+            .map_err(|err| {
+                format!(
+                    "invalid export params.format `{}`: {}",
+                    format_from_params, err
+                )
+            });
+    }
+    Ok(infer_export_format_from_text(input.unwrap_or_default()))
+}
+
 /// 描述：根据动作推断默认操作类型，避免模型遗漏字段时无法执行。
 fn infer_operation_kind_for_action(action: ModelToolAction) -> ModelPlanOperationKind {
     match action {
@@ -1291,7 +1814,8 @@ fn infer_operation_kind_for_action(action: ModelToolAction) -> ModelPlanOperatio
         | ModelToolAction::Array
         | ModelToolAction::AutoSmooth
         | ModelToolAction::WeightedNormal
-        | ModelToolAction::Decimate => ModelPlanOperationKind::ModifierChain,
+        | ModelToolAction::Decimate
+        | ModelToolAction::InspectMeshTopology => ModelPlanOperationKind::ModifierChain,
         ModelToolAction::Boolean => ModelPlanOperationKind::BooleanChain,
         ModelToolAction::TidyMaterialSlots
         | ModelToolAction::CheckTexturePaths
@@ -1331,22 +1855,37 @@ fn parse_operation_kind(
 }
 
 /// 描述：解析 AI 返回的结构化计划 JSON，转换为模型会话步骤。
-fn parse_llm_model_plan(raw: &str) -> Result<(Vec<ModelSessionPlannedStep>, Option<String>), String> {
+fn parse_llm_model_plan(
+    raw: &str,
+) -> Result<(Vec<ModelSessionPlannedStep>, Option<String>), String> {
     let json_text = extract_json_object(raw).ok_or_else(|| "LLM 未返回有效 JSON".to_string())?;
-    let parsed: LlmModelPlanResponse = serde_json::from_str(&json_text)
-        .map_err(|err| format!("解析规划 JSON 失败: {}", err))?;
+    let parsed: LlmModelPlanResponse =
+        serde_json::from_str(&json_text).map_err(|err| format!("解析规划 JSON 失败: {}", err))?;
 
     let mut steps: Vec<ModelSessionPlannedStep> = Vec::new();
     for item in parsed.steps {
         let step_type = item.step_type.trim().to_lowercase();
         match step_type.as_str() {
             "export" => {
+                let export_format = parse_export_format(
+                    item.format.as_deref(),
+                    item.params.as_ref(),
+                    item.input.as_deref(),
+                )?;
+                let export_params = item.params.unwrap_or_else(|| json!({}));
+                if !export_params.is_object() {
+                    return Err("export 步骤的 params 必须是对象".to_string());
+                }
                 let operation_kind =
                     parse_operation_kind(item.operation_kind.as_deref(), None, true)?;
                 let branch = parse_plan_branch(item.branch.as_deref())?;
                 let risk = parse_plan_risk(item.risk.as_deref())?;
                 steps.push(ModelSessionPlannedStep::Export {
-                    input: item.input.unwrap_or_else(|| "导出 GLB".to_string()),
+                    format: export_format,
+                    input: item.input.unwrap_or_else(|| {
+                        format!("导出 {}", export_format.as_str().to_uppercase())
+                    }),
+                    params: export_params,
                     operation_kind,
                     branch,
                     recoverable: item.recoverable.unwrap_or(false),
@@ -1364,11 +1903,8 @@ fn parse_llm_model_plan(raw: &str) -> Result<(Vec<ModelSessionPlannedStep>, Opti
                 let action = action_raw
                     .parse::<ModelToolAction>()
                     .map_err(|err| format!("无效 action `{}`: {}", action_raw, err))?;
-                let operation_kind = parse_operation_kind(
-                    item.operation_kind.as_deref(),
-                    Some(action),
-                    false,
-                )?;
+                let operation_kind =
+                    parse_operation_kind(item.operation_kind.as_deref(), Some(action), false)?;
                 let branch = parse_plan_branch(item.branch.as_deref())?;
                 let risk = parse_plan_risk(item.risk.as_deref())?;
                 steps.push(ModelSessionPlannedStep::Tool {
@@ -1398,114 +1934,167 @@ fn validate_llm_model_plan_steps(
 ) -> Result<(), String> {
     let lower = prompt.to_lowercase();
     let rename_intent = ["重命名", "rename"].iter().any(|key| lower.contains(key));
-    let select_intent = ["选择", "选中", "select"].iter().any(|key| lower.contains(key));
+    let select_intent = ["选择", "选中", "select"]
+        .iter()
+        .any(|key| lower.contains(key));
     let selection_reference_intent = has_selection_reference_intent(&lower);
-    let ensure_selection_scoped = |params: &serde_json::Value, action_name: &str| -> Result<(), String> {
-        let scope = params
-            .get("selection_scope")
-            .and_then(|value| value.as_str())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .or_else(|| {
-                params
-                    .get("selected_only")
-                    .and_then(|value| value.as_bool())
-                    .map(|selected_only| if selected_only { "selected" } else { "all" })
-            })
-            .unwrap_or("selected");
-        if !matches!(scope, "active" | "selected" | "all") {
-            return Err(format!(
-                "{} 的 selection_scope 非法，必须是 active|selected|all",
-                action_name
-            ));
-        }
-        if selection_reference_intent && scope == "all" {
-            return Err(format!(
-                "用户明确引用选中对象时，{} 不允许 selection_scope=all",
-                action_name
-            ));
-        }
-        Ok(())
-    };
-    let ensure_target_names = |params: &serde_json::Value, action_name: &str| -> Result<(), String> {
-        let Some(value) = params.get("target_names") else {
-            return Ok(());
-        };
-        let names = value
-            .as_array()
-            .ok_or_else(|| format!("{} 的 params.target_names 必须是非空字符串数组", action_name))?;
-        if names.is_empty() {
-            return Err(format!("{} 的 params.target_names 不能为空数组", action_name));
-        }
-        let valid = names.iter().all(|item| {
-            item.as_str()
+    let ensure_selection_scoped =
+        |params: &serde_json::Value, action_name: &str| -> Result<(), String> {
+            let scope = params
+                .get("selection_scope")
+                .and_then(|value| value.as_str())
                 .map(str::trim)
-                .map(|name| !name.is_empty())
-                .unwrap_or(false)
-        });
-        if !valid {
-            return Err(format!(
-                "{} 的 params.target_names 必须全部为非空字符串",
-                action_name
-            ));
-        }
-        Ok(())
-    };
-    let ensure_target_fields = |params: &serde_json::Value, action_name: &str| -> Result<(), String> {
-        let scope = resolve_selection_scope_from_params(params);
-        if let Some(target_mode) = params
-            .get("target_mode")
-            .and_then(|value| value.as_str())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            if !matches!(target_mode, "active" | "selected" | "all" | "named") {
+                .filter(|value| !value.is_empty())
+                .or_else(|| {
+                    params
+                        .get("selected_only")
+                        .and_then(|value| value.as_bool())
+                        .map(|selected_only| if selected_only { "selected" } else { "all" })
+                })
+                .unwrap_or("selected");
+            if !matches!(scope, "active" | "selected" | "all") {
                 return Err(format!(
-                    "{} 的 target_mode 非法，必须是 active|selected|all|named",
+                    "{} 的 selection_scope 非法，必须是 active|selected|all",
                     action_name
                 ));
             }
-            if target_mode == "named" {
-                let name_count = params
-                    .get("target_names")
-                    .and_then(|value| value.as_array())
-                    .map(|items| items.len())
-                    .unwrap_or(0);
-                if name_count == 0 {
+            if selection_reference_intent && scope == "all" {
+                return Err(format!(
+                    "用户明确引用选中对象时，{} 不允许 selection_scope=all",
+                    action_name
+                ));
+            }
+            Ok(())
+        };
+    let ensure_target_names =
+        |params: &serde_json::Value, action_name: &str| -> Result<(), String> {
+            let Some(value) = params.get("target_names") else {
+                return Ok(());
+            };
+            let names = value.as_array().ok_or_else(|| {
+                format!(
+                    "{} 的 params.target_names 必须是非空字符串数组",
+                    action_name
+                )
+            })?;
+            if names.is_empty() {
+                return Err(format!(
+                    "{} 的 params.target_names 不能为空数组",
+                    action_name
+                ));
+            }
+            let valid = names.iter().all(|item| {
+                item.as_str()
+                    .map(str::trim)
+                    .map(|name| !name.is_empty())
+                    .unwrap_or(false)
+            });
+            if !valid {
+                return Err(format!(
+                    "{} 的 params.target_names 必须全部为非空字符串",
+                    action_name
+                ));
+            }
+            Ok(())
+        };
+    let ensure_target_fields =
+        |params: &serde_json::Value, action_name: &str| -> Result<(), String> {
+            let scope = resolve_selection_scope_from_params(params);
+            if let Some(target_mode) = params
+                .get("target_mode")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                if !matches!(target_mode, "active" | "selected" | "all" | "named") {
                     return Err(format!(
-                        "{} 的 target_mode=named 时，target_names 不能为空",
+                        "{} 的 target_mode 非法，必须是 active|selected|all|named",
                         action_name
                     ));
                 }
+                if target_mode == "named" {
+                    let name_count = params
+                        .get("target_names")
+                        .and_then(|value| value.as_array())
+                        .map(|items| items.len())
+                        .unwrap_or(0);
+                    if name_count == 0 {
+                        return Err(format!(
+                            "{} 的 target_mode=named 时，target_names 不能为空",
+                            action_name
+                        ));
+                    }
+                }
             }
-        }
-        if params.get("require_selection").is_some()
-            && params
+            if params.get("require_selection").is_some()
+                && params
+                    .get("require_selection")
+                    .and_then(|value| value.as_bool())
+                    .is_none()
+            {
+                return Err(format!("{} 的 require_selection 必须是布尔值", action_name));
+            }
+            if let Some(require_selection) = params
                 .get("require_selection")
+                .and_then(|value| value.as_bool())
+            {
+                if require_selection && scope == "all" {
+                    return Err(format!(
+                        "{} 的 require_selection=true 与 selection_scope=all 冲突",
+                        action_name
+                    ));
+                }
+                if !require_selection && scope != "all" {
+                    return Err(format!(
+                        "{} 的 require_selection=false 与 selection_scope={} 冲突",
+                        action_name, scope
+                    ));
+                }
+            }
+            Ok(())
+        };
+    let ensure_selected_only_for_reference = |params: &serde_json::Value,
+                                              action_name: &str,
+                                              strict_required: bool|
+     -> Result<(), String> {
+        if params.get("selected_only").is_some()
+            && params
+                .get("selected_only")
                 .and_then(|value| value.as_bool())
                 .is_none()
         {
-            return Err(format!("{} 的 require_selection 必须是布尔值", action_name));
+            return Err(format!("{} 的 selected_only 必须是布尔值", action_name));
         }
-        if let Some(require_selection) = params
-            .get("require_selection")
+        if !selection_reference_intent {
+            return Ok(());
+        }
+        let selected_only = params
+            .get("selected_only")
             .and_then(|value| value.as_bool())
-        {
-            if require_selection && scope == "all" {
-                return Err(format!(
-                    "{} 的 require_selection=true 与 selection_scope=all 冲突",
-                    action_name
-                ));
-            }
-            if !require_selection && scope != "all" {
-                return Err(format!(
-                    "{} 的 require_selection=false 与 selection_scope={} 冲突",
-                    action_name, scope
-                ));
-            }
+            .unwrap_or(true);
+        if strict_required && params.get("selected_only").is_none() {
+            return Err(format!(
+                "用户明确引用选中对象时，{} 必须显式设置 selected_only=true",
+                action_name
+            ));
+        }
+        if !selected_only {
+            return Err(format!(
+                "用户明确引用选中对象时，{} 不允许 selected_only=false",
+                action_name
+            ));
         }
         Ok(())
     };
+
+    for step in steps {
+        let ModelSessionPlannedStep::Export { params, .. } = step else {
+            continue;
+        };
+        if !params.is_object() {
+            return Err("export 步骤的 params 必须是对象".to_string());
+        }
+    }
 
     for step in steps {
         let ModelSessionPlannedStep::Tool { action, params, .. } = step else {
@@ -1556,7 +2145,9 @@ fn validate_llm_model_plan_steps(
                     .and_then(|value| value.as_array())
                     .ok_or_else(|| "translate_objects 缺少 params.delta".to_string())?;
                 if delta.len() != 3 || !delta.iter().all(|value| value.as_f64().is_some()) {
-                    return Err("translate_objects 的 params.delta 必须是长度为3的数字数组".to_string());
+                    return Err(
+                        "translate_objects 的 params.delta 必须是长度为3的数字数组".to_string()
+                    );
                 }
                 ensure_selection_scoped(params, "translate_objects")?;
                 ensure_target_names(params, "translate_objects")?;
@@ -1568,7 +2159,9 @@ fn validate_llm_model_plan_steps(
                     .and_then(|value| value.as_array())
                     .ok_or_else(|| "rotate_objects 缺少 params.delta_euler".to_string())?;
                 if delta.len() != 3 || !delta.iter().all(|value| value.as_f64().is_some()) {
-                    return Err("rotate_objects 的 params.delta_euler 必须是长度为3的数字数组".to_string());
+                    return Err(
+                        "rotate_objects 的 params.delta_euler 必须是长度为3的数字数组".to_string(),
+                    );
                 }
                 ensure_selection_scoped(params, "rotate_objects")?;
                 ensure_target_names(params, "rotate_objects")?;
@@ -1581,10 +2174,14 @@ fn validate_llm_model_plan_steps(
                 let valid = factor.as_f64().is_some()
                     || factor
                         .as_array()
-                        .map(|items| items.len() == 3 && items.iter().all(|item| item.as_f64().is_some()))
+                        .map(|items| {
+                            items.len() == 3 && items.iter().all(|item| item.as_f64().is_some())
+                        })
                         .unwrap_or(false);
                 if !valid {
-                    return Err("scale_objects 的 params.factor 必须是数字或长度为3的数字数组".to_string());
+                    return Err(
+                        "scale_objects 的 params.factor 必须是数字或长度为3的数字数组".to_string(),
+                    );
                 }
                 ensure_selection_scoped(params, "scale_objects")?;
                 ensure_target_names(params, "scale_objects")?;
@@ -1601,14 +2198,104 @@ fn validate_llm_model_plan_steps(
                 }
             }
             ModelToolAction::ApplyTextureImage => {
-                let path = params
-                    .get("path")
+                let texture_keys = [
+                    "path",
+                    "base_color_path",
+                    "normal_path",
+                    "roughness_path",
+                    "metallic_path",
+                ];
+                let mut provided = 0usize;
+                for key in texture_keys {
+                    if let Some(value) = params.get(key) {
+                        let path = value.as_str().map(str::trim).ok_or_else(|| {
+                            format!("apply_texture_image 的 {} 必须是字符串", key)
+                        })?;
+                        if path.is_empty() {
+                            return Err(format!("apply_texture_image 的 {} 不能为空", key));
+                        }
+                        provided += 1;
+                    }
+                }
+                if provided == 0 {
+                    return Err(
+                        "apply_texture_image 至少需要 path/base_color_path/normal_path/roughness_path/metallic_path 之一"
+                            .to_string(),
+                    );
+                }
+                if let Some(value) = params.get("object") {
+                    let object_name = value
+                        .as_str()
+                        .map(str::trim)
+                        .ok_or_else(|| "apply_texture_image 的 object 必须是字符串".to_string())?;
+                    if object_name.is_empty() {
+                        return Err("apply_texture_image 的 object 不能为空".to_string());
+                    }
+                }
+                let mut has_explicit_targets = params
+                    .get("object")
                     .and_then(|value| value.as_str())
                     .map(str::trim)
-                    .unwrap_or("");
-                if path.is_empty() {
-                    return Err("apply_texture_image 缺少 path".to_string());
+                    .map(|name| !name.is_empty())
+                    .unwrap_or(false);
+                if let Some(value) = params.get("objects") {
+                    let objects = value.as_array().ok_or_else(|| {
+                        "apply_texture_image 的 objects 必须是非空字符串数组".to_string()
+                    })?;
+                    if objects.is_empty() {
+                        return Err("apply_texture_image 的 objects 不能为空数组".to_string());
+                    }
+                    let valid = objects.iter().all(|item| {
+                        item.as_str()
+                            .map(str::trim)
+                            .map(|name| !name.is_empty())
+                            .unwrap_or(false)
+                    });
+                    if !valid {
+                        return Err(
+                            "apply_texture_image 的 objects 必须全部为非空字符串".to_string()
+                        );
+                    }
+                    has_explicit_targets = true;
+                    if has_active_reference_intent(lower.as_str()) && objects.len() != 1 {
+                        return Err(
+                            "用户明确引用“这个物体”时，apply_texture_image 的 objects 必须仅包含一个对象"
+                                .to_string(),
+                        );
+                    }
                 }
+                if selection_reference_intent && !has_explicit_targets {
+                    if params.get("selection_scope").is_none()
+                        && params.get("selected_only").is_none()
+                    {
+                        return Err(
+                            "用户明确引用“这个物体/选中对象”时，apply_texture_image 必须显式设置 selection_scope 或 selected_only"
+                                .to_string(),
+                        );
+                    }
+                    ensure_selection_scoped(params, "apply_texture_image")?;
+                    ensure_target_names(params, "apply_texture_image")?;
+                    ensure_target_fields(params, "apply_texture_image")?;
+                }
+            }
+            ModelToolAction::AlignOrigin => {
+                ensure_selected_only_for_reference(params, "align_origin", false)?;
+            }
+            ModelToolAction::NormalizeScale => {
+                ensure_selected_only_for_reference(params, "normalize_scale", false)?;
+            }
+            ModelToolAction::NormalizeAxis => {
+                ensure_selected_only_for_reference(params, "normalize_axis", false)?;
+            }
+            ModelToolAction::AutoSmooth => {
+                ensure_selected_only_for_reference(params, "auto_smooth", false)?;
+            }
+            ModelToolAction::WeightedNormal => {
+                ensure_selected_only_for_reference(params, "weighted_normal", false)?;
+            }
+            ModelToolAction::TidyMaterialSlots => {
+                // 描述：该动作在 Bridge 侧默认全场景，因此在“这个物体”语义下必须显式限制 selected_only=true。
+                ensure_selected_only_for_reference(params, "tidy_material_slots", true)?;
             }
             _ => {}
         }
@@ -1616,16 +2303,98 @@ fn validate_llm_model_plan_steps(
     Ok(())
 }
 
-/// 描述：使用 AI 进行模型步骤规划；不允许规则兜底，失败时直接返回错误。
+/// 描述：判断步骤是否为 transform 动作，供目标歧义检测复用。
+fn is_transform_tool_action(action: ModelToolAction) -> bool {
+    matches!(
+        action,
+        ModelToolAction::TranslateObjects
+            | ModelToolAction::RotateObjects
+            | ModelToolAction::ScaleObjects
+    )
+}
+
+/// 描述：判断提示词是否包含 transform 意图，避免在非变换场景误触发目标歧义重规划。
+fn has_transform_intent(lower: &str) -> bool {
+    is_translate_intent(lower) || is_rotate_intent(lower) || is_scale_intent(lower)
+}
+
+/// 描述：检测规划结果是否存在“目标对象不明确”，用于触发一次带上下文的自动重规划。
+fn detect_ambiguous_target_plan(
+    steps: &[ModelSessionPlannedStep],
+    prompt: &str,
+    selection_snapshot: Option<&SelectionContextSnapshot>,
+) -> Option<String> {
+    let lower = prompt.to_lowercase();
+    if !has_selection_reference_intent(lower.as_str()) || !has_transform_intent(lower.as_str()) {
+        return None;
+    }
+
+    let transform_steps: Vec<(&ModelToolAction, &serde_json::Value)> = steps
+        .iter()
+        .filter_map(|step| {
+            let ModelSessionPlannedStep::Tool { action, params, .. } = step else {
+                return None;
+            };
+            if !is_transform_tool_action(*action) {
+                return None;
+            }
+            Some((action, params))
+        })
+        .collect();
+    if transform_steps.is_empty() {
+        return Some("用户要求对引用对象做变换，但规划中没有 transform 步骤".to_string());
+    }
+
+    let active_reference = has_active_reference_intent(lower.as_str());
+    for (action, params) in transform_steps {
+        let scope = resolve_selection_scope_from_params(params);
+        if scope == "all" {
+            return Some(format!(
+                "{} 使用 selection_scope=all，与引用对象语义冲突",
+                action.as_str()
+            ));
+        }
+        if active_reference && scope != "active" {
+            return Some(format!(
+                "用户引用“这个物体”时，{} 应优先 selection_scope=active",
+                action.as_str()
+            ));
+        }
+        if let Some(snapshot) = selection_snapshot {
+            if scope == "active" && snapshot.active_object.is_none() {
+                return Some(format!(
+                    "{} 依赖 active 目标，但当前 active_object 为空",
+                    action.as_str()
+                ));
+            }
+            if scope == "selected" && snapshot.selected_objects.is_empty() {
+                return Some(format!(
+                    "{} 依赖 selected 目标，但当前 selected_objects 为空",
+                    action.as_str()
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// 描述：使用 AI 进行模型步骤规划；若目标不明确会自动携带选择上下文重规划一次。
+type ModelPlanDebugObserver<'a> = dyn FnMut(&str, &str, &str) + 'a;
+
 fn plan_model_session_steps_with_llm(
     provider: Option<&str>,
     prompt: &str,
     capabilities: &ModelMcpCapabilities,
     workdir: Option<&str>,
+    selection_snapshot: Option<&SelectionContextSnapshot>,
+    mut on_debug: Option<&mut ModelPlanDebugObserver<'_>>,
 ) -> Result<Vec<ModelSessionPlannedStep>, DesktopProtocolError> {
     let parsed_provider = parse_provider(provider.unwrap_or("codex"));
     let mut last_error = String::new();
     let mut previous_raw_plan = String::new();
+    let prompt_lower = prompt.to_lowercase();
+    let mut retry_with_selection_context = false;
+    let mut retry_require_disambiguation = false;
 
     for attempt in 1..=2 {
         let planner_prompt = if attempt == 1 {
@@ -1636,11 +2405,30 @@ fn plan_model_session_steps_with_llm(
                 capabilities,
                 last_error.as_str(),
                 previous_raw_plan.as_str(),
+                if retry_with_selection_context {
+                    selection_snapshot
+                } else {
+                    None
+                },
+                retry_require_disambiguation,
             )
         };
-        let raw_plan = call_model(parsed_provider, planner_prompt.as_str(), workdir).map_err(|err| {
-            DesktopProtocolError::from(err.to_protocol_error())
-        })?;
+        if let Some(observer) = on_debug.as_deref_mut() {
+            observer(
+                "llm_plan_prompt",
+                &format!("模型规划 Prompt（attempt={}）", attempt),
+                planner_prompt.as_str(),
+            );
+        }
+        let raw_plan = call_model(parsed_provider, planner_prompt.as_str(), workdir)
+            .map_err(|err| DesktopProtocolError::from(err.to_protocol_error()))?;
+        if let Some(observer) = on_debug.as_deref_mut() {
+            observer(
+                "llm_plan_raw_response",
+                &format!("模型规划原始返回（attempt={}）", attempt),
+                raw_plan.as_str(),
+            );
+        }
         previous_raw_plan = raw_plan.clone();
 
         let parsed = parse_llm_model_plan(raw_plan.as_str());
@@ -1660,6 +2448,7 @@ fn plan_model_session_steps_with_llm(
         };
         let mut steps = steps;
         enrich_transform_targets_for_steps(&mut steps, prompt);
+        enrich_selection_scoped_params_for_reference_steps(&mut steps, prompt);
 
         if steps.is_empty() {
             last_error = reason.unwrap_or_else(|| "AI 未给出可执行步骤".to_string());
@@ -1673,14 +2462,50 @@ fn plan_model_session_steps_with_llm(
             ));
         }
 
+        if let Some(observer) = on_debug.as_deref_mut() {
+            let parsed_lines = steps
+                .iter()
+                .enumerate()
+                .map(|(index, step)| {
+                    let payload = build_step_trace_payload(step);
+                    format!("{}. {}", index + 1, payload)
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            observer(
+                "llm_plan_parsed_steps",
+                &format!("模型规划解析结果（attempt={}）", attempt),
+                parsed_lines.as_str(),
+            );
+        }
+
         if let Err(err) = validate_llm_model_plan_steps(&steps, prompt) {
             last_error = format!("规划步骤校验失败: {}", err);
             if attempt == 1 {
+                if selection_snapshot.is_some()
+                    && has_selection_reference_intent(prompt_lower.as_str())
+                {
+                    retry_with_selection_context = true;
+                    retry_require_disambiguation = true;
+                }
                 continue;
             }
             return Err(desktop_error_from_text(
                 last_error.as_str(),
                 "core.desktop.model.plan_invalid",
+                false,
+            ));
+        }
+        if let Some(reason) = detect_ambiguous_target_plan(&steps, prompt, selection_snapshot) {
+            last_error = format!("规划目标不明确: {}", reason);
+            if attempt == 1 {
+                retry_with_selection_context = selection_snapshot.is_some();
+                retry_require_disambiguation = true;
+                continue;
+            }
+            return Err(desktop_error_from_text(
+                last_error.as_str(),
+                "core.desktop.model.plan_target_ambiguous",
                 false,
             ));
         }
@@ -1868,7 +2693,10 @@ fn resolve_selection_scope_from_params(params: &serde_json::Value) -> &'static s
             return "all";
         }
     }
-    if let Some(selected_only) = params.get("selected_only").and_then(|value| value.as_bool()) {
+    if let Some(selected_only) = params
+        .get("selected_only")
+        .and_then(|value| value.as_bool())
+    {
         return if selected_only { "selected" } else { "all" };
     }
     "selected"
@@ -1885,17 +2713,43 @@ fn required_selection_scope_for_step(
     let ModelSessionPlannedStep::Tool { action, params, .. } = step else {
         return None;
     };
-    if !matches!(
-        action,
-        ModelToolAction::TranslateObjects | ModelToolAction::RotateObjects | ModelToolAction::ScaleObjects
-    ) {
-        return None;
-    }
-    let scope = resolve_selection_scope_from_params(params);
-    if scope == "all" {
-        None
-    } else {
-        Some(scope)
+    match action {
+        ModelToolAction::TranslateObjects
+        | ModelToolAction::RotateObjects
+        | ModelToolAction::ScaleObjects => {
+            let scope = resolve_selection_scope_from_params(params);
+            if scope == "all" {
+                None
+            } else {
+                Some(scope)
+            }
+        }
+        ModelToolAction::AlignOrigin
+        | ModelToolAction::NormalizeScale
+        | ModelToolAction::NormalizeAxis
+        | ModelToolAction::AutoSmooth
+        | ModelToolAction::WeightedNormal
+        | ModelToolAction::TidyMaterialSlots => Some("selected"),
+        ModelToolAction::Solidify
+        | ModelToolAction::Bevel
+        | ModelToolAction::Mirror
+        | ModelToolAction::Array
+        | ModelToolAction::Boolean
+        | ModelToolAction::Decimate
+        | ModelToolAction::ApplyTextureImage => {
+            let explicit_object = params
+                .get("object")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .map(|name| !name.is_empty())
+                .unwrap_or(false);
+            if explicit_object {
+                None
+            } else {
+                Some("active")
+            }
+        }
+        _ => None,
     }
 }
 
@@ -1933,7 +2787,8 @@ fn enrich_transform_target_params(params: &mut serde_json::Value, prompt: &str, 
     if !params.is_object() {
         *params = json!({});
     }
-    let has_explicit_scope = params.get("selection_scope").is_some() || params.get("selected_only").is_some();
+    let has_explicit_scope =
+        params.get("selection_scope").is_some() || params.get("selected_only").is_some();
     let selection_scope = if has_explicit_scope {
         resolve_selection_scope_from_params(params)
     } else {
@@ -1948,10 +2803,7 @@ fn enrich_transform_target_params(params: &mut serde_json::Value, prompt: &str, 
 
     if let Some(raw) = params.as_object_mut() {
         raw.insert("selection_scope".to_string(), json!(selection_scope));
-        raw.insert(
-            "selected_only".to_string(),
-            json!(selection_scope != "all"),
-        );
+        raw.insert("selected_only".to_string(), json!(selection_scope != "all"));
         raw.insert("target_mode".to_string(), json!(target_mode));
         if target_names.is_empty() {
             raw.remove("target_names");
@@ -1971,9 +2823,44 @@ fn enrich_transform_targets_for_steps(steps: &mut [ModelSessionPlannedStep], pro
         };
         if matches!(
             action,
-            ModelToolAction::TranslateObjects | ModelToolAction::RotateObjects | ModelToolAction::ScaleObjects
+            ModelToolAction::TranslateObjects
+                | ModelToolAction::RotateObjects
+                | ModelToolAction::ScaleObjects
         ) {
             enrich_transform_target_params(params, prompt, lower.as_str());
+        }
+    }
+}
+
+/// 描述：当用户引用“这个物体/选中对象”时，为 selected_only 类动作补齐 selected_only=true，避免误改全场景对象。
+fn enrich_selection_scoped_params_for_reference_steps(
+    steps: &mut [ModelSessionPlannedStep],
+    prompt: &str,
+) {
+    let lower = prompt.to_lowercase();
+    if !has_selection_reference_intent(lower.as_str()) {
+        return;
+    }
+    for step in steps {
+        let ModelSessionPlannedStep::Tool { action, params, .. } = step else {
+            continue;
+        };
+        if !matches!(
+            action,
+            ModelToolAction::AlignOrigin
+                | ModelToolAction::NormalizeScale
+                | ModelToolAction::NormalizeAxis
+                | ModelToolAction::AutoSmooth
+                | ModelToolAction::WeightedNormal
+                | ModelToolAction::TidyMaterialSlots
+        ) {
+            continue;
+        }
+        if !params.is_object() {
+            *params = json!({});
+        }
+        if let Some(raw) = params.as_object_mut() {
+            raw.insert("selected_only".to_string(), json!(true));
         }
     }
 }
@@ -2006,7 +2893,10 @@ fn parse_selection_context_snapshot(data: &serde_json::Value) -> SelectionContex
 }
 
 /// 描述：检查当前选择上下文是否满足步骤作用域要求。
-fn selection_context_meets_scope(snapshot: &SelectionContextSnapshot, required_scope: &str) -> bool {
+fn selection_context_meets_scope(
+    snapshot: &SelectionContextSnapshot,
+    required_scope: &str,
+) -> bool {
     match required_scope {
         "active" => snapshot.active_object.is_some() || !snapshot.selected_objects.is_empty(),
         "selected" => !snapshot.selected_objects.is_empty(),
@@ -2063,6 +2953,129 @@ fn should_invalidate_selection_context_cache(step: &ModelSessionPlannedStep) -> 
     }
 }
 
+/// 描述：判断步骤成功后是否应触发拓扑质量检查；仅在几何/网格修改动作后执行。
+fn should_run_topology_check_after_step(step: &ModelSessionPlannedStep) -> bool {
+    let ModelSessionPlannedStep::Tool { action, .. } = step else {
+        return false;
+    };
+    matches!(
+        action,
+        ModelToolAction::Solidify
+            | ModelToolAction::Bevel
+            | ModelToolAction::Mirror
+            | ModelToolAction::Array
+            | ModelToolAction::Boolean
+            | ModelToolAction::AutoSmooth
+            | ModelToolAction::WeightedNormal
+            | ModelToolAction::Decimate
+    )
+}
+
+/// 描述：判断步骤执行前是否需要创建文件恢复点，避免文件级操作污染当前会话。
+fn should_create_file_recover_point_for_step(step: &ModelSessionPlannedStep) -> bool {
+    let ModelSessionPlannedStep::Tool { action, .. } = step else {
+        return false;
+    };
+    matches!(
+        action,
+        ModelToolAction::NewFile | ModelToolAction::OpenFile | ModelToolAction::SaveFile
+    )
+}
+
+/// 描述：将任意文本转换为文件系统安全片段，作为恢复点目录名的一部分。
+fn normalize_recover_point_segment(value: &str) -> String {
+    let mut normalized = String::new();
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            normalized.push(ch.to_ascii_lowercase());
+        } else if matches!(ch, '-' | '_' | '.') {
+            normalized.push('-');
+        } else if ch.is_whitespace() {
+            normalized.push('-');
+        }
+    }
+    let trimmed = normalized.trim_matches('-');
+    if trimmed.is_empty() {
+        "unknown".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// 描述：构建文件操作恢复点路径，按会话和 trace 进行隔离，便于失败后恢复。
+fn build_file_recover_point_path(
+    output_dir: &str,
+    session_id: &str,
+    trace_id: &str,
+    step_index: usize,
+) -> PathBuf {
+    let session_segment = normalize_recover_point_segment(session_id);
+    let trace_segment = normalize_recover_point_segment(trace_id);
+    let timestamp = now_millis();
+    Path::new(output_dir)
+        .join("recover_points")
+        .join(session_segment)
+        .join(trace_segment)
+        .join(format!("step-{}-{}.blend", step_index + 1, timestamp))
+}
+
+/// 描述：判断当前主链路是否需要开启操作事务；复杂链路默认启用事务快照保护。
+fn should_create_operation_transaction(primary_steps: &[ModelSessionPlannedStep]) -> bool {
+    primary_steps.len() >= 2
+}
+
+/// 描述：构建操作事务快照路径，用于复杂链路失败时回滚到执行前状态。
+fn build_operation_transaction_snapshot_path(
+    output_dir: &str,
+    session_id: &str,
+    trace_id: &str,
+) -> PathBuf {
+    let session_segment = normalize_recover_point_segment(session_id);
+    let trace_segment = normalize_recover_point_segment(trace_id);
+    let timestamp = now_millis();
+    Path::new(output_dir)
+        .join("recover_points")
+        .join(session_segment)
+        .join(trace_segment)
+        .join(format!("transaction-start-{}.blend", timestamp))
+}
+
+/// 描述：从 list_objects 返回数据统计场景规模，输出对象总数与 Mesh 数量。
+fn parse_scene_object_metrics(data: &serde_json::Value) -> (usize, usize) {
+    let Some(objects) = data.get("objects").and_then(|value| value.as_array()) else {
+        return (0, 0);
+    };
+    let total_count = objects.len();
+    let mesh_count = objects
+        .iter()
+        .filter(|item| item.get("type").and_then(|value| value.as_str()) == Some("MESH"))
+        .count();
+    (total_count, mesh_count)
+}
+
+/// 描述：根据步骤数量与场景规模估算复杂流程耗时（毫秒），用于执行前提示。
+fn estimate_complex_flow_duration_ms(primary_step_count: usize, mesh_count: usize) -> u64 {
+    let base_ms = 1200u64;
+    let step_cost_ms = (primary_step_count as u64).saturating_mul(420);
+    let mesh_cost_ms = (mesh_count as u64).saturating_mul(12);
+    base_ms
+        .saturating_add(step_cost_ms)
+        .saturating_add(mesh_cost_ms)
+}
+
+/// 描述：从拓扑检查结果提取最新面数基线，供后续步骤计算面数变化。
+fn parse_topology_face_count_baseline(data: &serde_json::Value) -> HashMap<String, u64> {
+    data.get("face_counts")
+        .and_then(|value| value.as_object())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|(name, count)| count.as_u64().map(|value| (name.clone(), value)))
+                .collect::<HashMap<String, u64>>()
+        })
+        .unwrap_or_default()
+}
+
 /// 描述：识别“平移/移动”意图，支持中英文关键词。
 fn is_translate_intent(lower: &str) -> bool {
     ["平移", "移动", "translate", "move"]
@@ -2091,9 +3104,7 @@ fn parse_translate_delta(prompt: &str, lower: &str) -> (f64, f64, f64) {
 
 /// 描述：识别“旋转”意图，支持中英文关键词。
 fn is_rotate_intent(lower: &str) -> bool {
-    ["旋转", "rotate"]
-        .iter()
-        .any(|key| lower.contains(key))
+    ["旋转", "rotate"].iter().any(|key| lower.contains(key))
 }
 
 /// 描述：角度归一化为弧度；当数值明显超过 2π 时视为“度”输入。
@@ -2130,14 +3141,14 @@ fn parse_rotate_delta(prompt: &str, lower: &str) -> (f64, f64, f64) {
 
 /// 描述：识别“缩放”意图，支持中英文关键词。
 fn is_scale_intent(lower: &str) -> bool {
-    ["缩放", "scale"]
-        .iter()
-        .any(|key| lower.contains(key))
+    ["缩放", "scale"].iter().any(|key| lower.contains(key))
 }
 
 /// 描述：提取统一缩放因子，未提供时使用默认值。
 fn parse_scale_factor(prompt: &str) -> f64 {
-    parse_first_number(prompt).unwrap_or(1.1).clamp(0.001, 1000.0)
+    parse_first_number(prompt)
+        .unwrap_or(1.1)
+        .clamp(0.001, 1000.0)
 }
 
 /// 描述：从文本中提取被引号包裹的片段，供目标对象名解析复用。
@@ -2328,32 +3339,39 @@ fn is_apply_texture_intent(prompt: &str, lower: &str, path: &str) -> bool {
     let has_texture_keyword = ["贴图", "纹理", "材质", "texture", "image", "base color"]
         .iter()
         .any(|keyword| lower.contains(keyword));
-    let has_apply_verb = ["添加", "替换", "设置", "应用", "assign", "apply", "set", "use"]
-        .iter()
-        .any(|keyword| lower.contains(keyword));
+    let has_apply_verb = [
+        "添加", "替换", "设置", "应用", "assign", "apply", "set", "use",
+    ]
+    .iter()
+    .any(|keyword| lower.contains(keyword));
     let lower_path = path.to_lowercase();
-    let is_image_file = [".png", ".jpg", ".jpeg", ".tga", ".bmp", ".tif", ".tiff", ".exr"]
+    let is_image_file = [
+        ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".tif", ".tiff", ".exr",
+    ]
+    .iter()
+    .any(|suffix| lower_path.ends_with(suffix));
+    let starts_with_material_instruction = ["贴图", "纹理", "材质", "texture", "image", "material"]
         .iter()
-        .any(|suffix| lower_path.ends_with(suffix));
-    let starts_with_material_instruction =
-        ["贴图", "纹理", "材质", "texture", "image", "material"]
-            .iter()
-            .any(|prefix| prompt.trim_start().to_lowercase().starts_with(prefix));
+        .any(|prefix| prompt.trim_start().to_lowercase().starts_with(prefix));
 
     (has_texture_keyword && has_apply_verb && is_image_file)
         || (starts_with_material_instruction && is_image_file)
 }
 
 fn is_add_cube_intent(prompt: &str, lower: &str) -> bool {
-    const CN_EXPLICIT: [&str; 12] = [
+    const CN_EXPLICIT: [&str; 16] = [
         "添加正方体",
         "添加一个正方体",
         "添加立方体",
         "添加一个立方体",
         "新建正方体",
+        "新建一个正方体",
         "新建立方体",
+        "新建一个立方体",
         "创建正方体",
+        "创建一个正方体",
         "创建立方体",
+        "创建一个立方体",
         "加个正方体",
         "加一个正方体",
         "加个立方体",
@@ -2395,6 +3413,8 @@ fn is_add_cube_intent(prompt: &str, lower: &str) -> bool {
 enum PlannedModelStep {
     Export {
         input: String,
+        format: ExportModelFormat,
+        params: serde_json::Value,
     },
     Tool {
         action: ModelToolAction,
@@ -2403,16 +3423,54 @@ enum PlannedModelStep {
     },
 }
 
+/// 描述：解析本地规则规划的导出参数，支持“仅导出选中对象”和“不应用修改器”语义。
+fn build_export_plan_params(lower: &str) -> serde_json::Value {
+    let use_selection = [
+        "选中导出",
+        "仅导出选中",
+        "只导出选中",
+        "selected only",
+        "selection only",
+    ]
+    .iter()
+    .any(|key| lower.contains(key));
+    let disable_apply_modifiers = [
+        "不应用修改器",
+        "不应用所有修改器",
+        "without modifiers",
+        "no modifiers",
+    ]
+    .iter()
+    .any(|key| lower.contains(key));
+    json!({
+        "use_selection": use_selection,
+        "apply_modifiers": !disable_apply_modifiers,
+        "export_apply": !disable_apply_modifiers
+    })
+}
+
 fn plan_model_steps(prompt: &str) -> Vec<PlannedModelStep> {
     let lower = prompt.to_lowercase();
     let mut steps: Vec<PlannedModelStep> = Vec::new();
 
-    if ["导出", "export", "输出glb", "导出模型"]
-        .iter()
-        .any(|key| lower.contains(key))
+    if [
+        "导出",
+        "export",
+        "输出glb",
+        "输出fbx",
+        "输出obj",
+        "导出模型",
+        "导出fbx",
+        "导出obj",
+    ]
+    .iter()
+    .any(|key| lower.contains(key))
     {
+        let format = infer_export_format_from_text(lower.as_str());
         steps.push(PlannedModelStep::Export {
-            input: "导出 GLB".to_string(),
+            input: format!("导出 {}", format.as_str().to_uppercase()),
+            format,
+            params: build_export_plan_params(lower.as_str()),
         });
     }
     if ["列出对象", "查看对象", "list objects"]
@@ -2451,7 +3509,97 @@ fn plan_model_steps(prompt: &str) -> Vec<PlannedModelStep> {
             });
         }
     }
-    if lower.contains("重命名") || lower.contains("rename") {
+    let is_collection_context = lower.contains("集合") || lower.contains("collection");
+    if is_collection_context {
+        let mut collection_names: Vec<String> = Vec::new();
+        collection_names.extend(collect_wrapped_segments(prompt, '“', '”'));
+        collection_names.extend(collect_wrapped_segments(prompt, '「', '」'));
+        collection_names.extend(collect_wrapped_segments(prompt, '"', '"'));
+        collection_names.extend(collect_wrapped_segments(prompt, '\'', '\''));
+        collection_names.extend(collect_wrapped_segments(prompt, '`', '`'));
+        collection_names = collection_names
+            .into_iter()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty() && !value.contains('/') && !value.contains('\\'))
+            .fold(Vec::<String>::new(), |mut acc, item| {
+                if !acc.iter().any(|existing| existing == &item) {
+                    acc.push(item);
+                }
+                acc
+            });
+        if collection_names.is_empty() {
+            collection_names = parse_target_names_in_prompt(prompt, lower.as_str());
+        }
+
+        if (lower.contains("重命名") || lower.contains("rename")) && collection_names.len() >= 2
+        {
+            steps.push(PlannedModelStep::Tool {
+                action: ModelToolAction::OrganizeHierarchy,
+                input: format!(
+                    "集合重命名 {} -> {}",
+                    collection_names[0], collection_names[1]
+                ),
+                params: json!({
+                    "mode": "collection_rename",
+                    "collection": collection_names[0],
+                    "new_name": collection_names[1]
+                }),
+            });
+        } else if (lower.contains("重排")
+            || lower.contains("reorder")
+            || lower.contains("置顶")
+            || lower.contains("最前")
+            || lower.contains("最后")
+            || lower.contains("末尾"))
+            && !collection_names.is_empty()
+        {
+            let position = if ["置顶", "最前", "first", "front"]
+                .iter()
+                .any(|token| lower.contains(token))
+            {
+                "first"
+            } else {
+                "last"
+            };
+            let mut params = json!({
+                "mode": "collection_reorder",
+                "collection": collection_names[0],
+                "position": position,
+            });
+            if let Some(parent_collection) = collection_names.get(1) {
+                if let Some(raw) = params.as_object_mut() {
+                    raw.insert("parent_collection".to_string(), json!(parent_collection));
+                }
+            }
+            steps.push(PlannedModelStep::Tool {
+                action: ModelToolAction::OrganizeHierarchy,
+                input: format!("集合重排 {} -> {}", collection_names[0], position),
+                params,
+            });
+        } else if (lower.contains("移动")
+            || lower.contains("move")
+            || lower.contains("层级")
+            || lower.contains("parent"))
+            && !collection_names.is_empty()
+        {
+            let mut params = json!({
+                "mode": "collection_move",
+                "collection": collection_names[0],
+            });
+            if let Some(parent_collection) = collection_names.get(1) {
+                if let Some(raw) = params.as_object_mut() {
+                    raw.insert("parent_collection".to_string(), json!(parent_collection));
+                }
+            }
+            steps.push(PlannedModelStep::Tool {
+                action: ModelToolAction::OrganizeHierarchy,
+                input: format!("集合移动 {}", collection_names[0]),
+                params,
+            });
+        }
+    }
+
+    if (lower.contains("重命名") || lower.contains("rename")) && !is_collection_context {
         if let Some((left, right)) = prompt.split_once("为") {
             let old_name = left
                 .replace("重命名", "")
@@ -2468,7 +3616,7 @@ fn plan_model_steps(prompt: &str) -> Vec<PlannedModelStep> {
             }
         }
     }
-    if lower.contains("设为父级") || lower.contains("parent") {
+    if !is_collection_context && (lower.contains("设为父级") || lower.contains("parent")) {
         let normalized = prompt.replace("设为父级", " ");
         let parts = normalized
             .split_whitespace()
@@ -2501,7 +3649,10 @@ fn plan_model_steps(prompt: &str) -> Vec<PlannedModelStep> {
             });
         }
     }
-    if ["保存", "save file"].iter().any(|key| lower.contains(key)) {
+    if ["保存", "save file", "另存为", "save as"]
+        .iter()
+        .any(|key| lower.contains(key))
+    {
         let path = parse_path_in_prompt(prompt);
         steps.push(PlannedModelStep::Tool {
             action: ModelToolAction::SaveFile,
@@ -2707,10 +3858,14 @@ fn plan_model_steps(prompt: &str) -> Vec<PlannedModelStep> {
     }
     if let Some(path) = parse_path_in_prompt(prompt) {
         if is_apply_texture_intent(prompt, lower.as_str(), path.as_str()) {
+            let mut params = json!({ "path": path });
+            if has_selection_reference_intent(lower.as_str()) {
+                enrich_transform_target_params(&mut params, prompt, lower.as_str());
+            }
             steps.push(PlannedModelStep::Tool {
                 action: ModelToolAction::ApplyTextureImage,
                 input: format!("应用贴图 {}", path),
-                params: json!({ "path": path }),
+                params,
             });
         }
     }
@@ -2759,7 +3914,8 @@ fn check_capability_for_step(
                 | ModelToolAction::Boolean => capability_enabled(capabilities.geometry),
                 ModelToolAction::AutoSmooth
                 | ModelToolAction::WeightedNormal
-                | ModelToolAction::Decimate => capability_enabled(capabilities.mesh_opt),
+                | ModelToolAction::Decimate
+                | ModelToolAction::InspectMeshTopology => capability_enabled(capabilities.mesh_opt),
                 ModelToolAction::TidyMaterialSlots
                 | ModelToolAction::CheckTexturePaths
                 | ModelToolAction::ApplyTextureImage
@@ -2798,7 +3954,10 @@ fn is_bridge_unavailable_error(message: &str) -> bool {
 }
 
 /// 描述：按动作类型尝试自动拉起 Blender；当为 OpenFile 时优先带文件路径启动。
-fn launch_blender_for_action(action: ModelToolAction, params: &serde_json::Value) -> Result<(), String> {
+fn launch_blender_for_action(
+    action: ModelToolAction,
+    params: &serde_json::Value,
+) -> Result<(), String> {
     let blender_bin = resolve_blender_bin(None);
     let mut command = Command::new(&blender_bin);
     if matches!(action, ModelToolAction::OpenFile) {
@@ -2818,7 +3977,11 @@ fn launch_blender_for_action(action: ModelToolAction, params: &serde_json::Value
 }
 
 /// 描述：轮询检测 Bridge 可用性，等待 Blender 启动并加载插件。
-fn wait_for_bridge_ready(blender_bridge_addr: Option<String>, attempts: u32, interval_ms: u64) -> bool {
+fn wait_for_bridge_ready(
+    blender_bridge_addr: Option<String>,
+    attempts: u32,
+    interval_ms: u64,
+) -> bool {
     for _ in 0..attempts {
         if ping_blender_bridge(blender_bridge_addr.clone()).is_ok() {
             return true;
@@ -2862,10 +4025,7 @@ fn execute_model_tool_result_with_bridge_upgrade(
                     ));
                 }
                 return run_once().map_err(|second_err| {
-                    format!(
-                        "{}。Bridge 已就绪但动作仍失败：{}",
-                        first_err, second_err
-                    )
+                    format!("{}。Bridge 已就绪但动作仍失败：{}", first_err, second_err)
                 });
             }
 
@@ -2908,9 +4068,47 @@ fn fetch_selection_context_snapshot(
 }
 
 #[tauri::command]
-fn run_model_session_command(
+async fn run_model_session_command(
     app: tauri::AppHandle,
-    store: tauri::State<ModelSessionStore>,
+    store: tauri::State<'_, ModelSessionStore>,
+    session_id: String,
+    prompt: String,
+    provider: Option<String>,
+    trace_id: Option<String>,
+    project_name: Option<String>,
+    capabilities: Option<ModelMcpCapabilities>,
+    output_dir: Option<String>,
+    blender_bridge_addr: Option<String>,
+    confirmation_token: Option<String>,
+) -> Result<ModelSessionRunResponse, DesktopProtocolError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        run_model_session_command_inner(
+            app,
+            store,
+            session_id,
+            prompt,
+            provider,
+            trace_id,
+            project_name,
+            capabilities,
+            output_dir,
+            blender_bridge_addr,
+            confirmation_token,
+        )
+    })
+    .await
+    .map_err(|err| DesktopProtocolError {
+        code: "core.desktop.model.task_join_failed".to_string(),
+        message: format!("model session task join failed: {}", err),
+        suggestion: Some("请重试一次；如仍失败请重启应用".to_string()),
+        retryable: true,
+    })?
+}
+
+fn run_model_session_command_inner(
+    app: tauri::AppHandle,
+    store: ModelSessionStore,
     session_id: String,
     prompt: String,
     provider: Option<String>,
@@ -2933,8 +4131,9 @@ fn run_model_session_command(
     }
     let capabilities = capabilities.unwrap_or_default();
     let core_capabilities = to_core_capability_matrix(&capabilities);
-    let output_dir = normalize_output_dir_for_model(&app, output_dir)
-        .map_err(|err| desktop_error_from_text(&err, "core.desktop.model.output_dir_invalid", false))?;
+    let output_dir = normalize_output_dir_for_model(&app, output_dir).map_err(|err| {
+        desktop_error_from_text(&err, "core.desktop.model.output_dir_invalid", false)
+    })?;
     let output_dir_string = output_dir.to_string_lossy().to_string();
     let current_dir = env::current_dir()
         .ok()
@@ -2945,23 +4144,58 @@ fn run_model_session_command(
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "codex".to_string());
     let prompt_lower = normalized_prompt.to_lowercase();
+    let mut planner_selection_snapshot: Option<SelectionContextSnapshot> = None;
 
     {
-        let mut map = store
-            .sessions
-            .lock()
-            .map_err(|_| DesktopProtocolError {
-                code: "core.desktop.model.store_lock_failed".to_string(),
-                message: "model session store lock poisoned".to_string(),
-                suggestion: None,
-                retryable: true,
-            })?;
+        let mut map = store.sessions.lock().map_err(|_| DesktopProtocolError {
+            code: "core.desktop.model.store_lock_failed".to_string(),
+            message: "model session store lock poisoned".to_string(),
+            suggestion: None,
+            retryable: true,
+        })?;
         let session = map.entry(session_id.clone()).or_default();
         session.cancelled = false;
         session.last_prompt = Some(normalized_prompt.to_string());
         session.last_provider = Some(normalized_provider.clone());
         session.last_output_dir = Some(output_dir_string.clone());
     }
+    emit_model_session_stream_event(
+        &app,
+        ModelSessionStreamEvent {
+            session_id: session_id.clone(),
+            trace_id: trace_id.clone(),
+            status: "started".to_string(),
+            message: format!("模型会话已开始：{}", normalized_prompt),
+            step: None,
+            event: None,
+        },
+    );
+    emit_model_debug_trace_event(
+        &app,
+        ModelDebugTraceEvent {
+            session_id: session_id.clone(),
+            trace_id: trace_id.clone(),
+            stage: "session_request".to_string(),
+            title: "模型会话请求".to_string(),
+            detail: json!({
+                "provider": normalized_provider.clone(),
+                "prompt": normalized_prompt,
+                "output_dir": output_dir_string.clone(),
+                "project_name": project_name.clone(),
+                "capabilities": {
+                    "export": capabilities.export,
+                    "scene": capabilities.scene,
+                    "transform": capabilities.transform,
+                    "geometry": capabilities.geometry,
+                    "mesh_opt": capabilities.mesh_opt,
+                    "material": capabilities.material,
+                    "file": capabilities.file,
+                },
+            })
+            .to_string(),
+            timestamp_ms: now_millis(),
+        },
+    );
 
     if is_destructive_selection_intent(prompt_lower.as_str()) {
         let required_scope = if has_active_reference_intent(prompt_lower.as_str()) {
@@ -2972,22 +4206,24 @@ fn run_model_session_command(
         let snapshot = fetch_selection_context_snapshot(blender_bridge_addr.clone());
         match snapshot {
             Ok(snapshot)
-                if should_block_destructive_plan_for_empty_selection(prompt_lower.as_str(), &snapshot) =>
+                if should_block_destructive_plan_for_empty_selection(
+                    prompt_lower.as_str(),
+                    &snapshot,
+                ) =>
             {
                 let snapshot_active = snapshot.active_object.clone();
                 let snapshot_selected = snapshot.selected_objects.clone();
                 let snapshot_selected_count = snapshot_selected.len();
                 let base_index = {
-                    let map = store
-                        .sessions
-                        .lock()
-                        .map_err(|_| DesktopProtocolError {
-                            code: "core.desktop.model.store_lock_failed".to_string(),
-                            message: "model session store lock poisoned".to_string(),
-                            suggestion: None,
-                            retryable: true,
-                        })?;
-                    map.get(&session_id).map(|state| state.steps.len()).unwrap_or(0)
+                    let map = store.sessions.lock().map_err(|_| DesktopProtocolError {
+                        code: "core.desktop.model.store_lock_failed".to_string(),
+                        message: "model session store lock poisoned".to_string(),
+                        suggestion: None,
+                        retryable: true,
+                    })?;
+                    map.get(&session_id)
+                        .map(|state| state.steps.len())
+                        .unwrap_or(0)
                 };
                 let blocked_error = ProtocolError::new(
                     "core.desktop.model.selection_required",
@@ -3026,15 +4262,12 @@ fn run_model_session_command(
                 }];
                 let ui_hint = build_selection_required_ui_hint(required_scope, &snapshot);
                 let (all_steps, all_events, all_assets) = {
-                    let mut map = store
-                        .sessions
-                        .lock()
-                        .map_err(|_| DesktopProtocolError {
-                            code: "core.desktop.model.store_lock_failed".to_string(),
-                            message: "model session store lock poisoned".to_string(),
-                            suggestion: None,
-                            retryable: true,
-                        })?;
+                    let mut map = store.sessions.lock().map_err(|_| DesktopProtocolError {
+                        code: "core.desktop.model.store_lock_failed".to_string(),
+                        message: "model session store lock poisoned".to_string(),
+                        suggestion: None,
+                        retryable: true,
+                    })?;
                     let session = map.entry(session_id.clone()).or_default();
                     session.steps.extend(created_steps.clone());
                     session.events.extend(created_events.clone());
@@ -3044,9 +4277,22 @@ fn run_model_session_command(
                         session.assets.clone(),
                     )
                 };
+                let response_message =
+                    "检测到你引用了当前对象，但尚未选择目标对象，请先选择后重试。".to_string();
+                emit_model_session_stream_event(
+                    &app,
+                    ModelSessionStreamEvent {
+                        session_id: session_id.clone(),
+                        trace_id: trace_id.clone(),
+                        status: "manual".to_string(),
+                        message: response_message.clone(),
+                        step: None,
+                        event: None,
+                    },
+                );
                 return Ok(ModelSessionRunResponse {
                     trace_id,
-                    message: "检测到你引用了当前对象，但尚未选择目标对象，请先选择后重试。".to_string(),
+                    message: response_message,
                     steps: all_steps,
                     events: all_events,
                     assets: all_assets,
@@ -3062,16 +4308,15 @@ fn run_model_session_command(
                 );
                 let ui_hint = build_ui_hint_from_protocol_error(&protocol_error);
                 let base_index = {
-                    let map = store
-                        .sessions
-                        .lock()
-                        .map_err(|_| DesktopProtocolError {
-                            code: "core.desktop.model.store_lock_failed".to_string(),
-                            message: "model session store lock poisoned".to_string(),
-                            suggestion: None,
-                            retryable: true,
-                        })?;
-                    map.get(&session_id).map(|state| state.steps.len()).unwrap_or(0)
+                    let map = store.sessions.lock().map_err(|_| DesktopProtocolError {
+                        code: "core.desktop.model.store_lock_failed".to_string(),
+                        message: "model session store lock poisoned".to_string(),
+                        suggestion: None,
+                        retryable: true,
+                    })?;
+                    map.get(&session_id)
+                        .map(|state| state.steps.len())
+                        .unwrap_or(0)
                 };
                 let created_steps = vec![ModelStepRecord {
                     index: base_index,
@@ -3099,15 +4344,12 @@ fn run_model_session_command(
                     message: protocol_error.message.clone(),
                 }];
                 let (all_steps, all_events, all_assets) = {
-                    let mut map = store
-                        .sessions
-                        .lock()
-                        .map_err(|_| DesktopProtocolError {
-                            code: "core.desktop.model.store_lock_failed".to_string(),
-                            message: "model session store lock poisoned".to_string(),
-                            suggestion: None,
-                            retryable: true,
-                        })?;
+                    let mut map = store.sessions.lock().map_err(|_| DesktopProtocolError {
+                        code: "core.desktop.model.store_lock_failed".to_string(),
+                        message: "model session store lock poisoned".to_string(),
+                        suggestion: None,
+                        retryable: true,
+                    })?;
                     let session = map.entry(session_id.clone()).or_default();
                     session.steps.extend(created_steps.clone());
                     session.events.extend(created_events.clone());
@@ -3117,9 +4359,22 @@ fn run_model_session_command(
                         session.assets.clone(),
                     )
                 };
+                let response_message =
+                    "无法确认当前选择上下文，请先确认 Blender Bridge 可用后再重试。".to_string();
+                emit_model_session_stream_event(
+                    &app,
+                    ModelSessionStreamEvent {
+                        session_id: session_id.clone(),
+                        trace_id: trace_id.clone(),
+                        status: "failed".to_string(),
+                        message: response_message.clone(),
+                        step: None,
+                        event: None,
+                    },
+                );
                 return Ok(ModelSessionRunResponse {
                     trace_id,
-                    message: "无法确认当前选择上下文，请先确认 Blender Bridge 可用后再重试。".to_string(),
+                    message: response_message,
                     steps: all_steps,
                     events: all_events,
                     assets: all_assets,
@@ -3127,15 +4382,39 @@ fn run_model_session_command(
                     ui_hint,
                 });
             }
-            Ok(_) => {}
+            Ok(snapshot) => {
+                planner_selection_snapshot = Some(snapshot);
+            }
         }
     }
 
+    if planner_selection_snapshot.is_none() && has_selection_reference_intent(prompt_lower.as_str())
+    {
+        if let Ok(snapshot) = fetch_selection_context_snapshot(blender_bridge_addr.clone()) {
+            planner_selection_snapshot = Some(snapshot);
+        }
+    }
+
+    let mut planner_debug_observer = |stage: &str, title: &str, detail: &str| {
+        emit_model_debug_trace_event(
+            &app,
+            ModelDebugTraceEvent {
+                session_id: session_id.clone(),
+                trace_id: trace_id.clone(),
+                stage: stage.to_string(),
+                title: title.to_string(),
+                detail: detail.to_string(),
+                timestamp_ms: now_millis(),
+            },
+        );
+    };
     let planned_steps = plan_model_session_steps_with_llm(
         Some(normalized_provider.as_str()),
         normalized_prompt,
         &capabilities,
         current_dir.as_deref(),
+        planner_selection_snapshot.as_ref(),
+        Some(&mut planner_debug_observer),
     )?;
 
     if requires_safety_confirmation(&planned_steps) {
@@ -3145,18 +4424,18 @@ fn run_model_session_command(
             .unwrap_or(false);
         if !valid {
             let base_index = {
-                let map = store
-                    .sessions
-                    .lock()
-                    .map_err(|_| DesktopProtocolError {
-                        code: "core.desktop.model.store_lock_failed".to_string(),
-                        message: "model session store lock poisoned".to_string(),
-                        suggestion: None,
-                        retryable: true,
-                    })?;
-                map.get(&session_id).map(|state| state.steps.len()).unwrap_or(0)
+                let map = store.sessions.lock().map_err(|_| DesktopProtocolError {
+                    code: "core.desktop.model.store_lock_failed".to_string(),
+                    message: "model session store lock poisoned".to_string(),
+                    suggestion: None,
+                    retryable: true,
+                })?;
+                map.get(&session_id)
+                    .map(|state| state.steps.len())
+                    .unwrap_or(0)
             };
-            let ui_hint = build_safety_confirmation_ui_hint(&trace_id, normalized_prompt, &planned_steps);
+            let ui_hint =
+                build_safety_confirmation_ui_hint(&trace_id, normalized_prompt, &planned_steps);
             let created_steps = vec![ModelStepRecord {
                 index: base_index,
                 code: "safety_confirmation".to_string(),
@@ -3181,15 +4460,12 @@ fn run_model_session_command(
                 message: "complex session requires one-time confirmation token".to_string(),
             }];
             let (all_steps, all_events, all_assets) = {
-                let mut map = store
-                    .sessions
-                    .lock()
-                    .map_err(|_| DesktopProtocolError {
-                        code: "core.desktop.model.store_lock_failed".to_string(),
-                        message: "model session store lock poisoned".to_string(),
-                        suggestion: None,
-                        retryable: true,
-                    })?;
+                let mut map = store.sessions.lock().map_err(|_| DesktopProtocolError {
+                    code: "core.desktop.model.store_lock_failed".to_string(),
+                    message: "model session store lock poisoned".to_string(),
+                    suggestion: None,
+                    retryable: true,
+                })?;
                 let session = map.entry(session_id.clone()).or_default();
                 session.steps.extend(created_steps.clone());
                 session.events.extend(created_events.clone());
@@ -3199,9 +4475,21 @@ fn run_model_session_command(
                     session.assets.clone(),
                 )
             };
+            let response_message = "检测到高风险复杂操作，等待你确认后执行一次。".to_string();
+            emit_model_session_stream_event(
+                &app,
+                ModelSessionStreamEvent {
+                    session_id: session_id.clone(),
+                    trace_id: trace_id.clone(),
+                    status: "manual".to_string(),
+                    message: response_message.clone(),
+                    step: None,
+                    event: None,
+                },
+            );
             return Ok(ModelSessionRunResponse {
                 trace_id,
-                message: "检测到高风险复杂操作，等待你确认后执行一次。".to_string(),
+                message: response_message,
                 steps: all_steps,
                 events: all_events,
                 assets: all_assets,
@@ -3226,26 +4514,105 @@ fn run_model_session_command(
         .cloned()
         .collect();
     let mut selection_context_cache: Option<SelectionContextSnapshot> = None;
+    let mut topology_face_count_baseline: Option<HashMap<String, u64>> = None;
+    let mut operation_transaction_snapshot_path: Option<String> = None;
+
+    if should_create_operation_transaction(&primary_steps) {
+        let transaction_snapshot_path = build_operation_transaction_snapshot_path(
+            output_dir_string.as_str(),
+            session_id.as_str(),
+            trace_id.as_str(),
+        );
+        if let Some(parent) = transaction_snapshot_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let transaction_snapshot_text = transaction_snapshot_path.to_string_lossy().to_string();
+        created_events.push(ModelEventRecord {
+            event: "operation_transaction_started".to_string(),
+            step_index: None,
+            timestamp_ms: now_millis(),
+            message: "复杂流程事务已开启，准备写入执行前快照。".to_string(),
+        });
+        match execute_model_tool_result_with_bridge_upgrade(
+            ModelToolAction::SaveFile,
+            json!({"path": transaction_snapshot_text.clone()}),
+            blender_bridge_addr.clone(),
+        ) {
+            Ok(_) => {
+                operation_transaction_snapshot_path = Some(transaction_snapshot_text.clone());
+                created_events.push(ModelEventRecord {
+                    event: "operation_transaction_snapshot_created".to_string(),
+                    step_index: None,
+                    timestamp_ms: now_millis(),
+                    message: format!("操作事务快照已创建：{}", transaction_snapshot_text),
+                });
+                created_assets.push(ModelAssetRecord {
+                    kind: "operation_transaction_snapshot".to_string(),
+                    path: transaction_snapshot_text,
+                    version: now_millis() as u64,
+                    meta: Some(json!({
+                        "trace_id": trace_id,
+                        "session_id": session_id,
+                        "phase": "before_primary_steps",
+                    })),
+                });
+            }
+            Err(err) => {
+                created_events.push(ModelEventRecord {
+                    event: "operation_transaction_snapshot_skipped".to_string(),
+                    step_index: None,
+                    timestamp_ms: now_millis(),
+                    message: format!("操作事务快照创建失败，继续执行：{}", err),
+                });
+            }
+        }
+    }
+
+    if primary_steps.len() >= 3 {
+        if let Ok(scene_info) = execute_model_tool_result_with_bridge_upgrade(
+            ModelToolAction::ListObjects,
+            json!({}),
+            blender_bridge_addr.clone(),
+        ) {
+            let (total_count, mesh_count) = parse_scene_object_metrics(&scene_info.data);
+            let estimated_ms = estimate_complex_flow_duration_ms(primary_steps.len(), mesh_count);
+            created_events.push(ModelEventRecord {
+                event: "performance_estimated".to_string(),
+                step_index: None,
+                timestamp_ms: now_millis(),
+                message: format!(
+                    "complex flow estimate: steps={}, objects={}, meshes={}, eta≈{}s",
+                    primary_steps.len(),
+                    total_count,
+                    mesh_count,
+                    (estimated_ms / 1000).max(1)
+                ),
+            });
+            if mesh_count >= 200 || primary_steps.len() >= 10 {
+                created_events.push(ModelEventRecord {
+                    event: "performance_warning".to_string(),
+                    step_index: None,
+                    timestamp_ms: now_millis(),
+                    message: "当前场景规模较大，建议拆分批次执行并提前保存。".to_string(),
+                });
+            }
+        }
+    }
 
     for step in primary_steps {
         {
-            let map = store
-                .sessions
-                .lock()
-                .map_err(|_| DesktopProtocolError {
-                    code: "core.desktop.model.store_lock_failed".to_string(),
-                    message: "model session store lock poisoned".to_string(),
-                    suggestion: None,
-                    retryable: true,
-                })?;
-            let session = map
-                .get(&session_id)
-                .ok_or_else(|| DesktopProtocolError {
-                    code: "core.desktop.model.session_not_found".to_string(),
-                    message: "session state not found".to_string(),
-                    suggestion: None,
-                    retryable: false,
-                })?;
+            let map = store.sessions.lock().map_err(|_| DesktopProtocolError {
+                code: "core.desktop.model.store_lock_failed".to_string(),
+                message: "model session store lock poisoned".to_string(),
+                suggestion: None,
+                retryable: true,
+            })?;
+            let session = map.get(&session_id).ok_or_else(|| DesktopProtocolError {
+                code: "core.desktop.model.session_not_found".to_string(),
+                message: "session state not found".to_string(),
+                suggestion: None,
+                retryable: false,
+            })?;
             if session.cancelled {
                 return Err(DesktopProtocolError {
                     code: "core.desktop.model.cancelled".to_string(),
@@ -3264,15 +4631,12 @@ fn run_model_session_command(
             )
         })?;
         let next_index = {
-            let map = store
-                .sessions
-                .lock()
-                .map_err(|_| DesktopProtocolError {
-                    code: "core.desktop.model.store_lock_failed".to_string(),
-                    message: "model session store lock poisoned".to_string(),
-                    suggestion: None,
-                    retryable: true,
-                })?;
+            let map = store.sessions.lock().map_err(|_| DesktopProtocolError {
+                code: "core.desktop.model.store_lock_failed".to_string(),
+                message: "model session store lock poisoned".to_string(),
+                suggestion: None,
+                retryable: true,
+            })?;
             map.get(&session_id)
                 .map(|state| state.steps.len())
                 .unwrap_or(0)
@@ -3283,6 +4647,19 @@ fn run_model_session_command(
             timestamp_ms: now_millis(),
             message: format!("step {} started", next_index + 1),
         });
+        if let Some(last_event) = created_events.last() {
+            emit_model_session_stream_event(
+                &app,
+                ModelSessionStreamEvent {
+                    session_id: session_id.clone(),
+                    trace_id: trace_id.clone(),
+                    status: "running".to_string(),
+                    message: last_event.message.clone(),
+                    step: None,
+                    event: Some(last_event.clone()),
+                },
+            );
+        }
         created_events.push(ModelEventRecord {
             event: "branch_selected".to_string(),
             step_index: Some(next_index),
@@ -3294,12 +4671,92 @@ fn run_model_session_command(
                 step.risk_level().as_str()
             ),
         });
+        if let Some(last_event) = created_events.last() {
+            emit_model_session_stream_event(
+                &app,
+                ModelSessionStreamEvent {
+                    session_id: session_id.clone(),
+                    trace_id: trace_id.clone(),
+                    status: "running".to_string(),
+                    message: last_event.message.clone(),
+                    step: None,
+                    event: Some(last_event.clone()),
+                },
+            );
+        }
         let started = Instant::now();
         let step_code = step.code();
         let step_input = step.input().to_string();
         let step_trace_data = build_step_trace_payload(&step);
+        let mut file_recover_point_path: Option<String> = None;
+        emit_model_debug_trace_event(
+            &app,
+            ModelDebugTraceEvent {
+                session_id: session_id.clone(),
+                trace_id: trace_id.clone(),
+                stage: "step_execute_request".to_string(),
+                title: format!("执行步骤请求 #{}", next_index + 1),
+                detail: json!({
+                    "index": next_index,
+                    "code": step_code,
+                    "input": step_input,
+                    "trace_payload": step_trace_data,
+                })
+                .to_string(),
+                timestamp_ms: now_millis(),
+            },
+        );
 
-        if let Some(required_scope) = required_selection_scope_for_step(prompt_lower.as_str(), &step) {
+        if should_create_file_recover_point_for_step(&step) {
+            let recover_point_path = build_file_recover_point_path(
+                output_dir_string.as_str(),
+                session_id.as_str(),
+                trace_id.as_str(),
+                next_index,
+            );
+            if let Some(parent) = recover_point_path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            let recover_point_text = recover_point_path.to_string_lossy().to_string();
+            match execute_model_tool_result_with_bridge_upgrade(
+                ModelToolAction::SaveFile,
+                json!({"path": recover_point_text.clone()}),
+                blender_bridge_addr.clone(),
+            ) {
+                Ok(_) => {
+                    file_recover_point_path = Some(recover_point_text.clone());
+                    created_events.push(ModelEventRecord {
+                        event: "recover_point_created".to_string(),
+                        step_index: Some(next_index),
+                        timestamp_ms: now_millis(),
+                        message: format!("file recover point created: {}", recover_point_text),
+                    });
+                    created_assets.push(ModelAssetRecord {
+                        kind: "recover_point".to_string(),
+                        path: recover_point_text.clone(),
+                        version: now_millis() as u64,
+                        meta: Some(json!({
+                            "trace_id": trace_id,
+                            "step_code": step_code.clone(),
+                            "step_index": next_index,
+                            "session_id": session_id,
+                        })),
+                    });
+                }
+                Err(err) => {
+                    created_events.push(ModelEventRecord {
+                        event: "recover_point_skipped".to_string(),
+                        step_index: Some(next_index),
+                        timestamp_ms: now_millis(),
+                        message: format!("create recover point skipped: {}", err),
+                    });
+                }
+            }
+        }
+
+        if let Some(required_scope) =
+            required_selection_scope_for_step(prompt_lower.as_str(), &step)
+        {
             if selection_context_cache.is_none() {
                 if let Ok(selection_result) = execute_model_tool_result_with_bridge_upgrade(
                     ModelToolAction::GetSelectionContext,
@@ -3352,15 +4809,12 @@ fn run_model_session_command(
                         message: blocked_error.message.clone(),
                     });
                     let (all_steps, all_events, all_assets) = {
-                        let mut map = store
-                            .sessions
-                            .lock()
-                            .map_err(|_| DesktopProtocolError {
-                                code: "core.desktop.model.store_lock_failed".to_string(),
-                                message: "model session store lock poisoned".to_string(),
-                                suggestion: None,
-                                retryable: true,
-                            })?;
+                        let mut map = store.sessions.lock().map_err(|_| DesktopProtocolError {
+                            code: "core.desktop.model.store_lock_failed".to_string(),
+                            message: "model session store lock poisoned".to_string(),
+                            suggestion: None,
+                            retryable: true,
+                        })?;
                         let session = map.entry(session_id.clone()).or_default();
                         session.steps.extend(created_steps.clone());
                         session.events.extend(created_events.clone());
@@ -3371,6 +4825,17 @@ fn run_model_session_command(
                             session.assets.clone(),
                         )
                     };
+                    emit_model_session_stream_event(
+                        &app,
+                        ModelSessionStreamEvent {
+                            session_id: session_id.clone(),
+                            trace_id: trace_id.clone(),
+                            status: "manual".to_string(),
+                            message: blocked_error.message.clone(),
+                            step: created_steps.last().cloned(),
+                            event: created_events.last().cloned(),
+                        },
+                    );
                     return Ok(ModelSessionRunResponse {
                         trace_id,
                         message: blocked_error.message,
@@ -3385,7 +4850,7 @@ fn run_model_session_command(
         }
 
         let step_result: Result<(String, Option<String>), String> = match &step {
-            ModelSessionPlannedStep::Export { .. } => {
+            ModelSessionPlannedStep::Export { format, params, .. } => {
                 export_model(ExportModelRequest {
                     project_name: project_name
                         .as_deref()
@@ -3395,12 +4860,24 @@ fn run_model_session_command(
                         .to_string(),
                     prompt: normalized_prompt.to_string(),
                     output_dir: output_dir_string.clone(),
+                    export_format: Some(*format),
+                    export_params: params.as_object().and_then(|raw| {
+                        if raw.is_empty() {
+                            None
+                        } else {
+                            Some(params.clone())
+                        }
+                    }),
                     blender_bridge_addr: blender_bridge_addr.clone(),
                     target: ModelToolTarget::Blender,
                 })
                 .map(|result| {
                     (
-                        format!("导出成功：{}", result.exported_file),
+                        format!(
+                            "导出成功({})：{}",
+                            format.as_str().to_uppercase(),
+                            result.exported_file
+                        ),
                         Some(result.exported_file),
                     )
                 })
@@ -3418,14 +4895,95 @@ fn run_model_session_command(
         let elapsed = started.elapsed().as_millis();
         match step_result {
             Ok((summary, output_path)) => {
+                emit_model_debug_trace_event(
+                    &app,
+                    ModelDebugTraceEvent {
+                        session_id: session_id.clone(),
+                        trace_id: trace_id.clone(),
+                        stage: "step_execute_result".to_string(),
+                        title: format!("执行步骤完成 #{}", next_index + 1),
+                        detail: json!({
+                            "index": next_index,
+                            "code": step_code,
+                            "summary": summary.clone(),
+                            "elapsed_ms": elapsed,
+                            "output_path": output_path.clone(),
+                        })
+                        .to_string(),
+                        timestamp_ms: now_millis(),
+                    },
+                );
                 let mut step_data = step_trace_data.clone();
                 if let Some(raw) = step_data.as_object_mut() {
                     raw.insert("input".to_string(), json!(step_input));
                     raw.insert("trace_id".to_string(), json!(trace_id.clone()));
+                    raw.insert(
+                        "recover_point_path".to_string(),
+                        json!(file_recover_point_path.clone()),
+                    );
                 }
                 if let Some(path) = output_path.clone() {
                     if let Some(raw) = step_data.as_object_mut() {
                         raw.insert("exported_file".to_string(), json!(path.clone()));
+                    }
+                }
+                if should_run_topology_check_after_step(&step) {
+                    let mut inspect_params = json!({
+                        "selected_only": true,
+                        "strict": false,
+                    });
+                    if let Some(baseline) = topology_face_count_baseline.as_ref() {
+                        if !baseline.is_empty() {
+                            if let Some(raw) = inspect_params.as_object_mut() {
+                                raw.insert("baseline_face_counts".to_string(), json!(baseline));
+                            }
+                        }
+                    }
+                    match execute_model_tool_result_with_bridge_upgrade(
+                        ModelToolAction::InspectMeshTopology,
+                        inspect_params,
+                        blender_bridge_addr.clone(),
+                    ) {
+                        Ok(topology_result) => {
+                            let topology_data = topology_result.data.clone();
+                            if let Some(raw) = step_data.as_object_mut() {
+                                raw.insert("topology_check".to_string(), topology_data.clone());
+                            }
+                            let checked_count = topology_data
+                                .get("checked_count")
+                                .and_then(|value| value.as_u64())
+                                .unwrap_or(0);
+                            let issue_count = topology_data
+                                .get("issue_count")
+                                .and_then(|value| value.as_u64())
+                                .unwrap_or(0);
+                            let event_name = if issue_count > 0 {
+                                "topology_check_warning"
+                            } else {
+                                "topology_check_passed"
+                            };
+                            created_events.push(ModelEventRecord {
+                                event: event_name.to_string(),
+                                step_index: Some(next_index),
+                                timestamp_ms: now_millis(),
+                                message: format!(
+                                    "topology checked {} mesh(es), issues {}",
+                                    checked_count, issue_count
+                                ),
+                            });
+                            let baseline = parse_topology_face_count_baseline(&topology_data);
+                            if !baseline.is_empty() {
+                                topology_face_count_baseline = Some(baseline);
+                            }
+                        }
+                        Err(err) => {
+                            created_events.push(ModelEventRecord {
+                                event: "topology_check_skipped".to_string(),
+                                step_index: Some(next_index),
+                                timestamp_ms: now_millis(),
+                                message: format!("拓扑检查跳过：{}", err),
+                            });
+                        }
                     }
                 }
                 let step_record = ModelStepRecord {
@@ -3440,23 +4998,20 @@ fn run_model_session_command(
                 if let Some(path) = output_path.clone() {
                     exported_file = Some(path.clone());
                     let version = {
-                        let mut map = store
-                            .sessions
-                            .lock()
-                            .map_err(|_| DesktopProtocolError {
-                                code: "core.desktop.model.store_lock_failed".to_string(),
-                                message: "model session store lock poisoned".to_string(),
-                                suggestion: None,
-                                retryable: true,
-                            })?;
-                        let session = map
-                            .get_mut(&session_id)
-                            .ok_or_else(|| DesktopProtocolError {
-                                code: "core.desktop.model.session_not_found".to_string(),
-                                message: "session state not found".to_string(),
-                                suggestion: None,
-                                retryable: false,
-                            })?;
+                        let mut map = store.sessions.lock().map_err(|_| DesktopProtocolError {
+                            code: "core.desktop.model.store_lock_failed".to_string(),
+                            message: "model session store lock poisoned".to_string(),
+                            suggestion: None,
+                            retryable: true,
+                        })?;
+                        let session =
+                            map.get_mut(&session_id)
+                                .ok_or_else(|| DesktopProtocolError {
+                                    code: "core.desktop.model.session_not_found".to_string(),
+                                    message: "session state not found".to_string(),
+                                    suggestion: None,
+                                    retryable: false,
+                                })?;
                         session.version += 1;
                         session.version
                     };
@@ -3474,6 +5029,32 @@ fn run_model_session_command(
                     message: summary,
                 });
                 created_steps.push(step_record);
+                if let Some(last_step) = created_steps.last() {
+                    emit_model_session_stream_event(
+                        &app,
+                        ModelSessionStreamEvent {
+                            session_id: session_id.clone(),
+                            trace_id: trace_id.clone(),
+                            status: "running".to_string(),
+                            message: last_step.summary.clone(),
+                            step: Some(last_step.clone()),
+                            event: None,
+                        },
+                    );
+                }
+                if let Some(last_event) = created_events.last() {
+                    emit_model_session_stream_event(
+                        &app,
+                        ModelSessionStreamEvent {
+                            session_id: session_id.clone(),
+                            trace_id: trace_id.clone(),
+                            status: "running".to_string(),
+                            message: last_event.message.clone(),
+                            step: None,
+                            event: Some(last_event.clone()),
+                        },
+                    );
+                }
                 if should_invalidate_selection_context_cache(&step) {
                     selection_context_cache = None;
                 }
@@ -3481,12 +5062,40 @@ fn run_model_session_command(
             Err(err) => {
                 let protocol_error =
                     protocol_error_from_text(&err, "core.desktop.model.step_failed", true);
+                emit_model_debug_trace_event(
+                    &app,
+                    ModelDebugTraceEvent {
+                        session_id: session_id.clone(),
+                        trace_id: trace_id.clone(),
+                        stage: "step_execute_failed".to_string(),
+                        title: format!("执行步骤失败 #{}", next_index + 1),
+                        detail: json!({
+                            "index": next_index,
+                            "code": step_code,
+                            "raw_error": err.clone(),
+                            "protocol_error": {
+                                "code": protocol_error.code.clone(),
+                                "message": protocol_error.message.clone(),
+                                "retryable": protocol_error.retryable,
+                            },
+                        })
+                        .to_string(),
+                        timestamp_ms: now_millis(),
+                    },
+                );
+                let error_category =
+                    classify_model_error_category(protocol_error.code.as_str(), err.as_str());
                 let mut failed_step_data = step_trace_data.clone();
                 if let Some(raw) = failed_step_data.as_object_mut() {
                     raw.insert("input".to_string(), json!(step_input.clone()));
                     raw.insert("trace_id".to_string(), json!(trace_id.clone()));
                     raw.insert("error_code".to_string(), json!(protocol_error.code.clone()));
-                    raw.insert("error_message".to_string(), json!(protocol_error.message.clone()));
+                    raw.insert(
+                        "error_message".to_string(),
+                        json!(protocol_error.message.clone()),
+                    );
+                    raw.insert("raw_error_message".to_string(), json!(err.clone()));
+                    raw.insert("error_category".to_string(), json!(error_category));
                     raw.insert("error_attribution".to_string(), json!(step.code()));
                 }
                 let step_record = ModelStepRecord {
@@ -3505,8 +5114,74 @@ fn run_model_session_command(
                     message: protocol_error.message.clone(),
                 });
                 created_steps.push(step_record.clone());
+                emit_model_session_stream_event(
+                    &app,
+                    ModelSessionStreamEvent {
+                        session_id: session_id.clone(),
+                        trace_id: trace_id.clone(),
+                        status: "failed".to_string(),
+                        message: protocol_error.message.clone(),
+                        step: Some(step_record.clone()),
+                        event: created_events.last().cloned(),
+                    },
+                );
 
                 let mut recovery_summary = String::new();
+                if let Some(recover_path) = file_recover_point_path.clone() {
+                    if matches!(
+                        step,
+                        ModelSessionPlannedStep::Tool {
+                            action: ModelToolAction::NewFile
+                                | ModelToolAction::OpenFile
+                                | ModelToolAction::SaveFile,
+                            ..
+                        }
+                    ) {
+                        if let Ok((restore_msg, _)) = execute_model_tool_with_bridge_upgrade(
+                            ModelToolAction::OpenFile,
+                            json!({"path": recover_path}),
+                            blender_bridge_addr.clone(),
+                        ) {
+                            created_events.push(ModelEventRecord {
+                                event: "recover_point_restored".to_string(),
+                                step_index: Some(next_index),
+                                timestamp_ms: now_millis(),
+                                message: restore_msg,
+                            });
+                            recovery_summary = "已自动恢复到操作前文件快照。".to_string();
+                        }
+                    }
+                }
+                if let Some(transaction_snapshot_path) = operation_transaction_snapshot_path.clone()
+                {
+                    match execute_model_tool_with_bridge_upgrade(
+                        ModelToolAction::OpenFile,
+                        json!({"path": transaction_snapshot_path}),
+                        blender_bridge_addr.clone(),
+                    ) {
+                        Ok((restore_msg, _)) => {
+                            created_events.push(ModelEventRecord {
+                                event: "operation_transaction_rollback_applied".to_string(),
+                                step_index: Some(next_index),
+                                timestamp_ms: now_millis(),
+                                message: restore_msg,
+                            });
+                            recovery_summary = if recovery_summary.is_empty() {
+                                "已恢复到事务起点快照。".to_string()
+                            } else {
+                                format!("{} 并恢复到事务起点快照。", recovery_summary)
+                            };
+                        }
+                        Err(restore_err) => {
+                            created_events.push(ModelEventRecord {
+                                event: "operation_transaction_rollback_failed".to_string(),
+                                step_index: Some(next_index),
+                                timestamp_ms: now_millis(),
+                                message: format!("事务快照回滚失败：{}", restore_err),
+                            });
+                        }
+                    }
+                }
                 if step.recoverable() {
                     created_events.push(ModelEventRecord {
                         event: "rollback_started".to_string(),
@@ -3543,7 +5218,11 @@ fn run_model_session_command(
                             timestamp_ms: now_millis(),
                             message: "自动回滚完成".to_string(),
                         });
-                        recovery_summary = "已自动执行 Undo 回滚。".to_string();
+                        recovery_summary = if recovery_summary.is_empty() {
+                            "已自动执行 Undo 回滚。".to_string()
+                        } else {
+                            format!("{} 并执行了 Undo 回滚。", recovery_summary)
+                        };
                     } else {
                         created_events.push(ModelEventRecord {
                             event: "rollback_failed".to_string(),
@@ -3568,15 +5247,12 @@ fn run_model_session_command(
                 }
 
                 let (all_steps, all_events, all_assets) = {
-                    let mut map = store
-                        .sessions
-                        .lock()
-                        .map_err(|_| DesktopProtocolError {
-                            code: "core.desktop.model.store_lock_failed".to_string(),
-                            message: "model session store lock poisoned".to_string(),
-                            suggestion: None,
-                            retryable: true,
-                        })?;
+                    let mut map = store.sessions.lock().map_err(|_| DesktopProtocolError {
+                        code: "core.desktop.model.store_lock_failed".to_string(),
+                        message: "model session store lock poisoned".to_string(),
+                        suggestion: None,
+                        retryable: true,
+                    })?;
                     let session = map.entry(session_id.clone()).or_default();
                     session.steps.extend(created_steps.clone());
                     session.events.extend(created_events.clone());
@@ -3593,15 +5269,27 @@ fn run_model_session_command(
                 } else {
                     build_ui_hint_from_protocol_error(&protocol_error)
                 };
+                let failure_message = format!(
+                    "工作流在步骤 `{}` 失败：{} {}",
+                    step.code(),
+                    protocol_error.message,
+                    recovery_summary
+                );
+                emit_model_session_stream_event(
+                    &app,
+                    ModelSessionStreamEvent {
+                        session_id: session_id.clone(),
+                        trace_id: trace_id.clone(),
+                        status: "failed".to_string(),
+                        message: failure_message.clone(),
+                        step: None,
+                        event: None,
+                    },
+                );
 
                 return Ok(ModelSessionRunResponse {
                     trace_id,
-                    message: format!(
-                        "工作流在步骤 `{}` 失败：{} {}",
-                        step.code(),
-                        protocol_error.message,
-                        recovery_summary
-                    ),
+                    message: failure_message,
                     steps: all_steps,
                     events: all_events,
                     assets: all_assets,
@@ -3612,16 +5300,22 @@ fn run_model_session_command(
         }
     }
 
+    if operation_transaction_snapshot_path.is_some() {
+        created_events.push(ModelEventRecord {
+            event: "operation_transaction_committed".to_string(),
+            step_index: None,
+            timestamp_ms: now_millis(),
+            message: "复杂流程主链路执行完成，事务已提交。".to_string(),
+        });
+    }
+
     let (all_steps, all_events, all_assets) = {
-        let mut map = store
-            .sessions
-            .lock()
-            .map_err(|_| DesktopProtocolError {
-                code: "core.desktop.model.store_lock_failed".to_string(),
-                message: "model session store lock poisoned".to_string(),
-                suggestion: None,
-                retryable: true,
-            })?;
+        let mut map = store.sessions.lock().map_err(|_| DesktopProtocolError {
+            code: "core.desktop.model.store_lock_failed".to_string(),
+            message: "model session store lock poisoned".to_string(),
+            suggestion: None,
+            retryable: true,
+        })?;
         let session = map.entry(session_id.clone()).or_default();
         session.steps.extend(created_steps.clone());
         session.events.extend(created_events.clone());
@@ -3652,6 +5346,35 @@ fn run_model_session_command(
             message: format!("session={}, steps={}", session_id, created_steps.len()),
         },
     );
+    emit_model_session_stream_event(
+        &app,
+        ModelSessionStreamEvent {
+            session_id: session_id.clone(),
+            trace_id: trace_id.clone(),
+            status: "finished".to_string(),
+            message: message.clone(),
+            step: None,
+            event: None,
+        },
+    );
+    emit_model_debug_trace_event(
+        &app,
+        ModelDebugTraceEvent {
+            session_id: session_id.clone(),
+            trace_id: trace_id.clone(),
+            stage: "session_finished".to_string(),
+            title: "模型会话完成".to_string(),
+            detail: json!({
+                "step_count": created_steps.len(),
+                "event_count": created_events.len(),
+                "asset_count": created_assets.len(),
+                "exported_file": exported_file.clone(),
+                "message": message.clone(),
+            })
+            .to_string(),
+            timestamp_ms: now_millis(),
+        },
+    );
 
     Ok(ModelSessionRunResponse {
         trace_id,
@@ -3665,9 +5388,39 @@ fn run_model_session_command(
 }
 
 #[tauri::command]
-fn retry_model_session_last_step(
+async fn retry_model_session_last_step(
     app: tauri::AppHandle,
-    store: tauri::State<ModelSessionStore>,
+    store: tauri::State<'_, ModelSessionStore>,
+    session_id: String,
+    trace_id: Option<String>,
+    project_name: Option<String>,
+    capabilities: Option<ModelMcpCapabilities>,
+    blender_bridge_addr: Option<String>,
+) -> Result<ModelSessionRunResponse, DesktopProtocolError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        retry_model_session_last_step_inner(
+            app,
+            store,
+            session_id,
+            trace_id,
+            project_name,
+            capabilities,
+            blender_bridge_addr,
+        )
+    })
+    .await
+    .map_err(|err| DesktopProtocolError {
+        code: "core.desktop.model.retry_task_join_failed".to_string(),
+        message: format!("retry model session task join failed: {}", err),
+        suggestion: Some("请重试一次；如仍失败请重启应用".to_string()),
+        retryable: true,
+    })?
+}
+
+fn retry_model_session_last_step_inner(
+    app: tauri::AppHandle,
+    store: ModelSessionStore,
     session_id: String,
     trace_id: Option<String>,
     project_name: Option<String>,
@@ -3675,23 +5428,18 @@ fn retry_model_session_last_step(
     blender_bridge_addr: Option<String>,
 ) -> Result<ModelSessionRunResponse, DesktopProtocolError> {
     let (last_prompt, last_provider, last_output_dir) = {
-        let map = store
-            .sessions
-            .lock()
-            .map_err(|_| DesktopProtocolError {
-                code: "core.desktop.model.store_lock_failed".to_string(),
-                message: "model session store lock poisoned".to_string(),
-                suggestion: None,
-                retryable: true,
-            })?;
-        let state = map
-            .get(&session_id)
-            .ok_or_else(|| DesktopProtocolError {
-                code: "core.desktop.model.session_not_found".to_string(),
-                message: "会话不存在，无法重试".to_string(),
-                suggestion: None,
-                retryable: false,
-            })?;
+        let map = store.sessions.lock().map_err(|_| DesktopProtocolError {
+            code: "core.desktop.model.store_lock_failed".to_string(),
+            message: "model session store lock poisoned".to_string(),
+            suggestion: None,
+            retryable: true,
+        })?;
+        let state = map.get(&session_id).ok_or_else(|| DesktopProtocolError {
+            code: "core.desktop.model.session_not_found".to_string(),
+            message: "会话不存在，无法重试".to_string(),
+            suggestion: None,
+            retryable: false,
+        })?;
         (
             state
                 .last_prompt
@@ -3707,7 +5455,7 @@ fn retry_model_session_last_step(
         )
     };
 
-    run_model_session_command(
+    run_model_session_command_inner(
         app,
         store,
         session_id,
@@ -3723,14 +5471,34 @@ fn retry_model_session_last_step(
 }
 
 #[tauri::command]
-fn undo_model_session_step(
+async fn undo_model_session_step(
     app: tauri::AppHandle,
-    store: tauri::State<ModelSessionStore>,
+    store: tauri::State<'_, ModelSessionStore>,
     session_id: String,
     trace_id: Option<String>,
     blender_bridge_addr: Option<String>,
 ) -> Result<ModelSessionRunResponse, DesktopProtocolError> {
-    run_model_session_command(
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        undo_model_session_step_inner(app, store, session_id, trace_id, blender_bridge_addr)
+    })
+    .await
+    .map_err(|err| DesktopProtocolError {
+        code: "core.desktop.model.undo_task_join_failed".to_string(),
+        message: format!("undo model session task join failed: {}", err),
+        suggestion: Some("请重试一次；如仍失败请重启应用".to_string()),
+        retryable: true,
+    })?
+}
+
+fn undo_model_session_step_inner(
+    app: tauri::AppHandle,
+    store: ModelSessionStore,
+    session_id: String,
+    trace_id: Option<String>,
+    blender_bridge_addr: Option<String>,
+) -> Result<ModelSessionRunResponse, DesktopProtocolError> {
+    run_model_session_command_inner(
         app,
         store,
         session_id,
@@ -3785,6 +5553,163 @@ fn get_model_session_records(
     })
 }
 
+/// 描述：构建“模型执行总结”请求 Prompt，提供给 LLM 生成面向用户的最终说明。
+fn build_model_session_summary_prompt(
+    user_prompt: &str,
+    workflow_message: Option<&str>,
+    model_steps: &[ModelStepRecord],
+    model_events: &[ModelEventRecord],
+    exported_file: Option<&str>,
+    bridge_warning: Option<&str>,
+) -> String {
+    let step_payload = model_steps
+        .iter()
+        .map(|item| {
+            json!({
+                "index": item.index,
+                "code": item.code,
+                "status": item.status,
+                "elapsed_ms": item.elapsed_ms,
+                "summary": item.summary,
+                "error": item.error.as_ref().map(|err| err.message.clone()),
+            })
+        })
+        .collect::<Vec<_>>();
+    let event_payload = model_events
+        .iter()
+        .rev()
+        .take(80)
+        .map(|item| {
+            json!({
+                "event": item.event,
+                "step_index": item.step_index,
+                "message": item.message,
+                "timestamp_ms": item.timestamp_ms,
+            })
+        })
+        .collect::<Vec<_>>();
+    let workflow_message = workflow_message.unwrap_or("");
+    let exported_file = exported_file.unwrap_or("");
+    let bridge_warning = bridge_warning.unwrap_or("");
+
+    format!(
+        "你是 3D 建模助手的总结器。请根据执行记录输出“给终端用户看的总结”，要求：\n\
+1) 使用中文；\n\
+2) 重点写“具体做了什么”和“结果是什么”；\n\
+3) 不要输出内部实现术语（例如 workflow 节点名、trace id）；\n\
+4) 若有失败或风险，明确指出；\n\
+5) 保持简洁，建议 6-12 行。\n\
+\n\
+请按以下结构输出：\n\
+已完成内容：\n\
+- ...\n\
+执行结果：\n\
+- 成功/失败统计与关键产物\n\
+后续建议：\n\
+- 若一切成功可写“无需额外操作”；若有异常给出下一步。\n\
+\n\
+用户原始需求：\n\
+{user_prompt}\n\
+\n\
+工作流消息：\n\
+{workflow_message}\n\
+\n\
+步骤记录(JSON)：\n\
+{step_json}\n\
+\n\
+事件记录(JSON)：\n\
+{event_json}\n\
+\n\
+导出文件：\n\
+{exported_file}\n\
+\n\
+环境提示：\n\
+{bridge_warning}\n",
+        user_prompt = user_prompt,
+        workflow_message = workflow_message,
+        step_json = serde_json::to_string_pretty(&step_payload).unwrap_or_else(|_| "[]".to_string()),
+        event_json = serde_json::to_string_pretty(&event_payload).unwrap_or_else(|_| "[]".to_string()),
+        exported_file = exported_file,
+        bridge_warning = bridge_warning,
+    )
+}
+
+/// 描述：调用 LLM 生成模型执行总结，输出给前端会话最终结果展示。
+#[tauri::command]
+async fn summarize_model_session_result(
+    provider: Option<String>,
+    user_prompt: String,
+    workflow_message: Option<String>,
+    model_steps: Vec<ModelStepRecord>,
+    model_events: Vec<ModelEventRecord>,
+    exported_file: Option<String>,
+    bridge_warning: Option<String>,
+) -> Result<ModelSessionAiSummaryResponse, DesktopProtocolError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        summarize_model_session_result_inner(
+            provider,
+            user_prompt,
+            workflow_message,
+            model_steps,
+            model_events,
+            exported_file,
+            bridge_warning,
+        )
+    })
+    .await
+    .map_err(|err| DesktopProtocolError {
+        code: "core.desktop.model.summary_task_join_failed".to_string(),
+        message: format!("summary task join failed: {}", err),
+        suggestion: Some("请重试一次；若仍失败将自动回退规则总结".to_string()),
+        retryable: true,
+    })?
+}
+
+/// 描述：模型执行总结命令核心实现，负责组织 Prompt 并调用 LLM。
+fn summarize_model_session_result_inner(
+    provider: Option<String>,
+    user_prompt: String,
+    workflow_message: Option<String>,
+    model_steps: Vec<ModelStepRecord>,
+    model_events: Vec<ModelEventRecord>,
+    exported_file: Option<String>,
+    bridge_warning: Option<String>,
+) -> Result<ModelSessionAiSummaryResponse, DesktopProtocolError> {
+    let summary_prompt = build_model_session_summary_prompt(
+        user_prompt.as_str(),
+        workflow_message.as_deref(),
+        model_steps.as_slice(),
+        model_events.as_slice(),
+        exported_file.as_deref(),
+        bridge_warning.as_deref(),
+    );
+    let provider_name = provider
+        .unwrap_or_else(|| "codex".to_string())
+        .trim()
+        .to_string();
+    let parsed_provider = parse_provider(provider_name.as_str());
+    let workdir = env::current_dir()
+        .ok()
+        .map(|path| path.to_string_lossy().to_string());
+    let raw_response = call_model(parsed_provider, summary_prompt.as_str(), workdir.as_deref())
+        .map_err(|err| DesktopProtocolError::from(err.to_protocol_error()))?;
+    let summary = raw_response.trim().to_string();
+    if summary.is_empty() {
+        return Err(DesktopProtocolError {
+            code: "core.desktop.model.summary_empty".to_string(),
+            message: "summary model returned empty response".to_string(),
+            suggestion: Some("请重试一次；若仍失败将自动回退规则总结".to_string()),
+            retryable: true,
+        });
+    }
+    Ok(ModelSessionAiSummaryResponse {
+        summary,
+        prompt: summary_prompt,
+        raw_response,
+        provider: provider_name,
+    })
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(ModelSessionStore::default())
@@ -3798,7 +5723,8 @@ fn main() {
             retry_model_session_last_step,
             undo_model_session_step,
             cancel_model_session_step,
-            get_model_session_records
+            get_model_session_records,
+            summarize_model_session_result
         ])
         .run(tauri::generate_context!())
         .expect("error while running zodileap_agen_desktop");
@@ -3806,18 +5732,28 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
     use super::{
         blender_series_supports_extension, bridge_boot_script_content, bridge_enable_and_save_expr,
-        build_model_plan_prompt, build_ui_hint_from_protocol_error, is_bridge_unavailable_error,
-        is_destructive_selection_intent, parse_llm_model_plan, parse_selection_context_snapshot,
-        parse_target_names_in_prompt, plan_model_steps, required_selection_scope_for_step,
-        selection_context_meets_scope, should_block_destructive_plan_for_empty_selection,
-        split_error_code_and_message, validate_llm_model_plan_steps, ModelMcpCapabilities,
-        PlannedModelStep, SelectionContextSnapshot,
+        build_file_recover_point_path, build_model_plan_prompt, build_model_plan_retry_prompt,
+        build_operation_transaction_snapshot_path, build_ui_hint_from_protocol_error,
+        classify_model_error_category, detect_ambiguous_target_plan,
+        estimate_complex_flow_duration_ms, is_bridge_unavailable_error,
+        is_destructive_selection_intent, parse_llm_model_plan, parse_scene_object_metrics,
+        parse_selection_context_snapshot, parse_target_names_in_prompt,
+        parse_topology_face_count_baseline, plan_model_steps, protocol_error_from_text,
+        required_selection_scope_for_step, selection_context_meets_scope,
+        should_block_destructive_plan_for_empty_selection,
+        should_create_file_recover_point_for_step, should_create_operation_transaction,
+        should_run_topology_check_after_step, split_error_code_and_message,
+        validate_llm_model_plan_steps, ModelMcpCapabilities, PlannedModelStep,
+        SelectionContextSnapshot,
     };
-    use zodileap_mcp_model::{ModelPlanBranch, ModelPlanOperationKind, ModelPlanRiskLevel, ModelSessionPlannedStep, ModelToolAction};
+    use serde_json::json;
     use zodileap_mcp_common::ProtocolError;
+    use zodileap_mcp_model::{
+        ExportModelFormat, ModelPlanBranch, ModelPlanOperationKind, ModelPlanRiskLevel,
+        ModelSessionPlannedStep, ModelToolAction,
+    };
 
     #[test]
     fn add_cube_should_not_trigger_export() {
@@ -3846,6 +5782,26 @@ mod tests {
     }
 
     #[test]
+    fn export_keyword_should_parse_export_format_and_params() {
+        let steps = plan_model_steps("请仅导出选中对象为 FBX，并且不应用修改器");
+        let has_fbx_export = steps.iter().any(|step| {
+            if let PlannedModelStep::Export { format, params, .. } = step {
+                return *format == ExportModelFormat::Fbx
+                    && params
+                        .get("use_selection")
+                        .and_then(|value| value.as_bool())
+                        == Some(true)
+                    && params
+                        .get("apply_modifiers")
+                        .and_then(|value| value.as_bool())
+                        == Some(false);
+            }
+            false
+        });
+        assert!(has_fbx_export);
+    }
+
+    #[test]
     fn should_split_protocol_error_text() {
         let (code, message) = split_error_code_and_message(
             "mcp.model.export.invalid_bridge_addr: invalid bridge addr `127.0.0.1:notaport`",
@@ -3853,6 +5809,41 @@ mod tests {
         );
         assert_eq!(code, "mcp.model.export.invalid_bridge_addr");
         assert!(message.contains("invalid bridge addr"));
+    }
+
+    #[test]
+    fn should_classify_model_error_category() {
+        assert_eq!(
+            classify_model_error_category("mcp.model.bridge.action_failed", "connection refused"),
+            "bridge"
+        );
+        assert_eq!(
+            classify_model_error_category("core.desktop.model.step_failed", "no_target_object"),
+            "scene_state"
+        );
+        assert_eq!(
+            classify_model_error_category(
+                "mcp.model.tool.invalid_args",
+                "apply_texture_image requires path"
+            ),
+            "parameter"
+        );
+    }
+
+    #[test]
+    fn should_build_user_friendly_protocol_error_from_text() {
+        let error = protocol_error_from_text(
+            "mcp.model.tool.invalid_args: scale_objects factor must be number",
+            "core.desktop.model.step_failed",
+            true,
+        );
+        assert!(error.message.contains("参数无效"));
+        assert!(error
+            .suggestion
+            .as_deref()
+            .unwrap_or("")
+            .contains("参数范围"));
+        assert!(!error.retryable);
     }
 
     #[test]
@@ -3878,11 +5869,24 @@ mod tests {
     }
 
     #[test]
+    fn should_build_parameter_ui_hint_from_friendly_error() {
+        let error = protocol_error_from_text(
+            "mcp.model.tool.invalid_args: apply_texture_image requires path",
+            "core.desktop.model.step_failed",
+            true,
+        );
+        let ui_hint = build_ui_hint_from_protocol_error(&error).expect("must have ui hint");
+        assert_eq!(ui_hint.key, "check-params");
+    }
+
+    #[test]
     fn should_detect_bridge_unavailable_error() {
         assert!(is_bridge_unavailable_error(
             "mcp.model.export.bridge_connect_failed: cannot connect blender bridge"
         ));
-        assert!(!is_bridge_unavailable_error("mcp.model.bridge.action_failed: unsupported action"));
+        assert!(!is_bridge_unavailable_error(
+            "mcp.model.bridge.action_failed: unsupported action"
+        ));
     }
 
     #[test]
@@ -3909,26 +5913,54 @@ mod tests {
 
     #[test]
     fn should_plan_apply_texture_image_step() {
-        let steps = plan_model_steps("我发现场景地板的贴图缺失了，能用“/Users/yoho/Downloads/image.png”添加吗");
+        let steps = plan_model_steps(
+            "我发现场景地板的贴图缺失了，能用“/Users/yoho/Downloads/image.png”添加吗",
+        );
         let has_apply_texture = steps.iter().any(|step| {
             matches!(
                 step,
                 PlannedModelStep::Tool { action, .. } if action.as_str() == "apply_texture_image"
             )
         });
-        assert!(has_apply_texture, "贴图补图请求应路由到 apply_texture_image 动作");
+        assert!(
+            has_apply_texture,
+            "贴图补图请求应路由到 apply_texture_image 动作"
+        );
     }
 
     #[test]
     fn should_plan_apply_texture_image_step_with_quoted_space_path() {
-        let steps = plan_model_steps("我发现场景地板的贴图缺失了，能用“ /Users/yoho/Downloads/image.png”添加吗");
+        let steps = plan_model_steps(
+            "我发现场景地板的贴图缺失了，能用“ /Users/yoho/Downloads/image.png”添加吗",
+        );
         let has_apply_texture = steps.iter().any(|step| {
             matches!(
                 step,
                 PlannedModelStep::Tool { action, .. } if action.as_str() == "apply_texture_image"
             )
         });
-        assert!(has_apply_texture, "带空格引号路径也应路由到 apply_texture_image 动作");
+        assert!(
+            has_apply_texture,
+            "带空格引号路径也应路由到 apply_texture_image 动作"
+        );
+    }
+
+    #[test]
+    fn should_plan_apply_texture_with_selection_scope_for_selected_reference() {
+        let steps = plan_model_steps("给这个物体应用贴图“/Users/yoho/Downloads/image.png”");
+        let has_scoped_apply = steps.iter().any(|step| {
+            matches!(
+                step,
+                PlannedModelStep::Tool { action, params, .. }
+                if action.as_str() == "apply_texture_image"
+                    && matches!(
+                        params.get("selection_scope").and_then(|value| value.as_str()),
+                        Some("active" | "selected")
+                    )
+                    && params.get("require_selection").and_then(|value| value.as_bool()) == Some(true)
+            )
+        });
+        assert!(has_scoped_apply, "引用这个物体贴图时应补齐 selection_scope");
     }
 
     #[test]
@@ -3972,6 +6004,25 @@ mod tests {
     }
 
     #[test]
+    fn should_plan_rotate_two_objects_with_selected_scope() {
+        let steps = plan_model_steps("对这两个物体旋转 30 度");
+        let has_rotate_selected_scope = steps.iter().any(|step| {
+            matches!(
+                step,
+                PlannedModelStep::Tool { action, params, .. }
+                if action.as_str() == "rotate_objects"
+                    && params.get("selection_scope").and_then(|value| value.as_str()) == Some("selected")
+                    && params.get("target_mode").and_then(|value| value.as_str()) == Some("selected")
+                    && params.get("require_selection").and_then(|value| value.as_bool()) == Some(true)
+            )
+        });
+        assert!(
+            has_rotate_selected_scope,
+            "两个物体旋转应限定在 selected 作用域"
+        );
+    }
+
+    #[test]
     fn should_plan_scale_all_objects_step() {
         let steps = plan_model_steps("把所有物体缩放到1.2倍");
         let has_scale_all_scope = steps.iter().any(|step| {
@@ -3990,7 +6041,10 @@ mod tests {
 
     #[test]
     fn should_parse_target_names_in_prompt() {
-        let names = parse_target_names_in_prompt("对名为“Cube”和“Sphere”的物体平移 1", "对名为“cube”和“sphere”的物体平移 1");
+        let names = parse_target_names_in_prompt(
+            "对名为“Cube”和“Sphere”的物体平移 1",
+            "对名为“cube”和“sphere”的物体平移 1",
+        );
         assert_eq!(names, vec!["Cube".to_string(), "Sphere".to_string()]);
     }
 
@@ -4014,7 +6068,65 @@ mod tests {
                         == Some(true)
             )
         });
-        assert!(has_target_filter, "名词过滤场景应输出 translate_objects.target_names");
+        assert!(
+            has_target_filter,
+            "名词过滤场景应输出 translate_objects.target_names"
+        );
+    }
+
+    #[test]
+    fn should_plan_save_file_for_save_as_keyword() {
+        let steps = plan_model_steps("把当前场景另存为“/Users/yoho/Downloads/save_as_demo.blend”");
+        let has_save = steps.iter().any(|step| {
+            if let PlannedModelStep::Tool { action, params, .. } = step {
+                let path = params
+                    .get("path")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                return action.as_str() == "save_file"
+                    && path == "/Users/yoho/Downloads/save_as_demo.blend";
+            }
+            false
+        });
+        assert!(has_save);
+    }
+
+    #[test]
+    fn should_plan_collection_rename_step() {
+        let steps = plan_model_steps("把集合“建筑组”重命名为“主建筑组”");
+        let has_collection_rename = steps.iter().any(|step| {
+            if let PlannedModelStep::Tool { action, params, .. } = step {
+                let mode = params
+                    .get("mode")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                return action.as_str() == "organize_hierarchy" && mode == "collection_rename";
+            }
+            false
+        });
+        assert!(has_collection_rename);
+    }
+
+    #[test]
+    fn should_plan_collection_move_step() {
+        let steps = plan_model_steps("把集合“窗户”移动到集合“建筑结构”下");
+        let has_collection_move = steps.iter().any(|step| {
+            if let PlannedModelStep::Tool { action, params, .. } = step {
+                let mode = params
+                    .get("mode")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                let parent = params
+                    .get("parent_collection")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                return action.as_str() == "organize_hierarchy"
+                    && mode == "collection_move"
+                    && parent == "建筑结构";
+            }
+            false
+        });
+        assert!(has_collection_move);
     }
 
     #[test]
@@ -4041,6 +6153,40 @@ mod tests {
     }
 
     #[test]
+    fn should_parse_llm_model_export_step_with_format() {
+        let raw = r#"{
+          "steps": [
+            {
+              "type": "export",
+              "format": "obj",
+              "input": "导出 OBJ",
+              "params": {"use_selection": true},
+              "operation_kind": "scene_file_ops",
+              "branch": "primary",
+              "recoverable": false,
+              "risk": "medium",
+              "condition": null
+            }
+          ]
+        }"#;
+        let (steps, reason) = parse_llm_model_plan(raw).expect("plan should parse");
+        assert!(reason.is_none());
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].code(), "export_obj");
+        if let ModelSessionPlannedStep::Export { format, params, .. } = &steps[0] {
+            assert_eq!(*format, ExportModelFormat::Obj);
+            assert_eq!(
+                params
+                    .get("use_selection")
+                    .and_then(|value| value.as_bool()),
+                Some(true)
+            );
+        } else {
+            panic!("expected export step");
+        }
+    }
+
+    #[test]
     fn planner_prompt_should_require_json_only() {
         let prompt = build_model_plan_prompt(
             "给地板补贴图 /Users/yoho/Downloads/image.png",
@@ -4048,6 +6194,34 @@ mod tests {
         );
         assert!(prompt.contains("只能输出 JSON"));
         assert!(prompt.contains("不允许规则兜底"));
+    }
+
+    #[test]
+    fn planner_prompt_should_include_selection_few_shot_examples() {
+        let prompt =
+            build_model_plan_prompt("对这个物体平移 0.5", &ModelMcpCapabilities::default());
+        assert!(prompt.contains("选择集语义 few-shot"));
+        assert!(prompt.contains("用户：对这个物体平移 0.5"));
+        assert!(prompt.contains("selection_scope=\"active\""));
+    }
+
+    #[test]
+    fn retry_prompt_should_include_selection_context_for_disambiguation() {
+        let snapshot = SelectionContextSnapshot {
+            active_object: Some("Cube".to_string()),
+            selected_objects: vec!["Cube".to_string(), "Cube.001".to_string()],
+        };
+        let prompt = build_model_plan_retry_prompt(
+            "对这个物体平移 0.5",
+            &ModelMcpCapabilities::default(),
+            "规划目标不明确",
+            r#"{"steps":[]}"#,
+            Some(&snapshot),
+            true,
+        );
+        assert!(prompt.contains("当前 Blender 选择上下文"));
+        assert!(prompt.contains("\"active_object\": \"Cube\""));
+        assert!(prompt.contains("本次必须让 transform 步骤目标唯一且可解释"));
     }
 
     #[test]
@@ -4062,8 +6236,11 @@ mod tests {
             risk: ModelPlanRiskLevel::Low,
             condition: None,
         }];
-        let err = validate_llm_model_plan_steps(&steps, "创建一个正方体并贴图 /Users/yoho/Downloads/image.png")
-            .expect_err("rename without user intent should be rejected");
+        let err = validate_llm_model_plan_steps(
+            &steps,
+            "创建一个正方体并贴图 /Users/yoho/Downloads/image.png",
+        )
+        .expect_err("rename without user intent should be rejected");
         assert!(err.contains("不应规划 rename_object"));
     }
 
@@ -4136,6 +6313,168 @@ mod tests {
     }
 
     #[test]
+    fn should_reject_apply_texture_without_any_channel_path() {
+        let steps = vec![ModelSessionPlannedStep::Tool {
+            action: ModelToolAction::ApplyTextureImage,
+            input: "贴图".to_string(),
+            params: json!({}),
+            operation_kind: ModelPlanOperationKind::BatchMaterial,
+            branch: ModelPlanBranch::Primary,
+            recoverable: true,
+            risk: ModelPlanRiskLevel::Low,
+            condition: None,
+        }];
+        let err = validate_llm_model_plan_steps(&steps, "给这个物体补贴图")
+            .expect_err("apply_texture_image without any channel should be rejected");
+        assert!(err.contains("至少需要"));
+    }
+
+    #[test]
+    fn should_accept_apply_texture_with_multi_channel_paths() {
+        let steps = vec![ModelSessionPlannedStep::Tool {
+            action: ModelToolAction::ApplyTextureImage,
+            input: "贴图".to_string(),
+            params: json!({
+                "base_color_path": "/tmp/basecolor.png",
+                "normal_path": "/tmp/normal.png",
+                "roughness_path": "/tmp/roughness.png",
+                "metallic_path": "/tmp/metallic.png",
+                "selection_scope": "active",
+                "target_mode": "active",
+                "require_selection": true
+            }),
+            operation_kind: ModelPlanOperationKind::BatchMaterial,
+            branch: ModelPlanBranch::Primary,
+            recoverable: true,
+            risk: ModelPlanRiskLevel::Low,
+            condition: None,
+        }];
+        let ok = validate_llm_model_plan_steps(&steps, "给这个物体设置 PBR 贴图");
+        assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn should_reject_apply_texture_without_selection_scope_for_selected_reference() {
+        let steps = vec![ModelSessionPlannedStep::Tool {
+            action: ModelToolAction::ApplyTextureImage,
+            input: "贴图".to_string(),
+            params: json!({
+                "path": "/tmp/basecolor.png"
+            }),
+            operation_kind: ModelPlanOperationKind::BatchMaterial,
+            branch: ModelPlanBranch::Primary,
+            recoverable: true,
+            risk: ModelPlanRiskLevel::Low,
+            condition: None,
+        }];
+        let err = validate_llm_model_plan_steps(&steps, "给这个物体补贴图")
+            .expect_err("selection reference should require scoped apply_texture parameters");
+        assert!(err.contains("selection_scope"));
+    }
+
+    #[test]
+    fn should_reject_apply_texture_with_invalid_objects_list() {
+        let steps = vec![ModelSessionPlannedStep::Tool {
+            action: ModelToolAction::ApplyTextureImage,
+            input: "贴图".to_string(),
+            params: json!({
+                "path": "/tmp/basecolor.png",
+                "objects": ["Cube", ""]
+            }),
+            operation_kind: ModelPlanOperationKind::BatchMaterial,
+            branch: ModelPlanBranch::Primary,
+            recoverable: true,
+            risk: ModelPlanRiskLevel::Low,
+            condition: None,
+        }];
+        let err = validate_llm_model_plan_steps(&steps, "给两个对象贴图")
+            .expect_err("invalid objects list should be rejected");
+        assert!(err.contains("objects"));
+    }
+
+    #[test]
+    fn should_accept_apply_texture_with_objects_list() {
+        let steps = vec![ModelSessionPlannedStep::Tool {
+            action: ModelToolAction::ApplyTextureImage,
+            input: "贴图".to_string(),
+            params: json!({
+                "path": "/tmp/basecolor.png",
+                "objects": ["Cube", "Cube.001"]
+            }),
+            operation_kind: ModelPlanOperationKind::BatchMaterial,
+            branch: ModelPlanBranch::Primary,
+            recoverable: true,
+            risk: ModelPlanRiskLevel::Low,
+            condition: None,
+        }];
+        let ok = validate_llm_model_plan_steps(&steps, "给两个对象贴图");
+        assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn should_reject_tidy_material_slots_without_selected_only_for_selection_reference() {
+        let steps = vec![ModelSessionPlannedStep::Tool {
+            action: ModelToolAction::TidyMaterialSlots,
+            input: "整理材质槽".to_string(),
+            params: json!({}),
+            operation_kind: ModelPlanOperationKind::BatchMaterial,
+            branch: ModelPlanBranch::Primary,
+            recoverable: true,
+            risk: ModelPlanRiskLevel::Low,
+            condition: None,
+        }];
+        let err = validate_llm_model_plan_steps(&steps, "对这个物体整理材质槽")
+            .expect_err("selection reference should require selected_only=true");
+        assert!(err.contains("selected_only=true"));
+    }
+
+    #[test]
+    fn should_detect_ambiguous_target_plan_for_active_reference() {
+        let steps = vec![ModelSessionPlannedStep::Tool {
+            action: ModelToolAction::TranslateObjects,
+            input: "平移".to_string(),
+            params: json!({"delta":[0.5,0.0,0.0],"selection_scope":"selected"}),
+            operation_kind: ModelPlanOperationKind::BatchTransform,
+            branch: ModelPlanBranch::Primary,
+            recoverable: true,
+            risk: ModelPlanRiskLevel::Low,
+            condition: None,
+        }];
+        let snapshot = SelectionContextSnapshot {
+            active_object: Some("Cube".to_string()),
+            selected_objects: vec!["Cube".to_string(), "Cube.001".to_string()],
+        };
+        let reason = detect_ambiguous_target_plan(&steps, "对这个物体平移 0.5", Some(&snapshot));
+        assert!(
+            reason.is_some(),
+            "active 引用但 scope 非 active 应视为目标不明确"
+        );
+    }
+
+    #[test]
+    fn should_not_detect_ambiguous_target_plan_when_active_scope_matches() {
+        let steps = vec![ModelSessionPlannedStep::Tool {
+            action: ModelToolAction::RotateObjects,
+            input: "旋转".to_string(),
+            params: json!({"delta_euler":[0.0,0.0,0.5],"selection_scope":"active"}),
+            operation_kind: ModelPlanOperationKind::BatchTransform,
+            branch: ModelPlanBranch::Primary,
+            recoverable: true,
+            risk: ModelPlanRiskLevel::Low,
+            condition: None,
+        }];
+        let snapshot = SelectionContextSnapshot {
+            active_object: Some("Cube".to_string()),
+            selected_objects: vec!["Cube".to_string()],
+        };
+        let reason = detect_ambiguous_target_plan(&steps, "对这个物体旋转 30 度", Some(&snapshot));
+        assert!(
+            reason.is_none(),
+            "active 引用且 scope=active 时不应判定歧义"
+        );
+    }
+
+    #[test]
     fn should_parse_selection_context_snapshot() {
         let snapshot = parse_selection_context_snapshot(&json!({
             "active_object": "Cube",
@@ -4162,6 +6501,38 @@ mod tests {
     }
 
     #[test]
+    fn should_require_active_scope_for_modifier_step_without_explicit_object() {
+        let step = ModelSessionPlannedStep::Tool {
+            action: ModelToolAction::Solidify,
+            input: "加厚".to_string(),
+            params: json!({}),
+            operation_kind: ModelPlanOperationKind::ModifierChain,
+            branch: ModelPlanBranch::Primary,
+            recoverable: true,
+            risk: ModelPlanRiskLevel::Low,
+            condition: None,
+        };
+        let required = required_selection_scope_for_step("对这个物体加厚", &step);
+        assert_eq!(required, Some("active"));
+    }
+
+    #[test]
+    fn should_require_selected_scope_for_selected_only_action_step() {
+        let step = ModelSessionPlannedStep::Tool {
+            action: ModelToolAction::TidyMaterialSlots,
+            input: "整理材质槽".to_string(),
+            params: json!({"selected_only": true}),
+            operation_kind: ModelPlanOperationKind::BatchMaterial,
+            branch: ModelPlanBranch::Primary,
+            recoverable: true,
+            risk: ModelPlanRiskLevel::Low,
+            condition: None,
+        };
+        let required = required_selection_scope_for_step("对这个物体整理材质槽", &step);
+        assert_eq!(required, Some("selected"));
+    }
+
+    #[test]
     fn should_validate_selection_context_scope_readiness() {
         let empty = SelectionContextSnapshot::default();
         assert!(!selection_context_meets_scope(&empty, "selected"));
@@ -4173,6 +6544,147 @@ mod tests {
         };
         assert!(selection_context_meets_scope(&selected, "selected"));
         assert!(selection_context_meets_scope(&selected, "active"));
+    }
+
+    #[test]
+    fn should_detect_topology_check_required_for_modifier_step() {
+        let step = ModelSessionPlannedStep::Tool {
+            action: ModelToolAction::Decimate,
+            input: "减面".to_string(),
+            params: json!({"ratio":0.5}),
+            operation_kind: ModelPlanOperationKind::ModifierChain,
+            branch: ModelPlanBranch::Primary,
+            recoverable: true,
+            risk: ModelPlanRiskLevel::Medium,
+            condition: None,
+        };
+        assert!(should_run_topology_check_after_step(&step));
+    }
+
+    #[test]
+    fn should_detect_recover_point_required_for_file_step() {
+        let file_step = ModelSessionPlannedStep::Tool {
+            action: ModelToolAction::OpenFile,
+            input: "打开文件".to_string(),
+            params: json!({"path":"/tmp/a.blend"}),
+            operation_kind: ModelPlanOperationKind::SceneFileOps,
+            branch: ModelPlanBranch::Primary,
+            recoverable: true,
+            risk: ModelPlanRiskLevel::High,
+            condition: None,
+        };
+        assert!(should_create_file_recover_point_for_step(&file_step));
+
+        let transform_step = ModelSessionPlannedStep::Tool {
+            action: ModelToolAction::TranslateObjects,
+            input: "平移".to_string(),
+            params: json!({"delta":[0.1,0.0,0.0]}),
+            operation_kind: ModelPlanOperationKind::BatchTransform,
+            branch: ModelPlanBranch::Primary,
+            recoverable: true,
+            risk: ModelPlanRiskLevel::Low,
+            condition: None,
+        };
+        assert!(!should_create_file_recover_point_for_step(&transform_step));
+    }
+
+    #[test]
+    fn should_build_file_recover_point_path() {
+        let path =
+            build_file_recover_point_path("/tmp/zodileap-exports", "session-01", "trace-abc", 2);
+        let text = path.to_string_lossy().to_string();
+        assert!(text.contains("recover_points"));
+        assert!(text.contains("session-01"));
+        assert!(text.contains("trace-abc"));
+        assert!(text.ends_with(".blend"));
+        assert!(text.contains("step-3-"));
+    }
+
+    #[test]
+    fn should_build_operation_transaction_snapshot_path() {
+        let path = build_operation_transaction_snapshot_path(
+            "/tmp/zodileap-exports",
+            "session-01",
+            "trace-abc",
+        );
+        let text = path.to_string_lossy().to_string();
+        assert!(text.contains("recover_points"));
+        assert!(text.contains("session-01"));
+        assert!(text.contains("trace-abc"));
+        assert!(text.ends_with(".blend"));
+        assert!(text.contains("transaction-start-"));
+    }
+
+    #[test]
+    fn should_create_operation_transaction_for_complex_steps() {
+        let one_step = vec![ModelSessionPlannedStep::Tool {
+            action: ModelToolAction::TranslateObjects,
+            input: "平移".to_string(),
+            params: json!({"delta":[0.1,0.0,0.0]}),
+            operation_kind: ModelPlanOperationKind::BatchTransform,
+            branch: ModelPlanBranch::Primary,
+            recoverable: true,
+            risk: ModelPlanRiskLevel::Low,
+            condition: None,
+        }];
+        assert!(!should_create_operation_transaction(&one_step));
+
+        let two_steps = vec![
+            ModelSessionPlannedStep::Tool {
+                action: ModelToolAction::TranslateObjects,
+                input: "平移".to_string(),
+                params: json!({"delta":[0.1,0.0,0.0]}),
+                operation_kind: ModelPlanOperationKind::BatchTransform,
+                branch: ModelPlanBranch::Primary,
+                recoverable: true,
+                risk: ModelPlanRiskLevel::Low,
+                condition: None,
+            },
+            ModelSessionPlannedStep::Tool {
+                action: ModelToolAction::RotateObjects,
+                input: "旋转".to_string(),
+                params: json!({"delta_euler":[0.0,0.0,0.1]}),
+                operation_kind: ModelPlanOperationKind::BatchTransform,
+                branch: ModelPlanBranch::Primary,
+                recoverable: true,
+                risk: ModelPlanRiskLevel::Low,
+                condition: None,
+            },
+        ];
+        assert!(should_create_operation_transaction(&two_steps));
+    }
+
+    #[test]
+    fn should_parse_scene_object_metrics() {
+        let (total, meshes) = parse_scene_object_metrics(&json!({
+            "objects": [
+                {"name":"Cube","type":"MESH"},
+                {"name":"Light","type":"LIGHT"},
+                {"name":"Sphere","type":"MESH"}
+            ]
+        }));
+        assert_eq!(total, 3);
+        assert_eq!(meshes, 2);
+    }
+
+    #[test]
+    fn should_estimate_complex_flow_duration_ms() {
+        let small = estimate_complex_flow_duration_ms(3, 10);
+        let large = estimate_complex_flow_duration_ms(8, 300);
+        assert!(small > 0);
+        assert!(large > small);
+    }
+
+    #[test]
+    fn should_parse_topology_face_count_baseline_from_trace_data() {
+        let baseline = parse_topology_face_count_baseline(&json!({
+            "face_counts": {
+                "Cube": 128,
+                "Cube.001": 96
+            }
+        }));
+        assert_eq!(baseline.get("Cube"), Some(&128));
+        assert_eq!(baseline.get("Cube.001"), Some(&96));
     }
 
     #[test]

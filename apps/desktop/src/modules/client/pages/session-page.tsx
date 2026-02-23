@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AriButton,
   AriCard,
@@ -10,11 +10,14 @@ import {
   AriTypography,
 } from "aries_react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   AGENT_SESSIONS,
   getModelProjectById,
   getSessionMessages,
+  resolveAgentSessionTitle,
+  SESSION_TITLE_UPDATED_EVENT,
   upsertModelProject,
   upsertSessionMessages,
 } from "../data";
@@ -72,16 +75,216 @@ interface ModelSessionRunResponse {
 }
 
 interface MessageItem {
+  id?: string;
   role: "user" | "assistant";
   text: string;
 }
 
-function buildIntroMessage(isModelAgent: boolean): MessageItem {
+type AssistantRunSegmentStatus = "running" | "finished" | "failed";
+
+interface AssistantRunSegment {
+  key: string;
+  intro: string;
+  step: string;
+  status: AssistantRunSegmentStatus;
+}
+
+interface AssistantRunMeta {
+  status: "running" | "finished" | "failed";
+  startedAt: number;
+  finishedAt?: number;
+  collapsed: boolean;
+  summary: string;
+  segments: AssistantRunSegment[];
+}
+
+type AssistantRunStage = "planning" | "bridge" | "executing" | "finalizing";
+
+interface ModelSessionStreamEvent {
+  session_id: string;
+  trace_id: string;
+  status: string;
+  message: string;
+  step?: ModelStepRecord;
+  event?: ModelEventRecord;
+}
+
+interface AgentTextStreamEvent {
+  trace_id: string;
+  session_id?: string;
+  kind: string;
+  message: string;
+  delta?: string;
+}
+
+interface ModelDebugTraceEvent {
+  session_id: string;
+  trace_id: string;
+  stage: string;
+  title: string;
+  detail: string;
+  timestamp_ms: number;
+}
+
+interface ModelSessionAiSummaryResponse {
+  summary: string;
+  prompt: string;
+  raw_response: string;
+  provider: string;
+}
+
+interface SessionDebugFlowRecord {
+  id: string;
+  source: "ui" | "backend";
+  stage: string;
+  title: string;
+  detail: string;
+  timestamp: number;
+}
+
+// 描述：格式化任务耗时文案，统一用于完成分割线展示。
+//
+// Params:
+//
+//   - startedAt: 执行开始时间戳（毫秒）。
+//   - finishedAt: 执行结束时间戳（毫秒），可选。
+//
+// Returns:
+//
+//   - 中文耗时文案（如“2分13秒”）。
+function formatElapsedDuration(startedAt: number, finishedAt?: number): string {
+  const safeStartedAt = Number.isFinite(startedAt) ? startedAt : Date.now();
+  const safeFinishedAt = Number.isFinite(finishedAt) ? finishedAt : Date.now();
+  const totalSeconds = Math.max(0, Math.floor((safeFinishedAt - safeStartedAt) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes > 0) {
+    return `${minutes}分${seconds}秒`;
+  }
+  return `${seconds}秒`;
+}
+
+// 描述：把模型会话流式事件映射为“说明 + 步骤”结构，用于进行中轨迹渲染。
+//
+// Params:
+//
+//   - payload: 模型会话流式事件。
+//   - segmentKey: 段唯一键。
+//
+// Returns:
+//
+//   - 轨迹段；若事件无有效文本则返回 null。
+function mapModelStreamToRunSegment(
+  payload: ModelSessionStreamEvent,
+  segmentKey: string,
+): AssistantRunSegment | null {
+  const stepText = (payload.step?.summary || payload.event?.message || payload.message || "").trim();
+  if (!stepText) {
+    return null;
+  }
+
+  const eventName = payload.event?.event || "";
+  const code = payload.step?.code || "";
+  const status: AssistantRunSegmentStatus =
+    payload.status === "failed" || payload.step?.status === "failed" || eventName === "step_failed"
+      ? "failed"
+      : payload.status === "finished" || payload.step?.status === "success" || eventName === "step_finished"
+        ? "finished"
+        : "running";
+
+  let intro = status === "running" ? "正在处理当前步骤" : "当前步骤已完成";
+  if (code) {
+    if (status === "running") {
+      intro = `正在执行「${code}」`;
+    } else if (status === "failed") {
+      intro = `「${code}」执行失败，准备恢复`;
+    } else {
+      intro = `已完成「${code}」`;
+    }
+  } else if (eventName === "step_started") {
+    intro = "开始执行步骤";
+  } else if (eventName === "branch_selected") {
+    intro = "已选择执行分支";
+  } else if (eventName === "operation_transaction_started") {
+    intro = "开始创建执行事务";
+  } else if (eventName === "operation_transaction_committed") {
+    intro = "事务执行完成并提交";
+  } else if (status === "failed") {
+    intro = "执行中断，正在处理";
+  }
+
   return {
-    role: "assistant",
-    text: isModelAgent
-      ? "已进入模型智能体会话。可直接通过自然语言调用 MCP 执行新建、打开、编辑、导出等操作（当前默认 Blender，ZBrush 预留）。"
-      : "已进入代码智能体会话。请直接输入任务目标。",
+    key: segmentKey,
+    intro,
+    step: stepText,
+    status,
+  };
+}
+
+// 描述：根据模型流式事件判断当前执行阶段，用于无事件时的“心跳提示”文案。
+//
+// Params:
+//
+//   - payload: 模型会话流式事件。
+//
+// Returns:
+//
+//   - 归一化后的执行阶段。
+function resolveAssistantRunStage(payload: ModelSessionStreamEvent): AssistantRunStage {
+  const eventName = payload.event?.event || "";
+  const code = payload.step?.code || "";
+  const lowerMessage = (payload.message || payload.event?.message || payload.step?.summary || "").toLowerCase();
+
+  if (payload.status === "finished") {
+    return "finalizing";
+  }
+  if (eventName.includes("transaction") || lowerMessage.includes("bridge") || lowerMessage.includes("blender")) {
+    return "bridge";
+  }
+  if (code || eventName.includes("step") || eventName.includes("branch")) {
+    return "executing";
+  }
+  return "planning";
+}
+
+// 描述：生成等待阶段的“说明 + 步骤”心跳段落，避免长时间无反馈。
+//
+// Params:
+//
+//   - stage: 当前执行阶段。
+//   - heartbeatCount: 当前心跳次数（从 1 开始）。
+//   - segmentKey: 段唯一键。
+//
+// Returns:
+//
+//   - 用于进行中渲染的轨迹段。
+function buildAssistantHeartbeatSegment(
+  stage: AssistantRunStage,
+  heartbeatCount: number,
+  segmentKey: string,
+): AssistantRunSegment {
+  let step = "正在同步执行状态，请稍候…";
+  if (stage === "planning") {
+    step = heartbeatCount <= 1
+      ? "正在解析需求并规划执行步骤…"
+      : "规划中：正在确认本次操作所需的 Blender 指令…";
+  } else if (stage === "bridge") {
+    step = heartbeatCount <= 1
+      ? "正在检查 Blender Bridge 与当前会话连接状态…"
+      : "已发出环境检查请求，等待 Blender 返回状态…";
+  } else if (stage === "executing") {
+    step = heartbeatCount <= 1
+      ? "步骤正在执行中，等待 Blender 返回本步结果…"
+      : "仍在执行当前步骤，正在持续收集事件回传…";
+  } else if (stage === "finalizing") {
+    step = "正在整理执行结果并生成最终总结…";
+  }
+
+  return {
+    key: segmentKey,
+    intro: "正在处理当前步骤",
+    step,
+    status: "running",
   };
 }
 
@@ -89,6 +292,7 @@ const OUTPUT_DIR_QUOTED_REGEX =
   /(?:导出到|导出至|输出到|保存到|export\s+to|save\s+to)\s*[“"']([^"”']+)[”"']/i;
 const OUTPUT_DIR_PLAIN_REGEX =
   /(?:导出到|导出至|输出到|保存到|export\s+to|save\s+to)\s*(\/[^\s`"'，。；！？]+|[a-zA-Z]:\\[^\s`"'，。；！？]+)/i;
+const IMAGE_PATH_REGEX = /((?:\/|[a-zA-Z]:\\)[^\s`"'，。；！？]+?\.(?:png|jpe?g|webp|bmp|gif|tiff?))/i;
 
 function trimOutputSuffix(path: string): string {
   let result = path.trim().replace(/[，。；！？、]+$/u, "");
@@ -115,6 +319,111 @@ function extractOutputDirFromPrompt(prompt: string): string | undefined {
   return undefined;
 }
 
+// 描述：从用户输入中提取首个贴图路径，供完成总结文案引用。
+//
+// Params:
+//
+//   - prompt: 用户输入原文。
+//
+// Returns:
+//
+//   - 贴图路径；未命中时返回 undefined。
+function extractTexturePathFromPrompt(prompt: string): string | undefined {
+  const match = prompt.match(IMAGE_PATH_REGEX);
+  if (!match?.[1]) {
+    return undefined;
+  }
+  return trimOutputSuffix(match[1]) || undefined;
+}
+
+// 描述：把模型步骤记录转换为用户可读的动作文案，避免暴露内部术语。
+//
+// Params:
+//
+//   - step: 模型步骤记录。
+//   - texturePath: 用户输入中提取的贴图路径。
+//
+// Returns:
+//
+//   - 面向用户的单步总结文案。
+function buildUserReadableStepLine(step: ModelStepRecord, texturePath?: string): string {
+  const code = step.code || "unknown";
+  const summary = (step.summary || "").trim();
+
+  if (code === "new_file") {
+    return "已新建 Blender 场景文件。";
+  }
+  if (code === "add_cube") {
+    const name = summary.match(/`([^`]+)`/)?.[1];
+    if (name) {
+      return `已创建正方体对象「${name}」。`;
+    }
+    return "已创建一个正方体对象。";
+  }
+  if (code === "apply_texture_image") {
+    if (texturePath) {
+      return `已将贴图「${texturePath}」应用到目标对象材质。`;
+    }
+    return "已为目标对象应用贴图材质。";
+  }
+
+  if (summary) {
+    return `已完成「${code}」：${summary}`;
+  }
+  return `已完成「${code}」步骤。`;
+}
+
+// 描述：构建模型执行的用户可读总结，突出“做了什么”和“最终结果”。
+//
+// Params:
+//
+//   - requestPrompt: 用户原始指令。
+//   - steps: 模型步骤记录。
+//   - exportedFile: 导出文件路径。
+//   - bridgeRecovered: 是否发生过 Bridge 预检失败但已恢复。
+//
+// Returns:
+//
+//   - 可直接展示给用户的总结文本。
+function buildUserReadableModelSummary(
+  requestPrompt: string,
+  steps: ModelStepRecord[],
+  exportedFile?: string,
+  bridgeRecovered = false,
+): string {
+  const successSteps = steps.filter((item) => item.status === "success");
+  const failedSteps = steps.filter((item) => item.status === "failed");
+  const texturePath = extractTexturePathFromPrompt(requestPrompt);
+  const lines: string[] = ["已按你的需求完成本次模型操作。"];
+
+  if (successSteps.length > 0) {
+    lines.push("", "本次执行内容：");
+    successSteps.forEach((step, index) => {
+      lines.push(`${index + 1}. ${buildUserReadableStepLine(step, texturePath)}`);
+    });
+  } else {
+    lines.push("", "本次未获取到可确认的成功步骤记录。");
+  }
+
+  if (failedSteps.length > 0) {
+    lines.push("", `注意：仍有 ${failedSteps.length} 个步骤执行失败，请根据日志继续重试。`);
+  }
+
+  if (exportedFile) {
+    lines.push("", `导出结果：${exportedFile}`);
+  }
+
+  if (bridgeRecovered) {
+    lines.push("", "环境说明：执行前检测到 Bridge 短暂不可用，系统已自动恢复后继续执行。");
+  }
+
+  lines.push(
+    "",
+    `执行结果：成功 ${successSteps.length} 步${failedSteps.length > 0 ? `，失败 ${failedSteps.length} 步` : ""}。`,
+  );
+  return lines.join("\n").trim();
+}
+
 interface TraceRecord {
   traceId: string;
   source: string;
@@ -122,21 +431,53 @@ interface TraceRecord {
   message: string;
 }
 
-// 描述：格式化复杂 MCP 步骤元数据，供会话记录面板展示分支、风险与回滚信息。
-function formatComplexStepMeta(step: ModelStepRecord): string {
-  const operationKind = typeof step.data?.operation_kind === "string" ? step.data.operation_kind : "";
-  const branch = typeof step.data?.branch === "string" ? step.data.branch : "";
-  const riskLevel = typeof step.data?.risk_level === "string" ? step.data.risk_level : "";
-  const condition = typeof step.data?.condition === "string" ? step.data.condition : "";
-  const rollbackOf = typeof step.data?.rollback_of === "string" ? step.data.rollback_of : "";
-  const parts = [operationKind, branch, riskLevel].filter((item) => item.length > 0);
-  if (condition) {
-    parts.push(`condition=${condition}`);
+// 描述：将单条步骤记录合并到现有步骤列表，按 index 覆盖同编号项，避免流式重复追加。
+function mergeModelStepRecords(records: ModelStepRecord[], incoming?: ModelStepRecord): ModelStepRecord[] {
+  if (!incoming) {
+    return records;
   }
-  if (rollbackOf) {
-    parts.push(`rollback_of=${rollbackOf}`);
+  const next = [...records];
+  const hit = next.findIndex((item) => item.index === incoming.index);
+  if (hit >= 0) {
+    next[hit] = incoming;
+    return next;
   }
-  return parts.length > 0 ? ` · ${parts.join(" · ")}` : "";
+  next.push(incoming);
+  next.sort((a, b) => a.index - b.index);
+  return next;
+}
+
+// 描述：将单条事件记录合并到现有事件列表，按 event+step_index+timestamp 去重，避免流式抖动。
+function mergeModelEventRecords(records: ModelEventRecord[], incoming?: ModelEventRecord): ModelEventRecord[] {
+  if (!incoming) {
+    return records;
+  }
+  const exists = records.some((item) =>
+    item.event === incoming.event
+    && item.step_index === incoming.step_index
+    && item.timestamp_ms === incoming.timestamp_ms);
+  if (exists) {
+    return records;
+  }
+  return [...records, incoming];
+}
+
+// 描述：按消息 ID 替换现有消息文本，若未命中则追加到末尾。
+function upsertAssistantMessageById(messages: MessageItem[], messageId: string, text: string): MessageItem[] {
+  if (!messageId) {
+    return [...messages, { role: "assistant", text }];
+  }
+  const hit = messages.findIndex((item) => item.id === messageId);
+  if (hit < 0) {
+    return [...messages, { id: messageId, role: "assistant", text }];
+  }
+  const next = [...messages];
+  next[hit] = {
+    ...next[hit],
+    role: "assistant",
+    text,
+  };
+  return next;
 }
 
 export function SessionPage({
@@ -156,26 +497,21 @@ export function SessionPage({
   const [workflowStepRecords, setWorkflowStepRecords] = useState<WorkflowStepRecord[]>([]);
   const [uiHint, setUiHint] = useState<WorkflowUiHint | null>(null);
   const [traceRecords, setTraceRecords] = useState<TraceRecord[]>([]);
+  const [debugFlowRecords, setDebugFlowRecords] = useState<SessionDebugFlowRecord[]>([]);
   const [pendingDangerousPrompt, setPendingDangerousPrompt] = useState("");
   const [pendingDangerousToken, setPendingDangerousToken] = useState("");
   const [messagesHydrated, setMessagesHydrated] = useState(false);
   const [hydratedSessionKey, setHydratedSessionKey] = useState("");
   const isModelAgent = agentKey === "model";
   const normalizedAgentKey = isModelAgent ? "model" : "code";
+  const [sessionTitle, setSessionTitle] = useState(() => resolveAgentSessionTitle(normalizedAgentKey, sessionId));
   const sessionStorageKey = `${normalizedAgentKey}:${sessionId || "__none__"}`;
-
-  const session = useMemo(
-    () => AGENT_SESSIONS.find((item) => item.id === sessionId),
-    [sessionId]
-  );
-  const modelProject = useMemo(
-    () => (sessionId ? getModelProjectById(sessionId) : null),
-    [sessionId]
-  );
-
-  const title = modelProject?.title || session?.title || "会话详情";
+  const modelProject = sessionId ? getModelProjectById(sessionId) : null;
+  const session = AGENT_SESSIONS.find((item) => item.id === sessionId);
+  const title = sessionTitle || resolveAgentSessionTitle(normalizedAgentKey, sessionId);
   const updatedAt = modelProject?.updatedAt || session?.updatedAt || "-";
   const [messages, setMessages] = useState<MessageItem[]>([]);
+  const [assistantRunMetaMap, setAssistantRunMetaMap] = useState<Record<string, AssistantRunMeta>>({});
   const availableAiKeys = useMemo(
     () =>
       aiKeys.filter(
@@ -190,67 +526,418 @@ export function SessionPage({
     () => availableAiKeys.find((item) => item.provider === selectedProvider) || availableAiKeys[0] || null,
     [availableAiKeys, selectedProvider],
   );
+  const streamMessageIdRef = useRef("");
+  const stepRecordsRef = useRef<ModelStepRecord[]>([]);
+  const eventRecordsRef = useRef<ModelEventRecord[]>([]);
+  const streamDisplayedTextRef = useRef("");
+  const streamLatestTextRef = useRef("");
+  const streamRenderPendingRef = useRef(false);
+  const streamRenderFrameRef = useRef<number | null>(null);
+  const sessionMessagePersistTimerRef = useRef<number | null>(null);
+  const debugSnapshotTimerRef = useRef<number | null>(null);
+  const modelStreamRecordFlushTimerRef = useRef<number | null>(null);
+  const activeAgentStreamTraceRef = useRef("");
+  const agentStreamTextBufferRef = useRef("");
+  const modelStreamSeenKeysRef = useRef<Set<string>>(new Set());
+  const modelStreamDebugSeenKeysRef = useRef<Set<string>>(new Set());
+  const assistantRunHeartbeatTimerRef = useRef<number | null>(null);
+  const assistantRunLastActivityAtRef = useRef(0);
+  const assistantRunHeartbeatCountRef = useRef(0);
+  const assistantRunStageRef = useRef<AssistantRunStage>("planning");
+  const assistantRunStatusRef = useRef<AssistantRunMeta["status"] | "idle">("idle");
+
+  // 描述：停止当前会话流式渲染调度，避免会话切换后残留异步刷新。
+  const stopStreamTypingTimer = () => {
+    if (streamRenderFrameRef.current !== null) {
+      window.cancelAnimationFrame(streamRenderFrameRef.current);
+      streamRenderFrameRef.current = null;
+    }
+    streamRenderPendingRef.current = false;
+  };
+
+  // 描述：清理会话消息持久化定时器，避免频繁 localStorage 写入造成主线程阻塞。
+  const clearSessionMessagePersistTimer = () => {
+    if (sessionMessagePersistTimerRef.current !== null) {
+      window.clearTimeout(sessionMessagePersistTimerRef.current);
+      sessionMessagePersistTimerRef.current = null;
+    }
+  };
+
+  // 描述：清理调试快照定时器，避免 Dev 调试面板在流式期间过高频刷新。
+  const clearDebugSnapshotTimer = () => {
+    if (debugSnapshotTimerRef.current !== null) {
+      window.clearTimeout(debugSnapshotTimerRef.current);
+      debugSnapshotTimerRef.current = null;
+    }
+  };
+
+  // 描述：清理模型步骤/事件刷新的节流定时器，避免会话切换时写入旧会话状态。
+  const clearModelStreamRecordFlushTimer = () => {
+    if (modelStreamRecordFlushTimerRef.current !== null) {
+      window.clearTimeout(modelStreamRecordFlushTimerRef.current);
+      modelStreamRecordFlushTimerRef.current = null;
+    }
+  };
+
+  // 描述：清理模型会话心跳提示定时器，避免会话结束后继续追加“进行中”段落。
+  const clearAssistantRunHeartbeatTimer = () => {
+    if (assistantRunHeartbeatTimerRef.current !== null) {
+      window.clearTimeout(assistantRunHeartbeatTimerRef.current);
+      assistantRunHeartbeatTimerRef.current = null;
+    }
+  };
+
+  // 描述：设置当前流式消息文本并按帧批量更新，避免高频 setState 导致页面卡顿。
+  const setStreamingAssistantTarget = (targetText: string) => {
+    const messageId = streamMessageIdRef.current;
+    if (!messageId) {
+      return;
+    }
+    streamLatestTextRef.current = targetText;
+    if (streamRenderPendingRef.current) {
+      return;
+    }
+    streamRenderPendingRef.current = true;
+    streamRenderFrameRef.current = window.requestAnimationFrame(() => {
+      streamRenderPendingRef.current = false;
+      streamRenderFrameRef.current = null;
+      const currentMessageId = streamMessageIdRef.current;
+      const nextText = streamLatestTextRef.current;
+      if (!currentMessageId) {
+        return;
+      }
+      if (streamDisplayedTextRef.current === nextText) {
+        return;
+      }
+      streamDisplayedTextRef.current = nextText;
+      setMessages((prev) => upsertAssistantMessageById(prev, currentMessageId, nextText));
+    });
+  };
+
+  // 描述：把模型会话流式事件映射进运行轨迹，并按唯一键去重防止重复刷屏。
+  const appendModelStreamEventToMessage = (payload: ModelSessionStreamEvent) => {
+    const messageId = streamMessageIdRef.current;
+    if (!messageId) {
+      return;
+    }
+    const eventKey = payload.event
+      ? `event:${payload.event.event}:${payload.event.step_index ?? -1}:${payload.event.timestamp_ms}`
+      : payload.step
+        ? `step:${payload.step.index}:${payload.step.status}:${payload.step.elapsed_ms}:${payload.step.summary}`
+        : `status:${payload.status}:${payload.message}`;
+    if (modelStreamSeenKeysRef.current.has(eventKey)) {
+      return;
+    }
+    modelStreamSeenKeysRef.current.add(eventKey);
+    assistantRunLastActivityAtRef.current = Date.now();
+    assistantRunStageRef.current = resolveAssistantRunStage(payload);
+    const runSegment = mapModelStreamToRunSegment(payload, eventKey);
+    if (runSegment) {
+      appendAssistantRunSegment(messageId, runSegment);
+    }
+  };
+
+  // 描述：节流同步模型步骤与事件到状态，避免流式期间每个事件都触发整页重渲染。
+  const scheduleModelRecordFlush = (forceImmediate = false) => {
+    const flush = () => {
+      modelStreamRecordFlushTimerRef.current = null;
+      setStepRecords(stepRecordsRef.current);
+      setEventRecords(eventRecordsRef.current);
+    };
+    if (forceImmediate) {
+      clearModelStreamRecordFlushTimer();
+      flush();
+      return;
+    }
+    if (modelStreamRecordFlushTimerRef.current !== null) {
+      return;
+    }
+    modelStreamRecordFlushTimerRef.current = window.setTimeout(flush, 220);
+  };
+
+  // 描述：向指定助手消息追加一段执行轨迹，保持“说明 + 步骤”循环结构。
+  const appendAssistantRunSegment = (messageId: string, segment: AssistantRunSegment) => {
+    if (!messageId) {
+      return;
+    }
+    setAssistantRunMetaMap((prev) => {
+      const current = prev[messageId];
+      if (!current) {
+        return prev;
+      }
+      const last = current.segments[current.segments.length - 1];
+      const isDuplicate = Boolean(
+        last
+        && last.intro === segment.intro
+        && last.step === segment.step
+        && last.status === segment.status,
+      );
+      if (isDuplicate) {
+        return prev;
+      }
+      // 描述：保证同一时刻仅有一个 running 段，避免出现多个“同时闪烁”的进行中步骤。
+      const normalizedSegments = current.segments.map((item) =>
+        item.status === "running" ? { ...item, status: "finished" as const } : item);
+      return {
+        ...prev,
+        [messageId]: {
+          ...current,
+          segments: [...normalizedSegments, segment].slice(-160),
+        },
+      };
+    });
+  };
+
+  // 描述：启动模型执行心跳，在长时间无流式事件时持续补充用户可见进度。
+  //
+  // Params:
+  //
+  //   - messageId: 当前执行消息 ID。
+  const startAssistantRunHeartbeat = (messageId: string) => {
+    clearAssistantRunHeartbeatTimer();
+    const tick = () => {
+      const stillRunning = assistantRunStatusRef.current === "running";
+      const isCurrentMessage = streamMessageIdRef.current === messageId;
+      if (!stillRunning || !isCurrentMessage) {
+        clearAssistantRunHeartbeatTimer();
+        return;
+      }
+
+      const idleMs = Date.now() - assistantRunLastActivityAtRef.current;
+      if (idleMs >= 1400) {
+        assistantRunHeartbeatCountRef.current += 1;
+        appendAssistantRunSegment(
+          messageId,
+          buildAssistantHeartbeatSegment(
+            assistantRunStageRef.current,
+            assistantRunHeartbeatCountRef.current,
+            `heartbeat-${Date.now()}`,
+          ),
+        );
+        assistantRunLastActivityAtRef.current = Date.now();
+      }
+      assistantRunHeartbeatTimerRef.current = window.setTimeout(tick, 1200);
+    };
+    assistantRunHeartbeatTimerRef.current = window.setTimeout(tick, 1200);
+  };
+
+  // 描述：更新助手执行消息最终态（完成/失败），并写入总结文本与折叠状态。
+  const finishAssistantRunMessage = (
+    messageId: string,
+    status: "finished" | "failed",
+    summary: string,
+  ) => {
+    if (!messageId) {
+      return;
+    }
+    const finishedAt = Date.now();
+    assistantRunStatusRef.current = status;
+    assistantRunLastActivityAtRef.current = finishedAt;
+    clearAssistantRunHeartbeatTimer();
+    setAssistantRunMetaMap((prev) => {
+      const current = prev[messageId];
+      if (!current) {
+        return prev;
+      }
+      return {
+        ...prev,
+        [messageId]: {
+          ...current,
+          status,
+          finishedAt,
+          collapsed: status === "finished",
+          summary: summary.trim(),
+        },
+      };
+    });
+  };
+
+  // 描述：切换执行消息轨迹详情折叠状态，供“用时分割线”点击展开/收起。
+  const toggleAssistantRunMetaCollapsed = (messageId: string) => {
+    setAssistantRunMetaMap((prev) => {
+      const current = prev[messageId];
+      if (!current) {
+        return prev;
+      }
+      return {
+        ...prev,
+        [messageId]: {
+          ...current,
+          collapsed: !current.collapsed,
+        },
+      };
+    });
+  };
 
   const appendTraceRecord = (input: TraceRecord) => {
     setTraceRecords((prev) => [input, ...prev].slice(0, 50));
   };
 
+  // 描述：写入 Dev 调试全链路记录，覆盖“请求→执行→返回→解析”关键节点。
+  //
+  // Params:
+  //
+  //   - source: 记录来源（前端/后端）。
+  //   - stage: 阶段编码。
+  //   - title: 阶段标题。
+  //   - detail: 详细内容。
+  const appendDebugFlowRecord = (
+    source: SessionDebugFlowRecord["source"],
+    stage: string,
+    title: string,
+    detail: string,
+  ) => {
+    if (!import.meta.env.DEV) {
+      return;
+    }
+    const normalizedDetail = detail.trim();
+    if (!normalizedDetail) {
+      return;
+    }
+    setDebugFlowRecords((prev) => [
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        source,
+        stage,
+        title,
+        detail: normalizedDetail,
+        timestamp: Date.now(),
+      },
+      ...prev,
+    ].slice(0, 400));
+  };
+
   useEffect(() => {
-    const intro = buildIntroMessage(isModelAgent);
+    stepRecordsRef.current = stepRecords;
+  }, [stepRecords]);
+
+  useEffect(() => {
+    eventRecordsRef.current = eventRecords;
+  }, [eventRecords]);
+
+  useEffect(() => {
+    setSessionTitle(resolveAgentSessionTitle(normalizedAgentKey, sessionId));
+  }, [normalizedAgentKey, sessionId]);
+
+  useEffect(() => {
+    const onSessionTitleUpdated = (event: Event) => {
+      const detail = (event as CustomEvent<{ sessionId?: string; title?: string }>).detail;
+      if (!detail?.sessionId || detail.sessionId !== sessionId) {
+        return;
+      }
+      setSessionTitle(detail.title || resolveAgentSessionTitle(normalizedAgentKey, sessionId));
+    };
+    window.addEventListener(SESSION_TITLE_UPDATED_EVENT, onSessionTitleUpdated as EventListener);
+    return () => {
+      window.removeEventListener(SESSION_TITLE_UPDATED_EVENT, onSessionTitleUpdated as EventListener);
+    };
+  }, [normalizedAgentKey, sessionId]);
+
+  useEffect(() => {
+    stopStreamTypingTimer();
+    clearSessionMessagePersistTimer();
+    clearDebugSnapshotTimer();
+    clearModelStreamRecordFlushTimer();
+    clearAssistantRunHeartbeatTimer();
+    streamMessageIdRef.current = "";
+    stepRecordsRef.current = [];
+    eventRecordsRef.current = [];
+    streamDisplayedTextRef.current = "";
+    streamLatestTextRef.current = "";
+    activeAgentStreamTraceRef.current = "";
+    agentStreamTextBufferRef.current = "";
+    modelStreamSeenKeysRef.current.clear();
+    modelStreamDebugSeenKeysRef.current.clear();
+    assistantRunHeartbeatCountRef.current = 0;
+    assistantRunLastActivityAtRef.current = 0;
+    assistantRunStageRef.current = "planning";
+    assistantRunStatusRef.current = "idle";
     setUiHint(null);
     setTraceRecords([]);
+    setDebugFlowRecords([]);
+    setAssistantRunMetaMap({});
     setPendingDangerousPrompt("");
     setPendingDangerousToken("");
     if (!sessionId) {
-      setMessages([intro]);
+      // 描述：新建会话时不注入默认欢迎语，仅保留空线程与输入框。
+      setMessages([]);
       setMessagesHydrated(true);
       setHydratedSessionKey(sessionStorageKey);
       return;
     }
     const stored = getSessionMessages(normalizedAgentKey, sessionId);
-    setMessages(stored.length > 0 ? stored : [intro]);
+    setMessages(stored.length > 0 ? stored : []);
     setMessagesHydrated(true);
     setHydratedSessionKey(sessionStorageKey);
   }, [isModelAgent, normalizedAgentKey, sessionId, sessionStorageKey]);
 
+  useEffect(() => () => {
+    stopStreamTypingTimer();
+    clearSessionMessagePersistTimer();
+    clearDebugSnapshotTimer();
+    clearModelStreamRecordFlushTimer();
+    clearAssistantRunHeartbeatTimer();
+  }, []);
+
   useEffect(() => {
     if (!sessionId || !messagesHydrated || hydratedSessionKey !== sessionStorageKey) {
+      clearSessionMessagePersistTimer();
       return;
     }
-    upsertSessionMessages({
-      agentKey: normalizedAgentKey,
-      sessionId,
-      messages,
-    });
-  }, [messages, messagesHydrated, hydratedSessionKey, normalizedAgentKey, sessionId, sessionStorageKey]);
+    clearSessionMessagePersistTimer();
+    // 描述：发送中使用更长写入间隔，避免 token 流期间频繁 JSON 序列化阻塞主线程。
+    const persistDelay = sending ? 1200 : 180;
+    sessionMessagePersistTimerRef.current = window.setTimeout(() => {
+      sessionMessagePersistTimerRef.current = null;
+      upsertSessionMessages({
+        agentKey: normalizedAgentKey,
+        sessionId,
+        messages,
+      });
+    }, persistDelay);
+    return () => {
+      clearSessionMessagePersistTimer();
+    };
+  }, [messages, messagesHydrated, hydratedSessionKey, normalizedAgentKey, sending, sessionId, sessionStorageKey]);
 
   useEffect(() => {
     if (!import.meta.env.DEV) {
       return;
     }
-    window.dispatchEvent(
-      new CustomEvent("zodileap:session-debug", {
-        detail: {
-          sessionId,
-          agentKey: normalizedAgentKey,
-          title,
-          status,
-          workflowStepRecords,
-          stepRecords,
-          eventRecords,
-          assetRecords,
-          traceRecords,
-          messageCount: messages.length,
-          timestamp: Date.now(),
-        },
-      }),
-    );
+    clearDebugSnapshotTimer();
+    const dispatchDelay = sending ? 360 : 120;
+    debugSnapshotTimerRef.current = window.setTimeout(() => {
+      debugSnapshotTimerRef.current = null;
+      window.dispatchEvent(
+        new CustomEvent("zodileap:session-debug", {
+          detail: {
+            sessionId,
+            agentKey: normalizedAgentKey,
+            title,
+            status,
+            workflowStepRecords: workflowStepRecords.slice(-20),
+            stepRecords: stepRecords.slice(-20),
+            eventRecords: eventRecords.slice(-20),
+            assetRecords: assetRecords.slice(-20),
+            traceRecords: traceRecords.slice(0, 20),
+            debugFlowRecords: debugFlowRecords.slice(0, 120),
+            messageCount: messages.length,
+            timestamp: Date.now(),
+          },
+        }),
+      );
+    }, dispatchDelay);
+    return () => {
+      clearDebugSnapshotTimer();
+    };
   }, [
     assetRecords,
+    debugFlowRecords,
     eventRecords,
     messages.length,
     normalizedAgentKey,
     sessionId,
+    sending,
     status,
     stepRecords,
     traceRecords,
@@ -283,6 +970,226 @@ export function SessionPage({
       });
   }, [isModelAgent, sessionId]);
 
+  useEffect(() => {
+    if (!isModelAgent || !sessionId) {
+      return;
+    }
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen<ModelSessionStreamEvent>("model:session_stream", (event) => {
+      if (disposed) {
+        return;
+      }
+      const payload = event.payload;
+      if (!payload || payload.session_id !== sessionId) {
+        return;
+      }
+      const nextSteps = mergeModelStepRecords(stepRecordsRef.current, payload.step);
+      const nextEvents = mergeModelEventRecords(eventRecordsRef.current, payload.event);
+      stepRecordsRef.current = nextSteps;
+      eventRecordsRef.current = nextEvents;
+      if (payload.status === "running") {
+        scheduleModelRecordFlush(false);
+      } else {
+        scheduleModelRecordFlush(true);
+        appendTraceRecord({
+          traceId: payload.trace_id || `trace-local-${Date.now()}`,
+          source: "model:stream",
+          message: payload.message || "模型会话流式更新",
+        });
+      }
+      if (payload.status === "failed") {
+        setStatus(`执行失败：${payload.message}`);
+      } else if (payload.status === "finished") {
+        setStatus("执行完成");
+      } else {
+        setStatus("智能体执行中...");
+      }
+      const debugKey = payload.event
+        ? `event:${payload.event.event}:${payload.event.timestamp_ms}`
+        : payload.step
+          ? `step:${payload.step.index}:${payload.step.status}:${payload.step.elapsed_ms}`
+          : `status:${payload.status}:${payload.message}`;
+      if (!modelStreamDebugSeenKeysRef.current.has(debugKey)) {
+        modelStreamDebugSeenKeysRef.current.add(debugKey);
+        appendDebugFlowRecord(
+          "ui",
+          "model_session_stream",
+          `流式事件(${payload.status})`,
+          JSON.stringify({
+            message: payload.message,
+            step: payload.step
+              ? {
+                index: payload.step.index,
+                code: payload.step.code,
+                status: payload.step.status,
+                elapsed_ms: payload.step.elapsed_ms,
+                summary: payload.step.summary,
+              }
+              : null,
+            event: payload.event
+              ? {
+                event: payload.event.event,
+                step_index: payload.event.step_index,
+                message: payload.event.message,
+              }
+              : null,
+          }, null, 2),
+        );
+      }
+      appendModelStreamEventToMessage(payload);
+    })
+      .then((fn) => {
+        if (disposed) {
+          fn();
+          return;
+        }
+        unlisten = fn;
+      })
+      .catch(() => {
+        // 流式监听初始化失败时不阻断主流程，保留最终响应展示。
+      });
+    return () => {
+      disposed = true;
+      clearModelStreamRecordFlushTimer();
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [isModelAgent, sessionId]);
+
+  useEffect(() => {
+    if (!isModelAgent || !sessionId) {
+      return;
+    }
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen<ModelDebugTraceEvent>("model:debug_trace", (event) => {
+      if (disposed) {
+        return;
+      }
+      const payload = event.payload;
+      if (!payload || payload.session_id !== sessionId) {
+        return;
+      }
+      appendDebugFlowRecord(
+        "backend",
+        payload.stage || "backend",
+        payload.title || "后端调试",
+        payload.detail || "",
+      );
+    })
+      .then((fn) => {
+        if (disposed) {
+          fn();
+          return;
+        }
+        unlisten = fn;
+      })
+      .catch(() => {
+        // 后端调试流监听失败时不影响主流程。
+      });
+    return () => {
+      disposed = true;
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [isModelAgent, sessionId]);
+
+  useEffect(() => {
+    if (isModelAgent || !sessionId) {
+      return;
+    }
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen<AgentTextStreamEvent>("agent:text_stream", (event) => {
+      if (disposed) {
+        return;
+      }
+      const payload = event.payload;
+      if (!payload) {
+        return;
+      }
+      if (payload.session_id && payload.session_id !== sessionId) {
+        return;
+      }
+      if (activeAgentStreamTraceRef.current && payload.trace_id !== activeAgentStreamTraceRef.current) {
+        return;
+      }
+      if (!streamMessageIdRef.current) {
+        return;
+      }
+      if (payload.kind === "delta") {
+        const delta = payload.delta || "";
+        if (!delta) {
+          return;
+        }
+        agentStreamTextBufferRef.current = `${agentStreamTextBufferRef.current}${delta}`;
+        setStreamingAssistantTarget(agentStreamTextBufferRef.current);
+        return;
+      }
+      if (payload.kind === "error") {
+        setStreamingAssistantTarget(`执行失败：${payload.message}`);
+      }
+    })
+      .then((fn) => {
+        if (disposed) {
+          fn();
+          return;
+        }
+        unlisten = fn;
+      })
+      .catch(() => {
+        // 文本流监听失败时保持最终响应兜底展示。
+      });
+    return () => {
+      disposed = true;
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [isModelAgent, sessionId]);
+
+  // 描述：调用模型生成最终用户总结，输出更自然的结果说明；若失败则由上层回退规则总结。
+  //
+  // Params:
+  //
+  //   - provider: 当前选择的模型提供商。
+  //   - requestPrompt: 用户输入需求。
+  //   - workflowMessage: 工作流完成消息。
+  //   - modelSteps: 模型步骤记录。
+  //   - modelEvents: 模型事件记录。
+  //   - exportedFile: 导出文件路径。
+  //   - bridgeWarning: Bridge 恢复提示。
+  //
+  // Returns:
+  //
+  //   - AI 总结字符串。
+  const summarizeModelSessionWithAi = async (
+    provider: string,
+    requestPrompt: string,
+    workflowMessage: string,
+    modelSteps: ModelStepRecord[],
+    modelEvents: ModelEventRecord[],
+    exportedFile?: string,
+    bridgeWarning?: string,
+  ) => {
+    const response = await invoke<ModelSessionAiSummaryResponse>("summarize_model_session_result", {
+      provider,
+      userPrompt: requestPrompt,
+      workflowMessage,
+      modelSteps,
+      modelEvents,
+      exportedFile,
+      bridgeWarning: bridgeWarning || null,
+    });
+    appendDebugFlowRecord("backend", "ai_summary_prompt", "总结模型 Prompt", response.prompt);
+    appendDebugFlowRecord("backend", "ai_summary_raw", "总结模型原始返回", response.raw_response);
+    appendDebugFlowRecord("backend", "ai_summary_final", "总结模型解析结果", response.summary);
+    return response.summary.trim();
+  };
+
   const executePrompt = async (
     content: string,
     options?: {
@@ -299,18 +1206,86 @@ export function SessionPage({
     const appendUserMessage = options?.appendUserMessage !== false;
     const provider = selectedAi?.provider || "codex";
     const outputDir = isModelAgent ? extractOutputDirFromPrompt(normalizedContent) : undefined;
+    const streamMessageId = `assistant-stream-${Date.now()}`;
+    const codeTraceId = isModelAgent ? "" : `trace-${Date.now()}`;
     setInput("");
     setSending(true);
     setStatus("智能体执行中...");
     setUiHint(null);
+    appendDebugFlowRecord(
+      "ui",
+      "user_submit",
+      "用户发送消息",
+      JSON.stringify(
+        {
+          session_id: sessionId || "new-session",
+          agent_key: normalizedAgentKey,
+          provider,
+          prompt: normalizedContent,
+          output_dir: outputDir || null,
+          allow_dangerous_action: allowDangerousAction,
+        },
+        null,
+        2,
+      ),
+    );
     if (appendUserMessage) {
-      setMessages((prev) => [...prev, { role: "user", text: normalizedContent }]);
+      setMessages((prev) => [
+        ...prev,
+        { id: `user-${Date.now()}`, role: "user", text: normalizedContent },
+      ]);
+    }
+    stopStreamTypingTimer();
+    streamMessageIdRef.current = streamMessageId;
+    streamDisplayedTextRef.current = "";
+    streamLatestTextRef.current = "";
+    modelStreamSeenKeysRef.current.clear();
+    if (!isModelAgent) {
+      activeAgentStreamTraceRef.current = codeTraceId;
+      agentStreamTextBufferRef.current = "";
+    }
+    setMessages((prev) =>
+      upsertAssistantMessageById(
+        prev,
+        streamMessageId,
+        "",
+      ));
+    if (isModelAgent) {
+      assistantRunStatusRef.current = "running";
+      assistantRunStageRef.current = "planning";
+      assistantRunHeartbeatCountRef.current = 0;
+      assistantRunLastActivityAtRef.current = Date.now();
+      setAssistantRunMetaMap((prev) => ({
+        ...prev,
+        [streamMessageId]: {
+          status: "running",
+          startedAt: Date.now(),
+          collapsed: false,
+          summary: "",
+          segments: [
+            {
+              key: `intro-${Date.now()}`,
+              intro: "已接收需求，开始规划执行",
+              step: normalizedContent,
+              status: "running",
+            },
+          ],
+        },
+      }));
+      setStreamingAssistantTarget("正在规划本次模型操作…");
+      startAssistantRunHeartbeat(streamMessageId);
     }
 
     try {
       if (isModelAgent) {
         let bridgePrecheckWarning = "";
         const bridgeEnsureResult = await ensureBlenderBridge();
+        appendDebugFlowRecord(
+          "ui",
+          "bridge_precheck",
+          "Bridge 预检结果",
+          JSON.stringify(bridgeEnsureResult, null, 2),
+        );
         if (!bridgeEnsureResult.ok) {
           // 描述：Bridge 预检失败不立即作为错误 trace 写入，避免后续自动恢复成功时形成误导。
           bridgePrecheckWarning = bridgeEnsureResult.message;
@@ -330,6 +1305,28 @@ export function SessionPage({
           allowDangerousAction,
           confirmationToken,
         });
+        appendDebugFlowRecord(
+          "ui",
+          "workflow_response",
+          "工作流执行返回",
+          JSON.stringify(
+            {
+              workflow_message: response.message,
+              workflow_steps: (response.steps || []).map((item) => ({
+                name: item.name,
+                kind: item.kind,
+                status: item.status,
+                summary: item.summary,
+              })),
+              model_trace_id: response.modelSession?.trace_id || null,
+              model_step_count: response.modelSession?.steps?.length || 0,
+              model_event_count: response.modelSession?.events?.length || 0,
+              exported_file: response.exportedFile || null,
+            },
+            null,
+            2,
+          ),
+        );
         setWorkflowStepRecords(response.steps || []);
         setStepRecords(response.modelSession?.steps || []);
         setEventRecords(response.modelSession?.events || []);
@@ -347,6 +1344,12 @@ export function SessionPage({
             source: "bridge:ensure",
             message: `Bridge 预检未通过，但执行阶段已自动恢复并完成。预检详情：${bridgePrecheckWarning}`,
           });
+          appendAssistantRunSegment(streamMessageId, {
+            key: `bridge-warning-${Date.now()}`,
+            intro: "环境检查提示",
+            step: bridgePrecheckWarning,
+            status: "finished",
+          });
         }
         const nextUpdatedAt = new Date().toLocaleString("zh-CN", {
           month: "2-digit",
@@ -360,15 +1363,36 @@ export function SessionPage({
           prompt: normalizedContent,
           updatedAt: nextUpdatedAt,
         });
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: "assistant",
-            text: `${response.message}\n\n工作流步骤：\n${response.steps
-              .map((item, index) => `${index + 1}. ${item.name} - ${item.status} - ${item.summary}`)
-              .join("\n")}`,
-          },
-        ]);
+        let completionSummary = buildUserReadableModelSummary(
+          normalizedContent,
+          response.modelSession?.steps || [],
+          response.exportedFile,
+          Boolean(bridgePrecheckWarning),
+        );
+        try {
+          const aiSummary = await summarizeModelSessionWithAi(
+            provider,
+            normalizedContent,
+            response.message,
+            response.modelSession?.steps || [],
+            response.modelSession?.events || [],
+            response.exportedFile,
+            bridgePrecheckWarning,
+          );
+          if (aiSummary) {
+            completionSummary = aiSummary;
+          }
+        } catch (summaryErr) {
+          const summaryErrorMessage = normalizeInvokeError(summaryErr);
+          appendDebugFlowRecord(
+            "backend",
+            "ai_summary_failed",
+            "总结模型失败，回退规则总结",
+            summaryErrorMessage,
+          );
+        }
+        setStreamingAssistantTarget(completionSummary);
+        finishAssistantRunMessage(streamMessageId, "finished", completionSummary);
         setUiHint(response.uiHint || null);
         if (response.uiHint?.key === "dangerous-operation-confirm") {
           const hintPrompt = response.uiHint.context?.prompt;
@@ -387,9 +1411,10 @@ export function SessionPage({
       } else {
         const response = await invoke<AgentRunResponse>("run_agent_command", {
           agentKey: agentKey || "code",
+          sessionId,
           provider,
           prompt: content,
-          traceId: `trace-${Date.now()}`,
+          traceId: codeTraceId,
           projectName: title,
           modelExportEnabled: modelMcpCapabilities.export,
           blenderBridgeAddr: DEFAULT_BLENDER_BRIDGE_ADDR,
@@ -405,7 +1430,7 @@ export function SessionPage({
         });
         setUiHint(response.ui_hint ? mapProtocolUiHint(response.ui_hint) : null);
         setPendingDangerousToken("");
-        setMessages((prev) => [...prev, { role: "assistant", text: response.message }]);
+        setStreamingAssistantTarget(response.message);
         const actionText =
           response.actions?.length > 0 ? `动作：${response.actions.join(", ")}` : "动作：无";
         setStatus(
@@ -417,6 +1442,21 @@ export function SessionPage({
     } catch (err) {
       const detail = normalizeInvokeErrorDetail(err);
       const reason = detail.message;
+      appendDebugFlowRecord(
+        "ui",
+        "execute_failed",
+        "执行失败",
+        JSON.stringify(
+          {
+            code: detail.code || "",
+            message: reason,
+            suggestion: detail.suggestion || null,
+            retryable: detail.retryable,
+          },
+          null,
+          2,
+        ),
+      );
       setPendingDangerousToken("");
       appendTraceRecord({
         traceId: `trace-local-${Date.now()}`,
@@ -424,11 +1464,24 @@ export function SessionPage({
         code: detail.code,
         message: reason,
       });
-      setMessages((prev) => [...prev, { role: "assistant", text: `执行失败：${reason}` }]);
+      if (streamMessageIdRef.current) {
+        setStreamingAssistantTarget(`执行失败：${reason}`);
+        if (isModelAgent) {
+          finishAssistantRunMessage(streamMessageIdRef.current, "failed", `执行失败：${reason}`);
+        }
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          { id: `assistant-${Date.now()}`, role: "assistant", text: `执行失败：${reason}` },
+        ]);
+      }
       setStatus(`执行失败：${reason}`);
       setUiHint(buildUiHintFromProtocolError(detail));
     } finally {
       setSending(false);
+      if (!isModelAgent) {
+        activeAgentStreamTraceRef.current = "";
+      }
     }
   };
 
@@ -486,7 +1539,10 @@ export function SessionPage({
       setPendingDangerousPrompt("");
       setPendingDangerousToken("");
       setStatus("已取消本次危险操作");
-      setMessages((prev) => [...prev, { role: "assistant", text: "已取消本次危险操作。" }]);
+      setMessages((prev) => [
+        ...prev,
+        { id: `assistant-${Date.now()}`, role: "assistant", text: "已取消本次危险操作。" },
+      ]);
     }
   };
 
@@ -516,7 +1572,10 @@ export function SessionPage({
         });
       }
       setUiHint(response.ui_hint ? mapProtocolUiHint(response.ui_hint) : null);
-      setMessages((prev) => [...prev, { role: "assistant", text: response.message }]);
+      setMessages((prev) => [
+        ...prev,
+        { id: `assistant-${Date.now()}`, role: "assistant", text: response.message },
+      ]);
       setStatus("重试完成");
     } catch (err) {
       const detail = normalizeInvokeErrorDetail(err);
@@ -528,7 +1587,10 @@ export function SessionPage({
         message: reason,
       });
       setStatus(`重试失败：${reason}`);
-      setMessages((prev) => [...prev, { role: "assistant", text: `重试失败：${reason}` }]);
+      setMessages((prev) => [
+        ...prev,
+        { id: `assistant-${Date.now()}`, role: "assistant", text: `重试失败：${reason}` },
+      ]);
       setUiHint(buildUiHintFromProtocolError(detail));
     } finally {
       setSending(false);
@@ -544,27 +1606,75 @@ export function SessionPage({
         </div>
 
         <div className="desk-session-thread-wrap">
-          {isModelAgent && stepRecords.length > 0 ? (
-            <AriCard className="desk-msg">
-              <AriTypography variant="caption" value="执行记录" />
-              <div className="desk-model-step-list">
-                {stepRecords.slice().reverse().map((step) => (
-                  <AriTypography
-                    key={`${step.index}-${step.code}-${step.elapsed_ms}`}
-                    variant="caption"
-                    value={`#${step.index + 1} ${step.code} · ${step.status} · ${step.elapsed_ms}ms${formatComplexStepMeta(step)}${step.error?.message ? ` · ${step.error.message}` : ""}`}
-                  />
-                ))}
-              </div>
-            </AriCard>
-          ) : null}
           <div className="desk-thread">
-            {messages.map((message, index) => (
-              <AriCard key={`${message.role}-${index}`} className={`desk-msg ${message.role === "user" ? "user" : ""}`}>
-                <AriTypography variant="caption" value={message.role === "user" ? "你" : "智能体"} />
-                <ChatMarkdown content={message.text} />
-              </AriCard>
-            ))}
+            {messages.map((message, index) => {
+              const roleClass = message.role === "user" ? "user" : "assistant";
+              const runMeta = message.id ? assistantRunMetaMap[message.id] : undefined;
+              const useRunLayout = message.role === "assistant" && Boolean(runMeta);
+              const dividerTitle = runMeta
+                ? runMeta.status === "failed"
+                  ? `执行中断，用时 ${formatElapsedDuration(runMeta.startedAt, runMeta.finishedAt)}`
+                  : `已完成，用时 ${formatElapsedDuration(runMeta.startedAt, runMeta.finishedAt)}`
+                : "";
+              return (
+                <AriCard key={message.id || `message-${index}`} className={`desk-msg ${roleClass}`}>
+                  <AriTypography variant="caption" value={message.role === "user" ? "你" : "智能体"} />
+                  {useRunLayout && runMeta ? (
+                    <div className="desk-run-flow">
+                      {runMeta.status === "running" ? (
+                        <div className="desk-run-segments">
+                          {runMeta.segments.map((segment) => (
+                            <div key={segment.key} className="desk-run-segment">
+                              <AriTypography className="desk-run-intro" variant="caption" value={segment.intro} />
+                              <AriTypography
+                                className={`desk-run-step ${segment.status === "running" ? "desk-run-step-running" : ""}`}
+                                variant="caption"
+                                value={segment.step}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            className="desk-run-divider"
+                            onClick={() => {
+                              if (message.id) {
+                                toggleAssistantRunMetaCollapsed(message.id);
+                              }
+                            }}
+                          >
+                            <span className="desk-run-divider-line" />
+                            <span className="desk-run-divider-text">{dividerTitle}</span>
+                            <span className={`desk-run-divider-arrow ${runMeta.collapsed ? "" : "open"}`}>▾</span>
+                            <span className="desk-run-divider-line" />
+                          </button>
+                          {!runMeta.collapsed ? (
+                            <div className="desk-run-segments desk-run-segments-collapsed">
+                              {runMeta.segments.map((segment) => (
+                                <div key={`collapsed-${segment.key}`} className="desk-run-segment">
+                                  <AriTypography className="desk-run-intro" variant="caption" value={segment.intro} />
+                                  <AriTypography className="desk-run-step" variant="caption" value={segment.step} />
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                          <div className="desk-run-summary">
+                            <ChatMarkdown content={runMeta.summary || message.text} />
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ) : (
+                    <ChatMarkdown
+                      content={message.text}
+                      plainText={sending && Boolean(message.id) && message.id === streamMessageIdRef.current}
+                    />
+                  )}
+                </AriCard>
+              );
+            })}
           </div>
         </div>
 
