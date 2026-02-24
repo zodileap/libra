@@ -1,4 +1,6 @@
-use crate::ModelToolAction;
+use crate::{
+    model_tool_action_capability, ExportModelFormat, ModelToolAction, ModelToolCapabilityDomain,
+};
 use serde_json::{json, Value};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -72,7 +74,9 @@ impl ModelPlanBranch {
 #[derive(Debug, Clone)]
 pub enum ModelSessionPlannedStep {
     Export {
+        format: ExportModelFormat,
         input: String,
+        params: Value,
         operation_kind: ModelPlanOperationKind,
         branch: ModelPlanBranch,
         recoverable: bool,
@@ -95,7 +99,7 @@ impl ModelSessionPlannedStep {
     /// 描述：获取步骤代码，供执行层和追踪面板展示。
     pub fn code(&self) -> String {
         match self {
-            Self::Export { .. } => "export_glb".to_string(),
+            Self::Export { format, .. } => format!("export_{}", format.as_str()),
             Self::Tool { action, .. } => action.as_str().to_string(),
         }
     }
@@ -108,10 +112,10 @@ impl ModelSessionPlannedStep {
         }
     }
 
-    /// 描述：获取步骤参数，仅工具动作步骤可用。
+    /// 描述：获取步骤参数，导出与工具步骤均可返回。
     pub fn params(&self) -> Option<&Value> {
         match self {
-            Self::Export { .. } => None,
+            Self::Export { params, .. } => Some(params),
             Self::Tool { params, .. } => Some(params),
         }
     }
@@ -174,54 +178,65 @@ impl ModelSessionPlannedStep {
             "recoverable": self.recoverable(),
             "condition": self.condition(),
         });
-        if let Self::Tool { action, params, .. } = self {
-            if let Some(raw) = payload.as_object_mut() {
-                raw.insert("action".to_string(), json!(action.as_str()));
-                if let Some(scope) = params.get("selection_scope").and_then(|value| value.as_str()) {
-                    let target_names = params
-                        .get("target_names")
-                        .and_then(|value| value.as_array())
-                        .map(|items| {
-                            items
-                                .iter()
-                                .filter_map(|item| item.as_str())
-                                .map(str::trim)
-                                .filter(|name| !name.is_empty())
-                                .map(|name| name.to_string())
-                                .collect::<Vec<String>>()
-                        })
-                        .unwrap_or_default();
-                    let target_mode = params
-                        .get("target_mode")
-                        .and_then(|value| value.as_str())
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .map(|value| value.to_string())
-                        .unwrap_or_else(|| derive_target_mode(scope, &target_names).to_string());
-                    let require_selection = params
-                        .get("require_selection")
-                        .and_then(|value| value.as_bool())
-                        .unwrap_or(scope != "all");
-                    raw.insert("selection_scope".to_string(), json!(scope));
-                    raw.insert("target_mode".to_string(), json!(target_mode));
-                    raw.insert("require_selection".to_string(), json!(require_selection));
-                    let trace_scope = match scope {
-                        "active" => "active",
-                        "all" => "all",
-                        "selected" => {
-                            let name_count = target_names.len();
-                            if name_count <= 1 {
-                                "single"
-                            } else {
-                                "multi"
-                            }
-                        }
-                        _ => "single",
-                    };
-                    raw.insert("selection_scope_trace".to_string(), json!(trace_scope));
+        if let Some(raw) = payload.as_object_mut() {
+            match self {
+                Self::Export { format, params, .. } => {
+                    raw.insert("export_format".to_string(), json!(format.as_str()));
+                    raw.insert("export_params".to_string(), params.clone());
                 }
-                if let Some(names) = params.get("target_names") {
-                    raw.insert("target_names".to_string(), names.clone());
+                Self::Tool { action, params, .. } => {
+                    raw.insert("action".to_string(), json!(action.as_str()));
+                    if let Some(scope) = params
+                        .get("selection_scope")
+                        .and_then(|value| value.as_str())
+                    {
+                        let target_names = params
+                            .get("target_names")
+                            .and_then(|value| value.as_array())
+                            .map(|items| {
+                                items
+                                    .iter()
+                                    .filter_map(|item| item.as_str())
+                                    .map(str::trim)
+                                    .filter(|name| !name.is_empty())
+                                    .map(|name| name.to_string())
+                                    .collect::<Vec<String>>()
+                            })
+                            .unwrap_or_default();
+                        let target_mode = params
+                            .get("target_mode")
+                            .and_then(|value| value.as_str())
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| {
+                                derive_target_mode(scope, &target_names).to_string()
+                            });
+                        let require_selection = params
+                            .get("require_selection")
+                            .and_then(|value| value.as_bool())
+                            .unwrap_or(scope != "all");
+                        raw.insert("selection_scope".to_string(), json!(scope));
+                        raw.insert("target_mode".to_string(), json!(target_mode));
+                        raw.insert("require_selection".to_string(), json!(require_selection));
+                        let trace_scope = match scope {
+                            "active" => "active",
+                            "all" => "all",
+                            "selected" => {
+                                let name_count = target_names.len();
+                                if name_count <= 1 {
+                                    "single"
+                                } else {
+                                    "multi"
+                                }
+                            }
+                            _ => "single",
+                        };
+                        raw.insert("selection_scope_trace".to_string(), json!(trace_scope));
+                    }
+                    if let Some(names) = params.get("target_names") {
+                        raw.insert("target_names".to_string(), names.clone());
+                    }
                 }
             }
         }
@@ -264,8 +279,11 @@ pub fn plan_model_session_steps(prompt: &str) -> Vec<ModelSessionPlannedStep> {
     let lower = normalized.to_lowercase();
 
     let mut steps = plan_explicit_complex_steps(normalized, &lower);
+    let basic_steps = plan_basic_steps(normalized, &lower);
     if steps.is_empty() {
-        steps = plan_basic_steps(normalized, &lower);
+        steps = basic_steps;
+    } else {
+        merge_basic_steps(&mut steps, basic_steps);
     }
     if has_rollback_branch_intent(&lower) && !steps.is_empty() {
         let operation_kind = steps
@@ -284,6 +302,23 @@ pub fn plan_model_session_steps(prompt: &str) -> Vec<ModelSessionPlannedStep> {
         });
     }
     steps
+}
+
+/// 描述：将基础步骤补充到复杂步骤中，避免重复添加同分支同动作代码的步骤。
+fn merge_basic_steps(
+    target: &mut Vec<ModelSessionPlannedStep>,
+    basic_steps: Vec<ModelSessionPlannedStep>,
+) {
+    for step in basic_steps {
+        let step_code = step.code();
+        let branch = step.branch();
+        let exists = target
+            .iter()
+            .any(|item| item.code() == step_code && item.branch() == branch);
+        if !exists {
+            target.push(step);
+        }
+    }
 }
 
 /// 描述：判断当前计划是否需要一次性安全确认。
@@ -320,7 +355,8 @@ pub fn build_safety_confirmation_ui_hint(
         key: "dangerous-operation-confirm".to_string(),
         level: ProtocolUiHintLevel::Warning,
         title: "检测到高风险复杂操作".to_string(),
-        message: "本次操作包含高风险步骤（如布尔链/场景级文件操作）。请确认后仅执行一次。".to_string(),
+        message: "本次操作包含高风险步骤（如布尔链/场景级文件操作）。请确认后仅执行一次。"
+            .to_string(),
         actions: vec![
             ProtocolUiHintAction {
                 key: "allow_once".to_string(),
@@ -397,36 +433,14 @@ pub fn check_capability_for_session_step(
             }
         }
         ModelSessionPlannedStep::Tool { action, .. } => {
-            let allowed = match action {
-                ModelToolAction::ListObjects
-                | ModelToolAction::GetSelectionContext
-                | ModelToolAction::SelectObjects
-                | ModelToolAction::RenameObject
-                | ModelToolAction::OrganizeHierarchy => capabilities.scene,
-                ModelToolAction::TranslateObjects
-                | ModelToolAction::RotateObjects
-                | ModelToolAction::ScaleObjects
-                | ModelToolAction::AlignOrigin
-                | ModelToolAction::NormalizeScale
-                | ModelToolAction::NormalizeAxis => capabilities.transform,
-                ModelToolAction::Solidify
-                | ModelToolAction::AddCube
-                | ModelToolAction::Bevel
-                | ModelToolAction::Mirror
-                | ModelToolAction::Array
-                | ModelToolAction::Boolean => capabilities.geometry,
-                ModelToolAction::AutoSmooth
-                | ModelToolAction::WeightedNormal
-                | ModelToolAction::Decimate => capabilities.mesh_opt,
-                ModelToolAction::TidyMaterialSlots
-                | ModelToolAction::CheckTexturePaths
-                | ModelToolAction::ApplyTextureImage
-                | ModelToolAction::PackTextures => capabilities.material,
-                ModelToolAction::NewFile
-                | ModelToolAction::OpenFile
-                | ModelToolAction::SaveFile
-                | ModelToolAction::Undo
-                | ModelToolAction::Redo => capabilities.file,
+            let capability = model_tool_action_capability(*action);
+            let allowed = match capability {
+                ModelToolCapabilityDomain::Scene => capabilities.scene,
+                ModelToolCapabilityDomain::Transform => capabilities.transform,
+                ModelToolCapabilityDomain::Geometry => capabilities.geometry,
+                ModelToolCapabilityDomain::MeshOpt => capabilities.mesh_opt,
+                ModelToolCapabilityDomain::Material => capabilities.material,
+                ModelToolCapabilityDomain::File => capabilities.file,
             };
             if !allowed {
                 return Err(McpError::new(
@@ -478,6 +492,16 @@ fn plan_explicit_complex_steps(prompt: &str, lower: &str) -> Vec<ModelSessionPla
                 ModelToolAction::Bevel,
                 "修改器链：倒角",
                 json!({"width": 0.01, "segments": 2}),
+            ),
+            (
+                ModelToolAction::Mirror,
+                "修改器链：镜像",
+                json!({"axis": "X"}),
+            ),
+            (
+                ModelToolAction::Array,
+                "修改器链：阵列",
+                json!({"count": 3, "offset": 1.0}),
             ),
             (
                 ModelToolAction::Decimate,
@@ -562,7 +586,11 @@ fn plan_explicit_complex_steps(prompt: &str, lower: &str) -> Vec<ModelSessionPla
                 "批量材质：检查贴图路径",
                 json!({}),
             ),
-            (ModelToolAction::PackTextures, "批量材质：打包贴图", json!({})),
+            (
+                ModelToolAction::PackTextures,
+                "批量材质：打包贴图",
+                json!({}),
+            ),
         ] {
             steps.push(ModelSessionPlannedStep::Tool {
                 action,
@@ -577,10 +605,14 @@ fn plan_explicit_complex_steps(prompt: &str, lower: &str) -> Vec<ModelSessionPla
         }
         if let Some(path) = parse_path_in_prompt(prompt) {
             if is_apply_texture_intent(prompt, lower, path.as_str()) {
+                let mut params = json!({ "path": path });
+                if has_selection_reference_intent(lower) {
+                    enrich_transform_target_params(&mut params, prompt, lower);
+                }
                 steps.push(ModelSessionPlannedStep::Tool {
                     action: ModelToolAction::ApplyTextureImage,
                     input: format!("批量材质：应用贴图 {}", path),
-                    params: json!({ "path": path }),
+                    params,
                     operation_kind: ModelPlanOperationKind::BatchMaterial,
                     branch: ModelPlanBranch::Primary,
                     recoverable: true,
@@ -591,7 +623,10 @@ fn plan_explicit_complex_steps(prompt: &str, lower: &str) -> Vec<ModelSessionPla
         }
     }
 
-    if lower.contains("场景级操作") || lower.contains("scene file ops") || lower.contains("scene pipeline") {
+    if lower.contains("场景级操作")
+        || lower.contains("scene file ops")
+        || lower.contains("scene pipeline")
+    {
         steps.push(ModelSessionPlannedStep::Tool {
             action: ModelToolAction::SaveFile,
             input: "场景级操作：保存当前文件".to_string(),
@@ -615,7 +650,9 @@ fn plan_explicit_complex_steps(prompt: &str, lower: &str) -> Vec<ModelSessionPla
             });
         }
         steps.push(ModelSessionPlannedStep::Export {
-            input: "场景级操作：导出 GLB".to_string(),
+            format: parse_export_format_from_prompt(lower),
+            input: build_export_input(lower, "场景级操作：导出"),
+            params: build_export_params(lower),
             operation_kind: ModelPlanOperationKind::SceneFileOps,
             branch: ModelPlanBranch::Primary,
             recoverable: false,
@@ -630,12 +667,24 @@ fn plan_explicit_complex_steps(prompt: &str, lower: &str) -> Vec<ModelSessionPla
 /// 描述：规划基础步骤，保持与历史行为兼容。
 fn plan_basic_steps(prompt: &str, lower: &str) -> Vec<ModelSessionPlannedStep> {
     let mut steps: Vec<ModelSessionPlannedStep> = Vec::new();
-    if ["导出", "export", "输出glb", "导出模型"]
-        .iter()
-        .any(|key| lower.contains(key))
+    if [
+        "导出",
+        "export",
+        "输出glb",
+        "输出fbx",
+        "输出obj",
+        "导出模型",
+        "导出fbx",
+        "导出obj",
+    ]
+    .iter()
+    .any(|key| lower.contains(key))
     {
+        let format = parse_export_format_from_prompt(lower);
         steps.push(ModelSessionPlannedStep::Export {
-            input: "导出 GLB".to_string(),
+            format,
+            input: build_export_input(lower, "导出"),
+            params: build_export_params(lower),
             operation_kind: ModelPlanOperationKind::SceneFileOps,
             branch: ModelPlanBranch::Primary,
             recoverable: false,
@@ -689,7 +738,111 @@ fn plan_basic_steps(prompt: &str, lower: &str) -> Vec<ModelSessionPlannedStep> {
             });
         }
     }
-    if lower.contains("重命名") || lower.contains("rename") {
+    let is_collection_context = lower.contains("集合") || lower.contains("collection");
+    if is_collection_context {
+        let mut collection_names: Vec<String> = Vec::new();
+        collection_names.extend(collect_wrapped_segments(prompt, '“', '”'));
+        collection_names.extend(collect_wrapped_segments(prompt, '「', '」'));
+        collection_names.extend(collect_wrapped_segments(prompt, '"', '"'));
+        collection_names.extend(collect_wrapped_segments(prompt, '\'', '\''));
+        collection_names.extend(collect_wrapped_segments(prompt, '`', '`'));
+        collection_names = collection_names
+            .into_iter()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty() && !value.contains('/') && !value.contains('\\'))
+            .fold(Vec::<String>::new(), |mut acc, item| {
+                if !acc.iter().any(|existing| existing == &item) {
+                    acc.push(item);
+                }
+                acc
+            });
+        if collection_names.is_empty() {
+            collection_names = parse_target_names_in_prompt(prompt, lower);
+        }
+        if (lower.contains("重命名") || lower.contains("rename")) && collection_names.len() >= 2
+        {
+            steps.push(ModelSessionPlannedStep::Tool {
+                action: ModelToolAction::OrganizeHierarchy,
+                input: format!(
+                    "集合重命名 {} -> {}",
+                    collection_names[0], collection_names[1]
+                ),
+                params: json!({
+                    "mode": "collection_rename",
+                    "collection": collection_names[0],
+                    "new_name": collection_names[1]
+                }),
+                operation_kind: ModelPlanOperationKind::Basic,
+                branch: ModelPlanBranch::Primary,
+                recoverable: true,
+                risk: ModelPlanRiskLevel::Medium,
+                condition: None,
+            });
+        } else if (lower.contains("重排")
+            || lower.contains("reorder")
+            || lower.contains("置顶")
+            || lower.contains("最前")
+            || lower.contains("最后")
+            || lower.contains("末尾"))
+            && !collection_names.is_empty()
+        {
+            let position = if ["置顶", "最前", "first", "front"]
+                .iter()
+                .any(|token| lower.contains(token))
+            {
+                "first"
+            } else {
+                "last"
+            };
+            let mut params = json!({
+                "mode": "collection_reorder",
+                "collection": collection_names[0],
+                "position": position,
+            });
+            if let Some(parent_collection) = collection_names.get(1) {
+                if let Some(raw) = params.as_object_mut() {
+                    raw.insert("parent_collection".to_string(), json!(parent_collection));
+                }
+            }
+            steps.push(ModelSessionPlannedStep::Tool {
+                action: ModelToolAction::OrganizeHierarchy,
+                input: format!("集合重排 {} -> {}", collection_names[0], position),
+                params,
+                operation_kind: ModelPlanOperationKind::Basic,
+                branch: ModelPlanBranch::Primary,
+                recoverable: true,
+                risk: ModelPlanRiskLevel::Medium,
+                condition: None,
+            });
+        } else if (lower.contains("移动")
+            || lower.contains("move")
+            || lower.contains("层级")
+            || lower.contains("parent"))
+            && !collection_names.is_empty()
+        {
+            let mut params = json!({
+                "mode": "collection_move",
+                "collection": collection_names[0],
+            });
+            if let Some(parent_collection) = collection_names.get(1) {
+                if let Some(raw) = params.as_object_mut() {
+                    raw.insert("parent_collection".to_string(), json!(parent_collection));
+                }
+            }
+            steps.push(ModelSessionPlannedStep::Tool {
+                action: ModelToolAction::OrganizeHierarchy,
+                input: format!("集合移动 {}", collection_names[0]),
+                params,
+                operation_kind: ModelPlanOperationKind::Basic,
+                branch: ModelPlanBranch::Primary,
+                recoverable: true,
+                risk: ModelPlanRiskLevel::Medium,
+                condition: None,
+            });
+        }
+    }
+
+    if (lower.contains("重命名") || lower.contains("rename")) && !is_collection_context {
         if let Some((left, right)) = prompt.split_once("为") {
             let old_name = left
                 .replace("重命名", "")
@@ -711,7 +864,7 @@ fn plan_basic_steps(prompt: &str, lower: &str) -> Vec<ModelSessionPlannedStep> {
             }
         }
     }
-    if lower.contains("设为父级") || lower.contains("parent") {
+    if !is_collection_context && (lower.contains("设为父级") || lower.contains("parent")) {
         let normalized = prompt.replace("设为父级", " ");
         let parts = normalized
             .split_whitespace()
@@ -759,7 +912,10 @@ fn plan_basic_steps(prompt: &str, lower: &str) -> Vec<ModelSessionPlannedStep> {
             });
         }
     }
-    if ["保存", "save file"].iter().any(|key| lower.contains(key)) {
+    if ["保存", "save file", "另存为", "save as"]
+        .iter()
+        .any(|key| lower.contains(key))
+    {
         let path = parse_path_in_prompt(prompt);
         steps.push(ModelSessionPlannedStep::Tool {
             action: ModelToolAction::SaveFile,
@@ -895,7 +1051,9 @@ fn plan_basic_steps(prompt: &str, lower: &str) -> Vec<ModelSessionPlannedStep> {
         });
     }
     if is_add_cube_intent(prompt, lower) {
-        let size = parse_first_number(prompt).unwrap_or(2.0).clamp(0.001, 1000.0);
+        let size = parse_first_number(prompt)
+            .unwrap_or(2.0)
+            .clamp(0.001, 1000.0);
         steps.push(ModelSessionPlannedStep::Tool {
             action: ModelToolAction::AddCube,
             input: format!("添加正方体 size={}", size),
@@ -908,7 +1066,9 @@ fn plan_basic_steps(prompt: &str, lower: &str) -> Vec<ModelSessionPlannedStep> {
         });
     }
     if ["加厚", "solidify"].iter().any(|key| lower.contains(key)) {
-        let thickness = parse_first_number(prompt).unwrap_or(0.02).clamp(0.0001, 10.0);
+        let thickness = parse_first_number(prompt)
+            .unwrap_or(0.02)
+            .clamp(0.0001, 10.0);
         steps.push(ModelSessionPlannedStep::Tool {
             action: ModelToolAction::Solidify,
             input: format!("加厚 {}", thickness),
@@ -921,7 +1081,9 @@ fn plan_basic_steps(prompt: &str, lower: &str) -> Vec<ModelSessionPlannedStep> {
         });
     }
     if ["倒角", "bevel"].iter().any(|key| lower.contains(key)) {
-        let width = parse_first_number(prompt).unwrap_or(0.02).clamp(0.0001, 10.0);
+        let width = parse_first_number(prompt)
+            .unwrap_or(0.02)
+            .clamp(0.0001, 10.0);
         steps.push(ModelSessionPlannedStep::Tool {
             action: ModelToolAction::Bevel,
             input: format!("倒角 {}", width),
@@ -1059,10 +1221,14 @@ fn plan_basic_steps(prompt: &str, lower: &str) -> Vec<ModelSessionPlannedStep> {
     }
     if let Some(path) = parse_path_in_prompt(prompt) {
         if is_apply_texture_intent(prompt, lower, path.as_str()) {
+            let mut params = json!({ "path": path });
+            if has_selection_reference_intent(lower) {
+                enrich_transform_target_params(&mut params, prompt, lower);
+            }
             steps.push(ModelSessionPlannedStep::Tool {
                 action: ModelToolAction::ApplyTextureImage,
                 input: format!("应用贴图 {}", path),
-                params: json!({ "path": path }),
+                params,
                 operation_kind: ModelPlanOperationKind::BatchMaterial,
                 branch: ModelPlanBranch::Primary,
                 recoverable: true,
@@ -1179,6 +1345,11 @@ fn has_selected_reference_intent(lower: &str) -> bool {
     .any(|key| lower.contains(key))
 }
 
+/// 描述：统一判断提示词是否引用当前选择对象语义。
+fn has_selection_reference_intent(lower: &str) -> bool {
+    has_active_reference_intent(lower) || has_selected_reference_intent(lower)
+}
+
 /// 描述：识别“所有对象”语义，映射到 all 作用域。
 fn has_all_objects_intent(lower: &str) -> bool {
     [
@@ -1230,9 +1401,7 @@ fn parse_translate_delta(prompt: &str, lower: &str) -> (f64, f64, f64) {
 
 /// 描述：识别旋转意图，支持中英文关键词。
 fn is_rotate_intent(lower: &str) -> bool {
-    ["旋转", "rotate"]
-        .iter()
-        .any(|key| lower.contains(key))
+    ["旋转", "rotate"].iter().any(|key| lower.contains(key))
 }
 
 /// 描述：将角度输入归一为弧度；明显超过 2π 的值视为角度输入。
@@ -1269,14 +1438,14 @@ fn parse_rotate_delta(prompt: &str, lower: &str) -> (f64, f64, f64) {
 
 /// 描述：识别缩放意图，支持中英文关键词。
 fn is_scale_intent(lower: &str) -> bool {
-    ["缩放", "scale"]
-        .iter()
-        .any(|key| lower.contains(key))
+    ["缩放", "scale"].iter().any(|key| lower.contains(key))
 }
 
 /// 描述：提取统一缩放因子，未提供时使用默认值。
 fn parse_scale_factor(prompt: &str) -> f64 {
-    parse_first_number(prompt).unwrap_or(1.1).clamp(0.001, 1000.0)
+    parse_first_number(prompt)
+        .unwrap_or(1.1)
+        .clamp(0.001, 1000.0)
 }
 
 /// 描述：提取被指定符号包裹的片段，用于对象名解析。
@@ -1526,18 +1695,21 @@ fn is_apply_texture_intent(prompt: &str, lower: &str, path: &str) -> bool {
     let has_texture_keyword = ["贴图", "纹理", "材质", "texture", "image", "base color"]
         .iter()
         .any(|keyword| lower.contains(keyword));
-    let has_apply_verb = ["添加", "替换", "设置", "应用", "assign", "apply", "set", "use"]
-        .iter()
-        .any(|keyword| lower.contains(keyword));
+    let has_apply_verb = [
+        "添加", "替换", "设置", "应用", "assign", "apply", "set", "use",
+    ]
+    .iter()
+    .any(|keyword| lower.contains(keyword));
     let lower_path = path.to_lowercase();
-    let is_image_file = [".png", ".jpg", ".jpeg", ".tga", ".bmp", ".tif", ".tiff", ".exr"]
-        .iter()
-        .any(|suffix| lower_path.ends_with(suffix));
+    let is_image_file = [
+        ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".tif", ".tiff", ".exr",
+    ]
+    .iter()
+    .any(|suffix| lower_path.ends_with(suffix));
     let trimmed_prompt = prompt.trim_start();
-    let starts_with_material_instruction =
-        ["贴图", "纹理", "材质", "texture", "image", "material"]
-            .iter()
-            .any(|prefix| trimmed_prompt.to_lowercase().starts_with(prefix));
+    let starts_with_material_instruction = ["贴图", "纹理", "材质", "texture", "image", "material"]
+        .iter()
+        .any(|prefix| trimmed_prompt.to_lowercase().starts_with(prefix));
 
     (has_texture_keyword && has_apply_verb && is_image_file)
         || (starts_with_material_instruction && is_image_file)
@@ -1545,15 +1717,19 @@ fn is_apply_texture_intent(prompt: &str, lower: &str, path: &str) -> bool {
 
 /// 描述：识别“添加正方体/立方体”的显式意图，避免误判普通对话。
 fn is_add_cube_intent(prompt: &str, lower: &str) -> bool {
-    const CN_EXPLICIT: [&str; 12] = [
+    const CN_EXPLICIT: [&str; 16] = [
         "添加正方体",
         "添加一个正方体",
         "添加立方体",
         "添加一个立方体",
         "新建正方体",
+        "新建一个正方体",
         "新建立方体",
+        "新建一个立方体",
         "创建正方体",
+        "创建一个正方体",
         "创建立方体",
+        "创建一个立方体",
         "加个正方体",
         "加一个正方体",
         "加个立方体",
@@ -1588,6 +1764,54 @@ fn is_add_cube_intent(prompt: &str, lower: &str) -> bool {
         .any(|keyword| lower.contains(keyword));
 
     starts_with_create_verb && has_cube_noun
+}
+
+/// 描述：根据提示词推断导出格式，优先识别 fbx/obj，未命中则默认 glb。
+fn parse_export_format_from_prompt(lower: &str) -> ExportModelFormat {
+    let normalized = lower.replace(
+        ['，', ',', '。', '：', ':', '/', '\\', '-', '_', '(', ')'],
+        " ",
+    );
+    let has_token = |token: &str| normalized.split_whitespace().any(|item| item == token);
+    if lower.contains(".fbx") || has_token("fbx") {
+        ExportModelFormat::Fbx
+    } else if lower.contains(".obj") || has_token("obj") {
+        ExportModelFormat::Obj
+    } else {
+        ExportModelFormat::Glb
+    }
+}
+
+/// 描述：提取导出参数，当前支持是否仅导出选中对象与是否应用修改器。
+fn build_export_params(lower: &str) -> Value {
+    let use_selection = [
+        "选中导出",
+        "仅导出选中",
+        "只导出选中",
+        "selected only",
+        "selection only",
+    ]
+    .iter()
+    .any(|key| lower.contains(key));
+    let disable_apply_modifiers = [
+        "不应用修改器",
+        "不应用所有修改器",
+        "without modifiers",
+        "no modifiers",
+    ]
+    .iter()
+    .any(|key| lower.contains(key));
+    json!({
+        "use_selection": use_selection,
+        "apply_modifiers": !disable_apply_modifiers,
+        "export_apply": !disable_apply_modifiers
+    })
+}
+
+/// 描述：构建导出步骤输入文案，包含明确导出格式，便于 trace 面板快速识别。
+fn build_export_input(lower: &str, prefix: &str) -> String {
+    let format = parse_export_format_from_prompt(lower);
+    format!("{} {}", prefix, format.as_str().to_uppercase())
 }
 
 /// 描述：汇总高风险原因，便于 UI 展示用户确认信息。

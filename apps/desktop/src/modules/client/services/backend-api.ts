@@ -274,8 +274,8 @@ export async function createRuntimeSession(userId: string, agentCode: string): P
 }
 
 // 描述：查询会话列表。
-export async function listRuntimeSessions(userId: string, agentCode?: string): Promise<RuntimeSessionEntity[]> {
-  const query = toQueryString({ userId, agentCode });
+export async function listRuntimeSessions(userId: string, agentCode?: string, status?: number): Promise<RuntimeSessionEntity[]> {
+  const query = toQueryString({ userId, agentCode, status });
   const data = await request<{ list: RuntimeSessionEntity[] }>(`${runtimeBaseUrl}/workflow/v1/sessions${query}`);
   return data.list || [];
 }

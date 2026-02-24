@@ -7,6 +7,8 @@ import { SessionPage } from "./pages/session-page";
 import { AiKeyPage } from "./pages/ai-key-page";
 import { SettingsGeneralPage } from "./pages/settings-general-page";
 import { ModelAgentSettingsPage } from "./pages/model-agent-settings-page";
+import { CodeAgentSettingsPage } from "./pages/code-agent-settings-page";
+import { WorkflowCanvasPage } from "./pages/workflow-canvas-page";
 import type {
   AiKeyItem,
   BlenderBridgeEnsureOptions,
@@ -100,6 +102,14 @@ export function DesktopRouter({ auth }: { auth: AuthState }) {
               ensureBlenderBridge={auth.ensureBlenderBridge}
             />
           }
+        />
+        <Route
+          path="agents/code/settings"
+          element={<CodeAgentSettingsPage />}
+        />
+        <Route
+          path="agents/:agentKey/workflows"
+          element={<WorkflowCanvasPage />}
         />
       </Route>
 

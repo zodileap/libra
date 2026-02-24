@@ -3,8 +3,10 @@ use crate::workflow::{
 };
 use std::env;
 use std::fs;
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use zodileap_mcp_common::ProtocolError;
@@ -13,6 +15,21 @@ const LLM_RUNTIME_TAG: &str = "llm-v3-gateway";
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 const DEFAULT_RETRY_MAX: u8 = 1;
 const DEFAULT_RETRY_BACKOFF_MS: u64 = 400;
+
+/// 描述：LLM 文本增量回调签名，输出为原始文本分片。
+pub type LlmTextStreamObserver<'a> = dyn FnMut(&str) + 'a;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodexOutputStreamKind {
+    Stdout,
+    Stderr,
+}
+
+#[derive(Debug, Clone)]
+struct CodexOutputChunk {
+    stream: CodexOutputStreamKind,
+    text: String,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LlmProvider {
@@ -152,6 +169,22 @@ pub fn call_model(
     call_model_with_policy(provider, prompt, workdir, LlmGatewayPolicy::from_env())
 }
 
+/// 描述：按默认策略调用模型网关并返回文本增量，供上层实现 token 级流式输出。
+pub fn call_model_with_stream(
+    provider: LlmProvider,
+    prompt: &str,
+    workdir: Option<&str>,
+    on_chunk: &mut LlmTextStreamObserver,
+) -> Result<String, LlmGatewayError> {
+    call_model_with_policy_and_stream(
+        provider,
+        prompt,
+        workdir,
+        LlmGatewayPolicy::from_env(),
+        Some(on_chunk),
+    )
+}
+
 /// 描述：按指定策略调用模型网关，便于测试与不同运行环境注入。
 pub fn call_model_with_policy(
     provider: LlmProvider,
@@ -159,8 +192,19 @@ pub fn call_model_with_policy(
     workdir: Option<&str>,
     policy: LlmGatewayPolicy,
 ) -> Result<String, LlmGatewayError> {
+    call_model_with_policy_and_stream(provider, prompt, workdir, policy, None)
+}
+
+/// 描述：按指定策略调用模型网关，并可选输出增量文本事件。
+fn call_model_with_policy_and_stream(
+    provider: LlmProvider,
+    prompt: &str,
+    workdir: Option<&str>,
+    policy: LlmGatewayPolicy,
+    on_chunk: Option<&mut LlmTextStreamObserver>,
+) -> Result<String, LlmGatewayError> {
     match provider {
-        LlmProvider::CodexCli => call_codex_cli_with_retry(prompt, workdir, policy),
+        LlmProvider::CodexCli => call_codex_cli_with_retry(prompt, workdir, policy, on_chunk),
         LlmProvider::Gemini => Err(LlmGatewayError::new(
             provider,
             "core.agent.llm.provider_not_implemented",
@@ -181,10 +225,17 @@ fn call_codex_cli_with_retry(
     prompt: &str,
     workdir: Option<&str>,
     policy: LlmGatewayPolicy,
+    mut on_chunk: Option<&mut LlmTextStreamObserver>,
 ) -> Result<String, LlmGatewayError> {
     let hook = DefaultWorkflowRecoveryHook;
     let run = run_step_with_retry("llm.codex_cli", policy.retry_policy, &hook, |attempt| {
-        call_codex_cli_once(prompt, workdir, policy.timeout_secs, attempt)
+        call_codex_cli_once(
+            prompt,
+            workdir,
+            policy.timeout_secs,
+            attempt,
+            on_chunk.as_deref_mut(),
+        )
     });
 
     run.outcome.map_err(|err| err.with_attempts(run.attempts))
@@ -196,6 +247,7 @@ fn call_codex_cli_once(
     workdir: Option<&str>,
     timeout_secs: u64,
     attempt: u8,
+    mut on_chunk: Option<&mut LlmTextStreamObserver>,
 ) -> Result<String, LlmGatewayError> {
     let provider = LlmProvider::CodexCli;
     let output_file = build_output_file();
@@ -228,16 +280,57 @@ fn call_codex_cli_once(
         .with_attempts(attempt)
     })?;
 
+    let stdout = child.stdout.take().ok_or_else(|| {
+        LlmGatewayError::new(
+            provider,
+            "core.agent.llm.stdout_pipe_missing",
+            format!("[{}] stdout pipe is not available", LLM_RUNTIME_TAG),
+        )
+        .with_retryable(true)
+        .with_attempts(attempt)
+    })?;
+    let stderr = child.stderr.take().ok_or_else(|| {
+        LlmGatewayError::new(
+            provider,
+            "core.agent.llm.stderr_pipe_missing",
+            format!("[{}] stderr pipe is not available", LLM_RUNTIME_TAG),
+        )
+        .with_retryable(true)
+        .with_attempts(attempt)
+    })?;
+    let (tx, rx) = mpsc::channel::<CodexOutputChunk>();
+    let stdout_reader =
+        spawn_codex_stream_reader(stdout, CodexOutputStreamKind::Stdout, tx.clone());
+    let stderr_reader = spawn_codex_stream_reader(stderr, CodexOutputStreamKind::Stderr, tx);
+
     let timeout = Duration::from_secs(timeout_secs.max(1));
     let started = Instant::now();
-
-    loop {
+    let mut stdout_text = String::new();
+    let mut stderr_text = String::new();
+    let status = loop {
+        match rx.recv_timeout(Duration::from_millis(40)) {
+            Ok(chunk) => match chunk.stream {
+                CodexOutputStreamKind::Stdout => {
+                    stdout_text.push_str(chunk.text.as_str());
+                    if let Some(callback) = on_chunk.as_deref_mut() {
+                        callback(chunk.text.as_str());
+                    }
+                }
+                CodexOutputStreamKind::Stderr => {
+                    stderr_text.push_str(chunk.text.as_str());
+                }
+            },
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {}
+        }
         match child.try_wait() {
-            Ok(Some(_status)) => break,
+            Ok(Some(status)) => break status,
             Ok(None) => {
                 if started.elapsed() >= timeout {
                     let _ = child.kill();
                     let _ = child.wait();
+                    let _ = stdout_reader.join();
+                    let _ = stderr_reader.join();
                     return Err(LlmGatewayError::new(
                         provider,
                         "core.agent.llm.timeout",
@@ -253,6 +346,8 @@ fn call_codex_cli_once(
                 thread::sleep(Duration::from_millis(80));
             }
             Err(err) => {
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
                 return Err(LlmGatewayError::new(
                     provider,
                     "core.agent.llm.wait_failed",
@@ -262,25 +357,29 @@ fn call_codex_cli_once(
                 .with_attempts(attempt));
             }
         }
+    };
+
+    while let Ok(chunk) = rx.try_recv() {
+        match chunk.stream {
+            CodexOutputStreamKind::Stdout => {
+                stdout_text.push_str(chunk.text.as_str());
+                if let Some(callback) = on_chunk.as_deref_mut() {
+                    callback(chunk.text.as_str());
+                }
+            }
+            CodexOutputStreamKind::Stderr => {
+                stderr_text.push_str(chunk.text.as_str());
+            }
+        }
     }
+    let _ = stdout_reader.join();
+    let _ = stderr_reader.join();
 
-    let output = child.wait_with_output().map_err(|err| {
-        LlmGatewayError::new(
-            provider,
-            "core.agent.llm.output_read_failed",
-            format!("[{}] read codex output failed: {}", LLM_RUNTIME_TAG, err),
-        )
-        .with_retryable(true)
-        .with_attempts(attempt)
-    })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let reason = if !stderr.trim().is_empty() {
-            stderr
-        } else if !stdout.trim().is_empty() {
-            stdout
+    if !status.success() {
+        let reason = if !stderr_text.trim().is_empty() {
+            stderr_text
+        } else if !stdout_text.trim().is_empty() {
+            stdout_text
         } else {
             "unknown codex cli error".to_string()
         };
@@ -315,6 +414,32 @@ fn call_codex_cli_once(
         .with_attempts(attempt));
     }
     Ok(final_message)
+}
+
+/// 描述：启动 Codex 输出流读取线程，并把文本分片发送给主线程聚合处理。
+fn spawn_codex_stream_reader<R>(
+    mut reader: R,
+    stream: CodexOutputStreamKind,
+    tx: mpsc::Sender<CodexOutputChunk>,
+) -> thread::JoinHandle<()>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut buffer = [0_u8; 1024];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(size) => {
+                    let text = String::from_utf8_lossy(&buffer[..size]).to_string();
+                    if tx.send(CodexOutputChunk { stream, text }).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    })
 }
 
 /// 描述：构建一次调用的临时输出文件路径。

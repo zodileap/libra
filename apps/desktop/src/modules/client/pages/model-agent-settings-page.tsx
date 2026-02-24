@@ -1,320 +1,175 @@
 import { useMemo, useState } from "react";
-import { AriButton, AriCard, AriContainer, AriFlex, AriInput, AriMessage, AriSelect, AriSwitch, AriTypography } from "aries_react";
+import { useNavigate } from "react-router-dom";
 import {
-  copyModelWorkflow,
-  createModelWorkflowFromTemplate,
-  listModelWorkflows,
-  saveModelWorkflow,
-  toggleShareModelWorkflow,
-  updateWorkflowNodeParams,
-} from "../workflow";
-import type { WorkflowDefinition } from "../workflow";
+  AriButton,
+  AriContainer,
+  AriFlex,
+  AriSwitch,
+} from "aries_react";
 import type {
   BlenderBridgeEnsureOptions,
   BlenderBridgeEnsureResult,
   BlenderBridgeRuntime,
   ModelMcpCapabilities,
 } from "../types";
-import { DeskPageHeader, DeskSectionLabel, DeskSettingsRow } from "../widgets/settings-primitives";
+import { DeskPageHeader, DeskSectionTitle, DeskSettingsRow, DeskStatusText } from "../widgets/settings-primitives";
 
 interface ModelAgentSettingsPageProps {
   modelMcpCapabilities: ModelMcpCapabilities;
   onModelMcpCapabilitiesChange: (value: ModelMcpCapabilities) => void;
   blenderBridgeRuntime: BlenderBridgeRuntime;
-  ensureBlenderBridge: (options?: BlenderBridgeEnsureOptions) => Promise<BlenderBridgeEnsureResult>;
+  ensureBlenderBridge: (
+    options?: BlenderBridgeEnsureOptions,
+  ) => Promise<BlenderBridgeEnsureResult>;
 }
 
-interface CapabilitySettingItem {
+// 描述：
+//
+//   - 模型能力开关配置项，统一定义文案并映射到能力字段。
+const CAPABILITY_ITEMS: Array<{
   key: keyof ModelMcpCapabilities;
   title: string;
   description: string;
-}
-
-// 描述:
-//
-//   - 集中维护模型智能体能力开关的展示文案，避免页面结构重复和文案分散。
-const CAPABILITY_SETTING_ITEMS: CapabilitySettingItem[] = [
-  {
-    key: "export",
-    title: "导出模型（Blender）",
-    description: "控制 AI 是否可调用 MCP 导出能力。关闭后会话中无法执行导出。",
-  },
-  {
-    key: "scene",
-    title: "场景与对象能力",
-    description: "列出对象、选择对象、重命名、层级整理。",
-  },
-  {
-    key: "transform",
-    title: "变换能力",
-    description: "对齐原点、统一尺度、旋转方向标准化。",
-  },
-  {
-    key: "geometry",
-    title: "几何编辑能力",
-    description: "加厚、倒角、镜像、阵列、布尔。",
-  },
-  {
-    key: "mesh_opt",
-    title: "网格优化能力",
-    description: "自动平滑、Weighted Normal、Decimate。",
-  },
-  {
-    key: "material",
-    title: "材质与贴图能力",
-    description: "材质槽整理、贴图检查、应用贴图图片、打包贴图。",
-  },
-  {
-    key: "file",
-    title: "文件能力",
-    description: "新建、打开、保存、撤销与重试。",
-  },
+}> = [
+  { key: "export", title: "导出能力", description: "允许在执行链路中导出模型与产物。" },
+  { key: "scene", title: "场景操作", description: "允许新建、打开、保存等场景级操作。" },
+  { key: "transform", title: "变换操作", description: "允许平移、旋转、缩放等基础变换。" },
+  { key: "geometry", title: "几何编辑", description: "允许基础建模与几何体编辑。" },
+  { key: "mesh_opt", title: "网格优化", description: "允许简化、重建法线等网格优化操作。" },
+  { key: "material", title: "材质贴图", description: "允许创建材质、贴图与通道调整。" },
+  { key: "file", title: "文件管理", description: "允许导入/导出/另存以及文件级管理。" },
 ];
-
-// 描述:
 //
-//   - 生成工作流下拉项显示文案，统一版本号和分享状态表达。
+//   - 渲染模型智能体设置页，仅提供能力配置与 Bridge 状态管理。
 //
 // Params:
 //
-//   - workflow: 工作流定义。
-//
-// Returns:
-//
-//   - 可读工作流标题。
-function getWorkflowOptionLabel(workflow: WorkflowDefinition): string {
-  return `${workflow.name} (v${workflow.version})${workflow.shared ? " · 已分享" : ""}`;
-}
+//   - props: 模型能力配置与 Bridge 运行态。
+export function ModelAgentSettingsPage(props: ModelAgentSettingsPageProps) {
+  const navigate = useNavigate();
+  const [ensuringBridge, setEnsuringBridge] = useState(false);
 
-// 描述:
-//
-//   - 渲染模型智能体设置页面，统一能力开关、Bridge 状态与工作流编辑入口。
-export function ModelAgentSettingsPage({
-  modelMcpCapabilities,
-  onModelMcpCapabilitiesChange,
-  blenderBridgeRuntime,
-  ensureBlenderBridge,
-}: ModelAgentSettingsPageProps) {
-  const [workflowVersion, setWorkflowVersion] = useState(0);
-  const [selectedWorkflowId, setSelectedWorkflowId] = useState("");
-  const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
-  const [editingParamsText, setEditingParamsText] = useState("{}");
-  const workflows = useMemo(() => listModelWorkflows(), [workflowVersion]);
-  const workflowOptions = useMemo(
-    () => workflows.map((workflow) => ({ label: getWorkflowOptionLabel(workflow), value: workflow.id })),
-    [workflows]
-  );
-  const selectedWorkflow: WorkflowDefinition | null =
-    workflows.find((item) => item.id === selectedWorkflowId) || workflows[0] || null;
+  const capabilityItems = useMemo(() => CAPABILITY_ITEMS, []);
 
-  // 描述:
+  // 描述：
   //
-  //   - 刷新工作流版本号，触发 useMemo 重新读取本地工作流列表。
-  const refreshWorkflows = () => setWorkflowVersion((value) => value + 1);
-
-  // 描述:
-  //
-  //   - 统一更新某个能力开关并回写到页面状态。
+  //   - 更新单个能力开关状态，并写回全量能力配置。
   //
   // Params:
   //
-  //   - key: 能力键值。
-  //   - checked: 开关状态。
-  const patchCapability = (key: keyof ModelMcpCapabilities, checked: boolean) => {
-    const next: ModelMcpCapabilities = {
-      ...modelMcpCapabilities,
+  //   - key: 能力字段名。
+  //   - checked: 能力开关状态。
+  const patchCapability = (
+    key: keyof ModelMcpCapabilities,
+    checked: boolean,
+  ) => {
+    props.onModelMcpCapabilitiesChange({
+      ...props.modelMcpCapabilities,
       [key]: checked,
-    };
-    onModelMcpCapabilitiesChange(next);
+    });
   };
 
-  // 描述:
+  // 描述：
   //
-  //   - 将 AriSelect 的返回值规范化为工作流 ID，避免数组值或 undefined 进入状态。
+  //   - 主动检测/修复 Blender Bridge，避免会话阶段首次调用才暴露故障。
   //
   // Params:
   //
-  //   - value: AriSelect onChange 返回值。
-  const onWorkflowSelectChange = (value: string | number | (string | number)[] | undefined) => {
-    if (typeof value === "string" || typeof value === "number") {
-      setSelectedWorkflowId(String(value));
+  //   - forceInstall: 是否强制重装 Bridge 插件。
+  const runBridgeEnsure = async (forceInstall = false) => {
+    if (ensuringBridge || props.blenderBridgeRuntime.checking) {
       return;
     }
-    setSelectedWorkflowId("");
-  };
 
-  // 描述:
-  //
-  //   - 读取并进入节点参数编辑状态，使用格式化 JSON 便于手工修改。
-  //
-  // Params:
-  //
-  //   - workflowId: 工作流 ID。
-  //   - nodeId: 节点 ID。
-  const startEditNodeParams = (workflowId: string, nodeId: string) => {
-    const workflow = workflows.find((item) => item.id === workflowId);
-    const node = workflow?.nodes.find((item) => item.id === nodeId);
-    if (!node) return;
-    setSelectedWorkflowId(workflowId);
-    setEditingNodeId(nodeId);
-    setEditingParamsText(JSON.stringify(node.params || {}, null, 2));
-  };
-
-  // 描述:
-  //
-  //   - 持久化节点参数编辑结果，并在成功后退出编辑态。
-  const saveNodeParams = () => {
-    if (!selectedWorkflow || !editingNodeId) return;
+    setEnsuringBridge(true);
     try {
-      const params = JSON.parse(editingParamsText || "{}");
-      updateWorkflowNodeParams(selectedWorkflow.id, editingNodeId, params);
-      setEditingNodeId(null);
-      setEditingParamsText("{}");
-      refreshWorkflows();
-    } catch (_err) {
-      AriMessage.error({
-        content: "参数 JSON 格式无效，请修正后再保存。",
-        duration: 3500,
-        showClose: true,
-      });
+      await props.ensureBlenderBridge(forceInstall ? { forceInstall: true } : undefined);
+    } finally {
+      setEnsuringBridge(false);
     }
   };
 
   return (
     <AriContainer className="desk-content">
-      <div className="desk-settings-shell">
+      <AriContainer className="desk-settings-shell">
         <DeskPageHeader
           title="模型智能体设置"
-          description="统一管理模型能力、Blender Bridge 连接状态和可复用工作流。"
+          description="管理模型智能体执行能力与 Blender Bridge 连接状态。"
+          actions={(
+            <AriButton
+              color="primary"
+              label="进入工作流设置"
+              onClick={() => navigate("/agents/model/workflows")}
+            />
+          )}
         />
-        <DeskSectionLabel label="功能" />
 
-        <div className="desk-settings-panel">
-          {CAPABILITY_SETTING_ITEMS.map((capability) => (
+        <DeskSectionTitle title="MCP 能力开关" />
+        <AriContainer className="desk-settings-panel">
+          {capabilityItems.map((item) => (
             <DeskSettingsRow
-              key={capability.key}
-              title={capability.title}
-              description={capability.description}
+              key={item.key}
+              title={item.title}
+              description={item.description}
             >
               <AriSwitch
-                checked={modelMcpCapabilities[capability.key]}
-                onChange={(checked) => patchCapability(capability.key, checked)}
+                checked={Boolean(props.modelMcpCapabilities[item.key])}
+                onChange={(checked) => patchCapability(item.key, checked)}
               />
             </DeskSettingsRow>
           ))}
-        </div>
+        </AriContainer>
 
-        <DeskSectionLabel label="Blender" />
-        <div className="desk-settings-panel">
+        <DeskSectionTitle title="Blender Bridge" />
+        <AriContainer className="desk-settings-panel">
           <DeskSettingsRow
-            title="Bridge 连接状态"
-            description={
-              blenderBridgeRuntime.checking
-                ? "正在检测并自动修复 Bridge..."
-                : blenderBridgeRuntime.message
-            }
-          >
-            <AriButton
-              label={blenderBridgeRuntime.checking ? "处理中..." : "检测并迁移到 Extension"}
-              onClick={() => void ensureBlenderBridge({ forceInstall: true })}
-              disabled={blenderBridgeRuntime.checking}
-            />
-          </DeskSettingsRow>
-        </div>
-
-        <DeskSectionLabel label="模型工作流（P1/P2）" />
-        <div className="desk-settings-panel">
-          <DeskSettingsRow
-            title="工作流模板"
-            description="支持可插拔、可跳步、可重排、可复用。可创建自定义版本。"
-          >
-            <AriButton
-              label="新建工作流"
-              onClick={() => {
-                const created = createModelWorkflowFromTemplate(selectedWorkflow?.id);
-                setSelectedWorkflowId(created.id);
-                refreshWorkflows();
-              }}
-            />
-          </DeskSettingsRow>
-          <DeskSettingsRow
-            description="当前工作流"
+            title="连接状态"
+            description={props.blenderBridgeRuntime.message || "Bridge 状态未知。"}
             metaSlot={(
-              <AriSelect
-                className="desk-settings-select"
-                placeholder="请选择工作流"
-                value={selectedWorkflow?.id}
-                options={workflowOptions}
-                onChange={onWorkflowSelectChange}
-                disabled={workflowOptions.length === 0}
+              <DeskStatusText
+                value={props.blenderBridgeRuntime.checking
+                  ? "检测中"
+                  : props.blenderBridgeRuntime.ok
+                    ? "已连接"
+                    : "未连接"}
               />
             )}
           >
-            {selectedWorkflow ? (
-              <AriFlex align="center" space={8}>
-                <AriButton
-                  type="text"
-                  label="复制"
-                  onClick={() => {
-                    const copied = copyModelWorkflow(selectedWorkflow.id);
-                    setSelectedWorkflowId(copied.id);
-                    refreshWorkflows();
-                  }}
-                />
-                <AriButton
-                  type="text"
-                  label={selectedWorkflow.shared ? "取消分享" : "分享"}
-                  onClick={() => {
-                    toggleShareModelWorkflow(selectedWorkflow.id);
-                    refreshWorkflows();
-                  }}
-                />
-              </AriFlex>
-            ) : null}
+            <AriFlex align="center" space={8}>
+              <AriButton
+                label={props.blenderBridgeRuntime.checking || ensuringBridge ? "检测中..." : "重新检测"}
+                disabled={props.blenderBridgeRuntime.checking || ensuringBridge}
+                onClick={() => {
+                  void runBridgeEnsure(false);
+                }}
+              />
+              <AriButton
+                color="warning"
+                label={props.blenderBridgeRuntime.checking || ensuringBridge ? "处理中..." : "修复安装"}
+                disabled={props.blenderBridgeRuntime.checking || ensuringBridge}
+                onClick={() => {
+                  void runBridgeEnsure(true);
+                }}
+              />
+            </AriFlex>
           </DeskSettingsRow>
-          {selectedWorkflow?.nodes.map((node) => (
-            <DeskSettingsRow
-              key={node.id}
-              title={node.name}
-              description={`kind=${node.kind} | retry=${node.retryCount} | fallback=${node.fallbackKind || "-"}`}
-            >
-              <AriFlex align="center" space={8}>
-                <AriSwitch
-                  checked={node.enabled}
-                  onChange={(checked) => {
-                    if (!selectedWorkflow) return;
-                    const next: WorkflowDefinition = {
-                      ...selectedWorkflow,
-                      version: selectedWorkflow.version + 1,
-                      nodes: selectedWorkflow.nodes.map((item) =>
-                        item.id === node.id ? { ...item, enabled: checked } : item
-                      ),
-                    };
-                    saveModelWorkflow(next);
-                    refreshWorkflows();
-                  }}
-                />
-                <AriButton
-                  type="text"
-                  label="参数"
-                  onClick={() => startEditNodeParams(selectedWorkflow.id, node.id)}
-                />
-              </AriFlex>
-            </DeskSettingsRow>
-          ))}
-        </div>
-
-        {editingNodeId && selectedWorkflow ? (
-          <AriCard className="desk-prompt-card">
-            <AriTypography variant="h4" value={`编辑节点参数：${editingNodeId}`} />
-            <AriInput value={editingParamsText} onChange={setEditingParamsText} placeholder="{ }" />
-            <AriContainer className="desk-settings-node-editor-actions">
-              <AriButton label="取消" onClick={() => setEditingNodeId(null)} />
-              <AriButton color="primary" label="保存参数" onClick={saveNodeParams} />
-            </AriContainer>
-          </AriCard>
-        ) : null}
-      </div>
+          <DeskSettingsRow
+            title="工作流配置"
+            description="工作流设计器已独立，请在工作流设置页面新增和编辑节点。"
+          >
+            <AriButton
+              color="primary"
+              label="打开工作流设置"
+              onClick={() => navigate("/agents/model/workflows")}
+            />
+          </DeskSettingsRow>
+        </AriContainer>
+        <AriContainer className="desk-agent-settings-note-card">
+          <AriFlex align="center" justify="space-between" space={8}>
+            <DeskStatusText value="说明：智能体设置仅管理能力与运行环境，工作流管理已拆分。"/>
+          </AriFlex>
+        </AriContainer>
+      </AriContainer>
     </AriContainer>
   );
 }

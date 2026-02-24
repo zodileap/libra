@@ -1,4 +1,5 @@
 import type {
+  AgentKey,
   AiKeyItem,
   ModelMcpCapabilities,
   ModelAssetRecord,
@@ -48,6 +49,38 @@ export interface WorkflowNodeDefinition {
   params: Record<string, unknown>;
 }
 
+export type WorkflowGraphNodeType =
+  | "node"
+  | "start"
+  | "action"
+  | "branch"
+  | "loop"
+  | "end";
+
+export type WorkflowGraphEdgeType = "default" | "branch" | "loop";
+
+export interface WorkflowGraphNode {
+  id: string;
+  title: string;
+  description: string;
+  type: WorkflowGraphNodeType;
+  x: number;
+  y: number;
+}
+
+export interface WorkflowGraphEdge {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  type: WorkflowGraphEdgeType;
+  label?: string;
+}
+
+export interface WorkflowGraph {
+  nodes: WorkflowGraphNode[];
+  edges: WorkflowGraphEdge[];
+}
+
 export interface WorkflowDefinition {
   id: string;
   name: string;
@@ -55,6 +88,18 @@ export interface WorkflowDefinition {
   version: number;
   shared: boolean;
   nodes: WorkflowNodeDefinition[];
+  graph?: WorkflowGraph;
+}
+
+export interface CodeWorkflowDefinition {
+  id: string;
+  name: string;
+  description: string;
+  version: number;
+  shared: boolean;
+  agentKey: AgentKey;
+  promptPrefix: string;
+  graph?: WorkflowGraph;
 }
 
 export type WorkflowStepStatus = "success" | "failed" | "skipped" | "manual";

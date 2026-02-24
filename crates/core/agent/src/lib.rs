@@ -6,7 +6,7 @@ pub mod llm;
 pub mod workflow;
 
 use flow::{compose_prompt, AgentKind};
-use llm::{call_model, parse_provider};
+use llm::{call_model_with_stream, parse_provider};
 use zodileap_mcp_common::{
     now_millis, ProtocolAssetRecord, ProtocolError, ProtocolEventRecord, ProtocolStepRecord,
     ProtocolStepStatus, ProtocolUiHint,
@@ -39,6 +39,13 @@ pub struct AgentRunResult {
     pub events: Vec<ProtocolEventRecord>,
     pub assets: Vec<ProtocolAssetRecord>,
     pub ui_hint: Option<ProtocolUiHint>,
+}
+
+#[derive(Debug, Clone)]
+pub enum AgentStreamEvent {
+    LlmStarted { provider: String },
+    LlmDelta { content: String },
+    LlmFinished { provider: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,6 +83,17 @@ pub fn run_agent(request: AgentRunRequest) -> Result<AgentRunResult, String> {
 pub fn run_agent_with_protocol_error(
     request: AgentRunRequest,
 ) -> Result<AgentRunResult, ProtocolError> {
+    run_agent_with_protocol_error_stream(request, |_event| {})
+}
+
+/// 描述：执行智能体流程并输出增量流事件，供上层实现 token 级展示。
+pub fn run_agent_with_protocol_error_stream<F>(
+    request: AgentRunRequest,
+    mut on_stream_event: F,
+) -> Result<AgentRunResult, ProtocolError>
+where
+    F: FnMut(AgentStreamEvent),
+{
     let agent_kind = parse_agent_kind(&request.agent_key);
     let mut tool_outcome = maybe_export_model(&request, agent_kind)?;
 
@@ -93,8 +111,23 @@ pub fn run_agent_with_protocol_error(
         tool_outcome.tool_context.as_deref(),
     );
     let provider = parse_provider(&request.provider);
-    let reply = call_model(provider, &final_prompt, request.workdir.as_deref())
-        .map_err(|err| err.to_protocol_error())?;
+    on_stream_event(AgentStreamEvent::LlmStarted {
+        provider: request.provider.clone(),
+    });
+    let reply = call_model_with_stream(
+        provider,
+        &final_prompt,
+        request.workdir.as_deref(),
+        &mut |chunk| {
+            on_stream_event(AgentStreamEvent::LlmDelta {
+                content: chunk.to_string(),
+            });
+        },
+    )
+    .map_err(|err| err.to_protocol_error())?;
+    on_stream_event(AgentStreamEvent::LlmFinished {
+        provider: request.provider.clone(),
+    });
 
     let llm_finished = now_millis();
     tool_outcome.steps.push(ProtocolStepRecord {
@@ -151,9 +184,19 @@ fn parse_agent_kind(agent_key: &str) -> AgentKind {
 /// 描述：判断用户输入是否触发“模型导出”路径，用于决定是否调用 MCP 导出。
 fn should_trigger_export(prompt: &str) -> bool {
     let content = prompt.to_lowercase();
-    ["导出", "export", "输出glb", "生成glb", "导出模型"]
+    if ["导出", "export", "导出模型"]
         .iter()
         .any(|keyword| content.contains(keyword))
+    {
+        return true;
+    }
+    let has_output_verb = ["输出", "生成", "export", "output"]
+        .iter()
+        .any(|keyword| content.contains(keyword));
+    let has_format_hint = ["glb", "gltf", "fbx", "obj"]
+        .iter()
+        .any(|keyword| content.contains(keyword));
+    has_output_verb && has_format_hint
 }
 
 #[cfg(feature = "with-mcp-model")]
@@ -180,6 +223,8 @@ fn maybe_export_model(
                 .output_dir
                 .clone()
                 .unwrap_or_else(|| "exports".to_string()),
+            export_format: None,
+            export_params: None,
             blender_bridge_addr: request.blender_bridge_addr.clone(),
             target: mcp_model::ModelToolTarget::Blender,
         })

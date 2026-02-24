@@ -9,6 +9,7 @@ bl_info = {
 }
 
 import bpy
+import bmesh
 import json
 import os
 import queue
@@ -39,6 +40,66 @@ def _find_object(name):
             "请先在场景中确认对象名称是否正确",
         )
     return obj
+
+
+def _find_collection(name):
+    collection = bpy.data.collections.get(name)
+    if collection is None:
+        raise BridgeError(
+            "collection_not_found",
+            f"collection `{name}` not found",
+            "请先在场景中确认集合名称是否正确",
+        )
+    return collection
+
+
+def _iter_collection_containers():
+    seen = set()
+    for scene in bpy.data.scenes:
+        root = getattr(scene, "collection", None)
+        if root is None:
+            continue
+        pointer = int(root.as_pointer())
+        if pointer in seen:
+            continue
+        seen.add(pointer)
+        yield root
+    for collection in bpy.data.collections:
+        pointer = int(collection.as_pointer())
+        if pointer in seen:
+            continue
+        seen.add(pointer)
+        yield collection
+
+
+def _find_collection_parents(collection):
+    parents = []
+    for container in _iter_collection_containers():
+        if any(child.name == collection.name for child in container.children):
+            parents.append(container)
+    return parents
+
+
+def _is_scene_root_collection(collection):
+    return any(scene.collection.name == collection.name for scene in bpy.data.scenes)
+
+
+def _collection_has_descendant(root, candidate):
+    for child in root.children:
+        if child.name == candidate.name:
+            return True
+        if _collection_has_descendant(child, candidate):
+            return True
+    return False
+
+
+def _default_scene_root_collection():
+    scene = getattr(bpy.context, "scene", None)
+    if scene and getattr(scene, "collection", None):
+        return scene.collection
+    if bpy.data.scenes:
+        return bpy.data.scenes[0].collection
+    return None
 
 
 def _editable_objects(selected_only=False):
@@ -217,25 +278,164 @@ def _rename_object(payload):
 
 
 def _organize_hierarchy(payload):
-    child_name = str(payload.get("child") or "").strip()
-    parent_name = payload.get("parent")
-    if not child_name:
-        raise BridgeError("invalid_args", "organize_hierarchy requires `child`")
+    if not isinstance(payload, dict):
+        payload = {}
 
-    child = _find_object(child_name)
-    if parent_name is None or str(parent_name).strip() == "":
-        child.parent = None
-        parent_label = None
-    else:
-        parent = _find_object(str(parent_name))
-        child.parent = parent
-        parent_label = parent.name
+    mode = str(payload.get("mode") or "object_parent").strip().lower()
+    if mode == "object_parent":
+        child_name = str(payload.get("child") or "").strip()
+        parent_name = payload.get("parent")
+        if not child_name:
+            raise BridgeError("invalid_args", "organize_hierarchy requires `child`")
 
-    return {
-        "ok": True,
-        "message": "hierarchy updated",
-        "data": {"child": child.name, "parent": parent_label},
-    }
+        child = _find_object(child_name)
+        if parent_name is None or str(parent_name).strip() == "":
+            child.parent = None
+            parent_label = None
+        else:
+            parent = _find_object(str(parent_name))
+            child.parent = parent
+            parent_label = parent.name
+
+        return {
+            "ok": True,
+            "message": "hierarchy updated",
+            "data": {
+                "mode": "object_parent",
+                "child": child.name,
+                "parent": parent_label,
+            },
+        }
+
+    if mode == "collection_rename":
+        collection_name = str(payload.get("collection") or payload.get("child") or "").strip()
+        new_name = str(payload.get("new_name") or "").strip()
+        if not collection_name or not new_name:
+            raise BridgeError(
+                "invalid_args",
+                "collection_rename requires non-empty `collection` and `new_name`",
+            )
+        collection = _find_collection(collection_name)
+        if _is_scene_root_collection(collection):
+            raise BridgeError(
+                "invalid_target",
+                "scene root collection cannot be renamed",
+            )
+        old_name = collection.name
+        collection.name = new_name
+        return {
+            "ok": True,
+            "message": f"collection renamed `{old_name}` -> `{collection.name}`",
+            "data": {
+                "mode": "collection_rename",
+                "collection": old_name,
+                "new_name": collection.name,
+            },
+        }
+
+    if mode == "collection_move":
+        collection_name = str(payload.get("collection") or payload.get("child") or "").strip()
+        parent_name = str(
+            payload.get("parent_collection")
+            if payload.get("parent_collection") is not None
+            else payload.get("parent") or ""
+        ).strip()
+        if not collection_name:
+            raise BridgeError(
+                "invalid_args",
+                "collection_move requires non-empty `collection`",
+            )
+
+        collection = _find_collection(collection_name)
+        if _is_scene_root_collection(collection):
+            raise BridgeError(
+                "invalid_target",
+                "scene root collection cannot be moved",
+            )
+
+        if parent_name:
+            new_parent = _find_collection(parent_name)
+            if new_parent.name == collection.name:
+                raise BridgeError("invalid_args", "collection cannot be parent of itself")
+            if _collection_has_descendant(collection, new_parent):
+                raise BridgeError(
+                    "invalid_args",
+                    "collection cannot be moved under its descendant",
+                )
+        else:
+            new_parent = _default_scene_root_collection()
+            if new_parent is None:
+                raise BridgeError("scene_unavailable", "no scene root collection available")
+
+        old_parents = _find_collection_parents(collection)
+        for old_parent in old_parents:
+            old_parent.children.unlink(collection)
+        new_parent.children.link(collection)
+
+        return {
+            "ok": True,
+            "message": f"collection moved `{collection.name}` -> `{new_parent.name}`",
+            "data": {
+                "mode": "collection_move",
+                "collection": collection.name,
+                "old_parents": [parent.name for parent in old_parents],
+                "new_parent": new_parent.name,
+            },
+        }
+
+    if mode == "collection_reorder":
+        collection_name = str(payload.get("collection") or payload.get("child") or "").strip()
+        parent_name = str(payload.get("parent_collection") or "").strip()
+        position = str(payload.get("position") or "last").strip().lower()
+        if not collection_name:
+            raise BridgeError(
+                "invalid_args",
+                "collection_reorder requires non-empty `collection`",
+            )
+        if position not in {"first", "last"}:
+            raise BridgeError(
+                "invalid_args",
+                "collection_reorder `position` must be first/last",
+            )
+
+        collection = _find_collection(collection_name)
+        if parent_name:
+            parent_container = _find_collection(parent_name)
+        else:
+            parents = _find_collection_parents(collection)
+            parent_container = parents[0] if parents else _default_scene_root_collection()
+        if parent_container is None:
+            raise BridgeError("scene_unavailable", "no parent collection available for reorder")
+
+        children = list(parent_container.children)
+        if not any(child.name == collection.name for child in children):
+            raise BridgeError(
+                "invalid_args",
+                f"collection `{collection.name}` is not child of `{parent_container.name}`",
+            )
+        others = [child for child in children if child.name != collection.name]
+        ordered = [collection] + others if position == "first" else others + [collection]
+        for child in children:
+            parent_container.children.unlink(child)
+        for child in ordered:
+            parent_container.children.link(child)
+
+        return {
+            "ok": True,
+            "message": f"collection reordered `{collection.name}` to {position} in `{parent_container.name}`",
+            "data": {
+                "mode": "collection_reorder",
+                "collection": collection.name,
+                "parent_collection": parent_container.name,
+                "position": position,
+                "order": [child.name for child in ordered],
+            },
+        }
+
+    raise BridgeError(
+        "invalid_args",
+        "organize_hierarchy `mode` must be object_parent/collection_move/collection_rename/collection_reorder",
+    )
 
 
 def _align_origin(payload):
@@ -454,24 +654,78 @@ def _array(payload):
 
 
 def _boolean(payload):
+    if not isinstance(payload, dict):
+        payload = {}
+
     obj_name = _active_or_selected_name(payload)
     target_name = str(payload.get("target") or "").strip()
+    raw_targets = payload.get("targets")
     operation = str(payload.get("operation") or "DIFFERENCE").upper()
+    order = str(payload.get("order") or "as_provided").strip().lower()
+    rollback_on_error = bool(payload.get("rollback_on_error", True))
+
     if operation not in {"UNION", "DIFFERENCE", "INTERSECT"}:
         raise BridgeError("invalid_args", "boolean operation must be UNION/DIFFERENCE/INTERSECT")
-    if not target_name:
-        raise BridgeError("invalid_args", "boolean requires `target`")
+    if order not in {"as_provided", "reverse"}:
+        raise BridgeError("invalid_args", "boolean `order` must be as_provided/reverse")
+
+    target_names = []
+    if raw_targets is not None:
+        if not isinstance(raw_targets, (list, tuple)):
+            raise BridgeError("invalid_args", "boolean `targets` must be a non-empty string array")
+        for item in raw_targets:
+            name = str(item or "").strip()
+            if not name:
+                raise BridgeError("invalid_args", "boolean `targets` must be a non-empty string array")
+            target_names.append(name)
+    elif target_name:
+        target_names.append(target_name)
+    else:
+        raise BridgeError("invalid_args", "boolean requires `target` or non-empty `targets`")
+
+    deduped_targets = []
+    seen_targets = set()
+    for name in target_names:
+        if name in seen_targets:
+            continue
+        seen_targets.add(name)
+        deduped_targets.append(name)
+
+    if order == "reverse":
+        deduped_targets.reverse()
 
     obj = _find_object(obj_name)
-    target = _find_object(target_name)
-    mod = obj.modifiers.new(name="ZL_Boolean", type="BOOLEAN")
-    mod.operation = operation
-    mod.object = target
+    created_modifiers = []
+    applied_targets = []
+
+    try:
+        for index, current_target_name in enumerate(deduped_targets):
+            target = _find_object(current_target_name)
+            mod = obj.modifiers.new(name=f"ZL_Boolean_{index + 1}", type="BOOLEAN")
+            mod.operation = operation
+            mod.object = target
+            created_modifiers.append(mod.name)
+            applied_targets.append(target.name)
+    except BridgeError:
+        if rollback_on_error:
+            for modifier_name in reversed(created_modifiers):
+                modifier = obj.modifiers.get(modifier_name)
+                if modifier is not None:
+                    obj.modifiers.remove(modifier)
+        raise
 
     return {
         "ok": True,
-        "message": f"boolean `{operation}` applied: {obj.name} <- {target.name}",
-        "data": {"object": obj.name, "target": target.name, "operation": operation},
+        "message": f"boolean `{operation}` applied: {obj.name} <- {len(applied_targets)} target(s)",
+        "data": {
+            "object": obj.name,
+            "target": applied_targets[0] if len(applied_targets) == 1 else None,
+            "targets": applied_targets,
+            "count": len(applied_targets),
+            "operation": operation,
+            "order": order,
+            "rollback_on_error": rollback_on_error,
+        },
     }
 
 
@@ -538,38 +792,275 @@ def _tidy_material_slots(payload):
     }
 
 
+def _parse_baseline_face_counts(payload):
+    if not isinstance(payload, dict):
+        return {}
+    raw = payload.get("baseline_face_counts")
+    if not isinstance(raw, dict):
+        return {}
+    baseline = {}
+    for name, count in raw.items():
+        key = str(name or "").strip()
+        if not key:
+            continue
+        try:
+            baseline[key] = int(count)
+        except (TypeError, ValueError):
+            continue
+    return baseline
+
+
+def _inspect_mesh_topology(payload):
+    if not isinstance(payload, dict):
+        payload = {}
+    selected_only = bool(payload.get("selected_only", True))
+    strict = bool(payload.get("strict", False))
+    scope = "selected" if selected_only else "all"
+
+    objs = _editable_objects(selected_only=selected_only)
+    if not objs:
+        if strict:
+            raise BridgeError(
+                "no_target_object",
+                f"no mesh objects found for selection_scope={scope}",
+                "请先在 Blender 中选中待检查对象，或关闭 strict 模式",
+            )
+        objs = _editable_objects(selected_only=False)
+        scope = "all_fallback"
+
+    baseline = _parse_baseline_face_counts(payload)
+    details = []
+    face_counts = {}
+    issue_count = 0
+    total_non_manifold_edges = 0
+    total_zero_normal_faces = 0
+
+    for obj in objs:
+        mesh = obj.data
+        face_count = int(len(mesh.polygons))
+        edge_count = int(len(mesh.edges))
+        vertex_count = int(len(mesh.vertices))
+        zero_normal_faces = sum(
+            1 for poly in mesh.polygons if float(getattr(poly.normal, "length", 1.0)) < 1e-8
+        )
+
+        bm = bmesh.new()
+        bm.from_mesh(mesh)
+        non_manifold_edges = sum(1 for edge in bm.edges if not edge.is_manifold)
+        bm.free()
+
+        baseline_face_count = baseline.get(obj.name)
+        face_count_delta = (
+            int(face_count - baseline_face_count)
+            if baseline_face_count is not None
+            else 0
+        )
+        has_issue = non_manifold_edges > 0 or zero_normal_faces > 0
+        if has_issue:
+            issue_count += 1
+        total_non_manifold_edges += int(non_manifold_edges)
+        total_zero_normal_faces += int(zero_normal_faces)
+
+        details.append(
+            {
+                "object": obj.name,
+                "face_count": face_count,
+                "edge_count": edge_count,
+                "vertex_count": vertex_count,
+                "non_manifold_edges": int(non_manifold_edges),
+                "zero_normal_faces": int(zero_normal_faces),
+                "face_count_delta": face_count_delta,
+                "has_issue": has_issue,
+            }
+        )
+        face_counts[obj.name] = face_count
+
+    return {
+        "ok": True,
+        "message": f"topology check finished: checked {len(details)}, issues {issue_count}",
+        "data": {
+            "selection_scope": scope,
+            "checked_count": len(details),
+            "issue_count": issue_count,
+            "total_non_manifold_edges": total_non_manifold_edges,
+            "total_zero_normal_faces": total_zero_normal_faces,
+            "details": details,
+            "face_counts": face_counts,
+        },
+    }
+
+
 def _check_texture_paths(payload):
+    if not isinstance(payload, dict):
+        payload = {}
+    repair_relative = bool(payload.get("repair_relative", False))
+    requested_base_dir = str(payload.get("base_dir") or "").strip()
+    search_dirs = []
+    if requested_base_dir:
+        search_dirs.append(os.path.abspath(requested_base_dir))
+    if bpy.data.filepath:
+        search_dirs.append(os.path.dirname(os.path.abspath(bpy.data.filepath)))
+    if os.getcwd() not in search_dirs:
+        search_dirs.append(os.getcwd())
+
     missing = []
+    fixed = []
     for image in bpy.data.images:
         if not image.filepath:
             continue
         path = bpy.path.abspath(image.filepath)
-        if not os.path.exists(path):
+        if os.path.exists(path):
+            continue
+
+        repaired = False
+        repaired_path = None
+        if repair_relative:
+            basename = os.path.basename(path)
+            for base_dir in search_dirs:
+                candidate = os.path.join(base_dir, basename)
+                if os.path.exists(candidate):
+                    image.filepath = bpy.path.relpath(candidate) if bpy.data.filepath else candidate
+                    repaired = True
+                    repaired_path = candidate
+                    fixed.append(
+                        {
+                            "image": image.name,
+                            "from_path": path,
+                            "to_path": repaired_path,
+                        }
+                    )
+                    break
+        if not repaired:
             missing.append({"image": image.name, "path": path})
     return {
         "ok": True,
-        "message": f"texture check finished, missing {len(missing)}",
-        "data": {"missing": missing, "missing_count": len(missing)},
+        "message": f"texture check finished, missing {len(missing)}, fixed {len(fixed)}",
+        "data": {
+            "missing": missing,
+            "missing_count": len(missing),
+            "fixed": fixed,
+            "fixed_count": len(fixed),
+            "repair_relative": repair_relative,
+            "search_dirs": search_dirs,
+        },
     }
 
 
-def _apply_texture_image(payload):
-    path = str(payload.get("path") or "").strip()
-    if not path:
-        raise BridgeError("invalid_args", "apply_texture_image requires `path`")
-    abs_path = os.path.abspath(path)
-    if not os.path.exists(abs_path):
-        raise BridgeError("file_not_found", f"file not found: {abs_path}")
+def _resolve_texture_channel_paths(payload):
+    channel_keys = {
+        "base_color": "base_color_path",
+        "normal": "normal_path",
+        "roughness": "roughness_path",
+        "metallic": "metallic_path",
+    }
+    resolved = {}
 
-    object_name = str(payload.get("object") or "").strip()
-    if object_name:
-        obj = _find_object(object_name)
-    else:
-        obj = _find_object(_active_or_selected_name(payload))
+    base_color_path = str(payload.get("base_color_path") or payload.get("path") or "").strip()
+    if base_color_path:
+        abs_path = os.path.abspath(base_color_path)
+        if not os.path.exists(abs_path):
+            raise BridgeError("file_not_found", f"file not found: {abs_path}")
+        resolved["base_color"] = abs_path
+
+    for channel, key in channel_keys.items():
+        if channel == "base_color":
+            continue
+        raw_path = str(payload.get(key) or "").strip()
+        if not raw_path:
+            continue
+        abs_path = os.path.abspath(raw_path)
+        if not os.path.exists(abs_path):
+            raise BridgeError("file_not_found", f"file not found: {abs_path}")
+        resolved[channel] = abs_path
+
+    if not resolved:
+        raise BridgeError(
+            "invalid_args",
+            "apply_texture_image requires at least one of path/base_color_path/normal_path/roughness_path/metallic_path",
+        )
+    return resolved
+
+
+def _ensure_image_texture_node(nodes, label, location):
+    matched = [node for node in nodes if node.type == "TEX_IMAGE" and node.label == label]
+    if matched:
+        keep = matched[0]
+        keep.location = location
+        for extra in matched[1:]:
+            nodes.remove(extra)
+        return keep
+    node = nodes.new(type="ShaderNodeTexImage")
+    node.label = label
+    node.name = label
+    node.location = location
+    return node
+
+
+def _ensure_normal_map_node(nodes, label, location):
+    matched = [
+        node
+        for node in nodes
+        if node.type == "NORMAL_MAP" and (node.label == label or node.name == label)
+    ]
+    if matched:
+        keep = matched[0]
+        keep.label = label
+        keep.name = label
+        keep.location = location
+        for extra in matched[1:]:
+            nodes.remove(extra)
+        return keep
+    node = nodes.new(type="ShaderNodeNormalMap")
+    node.label = label
+    node.name = label
+    node.location = location
+    return node
+
+
+def _replace_input_link(links, from_socket, to_socket):
+    if from_socket is None or to_socket is None:
+        return
+    for link in list(to_socket.links):
+        links.remove(link)
+    links.new(from_socket, to_socket)
+
+
+def _resolve_apply_texture_target_names(payload):
+    raw_objects = payload.get("objects")
+    if raw_objects is None:
+        single = str(payload.get("object") or "").strip()
+        if single:
+            return [single]
+        targets, _scope = _resolve_transform_targets(payload)
+        return [obj.name for obj in targets]
+    if not isinstance(raw_objects, (list, tuple)):
+        raise BridgeError(
+            "invalid_args",
+            "apply_texture_image `objects` must be a non-empty string array",
+        )
+    names = []
+    for item in raw_objects:
+        name = str(item or "").strip()
+        if name:
+            names.append(name)
+    if not names:
+        raise BridgeError(
+            "invalid_args",
+            "apply_texture_image `objects` must be a non-empty string array",
+        )
+    deduped = []
+    seen = set()
+    for name in names:
+        if name in seen:
+            continue
+        seen.add(name)
+        deduped.append(name)
+    return deduped
+
+
+def _apply_texture_channels_to_object(obj, channel_paths):
     if obj.type != "MESH":
         raise BridgeError("invalid_target", f"object `{obj.name}` is not mesh")
-
-    image = bpy.data.images.load(abs_path, check_existing=True)
 
     material = obj.active_material
     if material is None:
@@ -604,41 +1095,218 @@ def _apply_texture_image(payload):
         output.location = (300, 0)
 
     if bsdf.outputs.get("BSDF") and output.inputs.get("Surface"):
-        has_surface_link = False
-        for link in links:
-            if (
-                link.from_node == bsdf
-                and link.to_node == output
-                and link.to_socket == output.inputs.get("Surface")
-            ):
-                has_surface_link = True
-                break
-        if not has_surface_link:
-            links.new(bsdf.outputs.get("BSDF"), output.inputs.get("Surface"))
+        _replace_input_link(links, bsdf.outputs.get("BSDF"), output.inputs.get("Surface"))
 
-    texture_node = None
-    for node in nodes:
-        if node.type == "TEX_IMAGE" and node.label == "ZL_BaseColorTexture":
-            texture_node = node
-            break
-    if texture_node is None:
-        texture_node = nodes.new(type="ShaderNodeTexImage")
-        texture_node.label = "ZL_BaseColorTexture"
-        texture_node.name = "ZL_BaseColorTexture"
-        texture_node.location = (-360, 0)
-    texture_node.image = image
+    applied_channels = []
+    warnings = []
 
-    base_color = bsdf.inputs.get("Base Color")
-    color_output = texture_node.outputs.get("Color")
-    if base_color and color_output:
-        for link in list(base_color.links):
-            links.remove(link)
-        links.new(color_output, base_color)
+    def _collect_texture_warnings(channel, image, expected_colorspace):
+        width = int(image.size[0]) if image.size else 0
+        height = int(image.size[1]) if image.size else 0
+        if width <= 0 or height <= 0:
+            warnings.append(
+                {
+                    "object": obj.name,
+                    "channel": channel,
+                    "kind": "invalid_size",
+                    "message": f"{channel} 贴图尺寸无效（{width}x{height}）",
+                    "suggestion": "请检查源贴图是否损坏，或重新导出有效纹理。",
+                }
+            )
+            return
+        if width < 128 or height < 128:
+            warnings.append(
+                {
+                    "object": obj.name,
+                    "channel": channel,
+                    "kind": "low_resolution",
+                    "message": f"{channel} 贴图分辨率较低（{width}x{height}）",
+                    "suggestion": "建议使用至少 512x512 的贴图，以避免近景模糊。",
+                }
+            )
+        if width > 8192 or height > 8192:
+            warnings.append(
+                {
+                    "object": obj.name,
+                    "channel": channel,
+                    "kind": "high_resolution",
+                    "message": f"{channel} 贴图分辨率较高（{width}x{height}）",
+                    "suggestion": "如性能受限，建议降采样到 2K 或 4K。",
+                }
+            )
+        if expected_colorspace and image.colorspace_settings.name != expected_colorspace:
+            warnings.append(
+                {
+                    "object": obj.name,
+                    "channel": channel,
+                    "kind": "colorspace_mismatch",
+                    "message": f"{channel} 色彩空间为 {image.colorspace_settings.name}，预期 {expected_colorspace}",
+                    "suggestion": "建议在贴图设置中修正为预期色彩空间。",
+                }
+            )
+
+    if "base_color" in channel_paths:
+        image = bpy.data.images.load(channel_paths["base_color"], check_existing=True)
+        original_colorspace = image.colorspace_settings.name
+        image.colorspace_settings.name = "sRGB"
+        if original_colorspace != "sRGB":
+            warnings.append(
+                {
+                    "object": obj.name,
+                    "channel": "base_color",
+                    "kind": "colorspace_adjusted",
+                    "message": f"base_color 色彩空间已从 {original_colorspace} 自动调整为 sRGB",
+                    "suggestion": "如需线性色彩流程，可手动确认贴图导入设置。",
+                }
+            )
+        base_color_node = _ensure_image_texture_node(
+            nodes, "ZL_BaseColorTexture", (-520, 180)
+        )
+        base_color_node.image = image
+        _collect_texture_warnings("base_color", image, "sRGB")
+        _replace_input_link(
+            links,
+            base_color_node.outputs.get("Color"),
+            bsdf.inputs.get("Base Color"),
+        )
+        applied_channels.append("base_color")
+
+    if "normal" in channel_paths:
+        image = bpy.data.images.load(channel_paths["normal"], check_existing=True)
+        original_colorspace = image.colorspace_settings.name
+        image.colorspace_settings.name = "Non-Color"
+        if original_colorspace != "Non-Color":
+            warnings.append(
+                {
+                    "object": obj.name,
+                    "channel": "normal",
+                    "kind": "colorspace_adjusted",
+                    "message": f"normal 色彩空间已从 {original_colorspace} 自动调整为 Non-Color",
+                    "suggestion": "法线贴图建议始终使用 Non-Color。",
+                }
+            )
+        normal_tex_node = _ensure_image_texture_node(
+            nodes, "ZL_NormalTexture", (-520, -40)
+        )
+        normal_tex_node.image = image
+        _collect_texture_warnings("normal", image, "Non-Color")
+        normal_map_node = _ensure_normal_map_node(nodes, "ZL_NormalMap", (-240, -40))
+        _replace_input_link(
+            links,
+            normal_tex_node.outputs.get("Color"),
+            normal_map_node.inputs.get("Color"),
+        )
+        _replace_input_link(
+            links,
+            normal_map_node.outputs.get("Normal"),
+            bsdf.inputs.get("Normal"),
+        )
+        applied_channels.append("normal")
+
+    if "roughness" in channel_paths:
+        image = bpy.data.images.load(channel_paths["roughness"], check_existing=True)
+        original_colorspace = image.colorspace_settings.name
+        image.colorspace_settings.name = "Non-Color"
+        if original_colorspace != "Non-Color":
+            warnings.append(
+                {
+                    "object": obj.name,
+                    "channel": "roughness",
+                    "kind": "colorspace_adjusted",
+                    "message": f"roughness 色彩空间已从 {original_colorspace} 自动调整为 Non-Color",
+                    "suggestion": "粗糙度贴图建议使用 Non-Color。",
+                }
+            )
+        roughness_node = _ensure_image_texture_node(
+            nodes, "ZL_RoughnessTexture", (-520, -260)
+        )
+        roughness_node.image = image
+        _collect_texture_warnings("roughness", image, "Non-Color")
+        _replace_input_link(
+            links,
+            roughness_node.outputs.get("Color"),
+            bsdf.inputs.get("Roughness"),
+        )
+        applied_channels.append("roughness")
+
+    if "metallic" in channel_paths:
+        image = bpy.data.images.load(channel_paths["metallic"], check_existing=True)
+        original_colorspace = image.colorspace_settings.name
+        image.colorspace_settings.name = "Non-Color"
+        if original_colorspace != "Non-Color":
+            warnings.append(
+                {
+                    "object": obj.name,
+                    "channel": "metallic",
+                    "kind": "colorspace_adjusted",
+                    "message": f"metallic 色彩空间已从 {original_colorspace} 自动调整为 Non-Color",
+                    "suggestion": "金属度贴图建议使用 Non-Color。",
+                }
+            )
+        metallic_node = _ensure_image_texture_node(
+            nodes, "ZL_MetallicTexture", (-520, -460)
+        )
+        metallic_node.image = image
+        _collect_texture_warnings("metallic", image, "Non-Color")
+        _replace_input_link(
+            links,
+            metallic_node.outputs.get("Color"),
+            bsdf.inputs.get("Metallic"),
+        )
+        applied_channels.append("metallic")
+
+    return material.name, applied_channels, warnings
+
+
+def _apply_texture_image(payload):
+    if not isinstance(payload, dict):
+        payload = {}
+    channel_paths = _resolve_texture_channel_paths(payload)
+    target_names = _resolve_apply_texture_target_names(payload)
+    success = []
+    failed = []
+    last_applied_channels = []
+    warnings = []
+
+    for name in target_names:
+        try:
+            obj = _find_object(name)
+            material_name, applied_channels, object_warnings = _apply_texture_channels_to_object(
+                obj, channel_paths
+            )
+            success.append({"object": obj.name, "material": material_name})
+            last_applied_channels = applied_channels
+            warnings.extend(object_warnings)
+        except BridgeError as err:
+            failed.append(
+                {
+                    "object": name,
+                    "code": err.code,
+                    "message": err.message,
+                }
+            )
+
+    if not success:
+        first = failed[0] if failed else {"code": "invalid_target", "message": "no mesh object available"}
+        raise BridgeError(first["code"], first["message"])
 
     return {
         "ok": True,
-        "message": f"applied texture `{abs_path}` to `{obj.name}`",
-        "data": {"object": obj.name, "material": material.name, "path": abs_path},
+        "message": f"applied texture channels {','.join(last_applied_channels)} to {len(success)} object(s), failed {len(failed)}",
+        "data": {
+            "object": success[0]["object"] if len(success) == 1 else None,
+            "material": success[0]["material"] if len(success) == 1 else None,
+            "objects": [item["object"] for item in success],
+            "results": success,
+            "failed": failed,
+            "success_count": len(success),
+            "failed_count": len(failed),
+            "channels": last_applied_channels,
+            "paths": channel_paths,
+            "path": channel_paths.get("base_color"),
+            "warnings": warnings,
+            "warning_count": len(warnings),
+        },
     }
 
 
@@ -697,27 +1365,129 @@ def _redo(_payload):
     return {"ok": True, "message": "redo success", "data": {}}
 
 
-def _export_glb(payload):
+def _read_bool_arg(payload, key, default):
+    value = payload.get(key, default)
+    if isinstance(value, bool):
+        return value
+    raise BridgeError("invalid_args", f"`{key}` must be boolean")
+
+
+def _resolve_export_output_path(payload):
     output_path = payload.get("output_path") if isinstance(payload, dict) else None
     if not output_path:
         raise BridgeError("invalid_args", "missing `output_path`")
 
-    output_path = os.path.abspath(output_path)
+    output_path = os.path.abspath(str(output_path))
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    return output_path
 
+
+def _validate_export_output_file(output_path, format_name):
+    if not os.path.exists(output_path):
+        raise BridgeError("export_file_missing", f"{format_name} export file not found: {output_path}")
+    size = os.path.getsize(output_path)
+    if size <= 0:
+        raise BridgeError("export_file_empty", f"{format_name} export file is empty: {output_path}")
+    return size
+
+
+def _export_glb(payload):
+    output_path = _resolve_export_output_path(payload)
+    use_selection = _read_bool_arg(payload, "use_selection", False)
+    export_apply = _read_bool_arg(payload, "export_apply", True)
     _set_object_mode()
     bpy.ops.export_scene.gltf(
         filepath=output_path,
         export_format="GLB",
-        use_selection=False,
-        export_apply=True,
+        use_selection=use_selection,
+        export_apply=export_apply,
     )
+    file_size = _validate_export_output_file(output_path, "GLB")
 
     return {
         "ok": True,
         "message": "exported",
         "output_path": output_path,
-        "data": {"path": output_path},
+        "data": {
+            "path": output_path,
+            "format": "glb",
+            "use_selection": use_selection,
+            "file_size_bytes": file_size,
+        },
+    }
+
+
+def _export_fbx(payload):
+    output_path = _resolve_export_output_path(payload)
+    use_selection = _read_bool_arg(payload, "use_selection", False)
+    apply_modifiers = _read_bool_arg(payload, "apply_modifiers", True)
+    add_leaf_bones = _read_bool_arg(payload, "add_leaf_bones", False)
+
+    _set_object_mode()
+    bpy.ops.export_scene.fbx(
+        filepath=output_path,
+        use_selection=use_selection,
+        use_mesh_modifiers=apply_modifiers,
+        add_leaf_bones=add_leaf_bones,
+        path_mode="AUTO",
+    )
+    file_size = _validate_export_output_file(output_path, "FBX")
+
+    return {
+        "ok": True,
+        "message": "exported",
+        "output_path": output_path,
+        "data": {
+            "path": output_path,
+            "format": "fbx",
+            "use_selection": use_selection,
+            "file_size_bytes": file_size,
+        },
+    }
+
+
+def _export_obj(payload):
+    output_path = _resolve_export_output_path(payload)
+    use_selection = _read_bool_arg(payload, "use_selection", False)
+    apply_modifiers = _read_bool_arg(payload, "apply_modifiers", True)
+    export_materials = _read_bool_arg(payload, "export_materials", True)
+
+    _set_object_mode()
+    obj_export_result = False
+    if hasattr(bpy.ops, "wm") and hasattr(bpy.ops.wm, "obj_export"):
+        try:
+            obj_export_result = bpy.ops.wm.obj_export(
+                filepath=output_path,
+                export_selected_objects=use_selection,
+                apply_modifiers=apply_modifiers,
+                export_materials=export_materials,
+            )
+        except TypeError:
+            obj_export_result = bpy.ops.wm.obj_export(filepath=output_path)
+    elif hasattr(bpy.ops, "export_scene") and hasattr(bpy.ops.export_scene, "obj"):
+        obj_export_result = bpy.ops.export_scene.obj(
+            filepath=output_path,
+            use_selection=use_selection,
+            use_mesh_modifiers=apply_modifiers,
+            use_materials=export_materials,
+        )
+    else:
+        raise BridgeError("unsupported_action", "obj export operator is unavailable")
+
+    if not obj_export_result:
+        raise BridgeError("export_failed", f"obj export failed: {output_path}")
+    file_size = _validate_export_output_file(output_path, "OBJ")
+
+    return {
+        "ok": True,
+        "message": "exported",
+        "output_path": output_path,
+        "data": {
+            "path": output_path,
+            "format": "obj",
+            "use_selection": use_selection,
+            "file_size_bytes": file_size,
+        },
     }
 
 
@@ -743,6 +1513,7 @@ ACTION_HANDLERS = {
     "auto_smooth": _auto_smooth,
     "weighted_normal": _weighted_normal,
     "decimate": _decimate,
+    "inspect_mesh_topology": _inspect_mesh_topology,
     "tidy_material_slots": _tidy_material_slots,
     "check_texture_paths": _check_texture_paths,
     "apply_texture_image": _apply_texture_image,
@@ -753,6 +1524,8 @@ ACTION_HANDLERS = {
     "undo": _undo,
     "redo": _redo,
     "export_glb": _export_glb,
+    "export_fbx": _export_fbx,
+    "export_obj": _export_obj,
 }
 
 

@@ -35,13 +35,18 @@ fn should_retry_and_recover() {
         backoff_millis: 0,
     };
     let mut calls = 0_u8;
-    let result = run_step_with_retry("llm.call", policy, &DefaultWorkflowRecoveryHook, |_attempt| {
-        calls = calls.saturating_add(1);
-        if calls < 2 {
-            return Err(TestError { retryable: true });
-        }
-        Ok("ok")
-    });
+    let result = run_step_with_retry(
+        "llm.call",
+        policy,
+        &DefaultWorkflowRecoveryHook,
+        |_attempt| {
+            calls = calls.saturating_add(1);
+            if calls < 2 {
+                return Err(TestError { retryable: true });
+            }
+            Ok("ok")
+        },
+    );
 
     assert_eq!(result.state, AgentWorkflowState::Recovered);
     assert_eq!(result.attempts, 2);
@@ -93,12 +98,10 @@ fn should_respect_custom_recovery_hook_fail_fast() {
         max_retries: 3,
         backoff_millis: 0,
     };
-    let result = run_step_with_retry::<(), _, _, _>(
-        "llm.call",
-        policy,
-        &AlwaysFailFastHook,
-        |_attempt| Err(TestError { retryable: true }),
-    );
+    let result =
+        run_step_with_retry::<(), _, _, _>("llm.call", policy, &AlwaysFailFastHook, |_attempt| {
+            Err(TestError { retryable: true })
+        });
 
     assert_eq!(result.state, AgentWorkflowState::Failed);
     assert_eq!(result.attempts, 1);

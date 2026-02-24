@@ -49,26 +49,22 @@ fn should_reject_gemini_provider_as_not_implemented() {
     let err = result.err().expect("must have error");
     assert_eq!(err.code, "core.agent.llm.provider_not_implemented");
     assert!(!err.retryable);
-    assert!(
-        err.suggestion
-            .as_deref()
-            .unwrap_or_default()
-            .contains("provider=codex")
-    );
+    assert!(err
+        .suggestion
+        .as_deref()
+        .unwrap_or_default()
+        .contains("provider=codex"));
 }
 
 /// 描述：验证网关错误转换协议错误时会带上 attempts 与 suggestion。
 #[test]
 fn should_convert_gateway_error_to_protocol_error() {
-    let protocol_error = LlmGatewayError::new(
-        LlmProvider::CodexCli,
-        "core.agent.llm.test",
-        "test failure",
-    )
-    .with_suggestion("retry later")
-    .with_retryable(true)
-    .with_attempts(3)
-    .to_protocol_error();
+    let protocol_error =
+        LlmGatewayError::new(LlmProvider::CodexCli, "core.agent.llm.test", "test failure")
+            .with_suggestion("retry later")
+            .with_retryable(true)
+            .with_attempts(3)
+            .to_protocol_error();
 
     assert_eq!(protocol_error.code, "core.agent.llm.test");
     assert!(protocol_error.message.contains("attempts=3"));
@@ -82,4 +78,18 @@ fn should_use_default_gateway_policy() {
     let policy = LlmGatewayPolicy::from_env();
     assert!(policy.timeout_secs > 0);
     assert!(policy.retry_policy.backoff_millis > 0);
+}
+
+/// 描述：验证流式调用接口在 provider 非法时返回一致错误且不会输出文本分片。
+#[test]
+fn should_reject_unknown_provider_for_stream_call() {
+    let mut chunks: Vec<String> = Vec::new();
+    let mut on_chunk = |chunk: &str| {
+        chunks.push(chunk.to_string());
+    };
+    let result = call_model_with_stream(LlmProvider::Unknown, "hello", None, &mut on_chunk);
+    assert!(result.is_err());
+    let err = result.err().expect("must have error");
+    assert_eq!(err.code, "core.agent.llm.provider_unknown");
+    assert!(chunks.is_empty());
 }

@@ -106,6 +106,24 @@ test("TestSessionPageShouldKeepHeartbeatDuringLongWait", () => {
   assert.match(source, /正在处理当前步骤/);
 });
 
+test("TestSessionPromptInputShouldSupportKeyboardHotkeys", () => {
+  const source = readDesktopSource("src/modules/client/pages/session-page.tsx");
+
+  // 描述:
+  //
+  //   - 会话输入框聚焦时应支持键盘热键，Enter 触发发送，Escape 触发失焦。
+  //   - 需跳过输入法组合态，避免中文上屏时误发送。
+  assert.match(source, /const handlePromptInputKeyDown = \(event: ReactKeyboardEvent<HTMLTextAreaElement>\) =>/);
+  assert.match(source, /if \(event\.key === "Escape"\)/);
+  assert.match(source, /event\.currentTarget\.blur\(\)/);
+  assert.match(source, /if \(event\.key !== "Enter" \|\| event\.shiftKey\)/);
+  assert.match(source, /if \(event\.nativeEvent\.isComposing\)/);
+  assert.match(source, /<AriInput\.TextArea/);
+  assert.match(source, /className="desk-session-prompt-input"/);
+  assert.match(source, /autoSize=\{\{ minRows: 3, maxRows: 10 \}\}/);
+  assert.match(source, /onKeyDown=\{handlePromptInputKeyDown\}/);
+});
+
 test("TestSessionPageShouldUseAiSummaryWithFallback", () => {
   const source = readDesktopSource("src/modules/client/pages/session-page.tsx");
 

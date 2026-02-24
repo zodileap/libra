@@ -64,7 +64,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
   return (
     <AriContainer className="desk-login">
       <AriCard className="desk-login-card">
-        <AriFlex vertical space={14}>
+        <AriFlex vertical align="flex-start" justify="flex-start" space={14}>
           <AriTypography variant="h1" value="Zodileap Agen" />
           <AriTypography variant="caption" value="登录后访问代码智能体和模型智能体" />
 

@@ -43,6 +43,7 @@ export const AGENT_SESSIONS: AgentSession[] = [
 const MODEL_PROJECT_STORAGE_KEY = "zodileap.desktop.model.projects";
 const SESSION_META_STORAGE_KEY = "zodileap.desktop.session.meta";
 const SESSION_MESSAGES_STORAGE_KEY = "zodileap.desktop.session.messages";
+export const SESSION_TITLE_UPDATED_EVENT = "zodileap:session-title-updated";
 
 interface StoredModelProject {
   id: string;
@@ -52,6 +53,12 @@ interface StoredModelProject {
 }
 
 interface SessionMeta {
+  renamedTitles: Record<string, string>;
+  pinnedIds: string[];
+  removedIds: string[];
+}
+
+export interface AgentSessionMetaSnapshot {
   renamedTitles: Record<string, string>;
   pinnedIds: string[];
   removedIds: string[];
@@ -136,6 +143,31 @@ function writeSessionMeta(meta: SessionMeta) {
   window.localStorage.setItem(SESSION_META_STORAGE_KEY, JSON.stringify(meta));
 }
 
+// 描述：读取会话元数据快照，供侧边栏展示固定/重命名状态。
+export function getAgentSessionMetaSnapshot(): AgentSessionMetaSnapshot {
+  return readSessionMeta();
+}
+
+// 描述：向当前窗口广播会话标题变更事件，供会话页与侧边栏同步标题显示。
+//
+// Params:
+//
+//   - sessionId: 会话 ID。
+//   - title: 最新标题文本。
+function emitSessionTitleUpdated(sessionId: string, title: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.dispatchEvent(
+    new CustomEvent(SESSION_TITLE_UPDATED_EVENT, {
+      detail: {
+        sessionId,
+        title,
+      },
+    }),
+  );
+}
+
 function readSessionMessages(): StoredSessionMessageGroup[] {
   if (typeof window === "undefined") {
     return [];
@@ -171,6 +203,42 @@ export function getModelProjectById(id: string): StoredModelProject | null {
   return readModelProjects().find((item) => item.id === id) || null;
 }
 
+// 描述：统一解析会话展示标题，确保侧边栏与会话内容区标题口径一致。
+//
+// Params:
+//
+//   - agentKey: 智能体类型（code/model）。
+//   - sessionId: 会话 ID。
+//
+// Returns:
+//
+//   会话展示标题。
+export function resolveAgentSessionTitle(agentKey: "code" | "model", sessionId?: string | null): string {
+  if (!sessionId) {
+    return "会话详情";
+  }
+
+  const meta = readSessionMeta();
+  const renamedTitle = meta.renamedTitles[sessionId];
+  if (renamedTitle) {
+    return renamedTitle;
+  }
+
+  if (agentKey === "model") {
+    const modelProject = getModelProjectById(sessionId);
+    if (modelProject?.title?.trim()) {
+      return modelProject.title.trim();
+    }
+  }
+
+  const presetSession = AGENT_SESSIONS.find((item) => item.id === sessionId && item.agentKey === agentKey);
+  if (presetSession?.title?.trim()) {
+    return presetSession.title.trim();
+  }
+
+  return "会话详情";
+}
+
 export function upsertModelProject(input: {
   id: string;
   title: string;
@@ -194,6 +262,20 @@ export function renameAgentSession(sessionId: string, title: string) {
     meta.renamedTitles[sessionId] = trimmed;
   }
   writeSessionMeta(meta);
+
+  const projects = readModelProjects();
+  const target = projects.find((item) => item.id === sessionId);
+  if (target && trimmed) {
+    writeModelProjects(
+      projects.map((item) => (item.id === sessionId ? { ...item, title: trimmed } : item)),
+    );
+  }
+
+  const inferredAgentKey = target
+    ? "model"
+    : (AGENT_SESSIONS.find((item) => item.id === sessionId)?.agentKey || "code");
+  const nextTitle = resolveAgentSessionTitle(inferredAgentKey, sessionId);
+  emitSessionTitleUpdated(sessionId, nextTitle);
 }
 
 export function togglePinnedAgentSession(sessionId: string): boolean {

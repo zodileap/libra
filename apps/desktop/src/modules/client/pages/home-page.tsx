@@ -10,7 +10,7 @@ interface HomePageProps {
 export function HomePage({ availableAgents }: HomePageProps) {
   return (
     <AriContainer className="desk-content">
-      <AriFlex vertical space={16}>
+      <AriFlex vertical align="flex-start" justify="flex-start" space={16}>
         <AriTypography variant="h1" value="欢迎使用 Zodileap Agen" />
         <AriTypography
           variant="body"
@@ -20,7 +20,7 @@ export function HomePage({ availableAgents }: HomePageProps) {
 
       <section className="desk-block">
         <AriTypography variant="h3" value="授权智能体" />
-        <div className="desk-shortcuts">
+        <AriContainer className="desk-shortcuts">
           {availableAgents.length === 0 ? (
             <AriCard className="desk-shortcut-card">
               <AriTypography variant="h4" value="暂无授权智能体" />
@@ -37,34 +37,34 @@ export function HomePage({ availableAgents }: HomePageProps) {
               </AriCard>
             ))
           )}
-        </div>
+        </AriContainer>
       </section>
 
       <section className="desk-block">
         <AriTypography variant="h3" value="快捷入口" />
-        <div className="desk-shortcuts">
+        <AriContainer className="desk-shortcuts">
           {SHORTCUTS.map((item) => (
             <AriCard key={item.id} className="desk-shortcut-card">
               <AriTypography variant="h4" value={item.title} />
               <AriTypography variant="caption" value={item.description} />
             </AriCard>
           ))}
-        </div>
+        </AriContainer>
       </section>
 
       <section className="desk-block">
         <AriTypography variant="h3" value="使用情况" />
         <AriCard className="desk-usage-card">
           <AriTypography variant="caption" value="近 7 天请求量" />
-          <div className="desk-bars">
-            <div className="desk-bar" style={{ height: 26 }} />
-            <div className="desk-bar" style={{ height: 38 }} />
-            <div className="desk-bar" style={{ height: 18 }} />
-            <div className="desk-bar" style={{ height: 52 }} />
-            <div className="desk-bar" style={{ height: 36 }} />
-            <div className="desk-bar" style={{ height: 42 }} />
-            <div className="desk-bar" style={{ height: 64 }} />
-          </div>
+          <AriContainer className="desk-bars">
+            <AriContainer className="desk-bar" style={{ height: 26 }} />
+            <AriContainer className="desk-bar" style={{ height: 38 }} />
+            <AriContainer className="desk-bar" style={{ height: 18 }} />
+            <AriContainer className="desk-bar" style={{ height: 52 }} />
+            <AriContainer className="desk-bar" style={{ height: 36 }} />
+            <AriContainer className="desk-bar" style={{ height: 42 }} />
+            <AriContainer className="desk-bar" style={{ height: 64 }} />
+          </AriContainer>
         </AriCard>
       </section>
     </AriContainer>

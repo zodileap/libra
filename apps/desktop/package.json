@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
+    "@xyflow/react": "^12.10.1",
     "react": "link:/Users/yoho/code/client/aries_react/node_modules/react",
     "react-dom": "link:/Users/yoho/code/client/aries_react/node_modules/react-dom",
     "react-router-dom": "link:/Users/yoho/code/client/aries_react/node_modules/react-router-dom"

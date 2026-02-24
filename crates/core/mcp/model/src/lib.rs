@@ -1,3 +1,4 @@
+mod action_contract;
 mod blender_session;
 mod complex_session;
 mod zbrush;
@@ -8,6 +9,12 @@ use zodileap_mcp_common::{
     ProtocolStepStatus, ProtocolUiHint,
 };
 
+pub use action_contract::{
+    all_model_tool_actions, model_tool_action_capability, model_tool_action_contract,
+    model_tool_action_contracts, model_tool_action_default_risk, model_tool_action_error_codes,
+    model_tool_action_params, model_tool_action_summary, ModelToolActionContract,
+    ModelToolCapabilityDomain, ModelToolParamContract,
+};
 pub use complex_session::{
     build_recovery_ui_hint, build_safety_confirmation_token, build_safety_confirmation_ui_hint,
     build_step_trace_payload, check_capability_for_session_step, plan_model_session_steps,
@@ -22,11 +29,50 @@ pub enum ModelToolTarget {
     ZBrush,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportModelFormat {
+    Glb,
+    Fbx,
+    Obj,
+}
+
+impl ExportModelFormat {
+    /// 描述：返回导出格式的小写标识，便于日志与协议字段复用。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Glb => "glb",
+            Self::Fbx => "fbx",
+            Self::Obj => "obj",
+        }
+    }
+}
+
+impl std::fmt::Display for ExportModelFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for ExportModelFormat {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_lowercase().as_str() {
+            "glb" | "gltf" => Ok(Self::Glb),
+            "fbx" => Ok(Self::Fbx),
+            "obj" => Ok(Self::Obj),
+            other => Err(format!("unsupported export format: {}", other)),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ExportModelRequest {
     pub project_name: String,
     pub prompt: String,
     pub output_dir: String,
+    pub export_format: Option<ExportModelFormat>,
+    pub export_params: Option<Value>,
     pub blender_bridge_addr: Option<String>,
     pub target: ModelToolTarget,
 }
@@ -64,6 +110,7 @@ pub enum ModelToolAction {
     AutoSmooth,
     WeightedNormal,
     Decimate,
+    InspectMeshTopology,
     TidyMaterialSlots,
     CheckTexturePaths,
     ApplyTextureImage,
@@ -98,6 +145,7 @@ impl ModelToolAction {
             ModelToolAction::AutoSmooth => "auto_smooth",
             ModelToolAction::WeightedNormal => "weighted_normal",
             ModelToolAction::Decimate => "decimate",
+            ModelToolAction::InspectMeshTopology => "inspect_mesh_topology",
             ModelToolAction::TidyMaterialSlots => "tidy_material_slots",
             ModelToolAction::CheckTexturePaths => "check_texture_paths",
             ModelToolAction::ApplyTextureImage => "apply_texture_image",
@@ -142,6 +190,7 @@ impl std::str::FromStr for ModelToolAction {
             "auto_smooth" => Ok(Self::AutoSmooth),
             "weighted_normal" => Ok(Self::WeightedNormal),
             "decimate" => Ok(Self::Decimate),
+            "inspect_mesh_topology" => Ok(Self::InspectMeshTopology),
             "tidy_material_slots" => Ok(Self::TidyMaterialSlots),
             "check_texture_paths" => Ok(Self::CheckTexturePaths),
             "apply_texture_image" => Ok(Self::ApplyTextureImage),
@@ -194,6 +243,14 @@ pub fn export_model(request: ExportModelRequest) -> McpResult<ExportModelResult>
             "mcp.model.export.invalid_output",
             "output_dir cannot be empty",
         ));
+    }
+    if let Some(params) = request.export_params.as_ref() {
+        if !params.is_object() {
+            return Err(McpError::new(
+                "mcp.model.export.invalid_params",
+                "export_params must be a JSON object when provided",
+            ));
+        }
     }
     match request.target {
         ModelToolTarget::Blender => blender_session::export_current_scene(request),
@@ -299,7 +356,10 @@ fn validate_tool_request(request: &ModelToolRequest) -> McpResult<()> {
             .ok_or_else(|| {
                 McpError::new(
                     format!("{}.missing", code_prefix),
-                    format!("{} requires `{}` array with 3 numeric values", request.action, key),
+                    format!(
+                        "{} requires `{}` array with 3 numeric values",
+                        request.action, key
+                    ),
                 )
             })?;
         if vec.len() != 3 {
@@ -362,6 +422,119 @@ fn validate_tool_request(request: &ModelToolRequest) -> McpResult<()> {
     };
 
     match request.action {
+        ModelToolAction::OrganizeHierarchy => {
+            let mode = request
+                .params
+                .get("mode")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("object_parent");
+            match mode {
+                "object_parent" => {
+                    let child = request
+                        .params
+                        .get("child")
+                        .and_then(|value| value.as_str())
+                        .map(str::trim)
+                        .unwrap_or("");
+                    if child.is_empty() {
+                        return Err(McpError::new(
+                            "mcp.model.tool.organize_hierarchy_missing_child",
+                            "organize_hierarchy object_parent requires non-empty `child`",
+                        ));
+                    }
+                }
+                "collection_move" => {
+                    let collection = request
+                        .params
+                        .get("collection")
+                        .or_else(|| request.params.get("child"))
+                        .and_then(|value| value.as_str())
+                        .map(str::trim)
+                        .unwrap_or("");
+                    if collection.is_empty() {
+                        return Err(McpError::new(
+                            "mcp.model.tool.organize_hierarchy_missing_collection",
+                            "organize_hierarchy collection_move requires non-empty `collection`",
+                        ));
+                    }
+                    if let Some(value) = request
+                        .params
+                        .get("parent_collection")
+                        .or_else(|| request.params.get("parent"))
+                    {
+                        if !(value.is_null() || value.as_str().is_some()) {
+                            return Err(McpError::new(
+                                "mcp.model.tool.organize_hierarchy_invalid_parent",
+                                "organize_hierarchy `parent_collection` must be string or null",
+                            ));
+                        }
+                    }
+                }
+                "collection_rename" => {
+                    let collection = request
+                        .params
+                        .get("collection")
+                        .or_else(|| request.params.get("child"))
+                        .and_then(|value| value.as_str())
+                        .map(str::trim)
+                        .unwrap_or("");
+                    if collection.is_empty() {
+                        return Err(McpError::new(
+                            "mcp.model.tool.organize_hierarchy_missing_collection",
+                            "organize_hierarchy collection_rename requires non-empty `collection`",
+                        ));
+                    }
+                    let new_name = request
+                        .params
+                        .get("new_name")
+                        .and_then(|value| value.as_str())
+                        .map(str::trim)
+                        .unwrap_or("");
+                    if new_name.is_empty() {
+                        return Err(McpError::new(
+                            "mcp.model.tool.organize_hierarchy_missing_new_name",
+                            "organize_hierarchy collection_rename requires non-empty `new_name`",
+                        ));
+                    }
+                }
+                "collection_reorder" => {
+                    let collection = request
+                        .params
+                        .get("collection")
+                        .or_else(|| request.params.get("child"))
+                        .and_then(|value| value.as_str())
+                        .map(str::trim)
+                        .unwrap_or("");
+                    if collection.is_empty() {
+                        return Err(McpError::new(
+                            "mcp.model.tool.organize_hierarchy_missing_collection",
+                            "organize_hierarchy collection_reorder requires non-empty `collection`",
+                        ));
+                    }
+                    let position = request
+                        .params
+                        .get("position")
+                        .and_then(|value| value.as_str())
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or("last");
+                    if !matches!(position, "first" | "last") {
+                        return Err(McpError::new(
+                            "mcp.model.tool.organize_hierarchy_invalid_position",
+                            "organize_hierarchy collection_reorder `position` must be first/last",
+                        ));
+                    }
+                }
+                _ => {
+                    return Err(McpError::new(
+                        "mcp.model.tool.organize_hierarchy_invalid_mode",
+                        "organize_hierarchy `mode` must be object_parent/collection_move/collection_rename/collection_reorder",
+                    ));
+                }
+            }
+        }
         ModelToolAction::AddCube => {
             let size = request
                 .params
@@ -385,6 +558,33 @@ fn validate_tool_request(request: &ModelToolRequest) -> McpResult<()> {
                 return Err(McpError::new(
                     "mcp.model.tool.array_count_out_of_range",
                     "array count must be in range [1, 128]",
+                ));
+            }
+            if let Some(offset) = request
+                .params
+                .get("offset")
+                .and_then(|value| value.as_f64())
+            {
+                if !offset.is_finite() || !(-1000.0..=1000.0).contains(&offset) {
+                    return Err(McpError::new(
+                        "mcp.model.tool.array_offset_out_of_range",
+                        "array offset must be finite and in range [-1000.0, 1000.0]",
+                    ));
+                }
+            }
+        }
+        ModelToolAction::Mirror => {
+            let axis = request
+                .params
+                .get("axis")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("X");
+            if !matches!(axis, "X" | "Y" | "Z") {
+                return Err(McpError::new(
+                    "mcp.model.tool.mirror_axis_invalid",
+                    "mirror axis must be one of: X, Y, Z",
                 ));
             }
         }
@@ -450,6 +650,81 @@ fn validate_tool_request(request: &ModelToolRequest) -> McpResult<()> {
                     "boolean times must be in range [1, 8]",
                 ));
             }
+            if let Some(value) = request.params.get("target") {
+                let target = value.as_str().map(str::trim).ok_or_else(|| {
+                    McpError::new(
+                        "mcp.model.tool.boolean_invalid_target",
+                        "boolean `target` must be a non-empty string",
+                    )
+                })?;
+                if target.is_empty() {
+                    return Err(McpError::new(
+                        "mcp.model.tool.boolean_invalid_target",
+                        "boolean `target` must be a non-empty string",
+                    ));
+                }
+            }
+            if let Some(value) = request.params.get("targets") {
+                let targets = value.as_array().ok_or_else(|| {
+                    McpError::new(
+                        "mcp.model.tool.boolean_invalid_targets",
+                        "boolean `targets` must be a non-empty string array",
+                    )
+                })?;
+                if targets.is_empty() {
+                    return Err(McpError::new(
+                        "mcp.model.tool.boolean_invalid_targets",
+                        "boolean `targets` must be a non-empty string array",
+                    ));
+                }
+                let all_valid = targets.iter().all(|item| {
+                    item.as_str()
+                        .map(str::trim)
+                        .map(|name| !name.is_empty())
+                        .unwrap_or(false)
+                });
+                if !all_valid {
+                    return Err(McpError::new(
+                        "mcp.model.tool.boolean_invalid_targets",
+                        "boolean `targets` must be a non-empty string array",
+                    ));
+                }
+            } else {
+                let target = request
+                    .params
+                    .get("target")
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    .unwrap_or("");
+                if target.is_empty() {
+                    return Err(McpError::new(
+                        "mcp.model.tool.boolean_missing_target",
+                        "boolean requires `target` or non-empty `targets`",
+                    ));
+                }
+            }
+            if let Some(value) = request.params.get("order") {
+                let order = value.as_str().map(str::trim).ok_or_else(|| {
+                    McpError::new(
+                        "mcp.model.tool.boolean_invalid_order",
+                        "boolean `order` must be one of: as_provided, reverse",
+                    )
+                })?;
+                if !matches!(order, "as_provided" | "reverse") {
+                    return Err(McpError::new(
+                        "mcp.model.tool.boolean_invalid_order",
+                        "boolean `order` must be one of: as_provided, reverse",
+                    ));
+                }
+            }
+            if let Some(value) = request.params.get("rollback_on_error") {
+                if value.as_bool().is_none() {
+                    return Err(McpError::new(
+                        "mcp.model.tool.boolean_invalid_rollback",
+                        "boolean `rollback_on_error` must be boolean",
+                    ));
+                }
+            }
         }
         ModelToolAction::TranslateObjects => {
             validate_selection_scope()?;
@@ -510,6 +785,40 @@ fn validate_tool_request(request: &ModelToolRequest) -> McpResult<()> {
                 ));
             }
         }
+        ModelToolAction::InspectMeshTopology => {
+            if let Some(value) = request.params.get("selected_only") {
+                if value.as_bool().is_none() {
+                    return Err(McpError::new(
+                        "mcp.model.tool.inspect_topology_invalid_selected_only",
+                        "inspect_mesh_topology `selected_only` must be boolean",
+                    ));
+                }
+            }
+            if let Some(value) = request.params.get("strict") {
+                if value.as_bool().is_none() {
+                    return Err(McpError::new(
+                        "mcp.model.tool.inspect_topology_invalid_strict",
+                        "inspect_mesh_topology `strict` must be boolean",
+                    ));
+                }
+            }
+            if let Some(value) = request.params.get("baseline_face_counts") {
+                let map = value.as_object().ok_or_else(|| {
+                    McpError::new(
+                        "mcp.model.tool.inspect_topology_invalid_baseline",
+                        "inspect_mesh_topology `baseline_face_counts` must be object map",
+                    )
+                })?;
+                for (name, count) in map {
+                    if name.trim().is_empty() || count.as_u64().is_none() {
+                        return Err(McpError::new(
+                            "mcp.model.tool.inspect_topology_invalid_baseline",
+                            "inspect_mesh_topology `baseline_face_counts` values must be non-negative integers",
+                        ));
+                    }
+                }
+            }
+        }
         ModelToolAction::OpenFile => {
             let path = request
                 .params
@@ -525,17 +834,78 @@ fn validate_tool_request(request: &ModelToolRequest) -> McpResult<()> {
             }
         }
         ModelToolAction::ApplyTextureImage => {
-            let path = request
-                .params
-                .get("path")
-                .and_then(|value| value.as_str())
-                .map(str::trim)
-                .unwrap_or("");
-            if path.is_empty() {
+            validate_selection_scope()?;
+            validate_target_names()?;
+            let texture_keys = [
+                "path",
+                "base_color_path",
+                "normal_path",
+                "roughness_path",
+                "metallic_path",
+            ];
+            let mut provided = 0usize;
+            for key in texture_keys {
+                if let Some(value) = request.params.get(key) {
+                    let path = value.as_str().map(str::trim).ok_or_else(|| {
+                        McpError::new(
+                            "mcp.model.tool.apply_texture_invalid_path",
+                            format!("apply_texture_image `{}` must be a non-empty string", key),
+                        )
+                    })?;
+                    if path.is_empty() {
+                        return Err(McpError::new(
+                            "mcp.model.tool.apply_texture_invalid_path",
+                            format!("apply_texture_image `{}` cannot be empty", key),
+                        ));
+                    }
+                    provided += 1;
+                }
+            }
+            if provided == 0 {
                 return Err(McpError::new(
                     "mcp.model.tool.apply_texture_missing_path",
-                    "apply_texture_image requires non-empty `path`",
+                    "apply_texture_image requires at least one of `path`/`base_color_path`/`normal_path`/`roughness_path`/`metallic_path`",
                 ));
+            }
+            if let Some(value) = request.params.get("object") {
+                let object_name = value.as_str().map(str::trim).ok_or_else(|| {
+                    McpError::new(
+                        "mcp.model.tool.apply_texture_invalid_object",
+                        "apply_texture_image `object` must be a non-empty string",
+                    )
+                })?;
+                if object_name.is_empty() {
+                    return Err(McpError::new(
+                        "mcp.model.tool.apply_texture_invalid_object",
+                        "apply_texture_image `object` must be a non-empty string",
+                    ));
+                }
+            }
+            if let Some(value) = request.params.get("objects") {
+                let objects = value.as_array().ok_or_else(|| {
+                    McpError::new(
+                        "mcp.model.tool.apply_texture_invalid_objects",
+                        "apply_texture_image `objects` must be a non-empty string array",
+                    )
+                })?;
+                if objects.is_empty() {
+                    return Err(McpError::new(
+                        "mcp.model.tool.apply_texture_invalid_objects",
+                        "apply_texture_image `objects` must be a non-empty string array",
+                    ));
+                }
+                let valid = objects.iter().all(|item| {
+                    item.as_str()
+                        .map(str::trim)
+                        .map(|name| !name.is_empty())
+                        .unwrap_or(false)
+                });
+                if !valid {
+                    return Err(McpError::new(
+                        "mcp.model.tool.apply_texture_invalid_objects",
+                        "apply_texture_image `objects` must be a non-empty string array",
+                    ));
+                }
             }
         }
         ModelToolAction::SaveFile => {
@@ -566,6 +936,8 @@ mod tests {
             project_name: "".to_string(),
             prompt: "导出".to_string(),
             output_dir: temp_dir.to_string_lossy().to_string(),
+            export_format: None,
+            export_params: None,
             blender_bridge_addr: None,
             target: ModelToolTarget::Blender,
         });
@@ -581,10 +953,29 @@ mod tests {
             project_name: "Robot".to_string(),
             prompt: "导出 glb".to_string(),
             output_dir: output_dir.to_string_lossy().to_string(),
+            export_format: None,
+            export_params: None,
             blender_bridge_addr: Some("127.0.0.1:9".to_string()),
             target: ModelToolTarget::Blender,
         });
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn export_should_reject_non_object_params() {
+        let output_dir = env::temp_dir().join("zodileap-mcp-model-tests");
+        let _ = fs::create_dir_all(&output_dir);
+        let result = export_model(ExportModelRequest {
+            project_name: "Robot".to_string(),
+            prompt: "导出 obj".to_string(),
+            output_dir: output_dir.to_string_lossy().to_string(),
+            export_format: Some(ExportModelFormat::Obj),
+            export_params: Some(serde_json::json!(["invalid"])),
+            blender_bridge_addr: None,
+            target: ModelToolTarget::Blender,
+        });
+        let err = result.expect_err("non object export_params should fail");
+        assert!(err.to_string().contains("invalid_params"));
     }
 
     #[test]
@@ -594,6 +985,22 @@ mod tests {
         assert!(script.contains("_persist_user_preferences"));
         assert!(script.contains("view_layer"));
         assert!(script.contains("_RestrictContext"));
+        assert!(script.contains("base_color_path"));
+        assert!(script.contains("_ensure_image_texture_node"));
+        assert!(script.contains("_ensure_normal_map_node"));
+        assert!(script.contains("repair_relative"));
+        assert!(script.contains("fixed_count"));
+        assert!(script.contains("`objects` must be a non-empty string array"));
+        assert!(script.contains("success_count"));
+        assert!(script.contains("warning_count"));
+        assert!(script.contains("inspect_mesh_topology"));
+        assert!(script.contains("import bmesh"));
+        assert!(script.contains("rollback_on_error"));
+        assert!(script.contains("boolean `targets`"));
+        assert!(script.contains("collection_move"));
+        assert!(script.contains("collection_reorder"));
+        assert!(script.contains("export_fbx"));
+        assert!(script.contains("export_obj"));
     }
 
     #[test]
@@ -605,6 +1012,22 @@ mod tests {
         assert!(script.contains("_RestrictContext"));
         assert!(script.contains("translate_objects"));
         assert!(script.contains("get_selection_context"));
+        assert!(script.contains("base_color_path"));
+        assert!(script.contains("_ensure_image_texture_node"));
+        assert!(script.contains("_ensure_normal_map_node"));
+        assert!(script.contains("repair_relative"));
+        assert!(script.contains("fixed_count"));
+        assert!(script.contains("`objects` must be a non-empty string array"));
+        assert!(script.contains("success_count"));
+        assert!(script.contains("warning_count"));
+        assert!(script.contains("inspect_mesh_topology"));
+        assert!(script.contains("import bmesh"));
+        assert!(script.contains("rollback_on_error"));
+        assert!(script.contains("boolean `targets`"));
+        assert!(script.contains("collection_move"));
+        assert!(script.contains("collection_reorder"));
+        assert!(script.contains("export_fbx"));
+        assert!(script.contains("export_obj"));
     }
 
     #[test]
@@ -698,6 +1121,247 @@ mod tests {
             timeout_secs: None,
         });
         assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn apply_texture_tool_should_require_at_least_one_texture_path() {
+        let err = validate_tool_request(&ModelToolRequest {
+            action: ModelToolAction::ApplyTextureImage,
+            params: serde_json::json!({}),
+            blender_bridge_addr: None,
+            timeout_secs: None,
+        })
+        .expect_err("apply texture without any path should fail");
+        assert!(err.to_string().contains("at least one"));
+    }
+
+    #[test]
+    fn apply_texture_tool_should_accept_multi_channel_texture_paths() {
+        let ok = validate_tool_request(&ModelToolRequest {
+            action: ModelToolAction::ApplyTextureImage,
+            params: serde_json::json!({
+                "base_color_path": "/tmp/basecolor.png",
+                "normal_path": "/tmp/normal.png",
+                "roughness_path": "/tmp/roughness.png",
+                "metallic_path": "/tmp/metallic.png",
+            }),
+            blender_bridge_addr: None,
+            timeout_secs: None,
+        });
+        assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn apply_texture_tool_should_reject_invalid_objects_list() {
+        let err = validate_tool_request(&ModelToolRequest {
+            action: ModelToolAction::ApplyTextureImage,
+            params: serde_json::json!({
+                "path": "/tmp/basecolor.png",
+                "objects": ["Cube", ""]
+            }),
+            blender_bridge_addr: None,
+            timeout_secs: None,
+        })
+        .expect_err("objects with empty name should fail");
+        assert!(err.to_string().contains("objects"));
+    }
+
+    #[test]
+    fn apply_texture_tool_should_accept_objects_list() {
+        let ok = validate_tool_request(&ModelToolRequest {
+            action: ModelToolAction::ApplyTextureImage,
+            params: serde_json::json!({
+                "path": "/tmp/basecolor.png",
+                "objects": ["Cube", "Cube.001"]
+            }),
+            blender_bridge_addr: None,
+            timeout_secs: None,
+        });
+        assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn apply_texture_tool_should_validate_selection_scope() {
+        let err = validate_tool_request(&ModelToolRequest {
+            action: ModelToolAction::ApplyTextureImage,
+            params: serde_json::json!({
+                "path": "/tmp/basecolor.png",
+                "selection_scope": "invalid"
+            }),
+            blender_bridge_addr: None,
+            timeout_secs: None,
+        })
+        .expect_err("invalid selection_scope should fail");
+        assert!(err.to_string().contains("invalid_selection_scope"));
+    }
+
+    #[test]
+    fn inspect_topology_tool_should_validate_baseline_face_counts() {
+        let err = validate_tool_request(&ModelToolRequest {
+            action: ModelToolAction::InspectMeshTopology,
+            params: serde_json::json!({
+                "baseline_face_counts": {"Cube": -1}
+            }),
+            blender_bridge_addr: None,
+            timeout_secs: None,
+        })
+        .expect_err("negative baseline face count should fail");
+        assert!(err.to_string().contains("baseline_face_counts"));
+
+        let ok = validate_tool_request(&ModelToolRequest {
+            action: ModelToolAction::InspectMeshTopology,
+            params: serde_json::json!({
+                "selected_only": true,
+                "strict": false,
+                "baseline_face_counts": {"Cube": 120, "Cube.001": 80}
+            }),
+            blender_bridge_addr: None,
+            timeout_secs: None,
+        });
+        assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn mirror_and_array_tool_should_validate_params() {
+        let mirror_err = validate_tool_request(&ModelToolRequest {
+            action: ModelToolAction::Mirror,
+            params: serde_json::json!({
+                "axis": "A"
+            }),
+            blender_bridge_addr: None,
+            timeout_secs: None,
+        })
+        .expect_err("mirror with invalid axis should fail");
+        assert!(mirror_err.to_string().contains("mirror axis"));
+
+        let array_err = validate_tool_request(&ModelToolRequest {
+            action: ModelToolAction::Array,
+            params: serde_json::json!({
+                "count": 2,
+                "offset": 10000.0
+            }),
+            blender_bridge_addr: None,
+            timeout_secs: None,
+        })
+        .expect_err("array with invalid offset should fail");
+        assert!(array_err.to_string().contains("array offset"));
+
+        let ok = validate_tool_request(&ModelToolRequest {
+            action: ModelToolAction::Array,
+            params: serde_json::json!({
+                "count": 4,
+                "offset": 1.5
+            }),
+            blender_bridge_addr: None,
+            timeout_secs: None,
+        });
+        assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn organize_hierarchy_tool_should_validate_collection_modes() {
+        let err = validate_tool_request(&ModelToolRequest {
+            action: ModelToolAction::OrganizeHierarchy,
+            params: serde_json::json!({
+                "mode": "invalid_mode",
+            }),
+            blender_bridge_addr: None,
+            timeout_secs: None,
+        })
+        .expect_err("invalid organize mode should fail");
+        assert!(err.to_string().contains("organize_hierarchy"));
+
+        let err = validate_tool_request(&ModelToolRequest {
+            action: ModelToolAction::OrganizeHierarchy,
+            params: serde_json::json!({
+                "mode": "collection_reorder",
+                "collection": "Buildings",
+                "position": "middle"
+            }),
+            blender_bridge_addr: None,
+            timeout_secs: None,
+        })
+        .expect_err("invalid reorder position should fail");
+        assert!(err.to_string().contains("position"));
+
+        let ok = validate_tool_request(&ModelToolRequest {
+            action: ModelToolAction::OrganizeHierarchy,
+            params: serde_json::json!({
+                "mode": "collection_move",
+                "collection": "Buildings",
+                "parent_collection": "City"
+            }),
+            blender_bridge_addr: None,
+            timeout_secs: None,
+        });
+        assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn boolean_tool_should_validate_target_order_and_rollback() {
+        let err = validate_tool_request(&ModelToolRequest {
+            action: ModelToolAction::Boolean,
+            params: serde_json::json!({
+                "target": "Cube",
+                "order": "invalid-order"
+            }),
+            blender_bridge_addr: None,
+            timeout_secs: None,
+        })
+        .expect_err("boolean with invalid order should fail");
+        assert!(err.to_string().contains("boolean `order`"));
+
+        let err = validate_tool_request(&ModelToolRequest {
+            action: ModelToolAction::Boolean,
+            params: serde_json::json!({
+                "targets": ["Cube", ""]
+            }),
+            blender_bridge_addr: None,
+            timeout_secs: None,
+        })
+        .expect_err("boolean with invalid targets should fail");
+        assert!(err.to_string().contains("targets"));
+
+        let ok = validate_tool_request(&ModelToolRequest {
+            action: ModelToolAction::Boolean,
+            params: serde_json::json!({
+                "targets": ["Cube", "Sphere"],
+                "order": "reverse",
+                "rollback_on_error": true,
+                "times": 2
+            }),
+            blender_bridge_addr: None,
+            timeout_secs: None,
+        });
+        assert!(ok.is_ok());
+    }
+
+    #[allow(non_snake_case)]
+    /// 描述：验证所有模型动作都存在统一契约，避免新增动作后遗漏能力边界定义。
+    #[test]
+    fn TestShouldCoverAllModelToolActionContracts() {
+        let contracts = model_tool_action_contracts();
+        assert_eq!(contracts.len(), all_model_tool_actions().len());
+        for action in all_model_tool_actions() {
+            let contract = model_tool_action_contract(*action);
+            assert_eq!(contract.action, *action);
+            assert!(!contract.summary.trim().is_empty());
+            assert!(!contract.risk_level.trim().is_empty());
+        }
+    }
+
+    #[allow(non_snake_case)]
+    /// 描述：验证契约文档覆盖全部动作，避免文档与实现脱节。
+    #[test]
+    fn TestShouldContainEveryModelToolActionInContractDoc() {
+        let doc = include_str!("../../../../../docs/model-tool-action-contract.md");
+        for action in all_model_tool_actions() {
+            assert!(
+                doc.contains(action.as_str()),
+                "contract doc missing action `{}`",
+                action.as_str()
+            );
+        }
     }
 }
 

@@ -28,6 +28,7 @@ fn should_parse_agent_kind() {
 fn should_trigger_export_by_keywords() {
     assert!(should_trigger_export("请导出当前模型"));
     assert!(should_trigger_export("export glb now"));
+    assert!(should_trigger_export("请输出 fbx"));
     assert!(!should_trigger_export("只给我分析步骤"));
 }
 
@@ -52,6 +53,22 @@ fn should_return_protocol_error_for_unknown_provider() {
     let err = run_agent_with_protocol_error(request).expect_err("must fail");
     assert_eq!(err.code, "core.agent.llm.provider_unknown");
     assert!(!err.retryable);
+}
+
+/// 描述：验证流式执行接口在失败前会先发送 LLM started 事件，便于前端及时进入“生成中”状态。
+#[test]
+fn should_emit_started_stream_event_before_provider_failure() {
+    let request = build_base_request();
+    let mut events: Vec<AgentStreamEvent> = Vec::new();
+    let err = run_agent_with_protocol_error_stream(request, |event| {
+        events.push(event);
+    })
+    .expect_err("must fail");
+    assert_eq!(err.code, "core.agent.llm.provider_unknown");
+    assert!(matches!(
+        events.first(),
+        Some(AgentStreamEvent::LlmStarted { .. })
+    ));
 }
 
 /// 描述：验证在未启用 model feature 时导出请求返回能力未启用错误。

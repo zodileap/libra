@@ -64,6 +64,29 @@ export default defineConfig({
         find: /^@\//,
         replacement: "/Users/yoho/code/zodileap-agen/apps/desktop/src/"
       },
+      // 描述：
+      //
+      //   - 强制所有 React 入口统一指向 aries_react 所在依赖目录，避免出现多份 React 导致 Invalid hook call。
+      {
+        find: /^react$/,
+        replacement: "/Users/yoho/code/client/aries_react/node_modules/react/index.js"
+      },
+      {
+        find: /^react\/jsx-runtime$/,
+        replacement: "/Users/yoho/code/client/aries_react/node_modules/react/jsx-runtime.js"
+      },
+      {
+        find: /^react\/jsx-dev-runtime$/,
+        replacement: "/Users/yoho/code/client/aries_react/node_modules/react/jsx-dev-runtime.js"
+      },
+      {
+        find: /^react-dom$/,
+        replacement: "/Users/yoho/code/client/aries_react/node_modules/react-dom/index.js"
+      },
+      {
+        find: /^react-dom\/client$/,
+        replacement: "/Users/yoho/code/client/aries_react/node_modules/react-dom/client.js"
+      },
       {
         find: /^aries_react$/,
         replacement: "/Users/yoho/code/client/aries_react/dist/index.es.js"

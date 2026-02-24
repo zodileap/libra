@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { AriContainer, AriTypography } from "aries_react";
+import { AriContainer, AriFlex, AriTypography } from "aries_react";
 
 interface DeskPageHeaderProps {
   title: string;
@@ -18,13 +18,13 @@ interface DeskPageHeaderProps {
 //   - actions: 右侧操作区内容。
 export function DeskPageHeader({ title, description, actions }: DeskPageHeaderProps) {
   return (
-    <div className="desk-page-header">
-      <div className="desk-page-header-main">
+    <AriFlex className="desk-page-header" align="flex-start" justify="space-between">
+      <AriContainer className="desk-page-header-main">
         <AriTypography variant="h1" value={title} />
         {description ? <AriTypography variant="caption" value={description} /> : null}
-      </div>
+      </AriContainer>
       {actions ? <AriContainer className="desk-page-header-actions">{actions}</AriContainer> : null}
-    </div>
+    </AriFlex>
   );
 }
 
@@ -77,14 +77,14 @@ interface DeskSettingsRowProps {
 //   - children: 右侧交互控件区域。
 export function DeskSettingsRow({ title, description, metaSlot, children }: DeskSettingsRowProps) {
   return (
-    <div className="desk-settings-row">
-      <div className="desk-settings-meta">
+    <AriFlex className="desk-settings-row" align="center" justify="space-between">
+      <AriContainer className="desk-settings-meta">
         {title ? <AriTypography variant="h4" value={title} /> : null}
         {description ? <AriTypography variant="caption" value={description} /> : null}
         {metaSlot}
-      </div>
+      </AriContainer>
       <AriContainer className="desk-settings-row-actions">{children}</AriContainer>
-    </div>
+    </AriFlex>
   );
 }
 

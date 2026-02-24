@@ -76,7 +76,7 @@ export function AgentPage({ modelMcpCapabilities: _modelMcpCapabilities, current
             onChange={setProjectName}
             placeholder="输入项目名称，例如：机甲角色_v1"
           />
-          <div className="desk-inline-gap" />
+          <AriContainer className="desk-inline-gap" />
           <AriInput
             value={prompt}
             onChange={setPrompt}
@@ -135,7 +135,7 @@ export function AgentPage({ modelMcpCapabilities: _modelMcpCapabilities, current
 
       <section className="desk-block">
         <AriTypography variant="h3" value="你可以这样开始" />
-        <div className="desk-two-cols">
+        <AriContainer className="desk-two-cols">
           <AriCard>
             <AriTypography variant="h4" value={agent.hint} />
             <AriTypography
@@ -150,7 +150,7 @@ export function AgentPage({ modelMcpCapabilities: _modelMcpCapabilities, current
               value={agentKey === "code" ? "框架、组件、代码模块会作为生成约束。 " : "导出能力可在“模型设置”中开关。"}
             />
           </AriCard>
-        </div>
+        </AriContainer>
       </section>
     </AriContainer>
   );

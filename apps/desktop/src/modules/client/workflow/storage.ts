@@ -1,7 +1,188 @@
-import { DEFAULT_MODEL_WORKFLOWS } from "./templates";
-import type { WorkflowDefinition, WorkflowNodeDefinition } from "./types";
+import { DEFAULT_CODE_WORKFLOWS, DEFAULT_MODEL_WORKFLOWS } from "./templates";
+import type {
+  CodeWorkflowDefinition,
+  WorkflowGraph,
+  WorkflowGraphEdge,
+  WorkflowGraphEdgeType,
+  WorkflowGraphNode,
+  WorkflowGraphNodeType,
+  WorkflowDefinition,
+  WorkflowNodeDefinition,
+} from "./types";
 
-const WORKFLOW_STORAGE_KEY = "zodileap.desktop.model.workflows";
+const MODEL_WORKFLOW_STORAGE_KEY = "zodileap.desktop.model.workflows";
+const CODE_WORKFLOW_STORAGE_KEY = "zodileap.desktop.code.workflows";
+
+// 描述：
+//
+//   - 记录默认模型工作流 ID，用于限制默认模板被误删。
+const DEFAULT_MODEL_WORKFLOW_ID_SET = new Set(
+  DEFAULT_MODEL_WORKFLOWS.map((item) => item.id),
+);
+
+// 描述：
+//
+//   - 记录默认代码工作流 ID，用于限制默认模板被误删。
+const DEFAULT_CODE_WORKFLOW_ID_SET = new Set(
+  DEFAULT_CODE_WORKFLOWS.map((item) => item.id),
+);
+
+const GRAPH_NODE_HORIZONTAL_GAP = 240;
+const GRAPH_CANVAS_BASE_X = 80;
+const GRAPH_CANVAS_BASE_Y = 160;
+
+function normalizeNodeType(value: unknown): WorkflowGraphNodeType {
+  const raw = String(value || "").trim();
+  if (
+    raw === "node" ||
+    raw === "start" ||
+    raw === "action" ||
+    raw === "branch" ||
+    raw === "loop" ||
+    raw === "end"
+  ) {
+    return raw;
+  }
+  return "node";
+}
+
+function normalizeEdgeType(value: unknown): WorkflowGraphEdgeType {
+  const raw = String(value || "").trim();
+  if (raw === "default" || raw === "branch" || raw === "loop") {
+    return raw;
+  }
+  return "default";
+}
+
+function normalizeGraphNode(node: WorkflowGraphNode): WorkflowGraphNode | null {
+  if (!node?.id) {
+    return null;
+  }
+  const x = Number.isFinite(node.x) ? Number(node.x) : GRAPH_CANVAS_BASE_X;
+  const y = Number.isFinite(node.y) ? Number(node.y) : GRAPH_CANVAS_BASE_Y;
+  return {
+    id: String(node.id),
+    title: String(node.title || "").trim() || "未命名节点",
+    description: String(node.description || "").trim(),
+    type: normalizeNodeType(node.type),
+    x,
+    y,
+  };
+}
+
+function normalizeGraphEdge(edge: WorkflowGraphEdge): WorkflowGraphEdge | null {
+  if (!edge?.id || !edge?.sourceId || !edge?.targetId) {
+    return null;
+  }
+  return {
+    id: String(edge.id),
+    sourceId: String(edge.sourceId),
+    targetId: String(edge.targetId),
+    type: normalizeEdgeType(edge.type),
+    label: String(edge.label || "").trim() || undefined,
+  };
+}
+
+function normalizeWorkflowGraph(graph?: WorkflowGraph): WorkflowGraph | undefined {
+  if (!graph) {
+    return undefined;
+  }
+  const nodes = (graph.nodes || [])
+    .map((node) => normalizeGraphNode(node))
+    .filter(Boolean) as WorkflowGraphNode[];
+  const nodeIdSet = new Set(nodes.map((node) => node.id));
+  const edges = (graph.edges || [])
+    .map((edge) => normalizeGraphEdge(edge))
+    .filter(Boolean)
+    .filter(
+      (edge): edge is WorkflowGraphEdge =>
+        Boolean(edge) &&
+        nodeIdSet.has(edge.sourceId) &&
+        nodeIdSet.has(edge.targetId),
+    );
+  if (nodes.length === 0) {
+    return undefined;
+  }
+  return { nodes, edges };
+}
+
+function buildModelFallbackGraph(workflow: WorkflowDefinition): WorkflowGraph {
+  const nodes = (workflow.nodes || []).map((node, index) => {
+    return {
+      id: `graph-${node.id}`,
+      title: node.name || node.kind,
+      description: `kind=${node.kind}`,
+      type: "node",
+      x: GRAPH_CANVAS_BASE_X + index * GRAPH_NODE_HORIZONTAL_GAP,
+      y: GRAPH_CANVAS_BASE_Y,
+    } as WorkflowGraphNode;
+  });
+  const edges: WorkflowGraphEdge[] = nodes.slice(0, -1).map((node, index) => ({
+    id: `edge-${node.id}-${nodes[index + 1].id}`,
+    sourceId: node.id,
+    targetId: nodes[index + 1].id,
+    type: "default",
+  }));
+  return { nodes, edges };
+}
+
+function buildCodeFallbackGraph(workflow: CodeWorkflowDefinition): WorkflowGraph {
+  const nodes: WorkflowGraphNode[] = [
+    {
+      id: `${workflow.id}-start`,
+      title: "开始",
+      description: "接收用户任务",
+      type: "node",
+      x: GRAPH_CANVAS_BASE_X,
+      y: GRAPH_CANVAS_BASE_Y,
+    },
+    {
+      id: `${workflow.id}-analysis`,
+      title: "需求分析",
+      description: "拆解目标、限制与边界",
+      type: "node",
+      x: GRAPH_CANVAS_BASE_X + GRAPH_NODE_HORIZONTAL_GAP,
+      y: GRAPH_CANVAS_BASE_Y,
+    },
+    {
+      id: `${workflow.id}-execute`,
+      title: "实现与验证",
+      description: "生成代码并执行测试",
+      type: "node",
+      x: GRAPH_CANVAS_BASE_X + GRAPH_NODE_HORIZONTAL_GAP * 2,
+      y: GRAPH_CANVAS_BASE_Y,
+    },
+    {
+      id: `${workflow.id}-finish`,
+      title: "完成",
+      description: "输出结果与后续建议",
+      type: "node",
+      x: GRAPH_CANVAS_BASE_X + GRAPH_NODE_HORIZONTAL_GAP * 3,
+      y: GRAPH_CANVAS_BASE_Y,
+    },
+  ];
+  const edges: WorkflowGraphEdge[] = [
+    {
+      id: `${workflow.id}-edge-start-analysis`,
+      sourceId: nodes[0].id,
+      targetId: nodes[1].id,
+      type: "default",
+    },
+    {
+      id: `${workflow.id}-edge-analysis-execute`,
+      sourceId: nodes[1].id,
+      targetId: nodes[2].id,
+      type: "default",
+    },
+    {
+      id: `${workflow.id}-edge-execute-finish`,
+      sourceId: nodes[2].id,
+      targetId: nodes[3].id,
+      type: "default",
+    },
+  ];
+  return { nodes, edges };
+}
 
 function normalizeWorkflowNode(node: WorkflowNodeDefinition): WorkflowNodeDefinition {
   const nextNode: WorkflowNodeDefinition = {
@@ -25,9 +206,33 @@ function normalizeWorkflowNode(node: WorkflowNodeDefinition): WorkflowNodeDefini
 }
 
 function normalizeWorkflow(workflow: WorkflowDefinition): WorkflowDefinition {
-  return {
+  const normalizedWorkflow: WorkflowDefinition = {
     ...workflow,
     nodes: (workflow.nodes || []).map(normalizeWorkflowNode),
+    graph: normalizeWorkflowGraph(workflow.graph),
+  };
+  if (!normalizedWorkflow.graph) {
+    normalizedWorkflow.graph = buildModelFallbackGraph(normalizedWorkflow);
+  }
+  return {
+    ...normalizedWorkflow,
+  };
+}
+
+function normalizeCodeWorkflow(
+  workflow: CodeWorkflowDefinition,
+): CodeWorkflowDefinition {
+  const normalizedWorkflow: CodeWorkflowDefinition = {
+    ...workflow,
+    agentKey: "code",
+    promptPrefix: String(workflow.promptPrefix || "").trim(),
+    graph: normalizeWorkflowGraph(workflow.graph),
+  };
+  if (!normalizedWorkflow.graph) {
+    normalizedWorkflow.graph = buildCodeFallbackGraph(normalizedWorkflow);
+  }
+  return {
+    ...normalizedWorkflow,
   };
 }
 
@@ -35,7 +240,7 @@ function readSavedWorkflows(): WorkflowDefinition[] {
   if (typeof window === "undefined") {
     return [];
   }
-  const raw = window.localStorage.getItem(WORKFLOW_STORAGE_KEY);
+  const raw = window.localStorage.getItem(MODEL_WORKFLOW_STORAGE_KEY);
   if (!raw) {
     return [];
   }
@@ -52,17 +257,48 @@ function readSavedWorkflows(): WorkflowDefinition[] {
   }
 }
 
+function readSavedCodeWorkflows(): CodeWorkflowDefinition[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+  const raw = window.localStorage.getItem(CODE_WORKFLOW_STORAGE_KEY);
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .filter((item) => item?.id && typeof item?.name === "string")
+      .map((item) => normalizeCodeWorkflow(item as CodeWorkflowDefinition));
+  } catch (_err) {
+    return [];
+  }
+}
+
 function writeSavedWorkflows(workflows: WorkflowDefinition[]) {
   if (typeof window === "undefined") {
     return;
   }
-  window.localStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify(workflows));
+  window.localStorage.setItem(MODEL_WORKFLOW_STORAGE_KEY, JSON.stringify(workflows));
+}
+
+function writeSavedCodeWorkflows(workflows: CodeWorkflowDefinition[]) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(CODE_WORKFLOW_STORAGE_KEY, JSON.stringify(workflows));
 }
 
 function cloneNodes(nodes: WorkflowNodeDefinition[]): WorkflowNodeDefinition[] {
   return nodes.map((node) => normalizeWorkflowNode(node));
 }
 
+// 描述：
+//
+//   - 返回当前可用模型工作流列表，包含默认模板与本地自定义覆盖项。
 export function listModelWorkflows(): WorkflowDefinition[] {
   const saved = readSavedWorkflows();
   const merged: WorkflowDefinition[] = [...DEFAULT_MODEL_WORKFLOWS.map((item) => ({ ...item, nodes: cloneNodes(item.nodes) }))];
@@ -85,23 +321,49 @@ export function listModelWorkflows(): WorkflowDefinition[] {
   return merged;
 }
 
+// 描述：
+//
+//   - 保存模型工作流定义，若同 ID 存在则覆盖。
+//
+// Params:
+//
+//   - workflow: 待保存工作流。
+//
+// Returns:
+//
+//   - 保存后的工作流。
 export function saveModelWorkflow(workflow: WorkflowDefinition): WorkflowDefinition {
+  const normalizedWorkflow = normalizeWorkflow(workflow);
   const all = listModelWorkflows();
   const next = all.map((item) =>
-    item.id === workflow.id
+    item.id === normalizedWorkflow.id
       ? {
-          ...workflow,
-          nodes: cloneNodes(workflow.nodes),
+          ...normalizedWorkflow,
+          nodes: cloneNodes(normalizedWorkflow.nodes),
         }
       : item
   );
-  if (!next.some((item) => item.id === workflow.id)) {
-    next.push({ ...workflow, nodes: cloneNodes(workflow.nodes) });
+  if (!next.some((item) => item.id === normalizedWorkflow.id)) {
+    next.push({
+      ...normalizedWorkflow,
+      nodes: cloneNodes(normalizedWorkflow.nodes),
+    });
   }
   writeSavedWorkflows(next);
-  return workflow;
+  return normalizedWorkflow;
 }
 
+// 描述：
+//
+//   - 基于现有模型工作流模板创建一个自定义副本。
+//
+// Params:
+//
+//   - baseId: 作为复制来源的工作流 ID。
+//
+// Returns:
+//
+//   - 新建的工作流。
 export function createModelWorkflowFromTemplate(baseId?: string): WorkflowDefinition {
   const source = listModelWorkflows().find((item) => item.id === baseId) || listModelWorkflows()[0];
   const id = `wf-custom-${Date.now()}`;
@@ -117,6 +379,17 @@ export function createModelWorkflowFromTemplate(baseId?: string): WorkflowDefini
   return workflow;
 }
 
+// 描述：
+//
+//   - 复制指定模型工作流，来源不存在时回退到默认模板。
+//
+// Params:
+//
+//   - workflowId: 被复制工作流 ID。
+//
+// Returns:
+//
+//   - 新建副本。
 export function copyModelWorkflow(workflowId: string): WorkflowDefinition {
   const source = listModelWorkflows().find((item) => item.id === workflowId);
   if (!source) {
@@ -125,6 +398,17 @@ export function copyModelWorkflow(workflowId: string): WorkflowDefinition {
   return createModelWorkflowFromTemplate(source.id);
 }
 
+// 描述：
+//
+//   - 切换模型工作流分享状态，返回更新结果。
+//
+// Params:
+//
+//   - workflowId: 目标工作流 ID。
+//
+// Returns:
+//
+//   - 更新后的工作流；未命中则返回 null。
 export function toggleShareModelWorkflow(workflowId: string): WorkflowDefinition | null {
   const all = listModelWorkflows();
   const target = all.find((item) => item.id === workflowId);
@@ -139,6 +423,72 @@ export function toggleShareModelWorkflow(workflowId: string): WorkflowDefinition
   return nextTarget;
 }
 
+// 描述：
+//
+//   - 删除模型工作流（仅支持删除自定义工作流，默认模板不可删除）。
+//
+// Params:
+//
+//   - workflowId: 待删除工作流 ID。
+//
+// Returns:
+//
+//   - true: 删除成功。
+//   - false: 删除失败（如默认模板/不存在）。
+export function deleteModelWorkflow(workflowId: string): boolean {
+  if (!workflowId || DEFAULT_MODEL_WORKFLOW_ID_SET.has(workflowId)) {
+    return false;
+  }
+  const all = listModelWorkflows();
+  if (!all.some((item) => item.id === workflowId)) {
+    return false;
+  }
+  const next = all.filter((item) => item.id !== workflowId);
+  writeSavedWorkflows(next);
+  return true;
+}
+
+// 描述：
+//
+//   - 更新模型工作流画布数据（节点与连线）。
+//
+// Params:
+//
+//   - workflowId: 工作流 ID。
+//   - graph: 最新图结构。
+//
+// Returns:
+//
+//   - 更新后的工作流；未命中则返回 null。
+export function updateModelWorkflowGraph(
+  workflowId: string,
+  graph: WorkflowGraph,
+): WorkflowDefinition | null {
+  const target = listModelWorkflows().find((item) => item.id === workflowId);
+  if (!target) {
+    return null;
+  }
+  const next: WorkflowDefinition = {
+    ...target,
+    graph: normalizeWorkflowGraph(graph) || buildModelFallbackGraph(target),
+    version: target.version + 1,
+  };
+  return saveModelWorkflow(next);
+}
+
+// 描述：
+//
+//   - 更新模型工作流中指定节点参数，更新后自动提升版本号。
+//
+// Params:
+//
+//   - workflowId: 工作流 ID。
+//   - nodeId: 节点 ID。
+//   - params: 节点参数对象。
+//
+// Returns:
+//
+//   - 更新后的工作流；未命中则返回 null。
 export function updateWorkflowNodeParams(
   workflowId: string,
   nodeId: string,
@@ -164,4 +514,203 @@ export function updateWorkflowNodeParams(
 
   saveModelWorkflow(next);
   return next;
+}
+
+// 描述：
+//
+//   - 返回当前可用代码工作流列表，包含默认模板与本地自定义覆盖项。
+export function listCodeWorkflows(): CodeWorkflowDefinition[] {
+  const saved = readSavedCodeWorkflows();
+  const merged: CodeWorkflowDefinition[] = DEFAULT_CODE_WORKFLOWS.map((item) =>
+    normalizeCodeWorkflow({ ...item }),
+  );
+  for (const workflow of saved) {
+    const index = merged.findIndex((item) => item.id === workflow.id);
+    if (index >= 0) {
+      merged[index] = normalizeCodeWorkflow({ ...workflow });
+    } else {
+      merged.push(normalizeCodeWorkflow({ ...workflow }));
+    }
+  }
+  return merged;
+}
+
+// 描述：
+//
+//   - 保存代码工作流定义，若同 ID 存在则覆盖。
+//
+// Params:
+//
+//   - workflow: 待保存代码工作流。
+//
+// Returns:
+//
+//   - 保存后的代码工作流。
+export function saveCodeWorkflow(
+  workflow: CodeWorkflowDefinition,
+): CodeWorkflowDefinition {
+  const normalized = normalizeCodeWorkflow(workflow);
+  const all = listCodeWorkflows();
+  const next = all.map((item) => (item.id === normalized.id ? normalized : item));
+  if (!next.some((item) => item.id === normalized.id)) {
+    next.push(normalized);
+  }
+  writeSavedCodeWorkflows(next);
+  return normalized;
+}
+
+// 描述：
+//
+//   - 基于现有代码工作流模板创建一个自定义副本。
+//
+// Params:
+//
+//   - baseId: 作为复制来源的工作流 ID。
+//
+// Returns:
+//
+//   - 新建的代码工作流。
+export function createCodeWorkflowFromTemplate(
+  baseId?: string,
+): CodeWorkflowDefinition {
+  const source = listCodeWorkflows().find((item) => item.id === baseId) || listCodeWorkflows()[0];
+  const nextWorkflow: CodeWorkflowDefinition = {
+    ...source,
+    id: `wf-code-custom-${Date.now()}`,
+    name: `${source.name}-副本`,
+    version: source.version + 1,
+    shared: false,
+    agentKey: "code",
+  };
+  saveCodeWorkflow(nextWorkflow);
+  return nextWorkflow;
+}
+
+// 描述：
+//
+//   - 复制指定代码工作流，来源不存在时回退到默认模板。
+//
+// Params:
+//
+//   - workflowId: 被复制工作流 ID。
+//
+// Returns:
+//
+//   - 新建副本。
+export function copyCodeWorkflow(workflowId: string): CodeWorkflowDefinition {
+  const source = listCodeWorkflows().find((item) => item.id === workflowId);
+  if (!source) {
+    return createCodeWorkflowFromTemplate();
+  }
+  return createCodeWorkflowFromTemplate(source.id);
+}
+
+// 描述：
+//
+//   - 切换代码工作流分享状态，返回更新结果。
+//
+// Params:
+//
+//   - workflowId: 目标工作流 ID。
+//
+// Returns:
+//
+//   - 更新后的工作流；未命中则返回 null。
+export function toggleShareCodeWorkflow(
+  workflowId: string,
+): CodeWorkflowDefinition | null {
+  const all = listCodeWorkflows();
+  const target = all.find((item) => item.id === workflowId);
+  if (!target) {
+    return null;
+  }
+  const nextTarget = {
+    ...target,
+    shared: !target.shared,
+  };
+  saveCodeWorkflow(nextTarget);
+  return nextTarget;
+}
+
+// 描述：
+//
+//   - 删除代码工作流（仅支持删除自定义工作流，默认模板不可删除）。
+//
+// Params:
+//
+//   - workflowId: 待删除工作流 ID。
+//
+// Returns:
+//
+//   - true: 删除成功。
+//   - false: 删除失败（如默认模板/不存在）。
+export function deleteCodeWorkflow(workflowId: string): boolean {
+  if (!workflowId || DEFAULT_CODE_WORKFLOW_ID_SET.has(workflowId)) {
+    return false;
+  }
+  const all = listCodeWorkflows();
+  if (!all.some((item) => item.id === workflowId)) {
+    return false;
+  }
+  const next = all.filter((item) => item.id !== workflowId);
+  writeSavedCodeWorkflows(next);
+  return true;
+}
+
+// 描述：
+//
+//   - 更新代码工作流画布数据（节点与连线）。
+//
+// Params:
+//
+//   - workflowId: 工作流 ID。
+//   - graph: 最新图结构。
+//
+// Returns:
+//
+//   - 更新后的工作流；未命中则返回 null。
+export function updateCodeWorkflowGraph(
+  workflowId: string,
+  graph: WorkflowGraph,
+): CodeWorkflowDefinition | null {
+  const target = listCodeWorkflows().find((item) => item.id === workflowId);
+  if (!target) {
+    return null;
+  }
+  const next: CodeWorkflowDefinition = {
+    ...target,
+    graph: normalizeWorkflowGraph(graph) || buildCodeFallbackGraph(target),
+    version: target.version + 1,
+  };
+  return saveCodeWorkflow(next);
+}
+
+// 描述：
+//
+//   - 根据代码工作流拼接本次执行 Prompt，未配置前缀时回退原始用户输入。
+//
+// Params:
+//
+//   - workflow: 当前选中代码工作流。
+//   - userPrompt: 用户原始输入。
+//
+// Returns:
+//
+//   - 拼接后的执行 Prompt。
+export function buildCodeWorkflowPrompt(
+  workflow: CodeWorkflowDefinition | null | undefined,
+  userPrompt: string,
+): string {
+  const normalizedPrompt = String(userPrompt || "").trim();
+  const prefix = String(workflow?.promptPrefix || "").trim();
+  if (!prefix) {
+    return normalizedPrompt;
+  }
+  return [
+    `【工作流：${workflow?.name || "代码工作流"}】`,
+    prefix,
+    "",
+    "【用户需求】",
+    normalizedPrompt,
+  ].join("\n");
 }

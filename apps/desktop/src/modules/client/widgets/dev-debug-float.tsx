@@ -115,7 +115,7 @@ export function DevDebugFloat() {
             />
             <AriContainer className="desk-dev-debug-section">
               <AriTypography variant="caption" value="执行全链路（前端视角）" />
-              <div className="desk-dev-debug-list">
+              <AriContainer className="desk-dev-debug-list">
                 {(snapshot?.debugFlowRecords || []).map((record, index) => {
                   const prefix = record.timestamp
                     ? `[${new Date(record.timestamp).toLocaleTimeString("zh-CN", { hour12: false })}]`
@@ -132,11 +132,11 @@ export function DevDebugFloat() {
                 {(snapshot?.debugFlowRecords?.length || 0) === 0 ? (
                   <AriTypography className="desk-dev-debug-line" variant="caption" value="暂无全链路记录" />
                 ) : null}
-              </div>
+              </AriContainer>
             </AriContainer>
             <AriContainer className="desk-dev-debug-section">
               <AriTypography variant="caption" value="模型规划 LLM 明细（后端视角）" />
-              <div className="desk-dev-debug-list">
+              <AriContainer className="desk-dev-debug-list">
                 {modelDebugTraces.map((item, index) => {
                   const prefix = item.timestamp_ms
                     ? `[${new Date(item.timestamp_ms).toLocaleTimeString("zh-CN", { hour12: false })}]`
@@ -153,11 +153,11 @@ export function DevDebugFloat() {
                 {modelDebugTraces.length === 0 ? (
                   <AriTypography className="desk-dev-debug-line" variant="caption" value="暂无模型规划 LLM 明细" />
                 ) : null}
-              </div>
+              </AriContainer>
             </AriContainer>
             <AriContainer className="desk-dev-debug-section">
               <AriTypography variant="caption" value="Agent 日志" />
-              <div className="desk-dev-debug-list">
+              <AriContainer className="desk-dev-debug-list">
                 {logs.length === 0 ? (
                   <AriTypography className="desk-dev-debug-line" variant="caption" value="暂无日志" />
                 ) : (
@@ -165,11 +165,11 @@ export function DevDebugFloat() {
                     <AriTypography className="desk-dev-debug-line" key={`${line}-${index}`} variant="caption" value={line} />
                   ))
                 )}
-              </div>
+              </AriContainer>
             </AriContainer>
             <AriContainer className="desk-dev-debug-section">
               <AriTypography variant="caption" value="Workflow 步骤" />
-              <div className="desk-dev-debug-list">
+              <AriContainer className="desk-dev-debug-list">
                 {(snapshot?.workflowStepRecords || []).slice(-10).reverse().map((item, index) => (
                   <AriTypography
                     className="desk-dev-debug-line"
@@ -178,11 +178,11 @@ export function DevDebugFloat() {
                     value={`${item.name || "-"} · ${item.status || "-"} · ${item.summary || "-"}`}
                   />
                 ))}
-              </div>
+              </AriContainer>
             </AriContainer>
             <AriContainer className="desk-dev-debug-section">
               <AriTypography variant="caption" value="Trace / Session 事件 / 资产" />
-              <div className="desk-dev-debug-list">
+              <AriContainer className="desk-dev-debug-list">
                 {(snapshot?.traceRecords || []).slice(0, 10).map((item, index) => (
                   <AriTypography
                     className="desk-dev-debug-line"
@@ -212,7 +212,7 @@ export function DevDebugFloat() {
                 && (snapshot?.assetRecords?.length || 0) === 0 ? (
                   <AriTypography className="desk-dev-debug-line" variant="caption" value="暂无 session 轨迹记录" />
                 ) : null}
-              </div>
+              </AriContainer>
             </AriContainer>
           </AriContainer>
         ) : null}

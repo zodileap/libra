@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
   AriButton,
   AriCard,
@@ -43,8 +43,18 @@ import type {
   ProtocolUiHint,
 } from "../types";
 import { ChatMarkdown } from "../widgets/chat-markdown";
-import { runModelWorkflow } from "../workflow";
-import type { WorkflowStepRecord, WorkflowUiHint } from "../workflow";
+import {
+  buildCodeWorkflowPrompt,
+  listCodeWorkflows,
+  listModelWorkflows,
+  runModelWorkflow,
+} from "../workflow";
+import type {
+  CodeWorkflowDefinition,
+  WorkflowDefinition,
+  WorkflowStepRecord,
+  WorkflowUiHint,
+} from "../workflow";
 
 interface SessionPageProps {
   modelMcpCapabilities: ModelMcpCapabilities;
@@ -293,6 +303,27 @@ const OUTPUT_DIR_QUOTED_REGEX =
 const OUTPUT_DIR_PLAIN_REGEX =
   /(?:导出到|导出至|输出到|保存到|export\s+to|save\s+to)\s*(\/[^\s`"'，。；！？]+|[a-zA-Z]:\\[^\s`"'，。；！？]+)/i;
 const IMAGE_PATH_REGEX = /((?:\/|[a-zA-Z]:\\)[^\s`"'，。；！？]+?\.(?:png|jpe?g|webp|bmp|gif|tiff?))/i;
+const MODEL_WORKFLOW_SELECTED_KEY = "zodileap.desktop.model.selectedWorkflowId";
+const CODE_WORKFLOW_SELECTED_KEY = "zodileap.desktop.code.selectedWorkflowId";
+
+// 描述：
+//
+//   - 从本地存储读取当前智能体最近一次选择的工作流 ID，未命中时返回空字符串。
+//
+// Params:
+//
+//   - storageKey: 本地存储键。
+//
+// Returns:
+//
+//   - 工作流 ID。
+function readSelectedWorkflowId(storageKey: string): string {
+  if (typeof window === "undefined") {
+    return "";
+  }
+  const value = window.localStorage.getItem(storageKey);
+  return String(value || "").trim();
+}
 
 function trimOutputSuffix(path: string): string {
   let result = path.trim().replace(/[，。；！？、]+$/u, "");
@@ -526,6 +557,43 @@ export function SessionPage({
     () => availableAiKeys.find((item) => item.provider === selectedProvider) || availableAiKeys[0] || null,
     [availableAiKeys, selectedProvider],
   );
+  const [selectedModelWorkflowId, setSelectedModelWorkflowId] = useState<string>(
+    () => readSelectedWorkflowId(MODEL_WORKFLOW_SELECTED_KEY),
+  );
+  const [selectedCodeWorkflowId, setSelectedCodeWorkflowId] = useState<string>(
+    () => readSelectedWorkflowId(CODE_WORKFLOW_SELECTED_KEY),
+  );
+  const modelWorkflows = useMemo<WorkflowDefinition[]>(() => listModelWorkflows(), []);
+  const codeWorkflows = useMemo<CodeWorkflowDefinition[]>(
+    () => listCodeWorkflows(),
+    [],
+  );
+  const selectedModelWorkflow = useMemo<WorkflowDefinition | null>(
+    () =>
+      modelWorkflows.find((item) => item.id === selectedModelWorkflowId) ||
+      modelWorkflows[0] ||
+      null,
+    [modelWorkflows, selectedModelWorkflowId],
+  );
+  const selectedCodeWorkflow = useMemo<CodeWorkflowDefinition | null>(
+    () =>
+      codeWorkflows.find((item) => item.id === selectedCodeWorkflowId) ||
+      codeWorkflows[0] ||
+      null,
+    [codeWorkflows, selectedCodeWorkflowId],
+  );
+  const workflowMenuItems = useMemo(() => {
+    if (isModelAgent) {
+      return modelWorkflows.map((workflow) => ({
+        key: workflow.id,
+        label: workflow.name,
+      }));
+    }
+    return codeWorkflows.map((workflow) => ({
+      key: workflow.id,
+      label: workflow.name,
+    }));
+  }, [codeWorkflows, isModelAgent, modelWorkflows]);
   const streamMessageIdRef = useRef("");
   const stepRecordsRef = useRef<ModelStepRecord[]>([]);
   const eventRecordsRef = useRef<ModelEventRecord[]>([]);
@@ -956,6 +1024,32 @@ export function SessionPage({
   }, [availableAiKeys, selectedProvider]);
 
   useEffect(() => {
+    if (!selectedModelWorkflow) {
+      return;
+    }
+    if (selectedModelWorkflow.id !== selectedModelWorkflowId) {
+      setSelectedModelWorkflowId(selectedModelWorkflow.id);
+      return;
+    }
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(MODEL_WORKFLOW_SELECTED_KEY, selectedModelWorkflow.id);
+    }
+  }, [selectedModelWorkflow, selectedModelWorkflowId]);
+
+  useEffect(() => {
+    if (!selectedCodeWorkflow) {
+      return;
+    }
+    if (selectedCodeWorkflow.id !== selectedCodeWorkflowId) {
+      setSelectedCodeWorkflowId(selectedCodeWorkflow.id);
+      return;
+    }
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(CODE_WORKFLOW_SELECTED_KEY, selectedCodeWorkflow.id);
+    }
+  }, [selectedCodeWorkflow, selectedCodeWorkflowId]);
+
+  useEffect(() => {
     if (!isModelAgent || !sessionId) {
       return;
     }
@@ -1205,6 +1299,12 @@ export function SessionPage({
     const confirmationToken = options?.confirmationToken;
     const appendUserMessage = options?.appendUserMessage !== false;
     const provider = selectedAi?.provider || "codex";
+    const activeWorkflowName = isModelAgent
+      ? selectedModelWorkflow?.name || "模型工作流"
+      : selectedCodeWorkflow?.name || "代码工作流";
+    const activeWorkflowId = isModelAgent
+      ? selectedModelWorkflow?.id || ""
+      : selectedCodeWorkflow?.id || "";
     const outputDir = isModelAgent ? extractOutputDirFromPrompt(normalizedContent) : undefined;
     const streamMessageId = `assistant-stream-${Date.now()}`;
     const codeTraceId = isModelAgent ? "" : `trace-${Date.now()}`;
@@ -1217,13 +1317,15 @@ export function SessionPage({
       "user_submit",
       "用户发送消息",
       JSON.stringify(
-        {
-          session_id: sessionId || "new-session",
-          agent_key: normalizedAgentKey,
-          provider,
-          prompt: normalizedContent,
-          output_dir: outputDir || null,
-          allow_dangerous_action: allowDangerousAction,
+          {
+            session_id: sessionId || "new-session",
+            agent_key: normalizedAgentKey,
+            provider,
+            workflow_id: activeWorkflowId || null,
+            workflow_name: activeWorkflowName,
+            prompt: normalizedContent,
+            output_dir: outputDir || null,
+            allow_dangerous_action: allowDangerousAction,
         },
         null,
         2,
@@ -1296,7 +1398,7 @@ export function SessionPage({
           projectName: title,
           prompt: normalizedContent,
           provider,
-          workflowId: "wf-model-full-v1",
+          workflowId: selectedModelWorkflow?.id || "wf-model-full-v1",
           referenceImages: [],
           styleImages: [],
           aiKeys,
@@ -1413,7 +1515,7 @@ export function SessionPage({
           agentKey: agentKey || "code",
           sessionId,
           provider,
-          prompt: content,
+          prompt: buildCodeWorkflowPrompt(selectedCodeWorkflow, content),
           traceId: codeTraceId,
           projectName: title,
           modelExportEnabled: modelMcpCapabilities.export,
@@ -1435,8 +1537,8 @@ export function SessionPage({
           response.actions?.length > 0 ? `动作：${response.actions.join(", ")}` : "动作：无";
         setStatus(
           response.exported_file
-            ? `${actionText}；导出文件：${response.exported_file}`
-            : actionText
+            ? `${actionText}；工作流：${activeWorkflowName}；导出文件：${response.exported_file}`
+            : `${actionText}；工作流：${activeWorkflowName}`
         );
       }
     } catch (err) {
@@ -1491,6 +1593,33 @@ export function SessionPage({
       return;
     }
     await executePrompt(content, { allowDangerousAction: false, appendUserMessage: true });
+  };
+
+  // 描述：
+  //
+  //   - 处理会话输入框键盘热键：Enter 发送、Escape 失焦。
+  //   - 对中文输入法组合输入进行保护，避免回车上屏阶段误触发送。
+  //
+  // Params:
+  //
+  //   - event: 输入框键盘事件。
+  const handlePromptInputKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.currentTarget.blur();
+      return;
+    }
+
+    if (event.key !== "Enter" || event.shiftKey) {
+      return;
+    }
+
+    if (event.nativeEvent.isComposing) {
+      return;
+    }
+
+    event.preventDefault();
+    void sendMessage();
   };
 
   const handleUiHintAction = async (action: WorkflowUiHint["actions"][number]) => {
@@ -1599,14 +1728,14 @@ export function SessionPage({
 
   return (
     <AriContainer className="desk-content desk-session-content" height="100%">
-      <div className="desk-session-shell">
-        <div className="desk-session-head">
+      <AriContainer className="desk-session-shell">
+        <AriContainer className="desk-session-head">
           <AriTypography variant="h1" value={title} />
           <AriTypography variant="caption" value={`最近更新：${updatedAt}`} />
-        </div>
+        </AriContainer>
 
-        <div className="desk-session-thread-wrap">
-          <div className="desk-thread">
+        <AriContainer className="desk-session-thread-wrap">
+          <AriContainer className="desk-thread">
             {messages.map((message, index) => {
               const roleClass = message.role === "user" ? "user" : "assistant";
               const runMeta = message.id ? assistantRunMetaMap[message.id] : undefined;
@@ -1620,20 +1749,20 @@ export function SessionPage({
                 <AriCard key={message.id || `message-${index}`} className={`desk-msg ${roleClass}`}>
                   <AriTypography variant="caption" value={message.role === "user" ? "你" : "智能体"} />
                   {useRunLayout && runMeta ? (
-                    <div className="desk-run-flow">
+                    <AriContainer className="desk-run-flow">
                       {runMeta.status === "running" ? (
-                        <div className="desk-run-segments">
+                        <AriContainer className="desk-run-segments">
                           {runMeta.segments.map((segment) => (
-                            <div key={segment.key} className="desk-run-segment">
+                            <AriContainer key={segment.key} className="desk-run-segment">
                               <AriTypography className="desk-run-intro" variant="caption" value={segment.intro} />
                               <AriTypography
                                 className={`desk-run-step ${segment.status === "running" ? "desk-run-step-running" : ""}`}
                                 variant="caption"
                                 value={segment.step}
                               />
-                            </div>
+                            </AriContainer>
                           ))}
-                        </div>
+                        </AriContainer>
                       ) : (
                         <>
                           <button
@@ -1651,21 +1780,21 @@ export function SessionPage({
                             <span className="desk-run-divider-line" />
                           </button>
                           {!runMeta.collapsed ? (
-                            <div className="desk-run-segments desk-run-segments-collapsed">
+                            <AriContainer className="desk-run-segments desk-run-segments-collapsed">
                               {runMeta.segments.map((segment) => (
-                                <div key={`collapsed-${segment.key}`} className="desk-run-segment">
+                                <AriContainer key={`collapsed-${segment.key}`} className="desk-run-segment">
                                   <AriTypography className="desk-run-intro" variant="caption" value={segment.intro} />
                                   <AriTypography className="desk-run-step" variant="caption" value={segment.step} />
-                                </div>
+                                </AriContainer>
                               ))}
-                            </div>
+                            </AriContainer>
                           ) : null}
-                          <div className="desk-run-summary">
+                          <AriContainer className="desk-run-summary">
                             <ChatMarkdown content={runMeta.summary || message.text} />
-                          </div>
+                          </AriContainer>
                         </>
                       )}
-                    </div>
+                    </AriContainer>
                   ) : (
                     <ChatMarkdown
                       content={message.text}
@@ -1675,10 +1804,10 @@ export function SessionPage({
                 </AriCard>
               );
             })}
-          </div>
-        </div>
+          </AriContainer>
+        </AriContainer>
 
-        <div className="desk-prompt-dock">
+        <AriContainer className="desk-prompt-dock">
           {uiHint ? (
             <AriCard className={`desk-action-slot desk-action-slot-${uiHint.level}`}>
               <AriTypography variant="h4" value={uiHint.title} />
@@ -1698,9 +1827,13 @@ export function SessionPage({
             </AriCard>
           ) : null}
           <AriCard className="desk-prompt-card desk-session-prompt-card">
-            <AriInput
+            <AriInput.TextArea
+              className="desk-session-prompt-input"
               value={input}
               onChange={setInput}
+              onKeyDown={handlePromptInputKeyDown}
+              rows={3}
+              autoSize={{ minRows: 3, maxRows: 10 }}
               placeholder={isModelAgent ? "输入需求，例如：打开模型并加厚；或导出当前模型到 exports" : "继续提问，或要求智能体修改结果..."}
             />
             <AriTypography className="desk-prompt-status" variant="caption" value={status || ""} />
@@ -1731,6 +1864,28 @@ export function SessionPage({
                     disabled={availableAiKeys.length === 0}
                   />
                 </AriTooltip>
+                <AriTooltip
+                  content={(
+                    <AriMenu
+                      items={workflowMenuItems}
+                      selectedKey={isModelAgent ? selectedModelWorkflow?.id || "" : selectedCodeWorkflow?.id || ""}
+                      onSelect={(key) => {
+                        if (isModelAgent) {
+                          setSelectedModelWorkflowId(key);
+                          return;
+                        }
+                        setSelectedCodeWorkflowId(key);
+                      }}
+                    />
+                  )}
+                >
+                  <AriButton
+                    type="text"
+                    label={isModelAgent ? selectedModelWorkflow?.name || "选择工作流" : selectedCodeWorkflow?.name || "选择工作流"}
+                    icon="arrow_drop_down"
+                    disabled={workflowMenuItems.length === 0}
+                  />
+                </AriTooltip>
               </AriFlex>
               <AriButton
                 type="default"
@@ -1743,8 +1898,8 @@ export function SessionPage({
               />
             </AriFlex>
           </AriCard>
-        </div>
-      </div>
+        </AriContainer>
+      </AriContainer>
     </AriContainer>
   );
 }

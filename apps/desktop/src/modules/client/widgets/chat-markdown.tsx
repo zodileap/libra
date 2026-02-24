@@ -1,9 +1,10 @@
-import { Fragment, type ReactNode } from "react";
-import { AriCode } from "aries_react";
+import { Fragment, memo, type ReactNode } from "react";
+import { AriCode, AriContainer } from "aries_react";
 
 interface ChatMarkdownProps {
   content: string;
   className?: string;
+  plainText?: boolean;
 }
 
 type MarkdownBlock =
@@ -210,21 +211,33 @@ function renderTextBlock(text: string, blockIndex: number): ReactNode {
   }
 
   return (
-    <div className="desk-md-text-block" key={`text-${blockIndex}`}>
+    <AriContainer className="desk-md-text-block" key={`text-${blockIndex}`}>
       {nodes}
-    </div>
+    </AriContainer>
   );
 }
 
-export function ChatMarkdown({ content, className }: ChatMarkdownProps) {
+export const ChatMarkdown = memo(function ChatMarkdown({
+  content,
+  className,
+  plainText = false,
+}: ChatMarkdownProps) {
+  if (plainText) {
+    return (
+      <AriContainer className={`desk-chat-markdown ${className || ""}`.trim()}>
+        <pre className="desk-chat-plain-text">{content}</pre>
+      </AriContainer>
+    );
+  }
+
   const blocks = splitMarkdownBlocks(content || "");
 
   return (
-    <div className={`desk-chat-markdown ${className || ""}`.trim()}>
+    <AriContainer className={`desk-chat-markdown ${className || ""}`.trim()}>
       {blocks.map((block, blockIndex) => {
         if (block.type === "code") {
           return (
-            <div key={`code-${blockIndex}`} className="desk-md-code-wrap">
+            <AriContainer key={`code-${blockIndex}`} className="desk-md-code-wrap">
               <AriCode
                 language={block.language}
                 value={block.code}
@@ -234,11 +247,11 @@ export function ChatMarkdown({ content, className }: ChatMarkdownProps) {
                 showLineNumbers
                 height={codeBlockHeight(block.code)}
               />
-            </div>
+            </AriContainer>
           );
         }
         return renderTextBlock(block.text, blockIndex);
       })}
-    </div>
+    </AriContainer>
   );
-}
+});

@@ -1,0 +1,45 @@
+{
+  "suite": "complex_session_regression_baseline_v1",
+  "cases": [
+    {
+      "id": "boolean_chain_with_rollback",
+      "scene_file": "/baseline/scenes/boolean_case.blend",
+      "prompt": "请基于场景“/baseline/scenes/boolean_case.blend”执行布尔链 2 次，并在失败后回滚",
+      "expected_step_codes": [
+        "boolean",
+        "boolean",
+        "undo"
+      ],
+      "expected_primary_count": 2,
+      "expected_fallback_count": 1,
+      "expect_high_risk": true
+    },
+    {
+      "id": "batch_material_with_texture",
+      "scene_file": "/baseline/scenes/material_case.blend",
+      "prompt": "请执行批量材质，并给地面应用贴图“/baseline/textures/floor_basecolor.png”",
+      "expected_step_codes": [
+        "tidy_material_slots",
+        "check_texture_paths",
+        "pack_textures",
+        "apply_texture_image"
+      ],
+      "expected_primary_count": 4,
+      "expected_fallback_count": 0,
+      "expect_high_risk": false
+    },
+    {
+      "id": "scene_file_ops_open_and_export",
+      "scene_file": "/baseline/scenes/scene_ops_case.blend",
+      "prompt": "对当前会话执行场景级操作，先打开“/baseline/scenes/scene_ops_case.blend”，再导出 GLB",
+      "expected_step_codes": [
+        "save_file",
+        "open_file",
+        "export_glb"
+      ],
+      "expected_primary_count": 3,
+      "expected_fallback_count": 0,
+      "expect_high_risk": true
+    }
+  ]
+}

@@ -20,7 +20,7 @@ export function SettingsGeneralPage({
 
   return (
     <AriContainer className="desk-content">
-      <div className="desk-settings-shell">
+      <AriContainer className="desk-settings-shell">
         <DeskPageHeader
           title="General"
           description="统一管理主题与基础交互偏好。"
@@ -28,7 +28,7 @@ export function SettingsGeneralPage({
 
         <DeskSectionTitle title="Appearance" />
 
-        <div className="desk-settings-panel">
+        <AriContainer className="desk-settings-panel">
           <DeskSettingsRow
             title="Theme"
             description="Use light, dark, or match your system"
@@ -71,8 +71,8 @@ export function SettingsGeneralPage({
           >
             <AriSwitch checked={pointerCursor} onChange={setPointerCursor} />
           </DeskSettingsRow>
-        </div>
-      </div>
+        </AriContainer>
+      </AriContainer>
     </AriContainer>
   );
 }

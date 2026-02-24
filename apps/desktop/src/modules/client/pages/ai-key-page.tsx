@@ -81,14 +81,14 @@ export function AiKeyPage({ aiKeys, onAiKeysChange }: AiKeyPageProps) {
 
   return (
     <AriContainer className="desk-content">
-      <div className="desk-settings-shell">
+      <AriContainer className="desk-settings-shell">
         <DeskPageHeader
           title="AI Key"
           description="管理各个模型供应商的访问 Key，用于代码与建模智能体。"
           actions={<AriTypography variant="caption" value="默认使用第 1 项 Provider" />}
         />
 
-        <div className="desk-settings-panel">
+        <AriContainer className="desk-settings-panel">
           {aiKeys.length === 0 ? (
             <DeskEmptyState
               title="暂无可用 Provider"
@@ -123,8 +123,8 @@ export function AiKeyPage({ aiKeys, onAiKeysChange }: AiKeyPageProps) {
               </DeskSettingsRow>
             ))
           )}
-        </div>
-      </div>
+        </AriContainer>
+      </AriContainer>
     </AriContainer>
   );
 }
