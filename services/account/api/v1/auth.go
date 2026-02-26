@@ -35,6 +35,11 @@ func (i AuthAPI) SetRouter(group *gin.RouterGroup) []gin.IRoutes {
 		group.POST("/login", base.login),
 		protected.GET("/me", base.me),
 		protected.POST("/logout", base.logout),
+		protected.GET("/identities", base.identities),
+		protected.GET("/permission-templates", base.permissionTemplates),
+		protected.GET("/permission-grants", base.permissionGrants),
+		protected.POST("/permission-grant", base.grantPermission),
+		protected.DELETE("/permission-grant", base.revokePermission),
 		protected.GET("/user-agent-accesses", base.userAgentAccessList),
 		protected.POST("/user-agent-access", base.grantUserAgentAccess),
 		protected.DELETE("/user-agent-access", base.revokeUserAgentAccess),
@@ -117,6 +122,102 @@ func (api *BaseAuth) logout(c *gin.Context) {
 				Resp: resp,
 				Err:  err,
 			}
+		},
+	)
+}
+
+// 描述：获取当前用户身份列表。
+func (api *BaseAuth) identities(c *gin.Context) {
+	processName := zlog.NewProcessName("api", "BaseAuth", "identities")
+	ctx := zlog.WithLogProcess(context.Background(), processName)
+	zapi.WithGet(
+		c,
+		ctx,
+		nil,
+		zstatuscode.Global_API_GetFailed,
+		func(headerParam zapi.HeaderParam, req struct{}) zapi.Result {
+			userID, _, err := readAuthContext(c)
+			if err != nil {
+				return zapi.Result{Err: err}
+			}
+			resp, err := api.Auth.ListUserIdentities(userID)
+			return zapi.Result{Resp: resp, Err: err}
+		},
+	)
+}
+
+// 描述：获取权限模板列表。
+func (api *BaseAuth) permissionTemplates(c *gin.Context) {
+	processName := zlog.NewProcessName("api", "BaseAuth", "permissionTemplates")
+	ctx := zlog.WithLogProcess(context.Background(), processName)
+	zapi.WithGet(
+		c,
+		ctx,
+		nil,
+		zstatuscode.Global_API_GetFailed,
+		func(headerParam zapi.HeaderParam, req struct{}) zapi.Result {
+			resp, err := api.Auth.ListPermissionTemplates()
+			return zapi.Result{Resp: resp, Err: err}
+		},
+	)
+}
+
+// 描述：获取权限授权记录列表。
+func (api *BaseAuth) permissionGrants(c *gin.Context) {
+	processName := zlog.NewProcessName("api", "BaseAuth", "permissionGrants")
+	ctx := zlog.WithLogProcess(context.Background(), processName)
+	zapi.WithGet(
+		c,
+		ctx,
+		nil,
+		zstatuscode.Global_API_GetFailed,
+		func(headerParam zapi.HeaderParam, req specs.AuthPermissionGrantListReq) zapi.Result {
+			userID, _, err := readAuthContext(c)
+			if err != nil {
+				return zapi.Result{Err: err}
+			}
+			resp, err := api.Auth.ListPermissionGrants(userID, req)
+			return zapi.Result{Resp: resp, Err: err}
+		},
+	)
+}
+
+// 描述：新增权限授权记录。
+func (api *BaseAuth) grantPermission(c *gin.Context) {
+	processName := zlog.NewProcessName("api", "BaseAuth", "grantPermission")
+	ctx := zlog.WithLogProcess(context.Background(), processName)
+	zapi.WithPost(
+		c,
+		ctx,
+		nil,
+		zstatuscode.Global_API_CreateFailed,
+		func(headerParam zapi.HeaderParam, req specs.AuthGrantPermissionReq) zapi.Result {
+			userID, _, err := readAuthContext(c)
+			if err != nil {
+				return zapi.Result{Err: err}
+			}
+			resp, err := api.Auth.GrantPermission(userID, req)
+			return zapi.Result{Resp: resp, Err: err}
+		},
+	)
+}
+
+// 描述：撤销权限授权记录。
+func (api *BaseAuth) revokePermission(c *gin.Context) {
+	processName := zlog.NewProcessName("api", "BaseAuth", "revokePermission")
+	ctx := zlog.WithLogProcess(context.Background(), processName)
+	zapi.WithDelete(
+		c,
+		ctx,
+		nil,
+		zstatuscode.Global_API_DeleteFailed,
+		func(headerParam zapi.HeaderParam, req specs.AuthRevokePermissionReq) zapi.Result {
+			userID, _, err := readAuthContext(c)
+			if err != nil {
+				return zapi.Result{Err: err}
+			}
+			resp, err := api.Auth.RevokePermission(userID, req)
+			return zapi.Result{Resp: resp, Err: err}
 		},
 	)
 }

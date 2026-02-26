@@ -4,6 +4,9 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
+	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,11 +22,34 @@ import (
 const (
 	// 描述：账号服务内置身份令牌默认有效期。
 	defaultAuthTokenTTL = 24 * time.Hour
+	// 描述：系统内置超级管理员用户ID，用于控制台权限管理引导。
+	bootstrapAdminUserID = "123e4567-e89b-12d3-a456-426614174000"
 )
 
 var (
 	// 描述：账号服务内置身份令牌存储，当前阶段使用内存实现。
 	globalAuthTokenStore = newAuthTokenStore()
+	// 描述：账号服务内置权限模板，用于控制台授权。
+	defaultPermissionTemplates = []specs.AuthPermissionTemplateItem{
+		{
+			Code:         "model.access.grant",
+			Name:         "模型访问授权",
+			Description:  "允许目标用户访问指定模型资源",
+			ResourceType: "model",
+		},
+		{
+			Code:         "model.access.delegate",
+			Name:         "模型权限转授权",
+			Description:  "允许目标用户向他人继续授予模型权限",
+			ResourceType: "model",
+		},
+		{
+			Code:         "console.permission.manage",
+			Name:         "控制台权限管理",
+			Description:  "允许目标用户在控制台执行权限管理操作",
+			ResourceType: "console",
+		},
+	}
 )
 
 // 描述：鉴权会话信息。
@@ -35,11 +61,13 @@ type AuthSessionInfo struct {
 
 // 描述：账号与鉴权服务，负责登录、会话校验、授权关系与可用智能体查询。
 type AuthService struct {
-	User        *account.User
-	Agent       *account.Agent
-	AgentAccess *account.AgentAccess
-	tokenStore  *authTokenStore
-	tokenTTL    time.Duration
+	User            *account.User
+	Agent           *account.Agent
+	AgentAccess     *account.AgentAccess
+	UserIdentity    *account.UserIdentity
+	PermissionGrant *account.PermissionGrant
+	tokenStore      *authTokenStore
+	tokenTTL        time.Duration
 }
 
 // 描述：创建账号与鉴权服务实例。
@@ -49,11 +77,13 @@ type AuthService struct {
 //   - 0: 鉴权服务实例。
 func NewAuthService() *AuthService {
 	return &AuthService{
-		User:        account.NewUser(),
-		Agent:       account.NewAgent(),
-		AgentAccess: account.NewAgentAccess(),
-		tokenStore:  globalAuthTokenStore,
-		tokenTTL:    defaultAuthTokenTTL,
+		User:            account.NewUser(),
+		Agent:           account.NewAgent(),
+		AgentAccess:     account.NewAgentAccess(),
+		UserIdentity:    account.NewUserIdentity(),
+		PermissionGrant: account.NewPermissionGrant(),
+		tokenStore:      globalAuthTokenStore,
+		tokenTTL:        defaultAuthTokenTTL,
 	}
 }
 
@@ -542,11 +572,528 @@ func (s *AuthService) GetAvailableAgents(userId zspecs.UserId) (specs.AuthAvaila
 	)
 }
 
+// 描述：查询当前用户的多身份信息，覆盖公司、部门与独立用户场景。
+//
+// Params:
+//
+//   - userId: 当前登录用户ID。
+//
+// Returns:
+//
+//   - 0: 身份列表。
+//   - 1: 错误。
+func (s *AuthService) ListUserIdentities(userId zspecs.UserId) (specs.AuthIdentityListResp, error) {
+	return WithService(
+		specs.AuthIdentityListResp{},
+		func(resp specs.AuthIdentityListResp) (specs.AuthIdentityListResp, error) {
+			if ok, msg := userId.Validate(); !ok {
+				return resp, newAuthBizError("1010011017", zstatuscode.Global_App_ParamInvalid.New().Sprintf("userId无效: %s", msg), "userId无效")
+			}
+			identities, err := s.ensureUserIdentities(userId)
+			if err != nil {
+				return resp, zerr.Must(err)
+			}
+			resp.List = identities
+			return resp, nil
+		},
+	)
+}
+
+// 描述：查询当前系统支持的权限模板。
+//
+// Returns:
+//
+//   - 0: 权限模板列表。
+//   - 1: 错误。
+func (s *AuthService) ListPermissionTemplates() (specs.AuthPermissionTemplateListResp, error) {
+	return WithService(
+		specs.AuthPermissionTemplateListResp{},
+		func(resp specs.AuthPermissionTemplateListResp) (specs.AuthPermissionTemplateListResp, error) {
+			resp.List = append(resp.List, defaultPermissionTemplates...)
+			return resp, nil
+		},
+	)
+}
+
+// 描述：查询权限授权记录，可按目标用户、权限编码与资源类型筛选。
+//
+// Params:
+//
+//   - actorUserId: 当前操作用户ID。
+//   - req: 查询请求。
+//
+// Returns:
+//
+//   - 0: 权限授权记录列表。
+//   - 1: 错误。
+func (s *AuthService) ListPermissionGrants(actorUserId zspecs.UserId, req specs.AuthPermissionGrantListReq) (specs.AuthPermissionGrantListResp, error) {
+	return WithService(
+		specs.AuthPermissionGrantListResp{},
+		func(resp specs.AuthPermissionGrantListResp) (specs.AuthPermissionGrantListResp, error) {
+			if ok, msg := actorUserId.Validate(); !ok {
+				return resp, newAuthBizError("1010011018", zstatuscode.Global_App_ParamInvalid.New().Sprintf("actorUserId无效: %s", msg), "actorUserId无效")
+			}
+
+			identities, err := s.ensureUserIdentities(actorUserId)
+			if err != nil {
+				return resp, zerr.Must(err)
+			}
+
+			queryReq := req
+			if !hasGrantManageRole(identities) {
+				if queryReq.TargetUserId == "" {
+					queryReq.TargetUserId = actorUserId.String()
+				}
+				if queryReq.TargetUserId != actorUserId.String() {
+					return resp, newAuthBizError("1010011027", zstatuscode.Global_App_ParamInvalid.New().Sprintf("无权查看其他用户授权记录"), "无权查看其他用户授权记录")
+				}
+			}
+
+			query, err := buildPermissionGrantQuery(queryReq)
+			if err != nil {
+				return resp, err
+			}
+			grantDTO, err := s.PermissionGrant.GetList(account.NewDBOpCfg(), query, false)
+			if err != nil {
+				return resp, zerr.Must(err)
+			}
+			if grantDTO == nil || len(grantDTO.PermissionGrants) == 0 {
+				return resp, nil
+			}
+
+			for _, grant := range grantDTO.PermissionGrants {
+				if grant == nil {
+					continue
+				}
+				resp.List = append(resp.List, buildAuthPermissionGrantItem(grant))
+			}
+			sort.SliceStable(resp.List, func(i int, j int) bool {
+				leftID, leftErr := strconv.ParseInt(resp.List[i].GrantId, 10, 64)
+				rightID, rightErr := strconv.ParseInt(resp.List[j].GrantId, 10, 64)
+				if leftErr != nil || rightErr != nil {
+					return resp.List[i].GrantId < resp.List[j].GrantId
+				}
+				return leftID < rightID
+			})
+			return resp, nil
+		},
+	)
+}
+
+// 描述：新增权限授权记录，用于模型等资源的授权管理。
+//
+// Params:
+//
+//   - actorUserId: 当前操作用户ID。
+//   - req: 授权请求。
+//
+// Returns:
+//
+//   - 0: 授权结果。
+//   - 1: 错误。
+func (s *AuthService) GrantPermission(actorUserId zspecs.UserId, req specs.AuthGrantPermissionReq) (specs.AuthGrantPermissionResp, error) {
+	return WithService(
+		specs.AuthGrantPermissionResp{},
+		func(resp specs.AuthGrantPermissionResp) (specs.AuthGrantPermissionResp, error) {
+			if ok, msg := actorUserId.Validate(); !ok {
+				return resp, newAuthBizError("1010011019", zstatuscode.Global_App_ParamInvalid.New().Sprintf("actorUserId无效: %s", msg), "actorUserId无效")
+			}
+
+			identities, err := s.ensureUserIdentities(actorUserId)
+			if err != nil {
+				return resp, zerr.Must(err)
+			}
+			if !hasGrantManageRole(identities) {
+				return resp, newAuthBizError("1010011028", zstatuscode.Global_App_ParamInvalid.New().Sprintf("当前身份无授权管理权限"), "当前身份无授权管理权限")
+			}
+
+			targetSpec := zspecs.NewUserId(req.TargetUserId)
+			if ok, msg := targetSpec.Validate(); !ok {
+				return resp, newAuthBizError("1010011020", zstatuscode.Global_App_ParamInvalid.New().Sprintf("targetUserId无效: %s", msg), "targetUserId无效")
+			}
+			if strings.TrimSpace(req.TargetUserName) == "" {
+				return resp, newAuthBizError("1010011021", zstatuscode.Global_App_ParamInvalid.New().Sprintf("targetUserName不能为空"), "targetUserName不能为空")
+			}
+			if strings.TrimSpace(req.PermissionCode) == "" {
+				return resp, newAuthBizError("1010011022", zstatuscode.Global_App_ParamInvalid.New().Sprintf("permissionCode不能为空"), "permissionCode不能为空")
+			}
+			if strings.TrimSpace(req.ResourceType) == "" {
+				return resp, newAuthBizError("1010011023", zstatuscode.Global_App_ParamInvalid.New().Sprintf("resourceType不能为空"), "resourceType不能为空")
+			}
+			if strings.TrimSpace(req.ResourceName) == "" {
+				return resp, newAuthBizError("1010011024", zstatuscode.Global_App_ParamInvalid.New().Sprintf("resourceName不能为空"), "resourceName不能为空")
+			}
+
+			targetUserNameSpec := zspecs.NewUserName(strings.TrimSpace(req.TargetUserName))
+			if ok, msg := targetUserNameSpec.Validate(); !ok {
+				return resp, newAuthBizError("1010011030", zstatuscode.Global_App_ParamInvalid.New().Sprintf("targetUserName无效: %s", msg), "targetUserName无效")
+			}
+			permissionCodeSpec := zspecs.NewCode(strings.TrimSpace(req.PermissionCode))
+			if ok, msg := permissionCodeSpec.Validate(); !ok {
+				return resp, newAuthBizError("1010011031", zstatuscode.Global_App_ParamInvalid.New().Sprintf("permissionCode无效: %s", msg), "permissionCode无效")
+			}
+			resourceTypeSpec := zspecs.NewCode(strings.TrimSpace(req.ResourceType))
+			if ok, msg := resourceTypeSpec.Validate(); !ok {
+				return resp, newAuthBizError("1010011032", zstatuscode.Global_App_ParamInvalid.New().Sprintf("resourceType无效: %s", msg), "resourceType无效")
+			}
+			resourceNameSpec := zspecs.NewName(strings.TrimSpace(req.ResourceName))
+			if ok, msg := resourceNameSpec.Validate(); !ok {
+				return resp, newAuthBizError("1010011033", zstatuscode.Global_App_ParamInvalid.New().Sprintf("resourceName无效: %s", msg), "resourceName无效")
+			}
+
+			grantedBy := actorUserId
+			statusActive := zspecs.NewStatus(1)
+			var expiresAtRemark *zspecs.Remark
+			if strings.TrimSpace(req.ExpiresAt) != "" {
+				expiresAtRemark = zspecs.NewRemark(strings.TrimSpace(req.ExpiresAt))
+				if ok, msg := expiresAtRemark.Validate(); !ok {
+					return resp, newAuthBizError("1010011034", zstatuscode.Global_App_ParamInvalid.New().Sprintf("expiresAt无效: %s", msg), "expiresAt无效")
+				}
+			}
+
+			createReq := account.PermissionGrantCreate{
+				ActorUserId:    actorUserId,
+				TargetUserId:   *targetSpec,
+				TargetUserName: *targetUserNameSpec,
+				PermissionCode: *permissionCodeSpec,
+				ResourceType:   *resourceTypeSpec,
+				ResourceName:   *resourceNameSpec,
+				GrantedBy:      &grantedBy,
+				Status:         statusActive,
+				ExpiresAt:      expiresAtRemark,
+			}
+			createDTO, err := s.PermissionGrant.Create(account.NewDBOpCfg(), createReq)
+			if err != nil {
+				return resp, zerr.Must(err)
+			}
+			if createDTO == nil || createDTO.PermissionGrant == nil {
+				return resp, zerr.Err_1003002002.New("PermissionGrant")
+			}
+
+			resp.Item = buildAuthPermissionGrantItem(createDTO.PermissionGrant)
+			logAccountAuditEvent(
+				"auth.permission.grant",
+				map[string]string{
+					"actorUserId":  actorUserId.String(),
+					"targetUserId": req.TargetUserId,
+					"permission":   req.PermissionCode,
+					"resourceType": req.ResourceType,
+				},
+			)
+			return resp, nil
+		},
+	)
+}
+
+// 描述：撤销权限授权记录。
+//
+// Params:
+//
+//   - actorUserId: 当前操作用户ID。
+//   - req: 撤销请求。
+//
+// Returns:
+//
+//   - 0: 撤销结果。
+//   - 1: 错误。
+func (s *AuthService) RevokePermission(actorUserId zspecs.UserId, req specs.AuthRevokePermissionReq) (specs.AuthRevokePermissionResp, error) {
+	return WithService(
+		specs.AuthRevokePermissionResp{},
+		func(resp specs.AuthRevokePermissionResp) (specs.AuthRevokePermissionResp, error) {
+			if ok, msg := actorUserId.Validate(); !ok {
+				return resp, newAuthBizError("1010011025", zstatuscode.Global_App_ParamInvalid.New().Sprintf("actorUserId无效: %s", msg), "actorUserId无效")
+			}
+
+			identities, err := s.ensureUserIdentities(actorUserId)
+			if err != nil {
+				return resp, zerr.Must(err)
+			}
+			if !hasGrantManageRole(identities) {
+				return resp, newAuthBizError("1010011029", zstatuscode.Global_App_ParamInvalid.New().Sprintf("当前身份无授权管理权限"), "当前身份无授权管理权限")
+			}
+			if strings.TrimSpace(req.GrantId) == "" {
+				return resp, newAuthBizError("1010011026", zstatuscode.Global_App_ParamInvalid.New().Sprintf("grantId不能为空"), "grantId不能为空")
+			}
+			grantIDValue, parseErr := strconv.ParseInt(strings.TrimSpace(req.GrantId), 10, 64)
+			if parseErr != nil {
+				return resp, newAuthBizError("1010011035", zstatuscode.Global_App_ParamInvalid.New().Sprintf("grantId无效"), "grantId无效")
+			}
+			grantID := zspecs.NewId(grantIDValue)
+
+			cfg := account.NewDBOpCfg()
+			cfg.KeepOpen = true
+			query := account.PermissionGrantQuery{Id: grantID}
+			grantDTO, err := s.PermissionGrant.GetList(cfg, query, false)
+			if err != nil {
+				return resp, zerr.Must(err)
+			}
+			if grantDTO == nil || len(grantDTO.PermissionGrants) == 0 || grantDTO.PermissionGrants[0] == nil {
+				resp.Success = false
+				return resp, nil
+			}
+
+			if err = s.PermissionGrant.Delete(cfg, grantDTO.PermissionGrants[0]); err != nil {
+				return resp, zerr.Must(err)
+			}
+			if err = s.PermissionGrant.Save(cfg); err != nil {
+				return resp, zerr.Must(err)
+			}
+
+			resp.Success = true
+			logAccountAuditEvent(
+				"auth.permission.revoke",
+				map[string]string{
+					"actorUserId": actorUserId.String(),
+					"grantId":     req.GrantId,
+					"success":     strconv.FormatBool(resp.Success),
+				},
+			)
+			return resp, nil
+		},
+	)
+}
+
 // 描述：构建业务错误并绑定状态码。
 func newAuthBizError(code string, statusCode *zstatuscode.StatusCode, msg string) error {
 	err := zerr.New(code, msg, 4, msg)
 	err.StatuCode = statusCode
 	return err
+}
+
+// 描述：确保指定用户至少存在一组默认身份，如果不存在则自动初始化。
+func (s *AuthService) ensureUserIdentities(userId zspecs.UserId) ([]specs.AuthIdentityItem, error) {
+	query := account.UserIdentityQuery{UserId: &userId}
+	identityDTO, err := s.UserIdentity.GetList(account.NewDBOpCfg(), query, false)
+	if err != nil {
+		if shouldFallbackIdentity(err) {
+			return buildDefaultIdentityItems(userId), nil
+		}
+		return nil, zerr.Must(err)
+	}
+	if identityDTO != nil && len(identityDTO.UserIdentitys) > 0 {
+		return buildAuthIdentityItems(identityDTO.UserIdentitys), nil
+	}
+
+	defaultCreates := buildDefaultUserIdentityCreates(userId)
+	if len(defaultCreates) == 0 {
+		return []specs.AuthIdentityItem{}, nil
+	}
+	if _, err = s.UserIdentity.CreateList(account.NewDBOpCfg(), defaultCreates); err != nil {
+		if shouldFallbackIdentity(err) {
+			return buildDefaultIdentityItems(userId), nil
+		}
+		return nil, zerr.Must(err)
+	}
+
+	identityDTO, err = s.UserIdentity.GetList(account.NewDBOpCfg(), query, false)
+	if err != nil {
+		if shouldFallbackIdentity(err) {
+			return buildDefaultIdentityItems(userId), nil
+		}
+		return nil, zerr.Must(err)
+	}
+	if identityDTO == nil {
+		return []specs.AuthIdentityItem{}, nil
+	}
+	return buildAuthIdentityItems(identityDTO.UserIdentitys), nil
+}
+
+// 描述：在数据库连接未初始化场景下允许回退默认身份，避免基础接口不可用。
+func shouldFallbackIdentity(err error) bool {
+	if err == nil {
+		return false
+	}
+	errText := strings.ToLower(err.Error())
+	return strings.Contains(errText, "connection tag 'account' does not exist")
+}
+
+// 描述：构建默认身份返回结构，用于数据库不可用时的降级。
+func buildDefaultIdentityItems(userId zspecs.UserId) []specs.AuthIdentityItem {
+	creates := buildDefaultUserIdentityCreates(userId)
+	items := make([]specs.AuthIdentityItem, 0, len(creates))
+	for _, createReq := range creates {
+		roleCodes := []string{}
+		if createReq.RoleCodes != nil {
+			roleCodes = splitCommaValues(createReq.RoleCodes.String())
+		}
+		items = append(items, specs.AuthIdentityItem{
+			IdentityId:   createReq.ScopeCode.String() + "-" + userId.String(),
+			IdentityType: createReq.IdentityType.String(),
+			ScopeName:    createReq.ScopeName.String(),
+			RoleCodes:    roleCodes,
+			Status:       "active",
+		})
+	}
+	return items
+}
+
+// 描述：构建用户默认身份写入参数。
+func buildDefaultUserIdentityCreates(userId zspecs.UserId) []account.UserIdentityCreate {
+	organizationRoles := []string{"org_member", "model_operator"}
+	departmentRoles := []string{"department_member"}
+	if userId.String() == bootstrapAdminUserID {
+		organizationRoles = append(organizationRoles, "org_admin", "permission_admin")
+		departmentRoles = append(departmentRoles, "department_admin")
+	}
+
+	identityStatus := zspecs.NewStatus(1)
+	organizationRolesRemark := zspecs.NewRemark(strings.Join(organizationRoles, ","))
+	departmentRolesRemark := zspecs.NewRemark(strings.Join(departmentRoles, ","))
+	individualRolesRemark := zspecs.NewRemark("individual_user")
+
+	return []account.UserIdentityCreate{
+		{
+			UserId:       userId,
+			IdentityType: *zspecs.NewCode("organization_member"),
+			ScopeCode:    *zspecs.NewCode("org"),
+			ScopeName:    *zspecs.NewName("Zodileap"),
+			RoleCodes:    organizationRolesRemark,
+			Status:       identityStatus,
+		},
+		{
+			UserId:       userId,
+			IdentityType: *zspecs.NewCode("department_member"),
+			ScopeCode:    *zspecs.NewCode("dept"),
+			ScopeName:    *zspecs.NewName("Agent Platform"),
+			RoleCodes:    departmentRolesRemark,
+			Status:       identityStatus,
+		},
+		{
+			UserId:       userId,
+			IdentityType: *zspecs.NewCode("individual"),
+			ScopeCode:    *zspecs.NewCode("ind"),
+			ScopeName:    *zspecs.NewName("Personal Workspace"),
+			RoleCodes:    individualRolesRemark,
+			Status:       identityStatus,
+		},
+	}
+}
+
+// 描述：将用户身份实体集合转换为接口返回结构。
+func buildAuthIdentityItems(entities []*account.UserIdentityEntity) []specs.AuthIdentityItem {
+	items := make([]specs.AuthIdentityItem, 0, len(entities))
+	for _, entityItem := range entities {
+		if entityItem == nil {
+			continue
+		}
+		items = append(items, buildAuthIdentityItem(entityItem))
+	}
+	return items
+}
+
+// 描述：将用户身份实体转换为接口返回结构。
+func buildAuthIdentityItem(entityItem *account.UserIdentityEntity) specs.AuthIdentityItem {
+	roleCodes := []string{}
+	if entityItem.RoleCodes() != nil {
+		roleCodes = splitCommaValues(entityItem.RoleCodes().String())
+	}
+	statusText := "active"
+	if entityItem.Status() != nil && entityItem.Status().Int16() != 1 {
+		statusText = "inactive"
+	}
+
+	return specs.AuthIdentityItem{
+		IdentityId:   fmt.Sprintf("%s-%d", entityItem.ScopeCode().String(), entityItem.Id().Int64()),
+		IdentityType: entityItem.IdentityType().String(),
+		ScopeName:    entityItem.ScopeName().String(),
+		RoleCodes:    roleCodes,
+		Status:       statusText,
+	}
+}
+
+// 描述：构建权限授权查询条件。
+func buildPermissionGrantQuery(req specs.AuthPermissionGrantListReq) (account.PermissionGrantQuery, error) {
+	query := account.PermissionGrantQuery{}
+	if strings.TrimSpace(req.TargetUserId) != "" {
+		targetUserId := zspecs.NewUserId(strings.TrimSpace(req.TargetUserId))
+		if ok, msg := targetUserId.Validate(); !ok {
+			return query, newAuthBizError("1010011036", zstatuscode.Global_App_ParamInvalid.New().Sprintf("targetUserId无效: %s", msg), "targetUserId无效")
+		}
+		query.TargetUserId = targetUserId
+	}
+	if strings.TrimSpace(req.PermissionCode) != "" {
+		permissionCode := zspecs.NewCode(strings.TrimSpace(req.PermissionCode))
+		if ok, msg := permissionCode.Validate(); !ok {
+			return query, newAuthBizError("1010011037", zstatuscode.Global_App_ParamInvalid.New().Sprintf("permissionCode无效: %s", msg), "permissionCode无效")
+		}
+		query.PermissionCode = permissionCode
+	}
+	if strings.TrimSpace(req.ResourceType) != "" {
+		resourceType := zspecs.NewCode(strings.TrimSpace(req.ResourceType))
+		if ok, msg := resourceType.Validate(); !ok {
+			return query, newAuthBizError("1010011038", zstatuscode.Global_App_ParamInvalid.New().Sprintf("resourceType无效: %s", msg), "resourceType无效")
+		}
+		query.ResourceType = resourceType
+	}
+	return query, nil
+}
+
+// 描述：将权限授权实体转换为接口返回结构。
+func buildAuthPermissionGrantItem(entityItem *account.PermissionGrantEntity) specs.AuthPermissionGrantItem {
+	createdAt := ""
+	if entityItem.CreatedAt() != nil {
+		createdAt = entityItem.CreatedAt().Time().Format(time.RFC3339Nano)
+	}
+	lastAt := ""
+	if entityItem.LastAt() != nil {
+		lastAt = entityItem.LastAt().Time().Format(time.RFC3339Nano)
+	}
+	expiresAt := ""
+	if entityItem.ExpiresAt() != nil {
+		expiresAt = entityItem.ExpiresAt().String()
+	}
+	grantedBy := ""
+	if entityItem.GrantedBy() != nil {
+		grantedBy = entityItem.GrantedBy().String()
+	}
+	statusText := "active"
+	if entityItem.Status() != nil && entityItem.Status().Int16() != 1 {
+		statusText = "inactive"
+	}
+
+	return specs.AuthPermissionGrantItem{
+		GrantId:        strconv.FormatInt(entityItem.Id().Int64(), 10),
+		ActorUserId:    entityItem.ActorUserId().String(),
+		TargetUserId:   entityItem.TargetUserId().String(),
+		TargetUserName: entityItem.TargetUserName().String(),
+		PermissionCode: entityItem.PermissionCode().String(),
+		ResourceType:   entityItem.ResourceType().String(),
+		ResourceName:   entityItem.ResourceName().String(),
+		GrantedBy:      grantedBy,
+		Status:         statusText,
+		ExpiresAt:      expiresAt,
+		CreatedAt:      createdAt,
+		LastAt:         lastAt,
+	}
+}
+
+// 描述：将逗号分隔的编码字符串拆分为数组。
+func splitCommaValues(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return []string{}
+	}
+	parts := strings.Split(raw, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+		result = append(result, value)
+	}
+	return result
+}
+
+// 描述：判断身份集合是否具备权限管理能力。
+func hasGrantManageRole(identities []specs.AuthIdentityItem) bool {
+	for _, identity := range identities {
+		for _, roleCode := range identity.RoleCodes {
+			if roleCode == "org_admin" || roleCode == "department_admin" || roleCode == "permission_admin" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // 描述：校验密码是否匹配，优先兼容 bcrypt，兼容历史明文数据。

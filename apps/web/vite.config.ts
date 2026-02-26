@@ -28,6 +28,18 @@ function patchAriesDynamicImport() {
 
 export default defineConfig({
   plugins: [patchAriesDynamicImport(), react()],
+  server: {
+    host: "127.0.0.1",
+    port: 1421,
+    strictPort: true,
+    proxy: {
+      "/__api/account": {
+        target: "http://127.0.0.1:18080",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/__api\/account/, "")
+      }
+    }
+  },
   resolve: {
     dedupe: ["react", "react-dom"],
     alias: [

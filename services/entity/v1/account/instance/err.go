@@ -14,6 +14,10 @@ var (
 	AccountAgentAccessErr = zerr.NewEntityError("account", "agent_access")
 	// AccountAgentErr 数据库Account中agent表执行操作出现错误
 	AccountAgentErr = zerr.NewEntityError("account", "agent")
+	// AccountPermissionGrantErr 数据库Account中permission_grant表执行操作出现错误
+	AccountPermissionGrantErr = zerr.NewEntityError("account", "permission_grant")
 	// AccountUserErr 数据库Account中user_info表执行操作出现错误
 	AccountUserErr = zerr.NewEntityError("account", "user_info")
+	// AccountUserIdentityErr 数据库Account中user_identity表执行操作出现错误
+	AccountUserIdentityErr = zerr.NewEntityError("account", "user_identity")
 )

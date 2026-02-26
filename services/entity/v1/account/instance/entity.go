@@ -270,6 +270,148 @@ func (r *Agent) createRemove(param AgentCreate) error {
 	return nil
 }
 
+// PermissionGrant 用于操作permission_grant表的仓储实现
+type PermissionGrant struct {
+}
+
+// NewPermissionGrant 创建新的PermissionGrantRepository实例
+func NewPermissionGrant() *PermissionGrant {
+	return &PermissionGrant{}
+}
+
+// InitDB 初始化数据库
+func (r *PermissionGrant) InitDB(config *DBOpCfg) error {
+	if err := WithInitDB(config); err != nil {
+		return zerr.Must(err)
+	}
+	return nil
+}
+
+// Create 创建一条记录
+func (r *PermissionGrant) Create(config *DBOpCfg, param PermissionGrantCreate) (*PermissionGrantDTO, error) {
+	return WithDB(config, func(nctx context.Context, db *AccountDB) (*PermissionGrantDTO, error) {
+		if err := r.createRemove(param); err != nil {
+			return nil, zerr.Must(err)
+		}
+
+		e, err := r.createPermissionGrant(config, db, param)
+		if err != nil {
+			return nil, zerr.Must(err)
+		}
+		if err = db.Save(nctx); err != nil {
+			return nil, zerr.Must(err)
+		}
+		return r.createPermissionGrantDTO(config.KeepOpen, e, db)
+	})
+}
+
+// CreateList 创建多条记录
+func (r *PermissionGrant) CreateList(config *DBOpCfg, params []PermissionGrantCreate) (*PermissionGrantsDTO, error) {
+	return WithDB(config, func(nctx context.Context, db *AccountDB) (*PermissionGrantsDTO, error) {
+		var es []*entity.PermissionGrantEntity
+		for _, param := range params {
+			if err := r.createRemove(param); err != nil {
+				return nil, zerr.Must(err)
+			}
+			e, err := r.createPermissionGrant(config, db, param)
+			if err != nil {
+				return nil, zerr.Must(err)
+			}
+			es = append(es, e)
+		}
+		if err := db.Save(nctx); err != nil {
+			return nil, zerr.Must(err)
+		}
+		return r.createPermissionGrantsDTO(config.KeepOpen, es, db)
+	})
+}
+
+// Get 获取单条记录
+func (r *PermissionGrant) Get(config *DBOpCfg, query PermissionGrantQuery, includeDelete bool) (*PermissionGrantDTO, error) {
+	return WithDB(config, func(nctx context.Context, db *AccountDB) (*PermissionGrantDTO, error) {
+		q := db.PermissionGrants.Where()
+		if _, err := r.queryPermissionGrant(db, q, query, includeDelete); err != nil {
+			return nil, zerr.Must(err)
+		}
+		e, err := q.Single(nctx)
+		if err != nil {
+			return nil, AccountPermissionGrantErr.Query(err)
+		}
+		return r.createPermissionGrantDTO(config.KeepOpen, e, db)
+	})
+}
+
+// GetList 获取多条记录
+func (r *PermissionGrant) GetList(config *DBOpCfg, query PermissionGrantQuery, includeDelete bool) (*PermissionGrantsDTO, error) {
+	return WithDB(config, func(nctx context.Context, db *AccountDB) (*PermissionGrantsDTO, error) {
+		q := db.PermissionGrants.Where()
+		if _, err := r.queryPermissionGrant(db, q, query, includeDelete); err != nil {
+			return nil, zerr.Must(err)
+		}
+		es, err := q.ToList(nctx)
+		if err != nil {
+			return nil, AccountPermissionGrantErr.Query(err)
+		}
+		return r.createPermissionGrantsDTO(config.KeepOpen, es, db)
+	})
+}
+
+// Update 更新记录
+func (r *PermissionGrant) Update(config *DBOpCfg, e *PermissionGrantEntity, params PermissionGrantUpdate) error {
+	if err := params.Validate(); err != nil {
+		return zerr.Must(err)
+	}
+	if params.ActorUserId != nil {
+		e.SetActorUserId(*params.ActorUserId)
+	}
+	if params.TargetUserId != nil {
+		e.SetTargetUserId(*params.TargetUserId)
+	}
+	if params.TargetUserName != nil {
+		e.SetTargetUserName(*params.TargetUserName)
+	}
+	if params.PermissionCode != nil {
+		e.SetPermissionCode(*params.PermissionCode)
+	}
+	if params.ResourceType != nil {
+		e.SetResourceType(*params.ResourceType)
+	}
+	if params.ResourceName != nil {
+		e.SetResourceName(*params.ResourceName)
+	}
+	if params.GrantedBy != nil {
+		e.SetGrantedBy(*params.GrantedBy)
+	}
+	if params.Status != nil {
+		e.SetStatus(*params.Status)
+	}
+	if params.ExpiresAt != nil {
+		e.SetExpiresAt(*params.ExpiresAt)
+	}
+	return nil
+}
+
+// Delete 逻辑删除 - 设置 DeletedAt 字段
+func (r *PermissionGrant) Delete(config *DBOpCfg, e *PermissionGrantEntity) error {
+	e.SetDeletedAt(zspecs.CreateDeletedAt())
+	return nil
+}
+
+// Remove 物理删除 - 从数据库真实删除记录
+func (r *PermissionGrant) Remove(config *DBOpCfg, e *PermissionGrantEntity) error {
+	return config.Instance.Remove(e.entity)
+}
+
+// Save 保存更改 - 用于在获取记录并修改后执行数据库保存操作
+func (r *PermissionGrant) Save(config *DBOpCfg) error {
+	return WithSave(config, "permission_grant")
+}
+
+// remove 在新建前删除已经被标记为删除的记录
+func (r *PermissionGrant) createRemove(param PermissionGrantCreate) error {
+	return nil
+}
+
 // User 用于操作user_info表的仓储实现
 type User struct {
 }
@@ -397,5 +539,138 @@ func (r *User) Save(config *DBOpCfg) error {
 
 // remove 在新建前删除已经被标记为删除的记录
 func (r *User) createRemove(param UserCreate) error {
+	return nil
+}
+
+// UserIdentity 用于操作user_identity表的仓储实现
+type UserIdentity struct {
+}
+
+// NewUserIdentity 创建新的UserIdentityRepository实例
+func NewUserIdentity() *UserIdentity {
+	return &UserIdentity{}
+}
+
+// InitDB 初始化数据库
+func (r *UserIdentity) InitDB(config *DBOpCfg) error {
+	if err := WithInitDB(config); err != nil {
+		return zerr.Must(err)
+	}
+	return nil
+}
+
+// Create 创建一条记录
+func (r *UserIdentity) Create(config *DBOpCfg, param UserIdentityCreate) (*UserIdentityDTO, error) {
+	return WithDB(config, func(nctx context.Context, db *AccountDB) (*UserIdentityDTO, error) {
+		if err := r.createRemove(param); err != nil {
+			return nil, zerr.Must(err)
+		}
+
+		e, err := r.createUserIdentity(config, db, param)
+		if err != nil {
+			return nil, zerr.Must(err)
+		}
+		if err = db.Save(nctx); err != nil {
+			return nil, zerr.Must(err)
+		}
+		return r.createUserIdentityDTO(config.KeepOpen, e, db)
+	})
+}
+
+// CreateList 创建多条记录
+func (r *UserIdentity) CreateList(config *DBOpCfg, params []UserIdentityCreate) (*UserIdentitysDTO, error) {
+	return WithDB(config, func(nctx context.Context, db *AccountDB) (*UserIdentitysDTO, error) {
+		var es []*entity.UserIdentityEntity
+		for _, param := range params {
+			if err := r.createRemove(param); err != nil {
+				return nil, zerr.Must(err)
+			}
+			e, err := r.createUserIdentity(config, db, param)
+			if err != nil {
+				return nil, zerr.Must(err)
+			}
+			es = append(es, e)
+		}
+		if err := db.Save(nctx); err != nil {
+			return nil, zerr.Must(err)
+		}
+		return r.createUserIdentitysDTO(config.KeepOpen, es, db)
+	})
+}
+
+// Get 获取单条记录
+func (r *UserIdentity) Get(config *DBOpCfg, query UserIdentityQuery, includeDelete bool) (*UserIdentityDTO, error) {
+	return WithDB(config, func(nctx context.Context, db *AccountDB) (*UserIdentityDTO, error) {
+		q := db.UserIdentitys.Where()
+		if _, err := r.queryUserIdentity(db, q, query, includeDelete); err != nil {
+			return nil, zerr.Must(err)
+		}
+		e, err := q.Single(nctx)
+		if err != nil {
+			return nil, AccountUserIdentityErr.Query(err)
+		}
+		return r.createUserIdentityDTO(config.KeepOpen, e, db)
+	})
+}
+
+// GetList 获取多条记录
+func (r *UserIdentity) GetList(config *DBOpCfg, query UserIdentityQuery, includeDelete bool) (*UserIdentitysDTO, error) {
+	return WithDB(config, func(nctx context.Context, db *AccountDB) (*UserIdentitysDTO, error) {
+		q := db.UserIdentitys.Where()
+		if _, err := r.queryUserIdentity(db, q, query, includeDelete); err != nil {
+			return nil, zerr.Must(err)
+		}
+		es, err := q.ToList(nctx)
+		if err != nil {
+			return nil, AccountUserIdentityErr.Query(err)
+		}
+		return r.createUserIdentitysDTO(config.KeepOpen, es, db)
+	})
+}
+
+// Update 更新记录
+func (r *UserIdentity) Update(config *DBOpCfg, e *UserIdentityEntity, params UserIdentityUpdate) error {
+	if err := params.Validate(); err != nil {
+		return zerr.Must(err)
+	}
+	if params.UserId != nil {
+		e.SetUserId(*params.UserId)
+	}
+	if params.IdentityType != nil {
+		e.SetIdentityType(*params.IdentityType)
+	}
+	if params.ScopeCode != nil {
+		e.SetScopeCode(*params.ScopeCode)
+	}
+	if params.ScopeName != nil {
+		e.SetScopeName(*params.ScopeName)
+	}
+	if params.RoleCodes != nil {
+		e.SetRoleCodes(*params.RoleCodes)
+	}
+	if params.Status != nil {
+		e.SetStatus(*params.Status)
+	}
+	return nil
+}
+
+// Delete 逻辑删除 - 设置 DeletedAt 字段
+func (r *UserIdentity) Delete(config *DBOpCfg, e *UserIdentityEntity) error {
+	e.SetDeletedAt(zspecs.CreateDeletedAt())
+	return nil
+}
+
+// Remove 物理删除 - 从数据库真实删除记录
+func (r *UserIdentity) Remove(config *DBOpCfg, e *UserIdentityEntity) error {
+	return config.Instance.Remove(e.entity)
+}
+
+// Save 保存更改 - 用于在获取记录并修改后执行数据库保存操作
+func (r *UserIdentity) Save(config *DBOpCfg) error {
+	return WithSave(config, "user_identity")
+}
+
+// remove 在新建前删除已经被标记为删除的记录
+func (r *UserIdentity) createRemove(param UserIdentityCreate) error {
 	return nil
 }

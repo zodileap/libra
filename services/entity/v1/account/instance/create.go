@@ -103,6 +103,58 @@ func (r *Agent) createAgentsDTO(keepOpen bool, es []*entity.AgentEntity, db *Acc
 	return NewAgentsDTO(es, db), nil
 }
 
+func (r *PermissionGrant) createPermissionGrant(config *DBOpCfg, db *AccountDB, params PermissionGrantCreate) (*entity.PermissionGrantEntity, error) {
+	if err := params.Validate(); err != nil {
+		return nil, zerr.Must(err)
+	}
+	options, err := r.buildPermissionGrantOptions(db, params)
+	if err != nil {
+		return nil, zerr.Must(err)
+	}
+	e, err := db.PermissionGrants.Create(
+		params.ActorUserId.String(),
+		params.TargetUserId.String(),
+		params.TargetUserName.String(),
+		params.PermissionCode.String(),
+		params.ResourceType.String(),
+		params.ResourceName.String(),
+		options...,
+	)
+	if err != nil {
+		return nil, AccountPermissionGrantErr.Create(err)
+	}
+	return e, nil
+}
+
+func (r *PermissionGrant) buildPermissionGrantOptions(db *AccountDB, params PermissionGrantCreate) ([]func(*entity.PermissionGrantEntity), error) {
+	var options []func(*entity.PermissionGrantEntity)
+	if params.GrantedBy != nil {
+		options = append(options, db.PermissionGrants.WithGrantedBy(params.GrantedBy.String()))
+	}
+	if params.Status != nil {
+		options = append(options, db.PermissionGrants.WithStatus(params.Status.Int16()))
+	}
+	if params.ExpiresAt != nil {
+		options = append(options, db.PermissionGrants.WithExpiresAt(params.ExpiresAt.String()))
+	}
+
+	return options, nil
+}
+
+func (r *PermissionGrant) createPermissionGrantDTO(keepOpen bool, e *entity.PermissionGrantEntity, db *AccountDB) (*PermissionGrantDTO, error) {
+	if keepOpen {
+		return NewPermissionGrantDTO(e, db), nil
+	}
+	return NewPermissionGrantDTO(e, db), nil
+}
+
+func (r *PermissionGrant) createPermissionGrantsDTO(keepOpen bool, es []*entity.PermissionGrantEntity, db *AccountDB) (*PermissionGrantsDTO, error) {
+	if keepOpen {
+		return NewPermissionGrantsDTO(es, db), nil
+	}
+	return NewPermissionGrantsDTO(es, db), nil
+}
+
 func (r *User) createUser(config *DBOpCfg, db *AccountDB, params UserCreate) (*entity.UserEntity, error) {
 	if err := params.Validate(); err != nil {
 		return nil, zerr.Must(err)
@@ -152,4 +204,51 @@ func (r *User) createUsersDTO(keepOpen bool, es []*entity.UserEntity, db *Accoun
 		return NewUsersDTO(es, db), nil
 	}
 	return NewUsersDTO(es, db), nil
+}
+
+func (r *UserIdentity) createUserIdentity(config *DBOpCfg, db *AccountDB, params UserIdentityCreate) (*entity.UserIdentityEntity, error) {
+	if err := params.Validate(); err != nil {
+		return nil, zerr.Must(err)
+	}
+	options, err := r.buildUserIdentityOptions(db, params)
+	if err != nil {
+		return nil, zerr.Must(err)
+	}
+	e, err := db.UserIdentitys.Create(
+		params.UserId.String(),
+		params.IdentityType.String(),
+		params.ScopeCode.String(),
+		params.ScopeName.String(),
+		options...,
+	)
+	if err != nil {
+		return nil, AccountUserIdentityErr.Create(err)
+	}
+	return e, nil
+}
+
+func (r *UserIdentity) buildUserIdentityOptions(db *AccountDB, params UserIdentityCreate) ([]func(*entity.UserIdentityEntity), error) {
+	var options []func(*entity.UserIdentityEntity)
+	if params.RoleCodes != nil {
+		options = append(options, db.UserIdentitys.WithRoleCodes(params.RoleCodes.String()))
+	}
+	if params.Status != nil {
+		options = append(options, db.UserIdentitys.WithStatus(params.Status.Int16()))
+	}
+
+	return options, nil
+}
+
+func (r *UserIdentity) createUserIdentityDTO(keepOpen bool, e *entity.UserIdentityEntity, db *AccountDB) (*UserIdentityDTO, error) {
+	if keepOpen {
+		return NewUserIdentityDTO(e, db), nil
+	}
+	return NewUserIdentityDTO(e, db), nil
+}
+
+func (r *UserIdentity) createUserIdentitysDTO(keepOpen bool, es []*entity.UserIdentityEntity, db *AccountDB) (*UserIdentitysDTO, error) {
+	if keepOpen {
+		return NewUserIdentitysDTO(es, db), nil
+	}
+	return NewUserIdentitysDTO(es, db), nil
 }

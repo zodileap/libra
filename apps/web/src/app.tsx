@@ -1,5 +1,5 @@
 import { StrictMode } from "react";
-import { AriApp, setAppConfig } from "aries_react";
+import { AriApp, AriContainer, setAppConfig } from "aries_react";
 import { AppRouter } from "./routes";
 
 const appConfig = setAppConfig({
@@ -8,13 +8,14 @@ const appConfig = setAppConfig({
   theme: "brand"
 });
 
+// 描述：应用根组件，承载 AriApp 与全局路由。
 export default function App() {
   return (
     <StrictMode>
       <AriApp appConfig={appConfig}>
-        <div className="web-app-root">
+        <AriContainer className="web-app-root">
           <AppRouter />
-        </div>
+        </AriContainer>
       </AriApp>
     </StrictMode>
   );

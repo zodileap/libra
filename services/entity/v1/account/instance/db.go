@@ -15,7 +15,9 @@ import (
 const dbName = "account"
 const agentAccessEntityName = "agent_access"
 const agentEntityName = "agent"
+const permissionGrantEntityName = "permission_grant"
 const userEntityName = "user_info"
+const userIdentityEntityName = "user_identity"
 
 type AccountDB struct {
 	*entity.Account
@@ -129,6 +131,38 @@ func NewAgentsDTO(es []*entity.AgentEntity, db *AccountDB) *AgentsDTO {
 	}
 }
 
+type PermissionGrantDTO struct {
+	PermissionGrant *PermissionGrantEntity
+	DB              *AccountDB
+}
+
+func NewPermissionGrantDTO(e *entity.PermissionGrantEntity, db *AccountDB) *PermissionGrantDTO {
+	var instance *PermissionGrantEntity
+	if e != nil {
+		instance = newPermissionGrantEntity(e)
+	}
+	return &PermissionGrantDTO{
+		PermissionGrant: instance,
+		DB:              db,
+	}
+}
+
+type PermissionGrantsDTO struct {
+	PermissionGrants []*PermissionGrantEntity
+	DB               *AccountDB
+}
+
+func NewPermissionGrantsDTO(es []*entity.PermissionGrantEntity, db *AccountDB) *PermissionGrantsDTO {
+	instance := make([]*PermissionGrantEntity, 0, len(es))
+	for _, e := range es {
+		instance = append(instance, newPermissionGrantEntity(e))
+	}
+	return &PermissionGrantsDTO{
+		PermissionGrants: instance,
+		DB:               db,
+	}
+}
+
 type UserDTO struct {
 	User *UserEntity
 	DB   *AccountDB
@@ -158,5 +192,37 @@ func NewUsersDTO(es []*entity.UserEntity, db *AccountDB) *UsersDTO {
 	return &UsersDTO{
 		Users: instance,
 		DB:    db,
+	}
+}
+
+type UserIdentityDTO struct {
+	UserIdentity *UserIdentityEntity
+	DB           *AccountDB
+}
+
+func NewUserIdentityDTO(e *entity.UserIdentityEntity, db *AccountDB) *UserIdentityDTO {
+	var instance *UserIdentityEntity
+	if e != nil {
+		instance = newUserIdentityEntity(e)
+	}
+	return &UserIdentityDTO{
+		UserIdentity: instance,
+		DB:           db,
+	}
+}
+
+type UserIdentitysDTO struct {
+	UserIdentitys []*UserIdentityEntity
+	DB            *AccountDB
+}
+
+func NewUserIdentitysDTO(es []*entity.UserIdentityEntity, db *AccountDB) *UserIdentitysDTO {
+	instance := make([]*UserIdentityEntity, 0, len(es))
+	for _, e := range es {
+		instance = append(instance, newUserIdentityEntity(e))
+	}
+	return &UserIdentitysDTO{
+		UserIdentitys: instance,
+		DB:            db,
 	}
 }

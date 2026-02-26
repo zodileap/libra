@@ -100,6 +100,53 @@ type AgentDeleteResp struct {
 	Success bool `json:"success"` // 是否删除成功
 }
 
+// 请求 - 创建多个权限授权记录
+type PermissionGrantCreateListReq struct {
+	List []account.PermissionGrantCreate `json:"list"` // 创建的数据
+}
+
+// 响应 - 创建多个权限授权记录
+type PermissionGrantCreateListResp struct {
+	List []*account.PermissionGrantEntity `json:"list"` // 创建的数据
+}
+
+// 请求 - 更新权限授权记录
+type PermissionGrantUpdateReq struct {
+	Query  account.PermissionGrantQuery  `json:"query" form:"query" binding:"required"`   // 查询条件
+	Update account.PermissionGrantUpdate `json:"update" form:"update" binding:"required"` // 更新内容
+}
+
+// 响应 - 更新权限授权记录
+type PermissionGrantUpdateResp struct {
+	List []*account.PermissionGrantEntity `json:"list"` // 更新的数据
+}
+
+// 请求 - 更新多个权限授权记录
+type PermissionGrantUpdateListReq struct {
+	List []PermissionGrantUpdateReq `json:"list"` // 更新的数据
+}
+
+// 响应 - 更新多个权限授权记录
+type PermissionGrantUpdateListResp struct {
+	List []*account.PermissionGrantEntity `json:"list"` // 更新的数据
+}
+
+// 请求 - 删除权限授权记录
+type PermissionGrantDeleteReq struct {
+	Query  account.PermissionGrantQuery `json:"query" form:"query" binding:"required"` // 查询条件
+	Remove bool                         `json:"remove" form:"remove"`                  // 是否物理删除
+}
+
+// 响应 - 获取多个权限授权记录
+type PermissionGrantGetListResp struct {
+	List []*account.PermissionGrantEntity `json:"list"` // 获得的数据
+}
+
+// 响应 - 删除权限授权记录
+type PermissionGrantDeleteResp struct {
+	Success bool `json:"success"` // 是否删除成功
+}
+
 // 请求 - 创建多个平台用户
 type UserCreateListReq struct {
 	List []account.UserCreate `json:"list"` // 创建的数据
@@ -144,5 +191,52 @@ type UserGetListResp struct {
 
 // 响应 - 删除平台用户
 type UserDeleteResp struct {
+	Success bool `json:"success"` // 是否删除成功
+}
+
+// 请求 - 创建多个用户身份
+type UserIdentityCreateListReq struct {
+	List []account.UserIdentityCreate `json:"list"` // 创建的数据
+}
+
+// 响应 - 创建多个用户身份
+type UserIdentityCreateListResp struct {
+	List []*account.UserIdentityEntity `json:"list"` // 创建的数据
+}
+
+// 请求 - 更新用户身份
+type UserIdentityUpdateReq struct {
+	Query  account.UserIdentityQuery  `json:"query" form:"query" binding:"required"`   // 查询条件
+	Update account.UserIdentityUpdate `json:"update" form:"update" binding:"required"` // 更新内容
+}
+
+// 响应 - 更新用户身份
+type UserIdentityUpdateResp struct {
+	List []*account.UserIdentityEntity `json:"list"` // 更新的数据
+}
+
+// 请求 - 更新多个用户身份
+type UserIdentityUpdateListReq struct {
+	List []UserIdentityUpdateReq `json:"list"` // 更新的数据
+}
+
+// 响应 - 更新多个用户身份
+type UserIdentityUpdateListResp struct {
+	List []*account.UserIdentityEntity `json:"list"` // 更新的数据
+}
+
+// 请求 - 删除用户身份
+type UserIdentityDeleteReq struct {
+	Query  account.UserIdentityQuery `json:"query" form:"query" binding:"required"` // 查询条件
+	Remove bool                      `json:"remove" form:"remove"`                  // 是否物理删除
+}
+
+// 响应 - 获取多个用户身份
+type UserIdentityGetListResp struct {
+	List []*account.UserIdentityEntity `json:"list"` // 获得的数据
+}
+
+// 响应 - 删除用户身份
+type UserIdentityDeleteResp struct {
 	Success bool `json:"success"` // 是否删除成功
 }

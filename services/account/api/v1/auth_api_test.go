@@ -173,3 +173,51 @@ func TestAuthorizationHeaderName(t *testing.T) {
 		t.Fatalf("Authorization 头常量不匹配")
 	}
 }
+
+// 描述：校验 identities 接口在鉴权上下文完整时可以返回成功。
+func TestBaseAuthIdentitiesSuccess(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	base := NewBaseAuth()
+	router := gin.New()
+	router.GET("/identities", func(c *gin.Context) {
+		c.Set(authContextUserIDKey, "123e4567-e89b-12d3-a456-426614174000")
+		c.Set(authContextTokenKey, "atk_identity_token")
+		base.identities(c)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/identities", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("identities 应返回 200，got=%d", rec.Code)
+	}
+	resp := decodeAPIResponse(t, rec.Body.Bytes())
+	if resp.Code != 200 {
+		t.Fatalf("业务状态码应为 200，got=%d", resp.Code)
+	}
+}
+
+// 描述：校验 permission-templates 接口可返回模板列表。
+func TestBaseAuthPermissionTemplatesSuccess(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	base := NewBaseAuth()
+	router := gin.New()
+	router.GET("/permission-templates", base.permissionTemplates)
+
+	req := httptest.NewRequest(http.MethodGet, "/permission-templates", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("permission-templates 应返回 200，got=%d", rec.Code)
+	}
+	resp := decodeAPIResponse(t, rec.Body.Bytes())
+	if resp.Code != 200 {
+		t.Fatalf("业务状态码应为 200，got=%d", resp.Code)
+	}
+}

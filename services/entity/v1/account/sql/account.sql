@@ -522,6 +522,292 @@ END
 $$;
 
 -- ********
+-- Sequence permission_grant_id_seq
+-- ********
+DO $$ 
+BEGIN     
+    -- 创建基础序列
+    CREATE SEQUENCE IF NOT EXISTS "public".permission_grant_id_seq
+        INCREMENT 1
+        MINVALUE 1
+        MAXVALUE 9223372036854775807
+        START 1
+        CACHE 1;
+    -- 创建随机种子序列
+    CREATE SEQUENCE IF NOT EXISTS "public"."permission_grant_id_seq_seed"
+    INCREMENT 1
+    MINVALUE 1
+    MAXVALUE 9223372036854775807
+    START 1
+    CACHE 1;
+END $$;
+CREATE OR REPLACE FUNCTION "public".permission_grant_id_seq() 
+RETURNS BIGINT AS $$
+DECLARE
+    timestamp_part BIGINT;
+    sequence_part BIGINT;
+    random_part BIGINT;
+BEGIN
+    -- 获取当前时间戳（毫秒）
+    timestamp_part := (extract(epoch from current_timestamp) * 1000)::BIGINT;
+    
+    -- 获取序列号
+    sequence_part := nextval('"public".permission_grant_id_seq') % 512;
+    
+    -- 获取随机数部分
+    random_part := nextval('"public".permission_grant_id_seq_seed') % 512;
+    
+    -- 组合TSID：41位时间戳 + 9位序列号 + 9位随机数
+    RETURN (timestamp_part << 18) | (sequence_part << 9) | random_part;
+END;
+$$ LANGUAGE plpgsql;
+-- ********
+-- Table "permission_grant"
+-- ********
+DO $$
+DECLARE
+    column_rec RECORD;
+    v_constraint_name TEXT;
+    v_unique_constraint_name TEXT; 
+    v_check_constraint_name TEXT;
+BEGIN
+    IF EXISTS (SELECT FROM pg_tables WHERE schemaname = 'public' AND tablename = 'permission_grant') THEN
+        -- 删除所有CHECK约束
+        FOR v_check_constraint_name IN 
+            SELECT conname
+            FROM pg_constraint con
+            JOIN pg_class rel ON rel.oid = con.conrelid
+            JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+            WHERE nsp.nspname = 'public'
+                AND rel.relname = 'permission_grant'
+                AND con.contype = 'c'
+        LOOP
+            EXECUTE 'ALTER TABLE "public"."permission_grant" DROP CONSTRAINT IF EXISTS ' || quote_ident(v_check_constraint_name);
+        END LOOP;
+
+        -- Check for any extra columns, and delete them if there are any.
+        -- 检查是否有多余的列，如果有则删除。
+        FOR column_rec IN SELECT tbl.column_name, tbl.data_type 
+            FROM information_schema.columns tbl 
+            WHERE table_schema = 'public' 
+            AND table_name = 'permission_grant' 
+        LOOP
+            IF column_rec.column_name NOT IN ('id','actor_user_id','target_user_id','target_user_name','permission_code','resource_type','resource_name','granted_by','status','expires_at','created_at','last_at','deleted_at') THEN
+                EXECUTE 'ALTER TABLE "public"."permission_grant" DROP COLUMN IF EXISTS ' || 
+                        quote_ident(column_rec.column_name) || ' CASCADE';
+            END IF;
+        END LOOP;
+
+        -- Check for missing columns, and add them if any are missing.
+        -- 检查是否缺少列，如果缺少则添加
+        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'permission_grant' AND column_name = 'id' ) THEN
+            ALTER TABLE "public"."permission_grant" ADD COLUMN "id" int8 NOT NULL DEFAULT permission_grant_id_seq();
+        ELSE
+            
+            ALTER TABLE "public"."permission_grant" ALTER COLUMN "id" SET NOT NULL; 
+            ALTER TABLE "public"."permission_grant" ALTER COLUMN "id" SET DEFAULT permission_grant_id_seq(); ALTER TABLE "public"."permission_grant" ALTER COLUMN "id" TYPE int8 USING "id"::int8;
+        END IF;
+        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'permission_grant' AND column_name = 'actor_user_id' ) THEN
+            ALTER TABLE "public"."permission_grant" ADD COLUMN "actor_user_id" uuid NOT NULL;
+        ELSE
+            
+            ALTER TABLE "public"."permission_grant" ALTER COLUMN "actor_user_id" SET NOT NULL; 
+            ALTER TABLE "public"."permission_grant" ALTER COLUMN "actor_user_id" DROP DEFAULT; ALTER TABLE "public"."permission_grant" ALTER COLUMN "actor_user_id" TYPE uuid USING "actor_user_id"::uuid;
+        END IF;
+        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'permission_grant' AND column_name = 'target_user_id' ) THEN
+            ALTER TABLE "public"."permission_grant" ADD COLUMN "target_user_id" uuid NOT NULL;
+        ELSE
+            
+            ALTER TABLE "public"."permission_grant" ALTER COLUMN "target_user_id" SET NOT NULL; 
+            ALTER TABLE "public"."permission_grant" ALTER COLUMN "target_user_id" DROP DEFAULT; ALTER TABLE "public"."permission_grant" ALTER COLUMN "target_user_id" TYPE uuid USING "target_user_id"::uuid;
+        END IF;
+        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'permission_grant' AND column_name = 'target_user_name' ) THEN
+            ALTER TABLE "public"."permission_grant" ADD COLUMN "target_user_name" varchar(255) NOT NULL;
+        ELSE
+            
+            ALTER TABLE "public"."permission_grant" ALTER COLUMN "target_user_name" SET NOT NULL; 
+            ALTER TABLE "public"."permission_grant" ALTER COLUMN "target_user_name" DROP DEFAULT; ALTER TABLE "public"."permission_grant" ALTER COLUMN "target_user_name" TYPE varchar(255) USING "target_user_name"::varchar(255);
+        END IF;
+        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'permission_grant' AND column_name = 'permission_code' ) THEN
+            ALTER TABLE "public"."permission_grant" ADD COLUMN "permission_code" varchar(128) NOT NULL;
+        ELSE
+            
+            ALTER TABLE "public"."permission_grant" ALTER COLUMN "permission_code" SET NOT NULL; 
+            ALTER TABLE "public"."permission_grant" ALTER COLUMN "permission_code" DROP DEFAULT; ALTER TABLE "public"."permission_grant" ALTER COLUMN "permission_code" TYPE varchar(128) USING "permission_code"::varchar(128);
+        END IF;
+        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'permission_grant' AND column_name = 'resource_type' ) THEN
+            ALTER TABLE "public"."permission_grant" ADD COLUMN "resource_type" varchar(128) NOT NULL;
+        ELSE
+            
+            ALTER TABLE "public"."permission_grant" ALTER COLUMN "resource_type" SET NOT NULL; 
+            ALTER TABLE "public"."permission_grant" ALTER COLUMN "resource_type" DROP DEFAULT; ALTER TABLE "public"."permission_grant" ALTER COLUMN "resource_type" TYPE varchar(128) USING "resource_type"::varchar(128);
+        END IF;
+        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'permission_grant' AND column_name = 'resource_name' ) THEN
+            ALTER TABLE "public"."permission_grant" ADD COLUMN "resource_name" varchar(255) NOT NULL;
+        ELSE
+            
+            ALTER TABLE "public"."permission_grant" ALTER COLUMN "resource_name" SET NOT NULL; 
+            ALTER TABLE "public"."permission_grant" ALTER COLUMN "resource_name" DROP DEFAULT; ALTER TABLE "public"."permission_grant" ALTER COLUMN "resource_name" TYPE varchar(255) USING "resource_name"::varchar(255);
+        END IF;
+        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'permission_grant' AND column_name = 'granted_by' ) THEN
+            ALTER TABLE "public"."permission_grant" ADD COLUMN "granted_by" uuid;
+        ELSE
+            
+            ALTER TABLE "public"."permission_grant" ALTER COLUMN "granted_by" DROP NOT NULL; 
+            ALTER TABLE "public"."permission_grant" ALTER COLUMN "granted_by" DROP DEFAULT; ALTER TABLE "public"."permission_grant" ALTER COLUMN "granted_by" TYPE uuid USING "granted_by"::uuid;
+        END IF;
+        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'permission_grant' AND column_name = 'status' ) THEN
+            ALTER TABLE "public"."permission_grant" ADD COLUMN "status" int2 DEFAULT 1;
+        ELSE
+            
+            ALTER TABLE "public"."permission_grant" ALTER COLUMN "status" DROP NOT NULL; 
+            ALTER TABLE "public"."permission_grant" ALTER COLUMN "status" SET DEFAULT 1; ALTER TABLE "public"."permission_grant" ALTER COLUMN "status" TYPE int2 USING "status"::int2;
+        END IF;
+        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'permission_grant' AND column_name = 'expires_at' ) THEN
+            ALTER TABLE "public"."permission_grant" ADD COLUMN "expires_at" varchar(1024);
+        ELSE
+            
+            ALTER TABLE "public"."permission_grant" ALTER COLUMN "expires_at" DROP NOT NULL; 
+            ALTER TABLE "public"."permission_grant" ALTER COLUMN "expires_at" DROP DEFAULT; ALTER TABLE "public"."permission_grant" ALTER COLUMN "expires_at" TYPE varchar(1024) USING "expires_at"::varchar(1024);
+        END IF;
+        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'permission_grant' AND column_name = 'created_at' ) THEN
+            ALTER TABLE "public"."permission_grant" ADD COLUMN "created_at" timestamptz(6) DEFAULT CURRENT_TIMESTAMP;
+        ELSE
+            
+            ALTER TABLE "public"."permission_grant" ALTER COLUMN "created_at" DROP NOT NULL; 
+            ALTER TABLE "public"."permission_grant" ALTER COLUMN "created_at" SET DEFAULT CURRENT_TIMESTAMP; ALTER TABLE "public"."permission_grant" ALTER COLUMN "created_at" TYPE timestamptz(6) USING "created_at"::timestamptz(6);
+        END IF;
+        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'permission_grant' AND column_name = 'last_at' ) THEN
+            ALTER TABLE "public"."permission_grant" ADD COLUMN "last_at" timestamptz(6) DEFAULT CURRENT_TIMESTAMP;
+        ELSE
+            
+            ALTER TABLE "public"."permission_grant" ALTER COLUMN "last_at" DROP NOT NULL; 
+            ALTER TABLE "public"."permission_grant" ALTER COLUMN "last_at" SET DEFAULT CURRENT_TIMESTAMP; ALTER TABLE "public"."permission_grant" ALTER COLUMN "last_at" TYPE timestamptz(6) USING "last_at"::timestamptz(6);
+        END IF;
+        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'permission_grant' AND column_name = 'deleted_at' ) THEN
+            ALTER TABLE "public"."permission_grant" ADD COLUMN "deleted_at" timestamptz(6) DEFAULT NULL;
+        ELSE
+            
+            ALTER TABLE "public"."permission_grant" ALTER COLUMN "deleted_at" DROP NOT NULL; 
+            ALTER TABLE "public"."permission_grant" ALTER COLUMN "deleted_at" SET DEFAULT NULL; ALTER TABLE "public"."permission_grant" ALTER COLUMN "deleted_at" TYPE timestamptz(6) USING "deleted_at"::timestamptz(6);
+        END IF;
+
+        -- Search for existing unique and primary key constraints and drop them
+        -- 查找并删除现有的唯一约束和主键约束
+        BEGIN
+            -- Drop primary key constraint
+            -- 删除主键约束
+            SELECT conname INTO v_constraint_name
+            FROM pg_constraint con
+            JOIN pg_class rel ON rel.oid = con.conrelid
+            JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+            WHERE nsp.nspname = 'public'
+                AND rel.relname = 'permission_grant'
+                AND con.contype = 'p';
+            IF v_constraint_name IS NOT NULL THEN
+                EXECUTE 'ALTER TABLE "public"."permission_grant" DROP CONSTRAINT IF EXISTS ' || quote_ident(v_constraint_name) || ' CASCADE';
+            END IF;
+
+            -- Drop unique constraints
+            -- 删除唯一约束
+            FOR v_unique_constraint_name IN 
+                SELECT conname
+                FROM pg_constraint con
+                JOIN pg_class rel ON rel.oid = con.conrelid
+                JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+                WHERE nsp.nspname = 'public'
+                    AND rel.relname = 'permission_grant'
+                    AND con.contype = 'u'
+            LOOP
+                BEGIN
+                    EXECUTE 'ALTER TABLE "public"."permission_grant" DROP CONSTRAINT IF EXISTS ' || quote_ident(v_unique_constraint_name);
+                EXCEPTION WHEN OTHERS THEN
+                    RAISE NOTICE 'Error dropping unique constraint %: %', v_unique_constraint_name, SQLERRM;
+                END;
+            END LOOP;
+        EXCEPTION WHEN OTHERS THEN
+            RAISE NOTICE 'Error during dropping primary key or unique constraints: %', SQLERRM;
+        END;
+
+        -- 添加所有字段的CHECK约束
+    ELSE
+        -- If the table does not exist, then create the table.
+        -- 如果表不存在，则创建表。
+        CREATE TABLE "public"."permission_grant" (
+            "id" int8 NOT NULL DEFAULT permission_grant_id_seq(),
+            "actor_user_id" uuid NOT NULL,
+            "target_user_id" uuid NOT NULL,
+            "target_user_name" varchar(255) NOT NULL,
+            "permission_code" varchar(128) NOT NULL,
+            "resource_type" varchar(128) NOT NULL,
+            "resource_name" varchar(255) NOT NULL,
+            "granted_by" uuid,
+            "status" int2 DEFAULT 1,
+            "expires_at" varchar(1024),
+            "created_at" timestamptz(6) DEFAULT CURRENT_TIMESTAMP,
+            "last_at" timestamptz(6) DEFAULT CURRENT_TIMESTAMP,
+            "deleted_at" timestamptz(6) DEFAULT NULL
+        );
+    END IF;
+    -- Field Comment.
+    -- 字段备注。
+    COMMENT ON COLUMN "public"."permission_grant"."id" IS  '主键Id';
+    COMMENT ON COLUMN "public"."permission_grant"."actor_user_id" IS  '操作人用户Id';
+    COMMENT ON COLUMN "public"."permission_grant"."target_user_id" IS  '目标用户Id';
+    COMMENT ON COLUMN "public"."permission_grant"."target_user_name" IS  '目标用户名称';
+    COMMENT ON COLUMN "public"."permission_grant"."permission_code" IS  '权限编码';
+    COMMENT ON COLUMN "public"."permission_grant"."resource_type" IS  '资源类型';
+    COMMENT ON COLUMN "public"."permission_grant"."resource_name" IS  '资源名称';
+    COMMENT ON COLUMN "public"."permission_grant"."granted_by" IS  '授权人用户Id';
+    COMMENT ON COLUMN "public"."permission_grant"."status" IS  '状态';
+    COMMENT ON COLUMN "public"."permission_grant"."expires_at" IS  '过期时间';
+    COMMENT ON COLUMN "public"."permission_grant"."created_at" IS  '创建数据时间';
+    COMMENT ON COLUMN "public"."permission_grant"."last_at" IS  '更新数据时间';
+    COMMENT ON COLUMN "public"."permission_grant"."deleted_at" IS  '删除数据时间（逻辑删除）';
+    -- Table Comment.
+    -- 表备注。
+    COMMENT ON TABLE "public"."permission_grant" IS '权限授权记录';
+
+    -- Primary Key.
+    -- 主键。
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM pg_constraint con
+            JOIN pg_class rel ON rel.oid = con.conrelid
+            JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+            WHERE nsp.nspname = 'public'
+                AND rel.relname = 'permission_grant'
+                AND con.contype = 'p'
+        ) THEN
+            BEGIN
+                ALTER TABLE "public"."permission_grant" ADD CONSTRAINT permission_grant_pkey PRIMARY KEY ("id");
+            EXCEPTION 
+                WHEN duplicate_table THEN
+                    RAISE NOTICE 'Primary key constraint already exists';
+                WHEN OTHERS THEN
+                    RAISE NOTICE 'Error adding primary key constraint: %', SQLERRM;
+            END;
+        END IF;
+    END;
+
+    -- Add unique constraints
+    -- 添加唯一约束
+    BEGIN
+    EXCEPTION WHEN OTHERS THEN
+        RAISE NOTICE 'Error during adding unique constraints: %', SQLERRM;
+    END;
+
+    -- Add indexes
+    -- 添加索引
+    BEGIN
+    EXCEPTION WHEN OTHERS THEN
+        RAISE NOTICE 'Error during adding indexes: %', SQLERRM;
+    END;
+END
+$$;
+
+-- ********
 -- Table "user_info"
 -- ********
 DO $$
@@ -731,6 +1017,265 @@ BEGIN
 END
 $$;
 
+-- ********
+-- Sequence user_identity_id_seq
+-- ********
+DO $$ 
+BEGIN     
+    -- 创建基础序列
+    CREATE SEQUENCE IF NOT EXISTS "public".user_identity_id_seq
+        INCREMENT 1
+        MINVALUE 1
+        MAXVALUE 9223372036854775807
+        START 1
+        CACHE 1;
+    -- 创建随机种子序列
+    CREATE SEQUENCE IF NOT EXISTS "public"."user_identity_id_seq_seed"
+    INCREMENT 1
+    MINVALUE 1
+    MAXVALUE 9223372036854775807
+    START 1
+    CACHE 1;
+END $$;
+CREATE OR REPLACE FUNCTION "public".user_identity_id_seq() 
+RETURNS BIGINT AS $$
+DECLARE
+    timestamp_part BIGINT;
+    sequence_part BIGINT;
+    random_part BIGINT;
+BEGIN
+    -- 获取当前时间戳（毫秒）
+    timestamp_part := (extract(epoch from current_timestamp) * 1000)::BIGINT;
+    
+    -- 获取序列号
+    sequence_part := nextval('"public".user_identity_id_seq') % 512;
+    
+    -- 获取随机数部分
+    random_part := nextval('"public".user_identity_id_seq_seed') % 512;
+    
+    -- 组合TSID：41位时间戳 + 9位序列号 + 9位随机数
+    RETURN (timestamp_part << 18) | (sequence_part << 9) | random_part;
+END;
+$$ LANGUAGE plpgsql;
+-- ********
+-- Table "user_identity"
+-- ********
+DO $$
+DECLARE
+    column_rec RECORD;
+    v_constraint_name TEXT;
+    v_unique_constraint_name TEXT; 
+    v_check_constraint_name TEXT;
+BEGIN
+    IF EXISTS (SELECT FROM pg_tables WHERE schemaname = 'public' AND tablename = 'user_identity') THEN
+        -- 删除所有CHECK约束
+        FOR v_check_constraint_name IN 
+            SELECT conname
+            FROM pg_constraint con
+            JOIN pg_class rel ON rel.oid = con.conrelid
+            JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+            WHERE nsp.nspname = 'public'
+                AND rel.relname = 'user_identity'
+                AND con.contype = 'c'
+        LOOP
+            EXECUTE 'ALTER TABLE "public"."user_identity" DROP CONSTRAINT IF EXISTS ' || quote_ident(v_check_constraint_name);
+        END LOOP;
+
+        -- Check for any extra columns, and delete them if there are any.
+        -- 检查是否有多余的列，如果有则删除。
+        FOR column_rec IN SELECT tbl.column_name, tbl.data_type 
+            FROM information_schema.columns tbl 
+            WHERE table_schema = 'public' 
+            AND table_name = 'user_identity' 
+        LOOP
+            IF column_rec.column_name NOT IN ('id','user_id','identity_type','scope_code','scope_name','role_codes','status','created_at','last_at','deleted_at') THEN
+                EXECUTE 'ALTER TABLE "public"."user_identity" DROP COLUMN IF EXISTS ' || 
+                        quote_ident(column_rec.column_name) || ' CASCADE';
+            END IF;
+        END LOOP;
+
+        -- Check for missing columns, and add them if any are missing.
+        -- 检查是否缺少列，如果缺少则添加
+        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'user_identity' AND column_name = 'id' ) THEN
+            ALTER TABLE "public"."user_identity" ADD COLUMN "id" int8 NOT NULL DEFAULT user_identity_id_seq();
+        ELSE
+            
+            ALTER TABLE "public"."user_identity" ALTER COLUMN "id" SET NOT NULL; 
+            ALTER TABLE "public"."user_identity" ALTER COLUMN "id" SET DEFAULT user_identity_id_seq(); ALTER TABLE "public"."user_identity" ALTER COLUMN "id" TYPE int8 USING "id"::int8;
+        END IF;
+        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'user_identity' AND column_name = 'user_id' ) THEN
+            ALTER TABLE "public"."user_identity" ADD COLUMN "user_id" uuid NOT NULL;
+        ELSE
+            
+            ALTER TABLE "public"."user_identity" ALTER COLUMN "user_id" SET NOT NULL; 
+            ALTER TABLE "public"."user_identity" ALTER COLUMN "user_id" DROP DEFAULT; ALTER TABLE "public"."user_identity" ALTER COLUMN "user_id" TYPE uuid USING "user_id"::uuid;
+        END IF;
+        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'user_identity' AND column_name = 'identity_type' ) THEN
+            ALTER TABLE "public"."user_identity" ADD COLUMN "identity_type" varchar(128) NOT NULL;
+        ELSE
+            
+            ALTER TABLE "public"."user_identity" ALTER COLUMN "identity_type" SET NOT NULL; 
+            ALTER TABLE "public"."user_identity" ALTER COLUMN "identity_type" DROP DEFAULT; ALTER TABLE "public"."user_identity" ALTER COLUMN "identity_type" TYPE varchar(128) USING "identity_type"::varchar(128);
+        END IF;
+        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'user_identity' AND column_name = 'scope_code' ) THEN
+            ALTER TABLE "public"."user_identity" ADD COLUMN "scope_code" varchar(128) NOT NULL;
+        ELSE
+            
+            ALTER TABLE "public"."user_identity" ALTER COLUMN "scope_code" SET NOT NULL; 
+            ALTER TABLE "public"."user_identity" ALTER COLUMN "scope_code" DROP DEFAULT; ALTER TABLE "public"."user_identity" ALTER COLUMN "scope_code" TYPE varchar(128) USING "scope_code"::varchar(128);
+        END IF;
+        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'user_identity' AND column_name = 'scope_name' ) THEN
+            ALTER TABLE "public"."user_identity" ADD COLUMN "scope_name" varchar(255) NOT NULL;
+        ELSE
+            
+            ALTER TABLE "public"."user_identity" ALTER COLUMN "scope_name" SET NOT NULL; 
+            ALTER TABLE "public"."user_identity" ALTER COLUMN "scope_name" DROP DEFAULT; ALTER TABLE "public"."user_identity" ALTER COLUMN "scope_name" TYPE varchar(255) USING "scope_name"::varchar(255);
+        END IF;
+        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'user_identity' AND column_name = 'role_codes' ) THEN
+            ALTER TABLE "public"."user_identity" ADD COLUMN "role_codes" varchar(1024);
+        ELSE
+            
+            ALTER TABLE "public"."user_identity" ALTER COLUMN "role_codes" DROP NOT NULL; 
+            ALTER TABLE "public"."user_identity" ALTER COLUMN "role_codes" DROP DEFAULT; ALTER TABLE "public"."user_identity" ALTER COLUMN "role_codes" TYPE varchar(1024) USING "role_codes"::varchar(1024);
+        END IF;
+        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'user_identity' AND column_name = 'status' ) THEN
+            ALTER TABLE "public"."user_identity" ADD COLUMN "status" int2 DEFAULT 1;
+        ELSE
+            
+            ALTER TABLE "public"."user_identity" ALTER COLUMN "status" DROP NOT NULL; 
+            ALTER TABLE "public"."user_identity" ALTER COLUMN "status" SET DEFAULT 1; ALTER TABLE "public"."user_identity" ALTER COLUMN "status" TYPE int2 USING "status"::int2;
+        END IF;
+        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'user_identity' AND column_name = 'created_at' ) THEN
+            ALTER TABLE "public"."user_identity" ADD COLUMN "created_at" timestamptz(6) DEFAULT CURRENT_TIMESTAMP;
+        ELSE
+            
+            ALTER TABLE "public"."user_identity" ALTER COLUMN "created_at" DROP NOT NULL; 
+            ALTER TABLE "public"."user_identity" ALTER COLUMN "created_at" SET DEFAULT CURRENT_TIMESTAMP; ALTER TABLE "public"."user_identity" ALTER COLUMN "created_at" TYPE timestamptz(6) USING "created_at"::timestamptz(6);
+        END IF;
+        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'user_identity' AND column_name = 'last_at' ) THEN
+            ALTER TABLE "public"."user_identity" ADD COLUMN "last_at" timestamptz(6) DEFAULT CURRENT_TIMESTAMP;
+        ELSE
+            
+            ALTER TABLE "public"."user_identity" ALTER COLUMN "last_at" DROP NOT NULL; 
+            ALTER TABLE "public"."user_identity" ALTER COLUMN "last_at" SET DEFAULT CURRENT_TIMESTAMP; ALTER TABLE "public"."user_identity" ALTER COLUMN "last_at" TYPE timestamptz(6) USING "last_at"::timestamptz(6);
+        END IF;
+        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'user_identity' AND column_name = 'deleted_at' ) THEN
+            ALTER TABLE "public"."user_identity" ADD COLUMN "deleted_at" timestamptz(6) DEFAULT NULL;
+        ELSE
+            
+            ALTER TABLE "public"."user_identity" ALTER COLUMN "deleted_at" DROP NOT NULL; 
+            ALTER TABLE "public"."user_identity" ALTER COLUMN "deleted_at" SET DEFAULT NULL; ALTER TABLE "public"."user_identity" ALTER COLUMN "deleted_at" TYPE timestamptz(6) USING "deleted_at"::timestamptz(6);
+        END IF;
+
+        -- Search for existing unique and primary key constraints and drop them
+        -- 查找并删除现有的唯一约束和主键约束
+        BEGIN
+            -- Drop primary key constraint
+            -- 删除主键约束
+            SELECT conname INTO v_constraint_name
+            FROM pg_constraint con
+            JOIN pg_class rel ON rel.oid = con.conrelid
+            JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+            WHERE nsp.nspname = 'public'
+                AND rel.relname = 'user_identity'
+                AND con.contype = 'p';
+            IF v_constraint_name IS NOT NULL THEN
+                EXECUTE 'ALTER TABLE "public"."user_identity" DROP CONSTRAINT IF EXISTS ' || quote_ident(v_constraint_name) || ' CASCADE';
+            END IF;
+
+            -- Drop unique constraints
+            -- 删除唯一约束
+            FOR v_unique_constraint_name IN 
+                SELECT conname
+                FROM pg_constraint con
+                JOIN pg_class rel ON rel.oid = con.conrelid
+                JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+                WHERE nsp.nspname = 'public'
+                    AND rel.relname = 'user_identity'
+                    AND con.contype = 'u'
+            LOOP
+                BEGIN
+                    EXECUTE 'ALTER TABLE "public"."user_identity" DROP CONSTRAINT IF EXISTS ' || quote_ident(v_unique_constraint_name);
+                EXCEPTION WHEN OTHERS THEN
+                    RAISE NOTICE 'Error dropping unique constraint %: %', v_unique_constraint_name, SQLERRM;
+                END;
+            END LOOP;
+        EXCEPTION WHEN OTHERS THEN
+            RAISE NOTICE 'Error during dropping primary key or unique constraints: %', SQLERRM;
+        END;
+
+        -- 添加所有字段的CHECK约束
+    ELSE
+        -- If the table does not exist, then create the table.
+        -- 如果表不存在，则创建表。
+        CREATE TABLE "public"."user_identity" (
+            "id" int8 NOT NULL DEFAULT user_identity_id_seq(),
+            "user_id" uuid NOT NULL,
+            "identity_type" varchar(128) NOT NULL,
+            "scope_code" varchar(128) NOT NULL,
+            "scope_name" varchar(255) NOT NULL,
+            "role_codes" varchar(1024),
+            "status" int2 DEFAULT 1,
+            "created_at" timestamptz(6) DEFAULT CURRENT_TIMESTAMP,
+            "last_at" timestamptz(6) DEFAULT CURRENT_TIMESTAMP,
+            "deleted_at" timestamptz(6) DEFAULT NULL
+        );
+    END IF;
+    -- Field Comment.
+    -- 字段备注。
+    COMMENT ON COLUMN "public"."user_identity"."id" IS  '主键Id';
+    COMMENT ON COLUMN "public"."user_identity"."user_id" IS  '用户Id';
+    COMMENT ON COLUMN "public"."user_identity"."identity_type" IS  '身份类型';
+    COMMENT ON COLUMN "public"."user_identity"."scope_code" IS  '作用域编码';
+    COMMENT ON COLUMN "public"."user_identity"."scope_name" IS  '作用域名称';
+    COMMENT ON COLUMN "public"."user_identity"."role_codes" IS  '角色编码集合（逗号分隔）';
+    COMMENT ON COLUMN "public"."user_identity"."status" IS  '状态';
+    COMMENT ON COLUMN "public"."user_identity"."created_at" IS  '创建数据时间';
+    COMMENT ON COLUMN "public"."user_identity"."last_at" IS  '更新数据时间';
+    COMMENT ON COLUMN "public"."user_identity"."deleted_at" IS  '删除数据时间（逻辑删除）';
+    -- Table Comment.
+    -- 表备注。
+    COMMENT ON TABLE "public"."user_identity" IS '用户身份';
+
+    -- Primary Key.
+    -- 主键。
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM pg_constraint con
+            JOIN pg_class rel ON rel.oid = con.conrelid
+            JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+            WHERE nsp.nspname = 'public'
+                AND rel.relname = 'user_identity'
+                AND con.contype = 'p'
+        ) THEN
+            BEGIN
+                ALTER TABLE "public"."user_identity" ADD CONSTRAINT user_identity_pkey PRIMARY KEY ("id");
+            EXCEPTION 
+                WHEN duplicate_table THEN
+                    RAISE NOTICE 'Primary key constraint already exists';
+                WHEN OTHERS THEN
+                    RAISE NOTICE 'Error adding primary key constraint: %', SQLERRM;
+            END;
+        END IF;
+    END;
+
+    -- Add unique constraints
+    -- 添加唯一约束
+    BEGIN
+    EXCEPTION WHEN OTHERS THEN
+        RAISE NOTICE 'Error during adding unique constraints: %', SQLERRM;
+    END;
+
+    -- Add indexes
+    -- 添加索引
+    BEGIN
+    EXCEPTION WHEN OTHERS THEN
+        RAISE NOTICE 'Error during adding indexes: %', SQLERRM;
+    END;
+END
+$$;
+
 
 
 
@@ -816,6 +1361,38 @@ BEGIN
                 BEFORE UPDATE ON "public"."agent_access"
                 FOR EACH ROW
                 EXECUTE FUNCTION "public"."update_agent_access_last_at_trigger_func"()';
+    END IF;
+    -- 只为存在的表创建触发器
+    IF EXISTS (SELECT FROM pg_tables WHERE schemaname = 'public' AND tablename = 'user_identity') THEN
+        -- Create trigger function
+        EXECUTE 'CREATE OR REPLACE FUNCTION "public"."' || quote_ident('update_user_identity_last_at_trigger_func') || '"()
+            RETURNS TRIGGER AS $func$
+            BEGIN
+                NEW.last_at = CURRENT_TIMESTAMP; RETURN NEW;
+            END;
+            $func$ LANGUAGE plpgsql';
+
+        -- Create trigger
+        EXECUTE 'CREATE TRIGGER "' || quote_ident('update_user_identity_last_at') || '"
+                BEFORE UPDATE ON "public"."user_identity"
+                FOR EACH ROW
+                EXECUTE FUNCTION "public"."update_user_identity_last_at_trigger_func"()';
+    END IF;
+    -- 只为存在的表创建触发器
+    IF EXISTS (SELECT FROM pg_tables WHERE schemaname = 'public' AND tablename = 'permission_grant') THEN
+        -- Create trigger function
+        EXECUTE 'CREATE OR REPLACE FUNCTION "public"."' || quote_ident('update_permission_grant_last_at_trigger_func') || '"()
+            RETURNS TRIGGER AS $func$
+            BEGIN
+                NEW.last_at = CURRENT_TIMESTAMP; RETURN NEW;
+            END;
+            $func$ LANGUAGE plpgsql';
+
+        -- Create trigger
+        EXECUTE 'CREATE TRIGGER "' || quote_ident('update_permission_grant_last_at') || '"
+                BEFORE UPDATE ON "public"."permission_grant"
+                FOR EACH ROW
+                EXECUTE FUNCTION "public"."update_permission_grant_last_at_trigger_func"()';
     END IF;
 END;
 $$;

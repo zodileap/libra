@@ -13,6 +13,11 @@
 - `POST /auth/v1/login`：账号密码登录，返回 token 与用户信息。
 - `GET /auth/v1/me`：读取当前登录用户信息。
 - `POST /auth/v1/logout`：当前 token 失效。
+- `GET /auth/v1/identities`：读取当前用户多身份列表（公司/部门/独立用户）。
+- `GET /auth/v1/permission-templates`：读取可授权权限模板列表。
+- `GET /auth/v1/permission-grants`：读取权限授权记录列表。
+- `POST /auth/v1/permission-grant`：新增权限授权记录。
+- `DELETE /auth/v1/permission-grant`：撤销权限授权记录。
 - `GET /auth/v1/available-agents`：读取当前用户可用智能体列表。
 - `GET /auth/v1/user-agent-accesses`：读取用户智能体授权关系。
 - `POST /auth/v1/user-agent-access`：新增/更新用户智能体授权关系。

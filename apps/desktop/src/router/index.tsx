@@ -1,4 +1,4 @@
-import { Suspense, useMemo } from "react";
+import { Suspense, useMemo, type ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AriContainer, AriTypography } from "aries_react";
 import {
@@ -147,6 +147,11 @@ function RouteLoadingFallback() {
   );
 }
 
+// 描述：为单个路由页面提供局部懒加载兜底，避免全局 Suspense 造成整页（含侧边栏）闪烁。
+function withRouteLoading(children: ReactNode) {
+  return <Suspense fallback={<RouteLoadingFallback />}>{children}</Suspense>;
+}
+
 // 描述：在路由渲染前进行模块与权限守卫，不改变页面业务逻辑。
 function RouteGuard({ auth, routeAccess, children }: { auth: AuthState; routeAccess: RouteAccess; children: JSX.Element }) {
   const location = useLocation();
@@ -164,45 +169,46 @@ export function DesktopRouter({ auth }: { auth: AuthState }) {
   const fallbackPath = resolveAuthedFallbackPath(auth, routeAccess);
 
   return (
-    <Suspense fallback={<RouteLoadingFallback />}>
-      <Routes>
-        <Route
-          path="/login"
-          element={
-            auth.user ? <Navigate to={fallbackPath} replace /> : <CommonLoginPageLazy onLogin={auth.login} />
-          }
-        />
+    <Routes>
+      <Route
+        path="/login"
+        element={
+          auth.user
+            ? <Navigate to={fallbackPath} replace />
+            : withRouteLoading(<CommonLoginPageLazy onLogin={auth.login} />)
+        }
+      />
 
-        <Route
-          path="/"
-          element={
-            auth.user ? (
-              <DesktopLayout
-                user={auth.user}
-                onLogout={auth.logout}
-                availableAgents={auth.availableAgents}
-                routeAccess={routeAccess}
-              />
-            ) : (
-              <Navigate to="/login" replace />
-            )
-          }
-        >
-          <Route index element={<Navigate to={fallbackPath} replace />} />
+      <Route
+        path="/"
+        element={
+          auth.user ? (
+            <DesktopLayout
+              user={auth.user}
+              onLogout={auth.logout}
+              availableAgents={auth.availableAgents}
+              routeAccess={routeAccess}
+            />
+          ) : (
+            <Navigate to="/login" replace />
+          )
+        }
+      >
+        <Route index element={<Navigate to={fallbackPath} replace />} />
 
-          <Route path="home" element={<CommonHomePageLazy availableAgents={auth.availableAgents} />} />
+        <Route path="home" element={withRouteLoading(<CommonHomePageLazy availableAgents={auth.availableAgents} />)} />
 
           {routeAccess.isModuleEnabled(SETTINGS_MODULE_KEY) ? (
             <>
               <Route path="settings" element={<Navigate to="/settings/general" replace />} />
               <Route
                 path="settings/general"
-                element={
+                element={withRouteLoading(
                   <SettingsGeneralPageLazy
                     colorThemeMode={auth.colorThemeMode}
                     onColorThemeModeChange={auth.setColorThemeMode}
-                  />
-                }
+                  />,
+                )}
               />
             </>
           ) : null}
@@ -212,39 +218,45 @@ export function DesktopRouter({ auth }: { auth: AuthState }) {
               <Route
                 path="agents/model/settings"
                 element={
-                  <RouteGuard auth={auth} routeAccess={routeAccess}>
-                    <ModelAgentSettingsPageLazy
-                      modelMcpCapabilities={auth.modelMcpCapabilities}
-                      onModelMcpCapabilitiesChange={auth.setModelMcpCapabilities}
-                      blenderBridgeRuntime={auth.blenderBridgeRuntime}
-                      ensureBlenderBridge={auth.ensureBlenderBridge}
-                    />
-                  </RouteGuard>
+                  withRouteLoading(
+                    <RouteGuard auth={auth} routeAccess={routeAccess}>
+                      <ModelAgentSettingsPageLazy
+                        modelMcpCapabilities={auth.modelMcpCapabilities}
+                        onModelMcpCapabilitiesChange={auth.setModelMcpCapabilities}
+                        blenderBridgeRuntime={auth.blenderBridgeRuntime}
+                        ensureBlenderBridge={auth.ensureBlenderBridge}
+                      />
+                    </RouteGuard>,
+                  )
                 }
               />
               <Route
                 path="agents/code/settings"
                 element={
-                  <RouteGuard auth={auth} routeAccess={routeAccess}>
-                    <CodeAgentSettingsPageLazy />
-                  </RouteGuard>
+                  withRouteLoading(
+                    <RouteGuard auth={auth} routeAccess={routeAccess}>
+                      <CodeAgentSettingsPageLazy />
+                    </RouteGuard>,
+                  )
                 }
               />
             </>
           ) : null}
 
-          <Route
-            path="ai-keys"
-            element={<CommonAiKeyPageLazy aiKeys={auth.aiKeys} onAiKeysChange={auth.setAiKeys} />}
-          />
+        <Route
+          path="ai-keys"
+          element={withRouteLoading(<CommonAiKeyPageLazy aiKeys={auth.aiKeys} onAiKeysChange={auth.setAiKeys} />)}
+        />
 
           {routeAccess.isModuleEnabled(AGENT_MODULE_KEY) ? (
             <Route
               path="agents/code"
               element={
-                <RouteGuard auth={auth} routeAccess={routeAccess}>
-                  <CodeAgentPageLazy modelMcpCapabilities={auth.modelMcpCapabilities} currentUser={auth.user} />
-                </RouteGuard>
+                withRouteLoading(
+                  <RouteGuard auth={auth} routeAccess={routeAccess}>
+                    <CodeAgentPageLazy modelMcpCapabilities={auth.modelMcpCapabilities} currentUser={auth.user} />
+                  </RouteGuard>,
+                )
               }
             />
           ) : null}
@@ -253,9 +265,11 @@ export function DesktopRouter({ auth }: { auth: AuthState }) {
             <Route
               path="agents/model"
               element={
-                <RouteGuard auth={auth} routeAccess={routeAccess}>
-                  <ModelAgentPageLazy modelMcpCapabilities={auth.modelMcpCapabilities} currentUser={auth.user} />
-                </RouteGuard>
+                withRouteLoading(
+                  <RouteGuard auth={auth} routeAccess={routeAccess}>
+                    <ModelAgentPageLazy modelMcpCapabilities={auth.modelMcpCapabilities} currentUser={auth.user} />
+                  </RouteGuard>,
+                )
               }
             />
           ) : null}
@@ -264,15 +278,17 @@ export function DesktopRouter({ auth }: { auth: AuthState }) {
             <Route
               path="agents/code/session/:sessionId"
               element={
-                <RouteGuard auth={auth} routeAccess={routeAccess}>
-                  <CodeSessionPageLazy
-                    currentUser={auth.user}
-                    modelMcpCapabilities={auth.modelMcpCapabilities}
-                    blenderBridgeRuntime={auth.blenderBridgeRuntime}
-                    ensureBlenderBridge={auth.ensureBlenderBridge}
-                    aiKeys={auth.aiKeys}
-                  />
-                </RouteGuard>
+                withRouteLoading(
+                  <RouteGuard auth={auth} routeAccess={routeAccess}>
+                    <CodeSessionPageLazy
+                      currentUser={auth.user}
+                      modelMcpCapabilities={auth.modelMcpCapabilities}
+                      blenderBridgeRuntime={auth.blenderBridgeRuntime}
+                      ensureBlenderBridge={auth.ensureBlenderBridge}
+                      aiKeys={auth.aiKeys}
+                    />
+                  </RouteGuard>,
+                )
               }
             />
           ) : null}
@@ -281,15 +297,17 @@ export function DesktopRouter({ auth }: { auth: AuthState }) {
             <Route
               path="agents/model/session/:sessionId"
               element={
-                <RouteGuard auth={auth} routeAccess={routeAccess}>
-                  <ModelSessionPageLazy
-                    currentUser={auth.user}
-                    modelMcpCapabilities={auth.modelMcpCapabilities}
-                    blenderBridgeRuntime={auth.blenderBridgeRuntime}
-                    ensureBlenderBridge={auth.ensureBlenderBridge}
-                    aiKeys={auth.aiKeys}
-                  />
-                </RouteGuard>
+                withRouteLoading(
+                  <RouteGuard auth={auth} routeAccess={routeAccess}>
+                    <ModelSessionPageLazy
+                      currentUser={auth.user}
+                      modelMcpCapabilities={auth.modelMcpCapabilities}
+                      blenderBridgeRuntime={auth.blenderBridgeRuntime}
+                      ensureBlenderBridge={auth.ensureBlenderBridge}
+                      aiKeys={auth.aiKeys}
+                    />
+                  </RouteGuard>,
+                )
               }
             />
           ) : null}
@@ -298,9 +316,11 @@ export function DesktopRouter({ auth }: { auth: AuthState }) {
             <Route
               path="agents/code/workflows"
               element={
-                <RouteGuard auth={auth} routeAccess={routeAccess}>
-                  <CodeWorkflowPageLazy />
-                </RouteGuard>
+                withRouteLoading(
+                  <RouteGuard auth={auth} routeAccess={routeAccess}>
+                    <CodeWorkflowPageLazy />
+                  </RouteGuard>,
+                )
               }
             />
           ) : null}
@@ -309,19 +329,21 @@ export function DesktopRouter({ auth }: { auth: AuthState }) {
             <Route
               path="agents/model/workflows"
               element={
-                <RouteGuard auth={auth} routeAccess={routeAccess}>
-                  <ModelWorkflowPageLazy />
-                </RouteGuard>
+                withRouteLoading(
+                  <RouteGuard auth={auth} routeAccess={routeAccess}>
+                    <ModelWorkflowPageLazy />
+                  </RouteGuard>,
+                )
               }
             />
           ) : null}
-        </Route>
 
-        <Route
-          path="*"
-          element={<Navigate to={auth.user ? fallbackPath : "/login"} replace />}
-        />
-      </Routes>
-    </Suspense>
+      </Route>
+
+      <Route
+        path="*"
+        element={<Navigate to={auth.user ? fallbackPath : "/login"} replace />}
+      />
+    </Routes>
   );
 }

@@ -502,6 +502,253 @@ func (s *BaseAgent) Delete(req specs.AgentDeleteReq) (specs.AgentDeleteResp, err
 	)
 }
 
+type BasePermissionGrant struct {
+	PermissionGrant *account.PermissionGrant
+}
+
+// 初始化权限授权记录的基础服务实例
+func NewBasePermissionGrant() *BasePermissionGrant {
+	return &BasePermissionGrant{
+		PermissionGrant: account.NewPermissionGrant(),
+	}
+}
+
+// 创建单条权限授权记录
+func (s *BasePermissionGrant) Create(req account.PermissionGrantCreate) (*account.PermissionGrantEntity, error) {
+	return WithService(
+		&account.PermissionGrantEntity{},
+		func(resp *account.PermissionGrantEntity) (*account.PermissionGrantEntity, error) {
+			dto, err := s.PermissionGrant.Create(
+				account.NewDBOpCfg(),
+				req,
+			)
+			if err != nil {
+				return nil, zerr.Must(err)
+			}
+			if dto == nil {
+				return nil, zerr.Err_1003002001.New("BasePermissionGrant", "account", "account")
+			}
+			if dto.PermissionGrant == nil {
+				return nil, zerr.Err_1003002002.New("PermissionGrant")
+			}
+			return dto.PermissionGrant, nil
+		},
+	)
+}
+
+// 创建多条权限授权记录
+func (s *BasePermissionGrant) CreateList(req []account.PermissionGrantCreate) (specs.PermissionGrantCreateListResp, error) {
+	return WithService(
+		specs.PermissionGrantCreateListResp{},
+		func(resp specs.PermissionGrantCreateListResp) (specs.PermissionGrantCreateListResp, error) {
+			dto, err := s.PermissionGrant.CreateList(
+				account.NewDBOpCfg(),
+				req,
+			)
+			if err != nil {
+				return resp, zerr.Must(err)
+			}
+			if dto == nil {
+				return resp, zerr.Err_1003002001.New("BasePermissionGrant", "account", "account")
+			}
+			if len(dto.PermissionGrants) == 0 {
+				return resp, zerr.Err_1003002002.New("PermissionGrant")
+			}
+			for _, PermissionGrant := range dto.PermissionGrants {
+				if PermissionGrant == nil {
+					return resp, zerr.Err_1003002002.New("PermissionGrant").Sprintf()
+				}
+				resp.List = append(resp.List, PermissionGrant)
+			}
+			return resp, nil
+		},
+	)
+}
+
+// 更新权限授权记录
+func (s BasePermissionGrant) Update(req specs.PermissionGrantUpdateReq) (specs.PermissionGrantUpdateResp, error) {
+	return WithService(
+		specs.PermissionGrantUpdateResp{},
+		func(resp specs.PermissionGrantUpdateResp) (specs.PermissionGrantUpdateResp, error) {
+			cfg := account.NewDBOpCfg()
+			cfg.KeepOpen = true
+
+			dto, err := s.PermissionGrant.GetList(
+				cfg,
+				req.Query,
+				false,
+			)
+			if err != nil {
+				return resp, zerr.Must(err)
+			}
+			if dto == nil {
+				return resp, zerr.Err_1003002001.New("BasePermissionGrant", "account", "account")
+			}
+			if len(dto.PermissionGrants) == 0 {
+				return resp, zerr.Err_1003002002.New("PermissionGrant")
+			}
+			for _, permissionGrant := range dto.PermissionGrants {
+				if err := s.PermissionGrant.Update(
+					cfg,
+					permissionGrant,
+					req.Update,
+				); err != nil {
+					return resp, zerr.Must(err)
+				}
+				resp.List = append(resp.List, permissionGrant)
+			}
+
+			if err := s.PermissionGrant.Save(cfg); err != nil {
+				return resp, zerr.Must(err)
+			}
+			return resp, nil
+		},
+	)
+}
+
+// 更新多个权限授权记录
+func (s BasePermissionGrant) UpdateList(req specs.PermissionGrantUpdateListReq) (specs.PermissionGrantUpdateListResp, error) {
+	return WithService(
+		specs.PermissionGrantUpdateListResp{},
+		func(resp specs.PermissionGrantUpdateListResp) (specs.PermissionGrantUpdateListResp, error) {
+			cfg := account.NewDBOpCfg()
+			cfg.KeepOpen = true
+
+			for _, item := range req.List {
+				dto, err := s.PermissionGrant.GetList(
+					cfg,
+					item.Query,
+					false,
+				)
+				if err != nil {
+					return resp, zerr.Must(err)
+				}
+				if dto == nil {
+					return resp, zerr.Err_1003002001.New("BasePermissionGrant", "account", "account")
+				}
+				if len(dto.PermissionGrants) == 0 {
+					return resp, zerr.Err_1003002002.New("PermissionGrant")
+				}
+				for _, permissionGrant := range dto.PermissionGrants {
+					if err := s.PermissionGrant.Update(
+						cfg,
+						permissionGrant,
+						item.Update,
+					); err != nil {
+						return resp, zerr.Must(err)
+					}
+					resp.List = append(resp.List, permissionGrant)
+				}
+			}
+
+			if err := s.PermissionGrant.Save(cfg); err != nil {
+				return resp, zerr.Must(err)
+			}
+			return resp, nil
+		},
+	)
+}
+
+// 获取单条权限授权记录
+func (s *BasePermissionGrant) Get(req account.PermissionGrantQuery) (*account.PermissionGrantEntity, error) {
+	return WithService(
+		&account.PermissionGrantEntity{},
+		func(resp *account.PermissionGrantEntity) (*account.PermissionGrantEntity, error) {
+			dto, err := s.PermissionGrant.Get(
+				account.NewDBOpCfg(),
+				req,
+				false,
+			)
+			if err != nil {
+				return nil, zerr.Must(err)
+			}
+			if dto == nil {
+				return nil, nil
+			}
+			if dto.PermissionGrant == nil {
+				return nil, nil
+			}
+			return dto.PermissionGrant, nil
+		},
+	)
+}
+
+// 获取多条权限授权记录
+func (s *BasePermissionGrant) GetList(req account.PermissionGrantQuery) (specs.PermissionGrantGetListResp, error) {
+	return WithService(
+		specs.PermissionGrantGetListResp{},
+		func(resp specs.PermissionGrantGetListResp) (specs.PermissionGrantGetListResp, error) {
+			dto, err := s.PermissionGrant.GetList(
+				account.NewDBOpCfg(),
+				req,
+				false,
+			)
+			if err != nil {
+				return resp, zerr.Must(err)
+			}
+			if dto == nil {
+				return resp, nil
+			}
+			if len(dto.PermissionGrants) == 0 {
+				return resp, nil
+			}
+			for _, PermissionGrant := range dto.PermissionGrants {
+				if PermissionGrant == nil {
+					continue
+				}
+				resp.List = append(resp.List, PermissionGrant)
+			}
+			return resp, nil
+		},
+	)
+}
+
+// 删除权限授权记录
+func (s *BasePermissionGrant) Delete(req specs.PermissionGrantDeleteReq) (specs.PermissionGrantDeleteResp, error) {
+	return WithService(
+		specs.PermissionGrantDeleteResp{},
+		func(resp specs.PermissionGrantDeleteResp) (specs.PermissionGrantDeleteResp, error) {
+			cfg := account.NewDBOpCfg()
+			cfg.KeepOpen = true
+			query := req.Query
+			dto, err := s.PermissionGrant.GetList(
+				cfg,
+				query,
+				false,
+			)
+			if err != nil {
+				return resp, zerr.Must(err)
+			}
+			if dto == nil {
+				return resp, zerr.Err_1003002001.New("BasePermissionGrant", "account", "account")
+			}
+			for _, permissionGrant := range dto.PermissionGrants {
+				var err error
+				if req.Remove {
+					err = s.PermissionGrant.Remove(
+						cfg,
+						permissionGrant,
+					)
+				} else {
+					err = s.PermissionGrant.Delete(
+						cfg,
+						permissionGrant,
+					)
+				}
+				if err != nil {
+					return resp, zerr.Must(err)
+				}
+			}
+			if err := s.PermissionGrant.Save(cfg); err != nil {
+				return resp, zerr.Must(err)
+			}
+
+			resp.Success = true
+			return resp, nil
+		},
+	)
+}
+
 type BaseUser struct {
 	User *account.User
 }
@@ -740,6 +987,253 @@ func (s *BaseUser) Delete(req specs.UserDeleteReq) (specs.UserDeleteResp, error)
 				}
 			}
 			if err := s.User.Save(cfg); err != nil {
+				return resp, zerr.Must(err)
+			}
+
+			resp.Success = true
+			return resp, nil
+		},
+	)
+}
+
+type BaseUserIdentity struct {
+	UserIdentity *account.UserIdentity
+}
+
+// 初始化用户身份的基础服务实例
+func NewBaseUserIdentity() *BaseUserIdentity {
+	return &BaseUserIdentity{
+		UserIdentity: account.NewUserIdentity(),
+	}
+}
+
+// 创建单条用户身份
+func (s *BaseUserIdentity) Create(req account.UserIdentityCreate) (*account.UserIdentityEntity, error) {
+	return WithService(
+		&account.UserIdentityEntity{},
+		func(resp *account.UserIdentityEntity) (*account.UserIdentityEntity, error) {
+			dto, err := s.UserIdentity.Create(
+				account.NewDBOpCfg(),
+				req,
+			)
+			if err != nil {
+				return nil, zerr.Must(err)
+			}
+			if dto == nil {
+				return nil, zerr.Err_1003002001.New("BaseUserIdentity", "account", "account")
+			}
+			if dto.UserIdentity == nil {
+				return nil, zerr.Err_1003002002.New("UserIdentity")
+			}
+			return dto.UserIdentity, nil
+		},
+	)
+}
+
+// 创建多条用户身份
+func (s *BaseUserIdentity) CreateList(req []account.UserIdentityCreate) (specs.UserIdentityCreateListResp, error) {
+	return WithService(
+		specs.UserIdentityCreateListResp{},
+		func(resp specs.UserIdentityCreateListResp) (specs.UserIdentityCreateListResp, error) {
+			dto, err := s.UserIdentity.CreateList(
+				account.NewDBOpCfg(),
+				req,
+			)
+			if err != nil {
+				return resp, zerr.Must(err)
+			}
+			if dto == nil {
+				return resp, zerr.Err_1003002001.New("BaseUserIdentity", "account", "account")
+			}
+			if len(dto.UserIdentitys) == 0 {
+				return resp, zerr.Err_1003002002.New("UserIdentity")
+			}
+			for _, UserIdentity := range dto.UserIdentitys {
+				if UserIdentity == nil {
+					return resp, zerr.Err_1003002002.New("UserIdentity").Sprintf()
+				}
+				resp.List = append(resp.List, UserIdentity)
+			}
+			return resp, nil
+		},
+	)
+}
+
+// 更新用户身份
+func (s BaseUserIdentity) Update(req specs.UserIdentityUpdateReq) (specs.UserIdentityUpdateResp, error) {
+	return WithService(
+		specs.UserIdentityUpdateResp{},
+		func(resp specs.UserIdentityUpdateResp) (specs.UserIdentityUpdateResp, error) {
+			cfg := account.NewDBOpCfg()
+			cfg.KeepOpen = true
+
+			dto, err := s.UserIdentity.GetList(
+				cfg,
+				req.Query,
+				false,
+			)
+			if err != nil {
+				return resp, zerr.Must(err)
+			}
+			if dto == nil {
+				return resp, zerr.Err_1003002001.New("BaseUserIdentity", "account", "account")
+			}
+			if len(dto.UserIdentitys) == 0 {
+				return resp, zerr.Err_1003002002.New("UserIdentity")
+			}
+			for _, userIdentity := range dto.UserIdentitys {
+				if err := s.UserIdentity.Update(
+					cfg,
+					userIdentity,
+					req.Update,
+				); err != nil {
+					return resp, zerr.Must(err)
+				}
+				resp.List = append(resp.List, userIdentity)
+			}
+
+			if err := s.UserIdentity.Save(cfg); err != nil {
+				return resp, zerr.Must(err)
+			}
+			return resp, nil
+		},
+	)
+}
+
+// 更新多个用户身份
+func (s BaseUserIdentity) UpdateList(req specs.UserIdentityUpdateListReq) (specs.UserIdentityUpdateListResp, error) {
+	return WithService(
+		specs.UserIdentityUpdateListResp{},
+		func(resp specs.UserIdentityUpdateListResp) (specs.UserIdentityUpdateListResp, error) {
+			cfg := account.NewDBOpCfg()
+			cfg.KeepOpen = true
+
+			for _, item := range req.List {
+				dto, err := s.UserIdentity.GetList(
+					cfg,
+					item.Query,
+					false,
+				)
+				if err != nil {
+					return resp, zerr.Must(err)
+				}
+				if dto == nil {
+					return resp, zerr.Err_1003002001.New("BaseUserIdentity", "account", "account")
+				}
+				if len(dto.UserIdentitys) == 0 {
+					return resp, zerr.Err_1003002002.New("UserIdentity")
+				}
+				for _, userIdentity := range dto.UserIdentitys {
+					if err := s.UserIdentity.Update(
+						cfg,
+						userIdentity,
+						item.Update,
+					); err != nil {
+						return resp, zerr.Must(err)
+					}
+					resp.List = append(resp.List, userIdentity)
+				}
+			}
+
+			if err := s.UserIdentity.Save(cfg); err != nil {
+				return resp, zerr.Must(err)
+			}
+			return resp, nil
+		},
+	)
+}
+
+// 获取单条用户身份
+func (s *BaseUserIdentity) Get(req account.UserIdentityQuery) (*account.UserIdentityEntity, error) {
+	return WithService(
+		&account.UserIdentityEntity{},
+		func(resp *account.UserIdentityEntity) (*account.UserIdentityEntity, error) {
+			dto, err := s.UserIdentity.Get(
+				account.NewDBOpCfg(),
+				req,
+				false,
+			)
+			if err != nil {
+				return nil, zerr.Must(err)
+			}
+			if dto == nil {
+				return nil, nil
+			}
+			if dto.UserIdentity == nil {
+				return nil, nil
+			}
+			return dto.UserIdentity, nil
+		},
+	)
+}
+
+// 获取多条用户身份
+func (s *BaseUserIdentity) GetList(req account.UserIdentityQuery) (specs.UserIdentityGetListResp, error) {
+	return WithService(
+		specs.UserIdentityGetListResp{},
+		func(resp specs.UserIdentityGetListResp) (specs.UserIdentityGetListResp, error) {
+			dto, err := s.UserIdentity.GetList(
+				account.NewDBOpCfg(),
+				req,
+				false,
+			)
+			if err != nil {
+				return resp, zerr.Must(err)
+			}
+			if dto == nil {
+				return resp, nil
+			}
+			if len(dto.UserIdentitys) == 0 {
+				return resp, nil
+			}
+			for _, UserIdentity := range dto.UserIdentitys {
+				if UserIdentity == nil {
+					continue
+				}
+				resp.List = append(resp.List, UserIdentity)
+			}
+			return resp, nil
+		},
+	)
+}
+
+// 删除用户身份
+func (s *BaseUserIdentity) Delete(req specs.UserIdentityDeleteReq) (specs.UserIdentityDeleteResp, error) {
+	return WithService(
+		specs.UserIdentityDeleteResp{},
+		func(resp specs.UserIdentityDeleteResp) (specs.UserIdentityDeleteResp, error) {
+			cfg := account.NewDBOpCfg()
+			cfg.KeepOpen = true
+			query := req.Query
+			dto, err := s.UserIdentity.GetList(
+				cfg,
+				query,
+				false,
+			)
+			if err != nil {
+				return resp, zerr.Must(err)
+			}
+			if dto == nil {
+				return resp, zerr.Err_1003002001.New("BaseUserIdentity", "account", "account")
+			}
+			for _, userIdentity := range dto.UserIdentitys {
+				var err error
+				if req.Remove {
+					err = s.UserIdentity.Remove(
+						cfg,
+						userIdentity,
+					)
+				} else {
+					err = s.UserIdentity.Delete(
+						cfg,
+						userIdentity,
+					)
+				}
+				if err != nil {
+					return resp, zerr.Must(err)
+				}
+			}
+			if err := s.UserIdentity.Save(cfg); err != nil {
 				return resp, zerr.Must(err)
 			}
 

@@ -20,6 +20,14 @@ type agentaccessentityRel interface {
 	rel
 }
 
+type permissiongrantentityRel interface {
+	rel
+}
+
 type userentityRel interface {
+	rel
+}
+
+type useridentityentityRel interface {
 	rel
 }

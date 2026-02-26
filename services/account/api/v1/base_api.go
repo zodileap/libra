@@ -302,6 +302,150 @@ func (api *BaseAgent) delete(c *gin.Context) {
 	)
 }
 
+type BasePermissionGrant struct {
+	PermissionGrant *service.BasePermissionGrant
+}
+
+// 初始化权限授权记录的基础API实例
+func NewBasePermissionGrant() *BasePermissionGrant {
+	return &BasePermissionGrant{
+		PermissionGrant: service.NewBasePermissionGrant(),
+	}
+}
+
+// 创建单个权限授权记录
+func (api *BasePermissionGrant) create(c *gin.Context) {
+	processName := zlog.NewProcessName("api", "BasePermissionGrant", "create")
+	ctx := zlog.WithLogProcess(context.Background(), processName)
+	zapi.WithPost(
+		c,
+		ctx,
+		nil,
+		zstatuscode.Global_API_CreateFailed,
+		func(headerParam zapi.HeaderParam, req account.PermissionGrantCreate) zapi.Result {
+			resp, err := api.PermissionGrant.Create(req)
+			return zapi.Result{
+				Resp: resp,
+				Err:  err,
+			}
+		},
+	)
+}
+
+// 创建多个权限授权记录
+func (api *BasePermissionGrant) createList(c *gin.Context) {
+	processName := zlog.NewProcessName("api", "BasePermissionGrant", "createList")
+	ctx := zlog.WithLogProcess(context.Background(), processName)
+	zapi.WithPost(
+		c,
+		ctx,
+		nil,
+		zstatuscode.Global_API_CreateFailed,
+		func(headerParam zapi.HeaderParam, req specs.PermissionGrantCreateListReq) zapi.Result {
+			resp, err := api.PermissionGrant.CreateList(req.List)
+			return zapi.Result{
+				Resp: resp,
+				Err:  err,
+			}
+		},
+	)
+}
+
+// 更新权限授权记录
+func (api *BasePermissionGrant) update(c *gin.Context) {
+	processName := zlog.NewProcessName("api", "BasePermissionGrant", "update")
+	ctx := zlog.WithLogProcess(context.Background(), processName)
+	zapi.WithPut(
+		c,
+		ctx,
+		nil,
+		zstatuscode.Global_API_UpdateFailed,
+		func(headerParam zapi.HeaderParam, req specs.PermissionGrantUpdateReq) zapi.Result {
+			resp, err := api.PermissionGrant.Update(req)
+			return zapi.Result{
+				Resp: resp,
+				Err:  err,
+			}
+		},
+	)
+}
+
+// 更新多个权限授权记录
+func (api *BasePermissionGrant) updateList(c *gin.Context) {
+	processName := zlog.NewProcessName("api", "BasePermissionGrant", "updateList")
+	ctx := zlog.WithLogProcess(context.Background(), processName)
+	zapi.WithPut(
+		c,
+		ctx,
+		nil,
+		zstatuscode.Global_API_UpdateFailed,
+		func(headerParam zapi.HeaderParam, req specs.PermissionGrantUpdateListReq) zapi.Result {
+			resp, err := api.PermissionGrant.UpdateList(req)
+			return zapi.Result{
+				Resp: resp,
+				Err:  err,
+			}
+		},
+	)
+}
+
+// 获取单个权限授权记录
+func (api *BasePermissionGrant) get(c *gin.Context) {
+	processName := zlog.NewProcessName("api", "BasePermissionGrant", "get")
+	ctx := zlog.WithLogProcess(context.Background(), processName)
+	zapi.WithGet(
+		c,
+		ctx,
+		nil,
+		zstatuscode.Global_API_GetFailed,
+		func(headerParam zapi.HeaderParam, req account.PermissionGrantQuery) zapi.Result {
+			resp, err := api.PermissionGrant.Get(req)
+			return zapi.Result{
+				Resp: resp,
+				Err:  err,
+			}
+		},
+	)
+}
+
+// 获取多个权限授权记录
+func (api *BasePermissionGrant) getList(c *gin.Context) {
+	processName := zlog.NewProcessName("api", "BasePermissionGrant", "getList")
+	ctx := zlog.WithLogProcess(context.Background(), processName)
+	zapi.WithGet(
+		c,
+		ctx,
+		nil,
+		zstatuscode.Global_API_GetFailed,
+		func(headerParam zapi.HeaderParam, req account.PermissionGrantQuery) zapi.Result {
+			resp, err := api.PermissionGrant.GetList(req)
+			return zapi.Result{
+				Resp: resp,
+				Err:  err,
+			}
+		},
+	)
+}
+
+// 删除权限授权记录
+func (api *BasePermissionGrant) delete(c *gin.Context) {
+	processName := zlog.NewProcessName("api", "BasePermissionGrant", "delete")
+	ctx := zlog.WithLogProcess(context.Background(), processName)
+	zapi.WithDelete(
+		c,
+		ctx,
+		nil,
+		zstatuscode.Global_API_DeleteFailed,
+		func(headerParam zapi.HeaderParam, req specs.PermissionGrantDeleteReq) zapi.Result {
+			resp, err := api.PermissionGrant.Delete(req)
+			return zapi.Result{
+				Resp: resp,
+				Err:  err,
+			}
+		},
+	)
+}
+
 type BaseUser struct {
 	User *service.BaseUser
 }
@@ -438,6 +582,150 @@ func (api *BaseUser) delete(c *gin.Context) {
 		zstatuscode.Global_API_DeleteFailed,
 		func(headerParam zapi.HeaderParam, req specs.UserDeleteReq) zapi.Result {
 			resp, err := api.User.Delete(req)
+			return zapi.Result{
+				Resp: resp,
+				Err:  err,
+			}
+		},
+	)
+}
+
+type BaseUserIdentity struct {
+	UserIdentity *service.BaseUserIdentity
+}
+
+// 初始化用户身份的基础API实例
+func NewBaseUserIdentity() *BaseUserIdentity {
+	return &BaseUserIdentity{
+		UserIdentity: service.NewBaseUserIdentity(),
+	}
+}
+
+// 创建单个用户身份
+func (api *BaseUserIdentity) create(c *gin.Context) {
+	processName := zlog.NewProcessName("api", "BaseUserIdentity", "create")
+	ctx := zlog.WithLogProcess(context.Background(), processName)
+	zapi.WithPost(
+		c,
+		ctx,
+		nil,
+		zstatuscode.Global_API_CreateFailed,
+		func(headerParam zapi.HeaderParam, req account.UserIdentityCreate) zapi.Result {
+			resp, err := api.UserIdentity.Create(req)
+			return zapi.Result{
+				Resp: resp,
+				Err:  err,
+			}
+		},
+	)
+}
+
+// 创建多个用户身份
+func (api *BaseUserIdentity) createList(c *gin.Context) {
+	processName := zlog.NewProcessName("api", "BaseUserIdentity", "createList")
+	ctx := zlog.WithLogProcess(context.Background(), processName)
+	zapi.WithPost(
+		c,
+		ctx,
+		nil,
+		zstatuscode.Global_API_CreateFailed,
+		func(headerParam zapi.HeaderParam, req specs.UserIdentityCreateListReq) zapi.Result {
+			resp, err := api.UserIdentity.CreateList(req.List)
+			return zapi.Result{
+				Resp: resp,
+				Err:  err,
+			}
+		},
+	)
+}
+
+// 更新用户身份
+func (api *BaseUserIdentity) update(c *gin.Context) {
+	processName := zlog.NewProcessName("api", "BaseUserIdentity", "update")
+	ctx := zlog.WithLogProcess(context.Background(), processName)
+	zapi.WithPut(
+		c,
+		ctx,
+		nil,
+		zstatuscode.Global_API_UpdateFailed,
+		func(headerParam zapi.HeaderParam, req specs.UserIdentityUpdateReq) zapi.Result {
+			resp, err := api.UserIdentity.Update(req)
+			return zapi.Result{
+				Resp: resp,
+				Err:  err,
+			}
+		},
+	)
+}
+
+// 更新多个用户身份
+func (api *BaseUserIdentity) updateList(c *gin.Context) {
+	processName := zlog.NewProcessName("api", "BaseUserIdentity", "updateList")
+	ctx := zlog.WithLogProcess(context.Background(), processName)
+	zapi.WithPut(
+		c,
+		ctx,
+		nil,
+		zstatuscode.Global_API_UpdateFailed,
+		func(headerParam zapi.HeaderParam, req specs.UserIdentityUpdateListReq) zapi.Result {
+			resp, err := api.UserIdentity.UpdateList(req)
+			return zapi.Result{
+				Resp: resp,
+				Err:  err,
+			}
+		},
+	)
+}
+
+// 获取单个用户身份
+func (api *BaseUserIdentity) get(c *gin.Context) {
+	processName := zlog.NewProcessName("api", "BaseUserIdentity", "get")
+	ctx := zlog.WithLogProcess(context.Background(), processName)
+	zapi.WithGet(
+		c,
+		ctx,
+		nil,
+		zstatuscode.Global_API_GetFailed,
+		func(headerParam zapi.HeaderParam, req account.UserIdentityQuery) zapi.Result {
+			resp, err := api.UserIdentity.Get(req)
+			return zapi.Result{
+				Resp: resp,
+				Err:  err,
+			}
+		},
+	)
+}
+
+// 获取多个用户身份
+func (api *BaseUserIdentity) getList(c *gin.Context) {
+	processName := zlog.NewProcessName("api", "BaseUserIdentity", "getList")
+	ctx := zlog.WithLogProcess(context.Background(), processName)
+	zapi.WithGet(
+		c,
+		ctx,
+		nil,
+		zstatuscode.Global_API_GetFailed,
+		func(headerParam zapi.HeaderParam, req account.UserIdentityQuery) zapi.Result {
+			resp, err := api.UserIdentity.GetList(req)
+			return zapi.Result{
+				Resp: resp,
+				Err:  err,
+			}
+		},
+	)
+}
+
+// 删除用户身份
+func (api *BaseUserIdentity) delete(c *gin.Context) {
+	processName := zlog.NewProcessName("api", "BaseUserIdentity", "delete")
+	ctx := zlog.WithLogProcess(context.Background(), processName)
+	zapi.WithDelete(
+		c,
+		ctx,
+		nil,
+		zstatuscode.Global_API_DeleteFailed,
+		func(headerParam zapi.HeaderParam, req specs.UserIdentityDeleteReq) zapi.Result {
+			resp, err := api.UserIdentity.Delete(req)
 			return zapi.Result{
 				Resp: resp,
 				Err:  err,

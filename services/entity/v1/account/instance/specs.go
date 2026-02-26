@@ -656,6 +656,451 @@ func (e *AgentUpdate) Validate() error {
 	return nil
 }
 
+// 权限授权记录实例
+type PermissionGrantEntity struct {
+	entity *entity.PermissionGrantEntity
+}
+
+func newPermissionGrantEntity(entity *entity.PermissionGrantEntity) *PermissionGrantEntity {
+	return &PermissionGrantEntity{entity: entity}
+}
+
+func (e *PermissionGrantEntity) MarshalJSON() ([]byte, error) {
+	type tempJSON struct {
+		Id             string     `json:"id"`
+		ActorUserId    string     `json:"actor_user_id"`
+		TargetUserId   string     `json:"target_user_id"`
+		TargetUserName string     `json:"target_user_name"`
+		PermissionCode string     `json:"permission_code"`
+		ResourceType   string     `json:"resource_type"`
+		ResourceName   string     `json:"resource_name"`
+		GrantedBy      *string    `json:"granted_by"`
+		Status         *int16     `json:"status"`
+		ExpiresAt      *string    `json:"expires_at"`
+		CreatedAt      *time.Time `json:"created_at"`
+		LastAt         *time.Time `json:"last_at"`
+		DeletedAt      *time.Time `json:"deleted_at,omitempty"`
+	}
+	Id := strconv.FormatInt(e.entity.Id.Get(), 10)
+	temp := tempJSON{
+		Id:             Id,
+		ActorUserId:    e.entity.ActorUserId.Get(),
+		TargetUserId:   e.entity.TargetUserId.Get(),
+		TargetUserName: e.entity.TargetUserName.Get(),
+		PermissionCode: e.entity.PermissionCode.Get(),
+		ResourceType:   e.entity.ResourceType.Get(),
+		ResourceName:   e.entity.ResourceName.Get(),
+		GrantedBy:      e.entity.GrantedBy.Get(),
+		Status:         e.entity.Status.Get(),
+		ExpiresAt:      e.entity.ExpiresAt.Get(),
+		CreatedAt:      e.entity.CreatedAt.Get(),
+		LastAt:         e.entity.LastAt.Get(),
+		DeletedAt:      e.entity.DeletedAt.Get(),
+	}
+
+	return json.Marshal(temp)
+}
+
+func (e *PermissionGrantEntity) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, e.entity)
+}
+func (e *PermissionGrantEntity) Id() zspecs.Id {
+	v := e.entity.Id.Get()
+
+	specV := zspecs.NewId(v)
+	return *specV
+
+}
+func (e *PermissionGrantEntity) SetId(v zspecs.Id) {
+	e.entity.Id.Set(v.Int64())
+}
+
+func (e *PermissionGrantEntity) ActorUserId() zspecs.UserId {
+	v := e.entity.ActorUserId.Get()
+
+	specV := zspecs.NewUserId(v)
+	return *specV
+
+}
+func (e *PermissionGrantEntity) SetActorUserId(v zspecs.UserId) {
+	e.entity.ActorUserId.Set(v.String())
+}
+
+func (e *PermissionGrantEntity) TargetUserId() zspecs.UserId {
+	v := e.entity.TargetUserId.Get()
+
+	specV := zspecs.NewUserId(v)
+	return *specV
+
+}
+func (e *PermissionGrantEntity) SetTargetUserId(v zspecs.UserId) {
+	e.entity.TargetUserId.Set(v.String())
+}
+
+func (e *PermissionGrantEntity) TargetUserName() zspecs.UserName {
+	v := e.entity.TargetUserName.Get()
+
+	specV := zspecs.NewUserName(v)
+	return *specV
+
+}
+func (e *PermissionGrantEntity) SetTargetUserName(v zspecs.UserName) {
+	e.entity.TargetUserName.Set(v.String())
+}
+
+func (e *PermissionGrantEntity) PermissionCode() zspecs.Code {
+	v := e.entity.PermissionCode.Get()
+
+	specV := zspecs.NewCode(v)
+	return *specV
+
+}
+func (e *PermissionGrantEntity) SetPermissionCode(v zspecs.Code) {
+	e.entity.PermissionCode.Set(v.String())
+}
+
+func (e *PermissionGrantEntity) ResourceType() zspecs.Code {
+	v := e.entity.ResourceType.Get()
+
+	specV := zspecs.NewCode(v)
+	return *specV
+
+}
+func (e *PermissionGrantEntity) SetResourceType(v zspecs.Code) {
+	e.entity.ResourceType.Set(v.String())
+}
+
+func (e *PermissionGrantEntity) ResourceName() zspecs.Name {
+	v := e.entity.ResourceName.Get()
+
+	specV := zspecs.NewName(v)
+	return *specV
+
+}
+func (e *PermissionGrantEntity) SetResourceName(v zspecs.Name) {
+	e.entity.ResourceName.Set(v.String())
+}
+
+func (e *PermissionGrantEntity) GrantedBy() *zspecs.UserId {
+	v := e.entity.GrantedBy.Get()
+
+	if v == nil {
+		return nil
+	}
+
+	specV := zspecs.NewUserId(*v)
+	return specV
+
+}
+func (e *PermissionGrantEntity) SetGrantedBy(v zspecs.UserId) {
+	e.entity.GrantedBy.Set(v.String())
+}
+
+func (e *PermissionGrantEntity) Status() *zspecs.Status {
+	v := e.entity.Status.Get()
+
+	if v == nil {
+		return nil
+	}
+
+	specV := zspecs.NewStatus(*v)
+	return specV
+
+}
+func (e *PermissionGrantEntity) SetStatus(v zspecs.Status) {
+	e.entity.Status.Set(v.Int16())
+}
+
+func (e *PermissionGrantEntity) ExpiresAt() *zspecs.Remark {
+	v := e.entity.ExpiresAt.Get()
+
+	if v == nil {
+		return nil
+	}
+
+	specV := zspecs.NewRemark(*v)
+	return specV
+
+}
+func (e *PermissionGrantEntity) SetExpiresAt(v zspecs.Remark) {
+	e.entity.ExpiresAt.Set(v.String())
+}
+
+func (e *PermissionGrantEntity) CreatedAt() *zspecs.CreatedAt {
+	v := e.entity.CreatedAt.Get()
+
+	if v == nil {
+		return nil
+	}
+
+	specV := zspecs.NewCreatedAt(*v)
+	return specV
+
+}
+func (e *PermissionGrantEntity) SetCreatedAt(v zspecs.CreatedAt) {
+	e.entity.CreatedAt.Set(v.Time())
+}
+
+func (e *PermissionGrantEntity) LastAt() *zspecs.LastAt {
+	v := e.entity.LastAt.Get()
+
+	if v == nil {
+		return nil
+	}
+
+	specV := zspecs.NewLastAt(*v)
+	return specV
+
+}
+func (e *PermissionGrantEntity) SetLastAt(v zspecs.LastAt) {
+	e.entity.LastAt.Set(v.Time())
+}
+
+func (e *PermissionGrantEntity) DeletedAt() *zspecs.DeletedAt {
+	v := e.entity.DeletedAt.Get()
+
+	if v == nil {
+		return nil
+	}
+
+	specV := zspecs.NewDeletedAt(*v)
+	return specV
+
+}
+func (e *PermissionGrantEntity) SetDeletedAt(v zspecs.DeletedAt) {
+	e.entity.DeletedAt.Set(v.Time())
+}
+
+// 创建单条权限授权记录
+type PermissionGrantCreate struct {
+	ActorUserId    zspecs.UserId   `json:"actorUserId" binding:"required"`    // 操作人用户Id (必填)
+	TargetUserId   zspecs.UserId   `json:"targetUserId" binding:"required"`   // 目标用户Id (必填)
+	TargetUserName zspecs.UserName `json:"targetUserName" binding:"required"` // 目标用户名称 (必填)
+	PermissionCode zspecs.Code     `json:"permissionCode" binding:"required"` // 权限编码 (必填)
+	ResourceType   zspecs.Code     `json:"resourceType" binding:"required"`   // 资源类型 (必填)
+	ResourceName   zspecs.Name     `json:"resourceName" binding:"required"`   // 资源名称 (必填)
+	GrantedBy      *zspecs.UserId  `json:"grantedBy"`                         // 授权人用户Id (可选)
+	Status         *zspecs.Status  `json:"status"`                            // 状态 (自动填充)
+	ExpiresAt      *zspecs.Remark  `json:"expiresAt"`                         // 过期时间 (可选)
+}
+
+// 验证必填字段
+func (e *PermissionGrantCreate) Validate() error {
+	if v, msg := e.ActorUserId.Validate(); !v {
+		return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "ActorUserId", e.ActorUserId, msg).SetStatusCodeMsg("ActorUserId", e.ActorUserId, msg)
+	}
+	if v, msg := e.TargetUserId.Validate(); !v {
+		return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "TargetUserId", e.TargetUserId, msg).SetStatusCodeMsg("TargetUserId", e.TargetUserId, msg)
+	}
+	if v, msg := e.TargetUserName.Validate(); !v {
+		return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "TargetUserName", e.TargetUserName, msg).SetStatusCodeMsg("TargetUserName", e.TargetUserName, msg)
+	}
+	if v, msg := e.PermissionCode.Validate(); !v {
+		return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "PermissionCode", e.PermissionCode, msg).SetStatusCodeMsg("PermissionCode", e.PermissionCode, msg)
+	}
+	if v, msg := e.ResourceType.Validate(); !v {
+		return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "ResourceType", e.ResourceType, msg).SetStatusCodeMsg("ResourceType", e.ResourceType, msg)
+	}
+	if v, msg := e.ResourceName.Validate(); !v {
+		return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "ResourceName", e.ResourceName, msg).SetStatusCodeMsg("ResourceName", e.ResourceName, msg)
+	}
+	if e.GrantedBy != nil {
+		if v, msg := e.GrantedBy.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "GrantedBy", e.GrantedBy, msg).SetStatusCodeMsg("GrantedBy", e.GrantedBy, msg)
+		}
+	}
+	if e.Status != nil {
+		if v, msg := e.Status.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "Status", e.Status, msg).SetStatusCodeMsg("Status", e.Status, msg)
+		}
+	}
+	if e.ExpiresAt != nil {
+		if v, msg := e.ExpiresAt.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "ExpiresAt", e.ExpiresAt, msg).SetStatusCodeMsg("ExpiresAt", e.ExpiresAt, msg)
+		}
+	}
+	return nil
+}
+
+// 查询权限授权记录
+type PermissionGrantQuery struct {
+	Id               *zspecs.Id        `json:"id" form:"id"`                             // 主键Id
+	Ids              []zspecs.Id       `json:"ids" form:"ids"`                           // 主键Id
+	ById             *zspecs.OrderBy   `json:"byId" form:"byId"`                         // 按照主键Id排序
+	ActorUserId      *zspecs.UserId    `json:"actorUserId" form:"actorUserId"`           // 操作人用户Id
+	ActorUserIds     []zspecs.UserId   `json:"actorUserIds" form:"actorUserIds"`         // 操作人用户Id
+	ByActorUserId    *zspecs.OrderBy   `json:"byActorUserId" form:"byActorUserId"`       // 按照操作人用户Id排序
+	TargetUserId     *zspecs.UserId    `json:"targetUserId" form:"targetUserId"`         // 目标用户Id
+	TargetUserIds    []zspecs.UserId   `json:"targetUserIds" form:"targetUserIds"`       // 目标用户Id
+	ByTargetUserId   *zspecs.OrderBy   `json:"byTargetUserId" form:"byTargetUserId"`     // 按照目标用户Id排序
+	TargetUserName   *zspecs.UserName  `json:"targetUserName" form:"targetUserName"`     // 目标用户名称
+	TargetUserNames  []zspecs.UserName `json:"targetUserNames" form:"targetUserNames"`   // 目标用户名称
+	ByTargetUserName *zspecs.OrderBy   `json:"byTargetUserName" form:"byTargetUserName"` // 按照目标用户名称排序
+	PermissionCode   *zspecs.Code      `json:"permissionCode" form:"permissionCode"`     // 权限编码
+	PermissionCodes  []zspecs.Code     `json:"permissionCodes" form:"permissionCodes"`   // 权限编码
+	ByPermissionCode *zspecs.OrderBy   `json:"byPermissionCode" form:"byPermissionCode"` // 按照权限编码排序
+	ResourceType     *zspecs.Code      `json:"resourceType" form:"resourceType"`         // 资源类型
+	ResourceTypes    []zspecs.Code     `json:"resourceTypes" form:"resourceTypes"`       // 资源类型
+	ByResourceType   *zspecs.OrderBy   `json:"byResourceType" form:"byResourceType"`     // 按照资源类型排序
+	ResourceName     *zspecs.Name      `json:"resourceName" form:"resourceName"`         // 资源名称
+	ResourceNames    []zspecs.Name     `json:"resourceNames" form:"resourceNames"`       // 资源名称
+	ByResourceName   *zspecs.OrderBy   `json:"byResourceName" form:"byResourceName"`     // 按照资源名称排序
+	GrantedBy        *zspecs.UserId    `json:"grantedBy" form:"grantedBy"`               // 授权人用户Id
+	GrantedBys       []zspecs.UserId   `json:"grantedBys" form:"grantedBys"`             // 授权人用户Id
+	ByGrantedBy      *zspecs.OrderBy   `json:"byGrantedBy" form:"byGrantedBy"`           // 按照授权人用户Id排序
+	Status           *zspecs.Status    `json:"status" form:"status"`                     // 状态
+	Statuss          []zspecs.Status   `json:"statuss" form:"statuss"`                   // 状态
+	ByStatus         *zspecs.OrderBy   `json:"byStatus" form:"byStatus"`                 // 按照状态排序
+	ExpiresAt        *zspecs.Remark    `json:"expiresAt" form:"expiresAt"`               // 过期时间
+	ExpiresAts       []zspecs.Remark   `json:"expiresAts" form:"expiresAts"`             // 过期时间
+	ByExpiresAt      *zspecs.OrderBy   `json:"byExpiresAt" form:"byExpiresAt"`           // 按照过期时间排序
+	ByCreatedAt      *zspecs.OrderBy   `json:"byCreatedAt" form:"byCreatedAt"`           // 按照创建数据时间排序
+	ByLastAt         *zspecs.OrderBy   `json:"byLastAt" form:"byLastAt"`                 // 按照更新数据时间排序
+	ByDeletedAt      *zspecs.OrderBy   `json:"byDeletedAt" form:"byDeletedAt"`           // 按照删除数据时间（逻辑删除）排序
+	CreatedAtStart   *zspecs.CreatedAt `json:"createdAtStart" form:"createdAtStart"`     // 创建时间起始
+	CreatedAtEnd     *zspecs.CreatedAt `json:"createdAtEnd" form:"createdAtEnd"`         // 创建时间结束
+	LastAtStart      *zspecs.LastAt    `json:"lastAtStart" form:"lastAtStart"`           // 最后更新时间起始
+	LastAtEnd        *zspecs.LastAt    `json:"lastAtEnd" form:"lastAtEnd"`               // 最后更新时间结束
+}
+
+// 验证查询条件
+func (e *PermissionGrantQuery) Validate() error {
+	if e.Id != nil {
+		if v, msg := e.Id.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "Id", e.Id, msg)
+		}
+	}
+	if e.ActorUserId != nil {
+		if v, msg := e.ActorUserId.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "ActorUserId", e.ActorUserId, msg)
+		}
+	}
+	if e.TargetUserId != nil {
+		if v, msg := e.TargetUserId.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "TargetUserId", e.TargetUserId, msg)
+		}
+	}
+	if e.TargetUserName != nil {
+		if v, msg := e.TargetUserName.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "TargetUserName", e.TargetUserName, msg)
+		}
+	}
+	if e.PermissionCode != nil {
+		if v, msg := e.PermissionCode.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "PermissionCode", e.PermissionCode, msg)
+		}
+	}
+	if e.ResourceType != nil {
+		if v, msg := e.ResourceType.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "ResourceType", e.ResourceType, msg)
+		}
+	}
+	if e.ResourceName != nil {
+		if v, msg := e.ResourceName.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "ResourceName", e.ResourceName, msg)
+		}
+	}
+	if e.GrantedBy != nil {
+		if v, msg := e.GrantedBy.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "GrantedBy", e.GrantedBy, msg)
+		}
+	}
+	if e.Status != nil {
+		if v, msg := e.Status.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "Status", e.Status, msg)
+		}
+	}
+	if e.ExpiresAt != nil {
+		if v, msg := e.ExpiresAt.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "ExpiresAt", e.ExpiresAt, msg)
+		}
+	}
+	if e.CreatedAtStart != nil {
+		if v, msg := e.CreatedAtStart.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "CreatedAtStart", e.CreatedAtStart, msg)
+		}
+	}
+	if e.CreatedAtEnd != nil {
+		if v, msg := e.CreatedAtEnd.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "CreatedAtEnd", e.CreatedAtEnd, msg)
+		}
+	}
+	if e.LastAtStart != nil {
+		if v, msg := e.LastAtStart.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "LastAtStart", e.LastAtStart, msg)
+		}
+	}
+	if e.LastAtEnd != nil {
+		if v, msg := e.LastAtEnd.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "LastAtEnd", e.LastAtEnd, msg)
+		}
+	}
+	return nil
+}
+
+// 更新权限授权记录
+type PermissionGrantUpdate struct {
+	ActorUserId    *zspecs.UserId   `json:"actorUserId"`    // 操作人用户Id
+	TargetUserId   *zspecs.UserId   `json:"targetUserId"`   // 目标用户Id
+	TargetUserName *zspecs.UserName `json:"targetUserName"` // 目标用户名称
+	PermissionCode *zspecs.Code     `json:"permissionCode"` // 权限编码
+	ResourceType   *zspecs.Code     `json:"resourceType"`   // 资源类型
+	ResourceName   *zspecs.Name     `json:"resourceName"`   // 资源名称
+	GrantedBy      *zspecs.UserId   `json:"grantedBy"`      // 授权人用户Id
+	Status         *zspecs.Status   `json:"status"`         // 状态
+	ExpiresAt      *zspecs.Remark   `json:"expiresAt"`      // 过期时间
+}
+
+// 验证更新字段
+func (e *PermissionGrantUpdate) Validate() error {
+	if e.ActorUserId != nil {
+		if v, msg := e.ActorUserId.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "ActorUserId", e.ActorUserId, msg)
+		}
+	}
+	if e.TargetUserId != nil {
+		if v, msg := e.TargetUserId.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "TargetUserId", e.TargetUserId, msg)
+		}
+	}
+	if e.TargetUserName != nil {
+		if v, msg := e.TargetUserName.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "TargetUserName", e.TargetUserName, msg)
+		}
+	}
+	if e.PermissionCode != nil {
+		if v, msg := e.PermissionCode.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "PermissionCode", e.PermissionCode, msg)
+		}
+	}
+	if e.ResourceType != nil {
+		if v, msg := e.ResourceType.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "ResourceType", e.ResourceType, msg)
+		}
+	}
+	if e.ResourceName != nil {
+		if v, msg := e.ResourceName.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "ResourceName", e.ResourceName, msg)
+		}
+	}
+	if e.GrantedBy != nil {
+		if v, msg := e.GrantedBy.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "GrantedBy", e.GrantedBy, msg)
+		}
+	}
+	if e.Status != nil {
+		if v, msg := e.Status.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "Status", e.Status, msg)
+		}
+	}
+	if e.ExpiresAt != nil {
+		if v, msg := e.ExpiresAt.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "permission_grant", "ExpiresAt", e.ExpiresAt, msg)
+		}
+	}
+	return nil
+}
+
 // 平台用户实例
 type UserEntity struct {
 	entity *entity.UserEntity
@@ -981,6 +1426,352 @@ func (e *UserUpdate) Validate() error {
 	if e.Status != nil {
 		if v, msg := e.Status.Validate(); !v {
 			return zerr.Err_1004002005.New().Sprintf("account", "user_info", "Status", e.Status, msg)
+		}
+	}
+	return nil
+}
+
+// 用户身份实例
+type UserIdentityEntity struct {
+	entity *entity.UserIdentityEntity
+}
+
+func newUserIdentityEntity(entity *entity.UserIdentityEntity) *UserIdentityEntity {
+	return &UserIdentityEntity{entity: entity}
+}
+
+func (e *UserIdentityEntity) MarshalJSON() ([]byte, error) {
+	type tempJSON struct {
+		Id           string     `json:"id"`
+		UserId       string     `json:"user_id"`
+		IdentityType string     `json:"identity_type"`
+		ScopeCode    string     `json:"scope_code"`
+		ScopeName    string     `json:"scope_name"`
+		RoleCodes    *string    `json:"role_codes"`
+		Status       *int16     `json:"status"`
+		CreatedAt    *time.Time `json:"created_at"`
+		LastAt       *time.Time `json:"last_at"`
+		DeletedAt    *time.Time `json:"deleted_at,omitempty"`
+	}
+	Id := strconv.FormatInt(e.entity.Id.Get(), 10)
+	temp := tempJSON{
+		Id:           Id,
+		UserId:       e.entity.UserId.Get(),
+		IdentityType: e.entity.IdentityType.Get(),
+		ScopeCode:    e.entity.ScopeCode.Get(),
+		ScopeName:    e.entity.ScopeName.Get(),
+		RoleCodes:    e.entity.RoleCodes.Get(),
+		Status:       e.entity.Status.Get(),
+		CreatedAt:    e.entity.CreatedAt.Get(),
+		LastAt:       e.entity.LastAt.Get(),
+		DeletedAt:    e.entity.DeletedAt.Get(),
+	}
+
+	return json.Marshal(temp)
+}
+
+func (e *UserIdentityEntity) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, e.entity)
+}
+func (e *UserIdentityEntity) Id() zspecs.Id {
+	v := e.entity.Id.Get()
+
+	specV := zspecs.NewId(v)
+	return *specV
+
+}
+func (e *UserIdentityEntity) SetId(v zspecs.Id) {
+	e.entity.Id.Set(v.Int64())
+}
+
+func (e *UserIdentityEntity) UserId() zspecs.UserId {
+	v := e.entity.UserId.Get()
+
+	specV := zspecs.NewUserId(v)
+	return *specV
+
+}
+func (e *UserIdentityEntity) SetUserId(v zspecs.UserId) {
+	e.entity.UserId.Set(v.String())
+}
+
+func (e *UserIdentityEntity) IdentityType() zspecs.Code {
+	v := e.entity.IdentityType.Get()
+
+	specV := zspecs.NewCode(v)
+	return *specV
+
+}
+func (e *UserIdentityEntity) SetIdentityType(v zspecs.Code) {
+	e.entity.IdentityType.Set(v.String())
+}
+
+func (e *UserIdentityEntity) ScopeCode() zspecs.Code {
+	v := e.entity.ScopeCode.Get()
+
+	specV := zspecs.NewCode(v)
+	return *specV
+
+}
+func (e *UserIdentityEntity) SetScopeCode(v zspecs.Code) {
+	e.entity.ScopeCode.Set(v.String())
+}
+
+func (e *UserIdentityEntity) ScopeName() zspecs.Name {
+	v := e.entity.ScopeName.Get()
+
+	specV := zspecs.NewName(v)
+	return *specV
+
+}
+func (e *UserIdentityEntity) SetScopeName(v zspecs.Name) {
+	e.entity.ScopeName.Set(v.String())
+}
+
+func (e *UserIdentityEntity) RoleCodes() *zspecs.Remark {
+	v := e.entity.RoleCodes.Get()
+
+	if v == nil {
+		return nil
+	}
+
+	specV := zspecs.NewRemark(*v)
+	return specV
+
+}
+func (e *UserIdentityEntity) SetRoleCodes(v zspecs.Remark) {
+	e.entity.RoleCodes.Set(v.String())
+}
+
+func (e *UserIdentityEntity) Status() *zspecs.Status {
+	v := e.entity.Status.Get()
+
+	if v == nil {
+		return nil
+	}
+
+	specV := zspecs.NewStatus(*v)
+	return specV
+
+}
+func (e *UserIdentityEntity) SetStatus(v zspecs.Status) {
+	e.entity.Status.Set(v.Int16())
+}
+
+func (e *UserIdentityEntity) CreatedAt() *zspecs.CreatedAt {
+	v := e.entity.CreatedAt.Get()
+
+	if v == nil {
+		return nil
+	}
+
+	specV := zspecs.NewCreatedAt(*v)
+	return specV
+
+}
+func (e *UserIdentityEntity) SetCreatedAt(v zspecs.CreatedAt) {
+	e.entity.CreatedAt.Set(v.Time())
+}
+
+func (e *UserIdentityEntity) LastAt() *zspecs.LastAt {
+	v := e.entity.LastAt.Get()
+
+	if v == nil {
+		return nil
+	}
+
+	specV := zspecs.NewLastAt(*v)
+	return specV
+
+}
+func (e *UserIdentityEntity) SetLastAt(v zspecs.LastAt) {
+	e.entity.LastAt.Set(v.Time())
+}
+
+func (e *UserIdentityEntity) DeletedAt() *zspecs.DeletedAt {
+	v := e.entity.DeletedAt.Get()
+
+	if v == nil {
+		return nil
+	}
+
+	specV := zspecs.NewDeletedAt(*v)
+	return specV
+
+}
+func (e *UserIdentityEntity) SetDeletedAt(v zspecs.DeletedAt) {
+	e.entity.DeletedAt.Set(v.Time())
+}
+
+// 创建单条用户身份
+type UserIdentityCreate struct {
+	UserId       zspecs.UserId  `json:"userId" binding:"required"`       // 用户Id (必填)
+	IdentityType zspecs.Code    `json:"identityType" binding:"required"` // 身份类型 (必填)
+	ScopeCode    zspecs.Code    `json:"scopeCode" binding:"required"`    // 作用域编码 (必填)
+	ScopeName    zspecs.Name    `json:"scopeName" binding:"required"`    // 作用域名称 (必填)
+	RoleCodes    *zspecs.Remark `json:"roleCodes"`                       // 角色编码集合（逗号分隔） (可选)
+	Status       *zspecs.Status `json:"status"`                          // 状态 (自动填充)
+}
+
+// 验证必填字段
+func (e *UserIdentityCreate) Validate() error {
+	if v, msg := e.UserId.Validate(); !v {
+		return zerr.Err_1004002005.New().Sprintf("account", "user_identity", "UserId", e.UserId, msg).SetStatusCodeMsg("UserId", e.UserId, msg)
+	}
+	if v, msg := e.IdentityType.Validate(); !v {
+		return zerr.Err_1004002005.New().Sprintf("account", "user_identity", "IdentityType", e.IdentityType, msg).SetStatusCodeMsg("IdentityType", e.IdentityType, msg)
+	}
+	if v, msg := e.ScopeCode.Validate(); !v {
+		return zerr.Err_1004002005.New().Sprintf("account", "user_identity", "ScopeCode", e.ScopeCode, msg).SetStatusCodeMsg("ScopeCode", e.ScopeCode, msg)
+	}
+	if v, msg := e.ScopeName.Validate(); !v {
+		return zerr.Err_1004002005.New().Sprintf("account", "user_identity", "ScopeName", e.ScopeName, msg).SetStatusCodeMsg("ScopeName", e.ScopeName, msg)
+	}
+	if e.RoleCodes != nil {
+		if v, msg := e.RoleCodes.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "user_identity", "RoleCodes", e.RoleCodes, msg).SetStatusCodeMsg("RoleCodes", e.RoleCodes, msg)
+		}
+	}
+	if e.Status != nil {
+		if v, msg := e.Status.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "user_identity", "Status", e.Status, msg).SetStatusCodeMsg("Status", e.Status, msg)
+		}
+	}
+	return nil
+}
+
+// 查询用户身份
+type UserIdentityQuery struct {
+	Id             *zspecs.Id        `json:"id" form:"id"`                         // 主键Id
+	Ids            []zspecs.Id       `json:"ids" form:"ids"`                       // 主键Id
+	ById           *zspecs.OrderBy   `json:"byId" form:"byId"`                     // 按照主键Id排序
+	UserId         *zspecs.UserId    `json:"userId" form:"userId"`                 // 用户Id
+	UserIds        []zspecs.UserId   `json:"userIds" form:"userIds"`               // 用户Id
+	ByUserId       *zspecs.OrderBy   `json:"byUserId" form:"byUserId"`             // 按照用户Id排序
+	IdentityType   *zspecs.Code      `json:"identityType" form:"identityType"`     // 身份类型
+	IdentityTypes  []zspecs.Code     `json:"identityTypes" form:"identityTypes"`   // 身份类型
+	ByIdentityType *zspecs.OrderBy   `json:"byIdentityType" form:"byIdentityType"` // 按照身份类型排序
+	ScopeCode      *zspecs.Code      `json:"scopeCode" form:"scopeCode"`           // 作用域编码
+	ScopeCodes     []zspecs.Code     `json:"scopeCodes" form:"scopeCodes"`         // 作用域编码
+	ByScopeCode    *zspecs.OrderBy   `json:"byScopeCode" form:"byScopeCode"`       // 按照作用域编码排序
+	ScopeName      *zspecs.Name      `json:"scopeName" form:"scopeName"`           // 作用域名称
+	ScopeNames     []zspecs.Name     `json:"scopeNames" form:"scopeNames"`         // 作用域名称
+	ByScopeName    *zspecs.OrderBy   `json:"byScopeName" form:"byScopeName"`       // 按照作用域名称排序
+	RoleCodes      *zspecs.Remark    `json:"roleCodes" form:"roleCodes"`           // 角色编码集合（逗号分隔）
+	RoleCodess     []zspecs.Remark   `json:"roleCodess" form:"roleCodess"`         // 角色编码集合（逗号分隔）
+	ByRoleCodes    *zspecs.OrderBy   `json:"byRoleCodes" form:"byRoleCodes"`       // 按照角色编码集合（逗号分隔）排序
+	Status         *zspecs.Status    `json:"status" form:"status"`                 // 状态
+	Statuss        []zspecs.Status   `json:"statuss" form:"statuss"`               // 状态
+	ByStatus       *zspecs.OrderBy   `json:"byStatus" form:"byStatus"`             // 按照状态排序
+	ByCreatedAt    *zspecs.OrderBy   `json:"byCreatedAt" form:"byCreatedAt"`       // 按照创建数据时间排序
+	ByLastAt       *zspecs.OrderBy   `json:"byLastAt" form:"byLastAt"`             // 按照更新数据时间排序
+	ByDeletedAt    *zspecs.OrderBy   `json:"byDeletedAt" form:"byDeletedAt"`       // 按照删除数据时间（逻辑删除）排序
+	CreatedAtStart *zspecs.CreatedAt `json:"createdAtStart" form:"createdAtStart"` // 创建时间起始
+	CreatedAtEnd   *zspecs.CreatedAt `json:"createdAtEnd" form:"createdAtEnd"`     // 创建时间结束
+	LastAtStart    *zspecs.LastAt    `json:"lastAtStart" form:"lastAtStart"`       // 最后更新时间起始
+	LastAtEnd      *zspecs.LastAt    `json:"lastAtEnd" form:"lastAtEnd"`           // 最后更新时间结束
+}
+
+// 验证查询条件
+func (e *UserIdentityQuery) Validate() error {
+	if e.Id != nil {
+		if v, msg := e.Id.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "user_identity", "Id", e.Id, msg)
+		}
+	}
+	if e.UserId != nil {
+		if v, msg := e.UserId.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "user_identity", "UserId", e.UserId, msg)
+		}
+	}
+	if e.IdentityType != nil {
+		if v, msg := e.IdentityType.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "user_identity", "IdentityType", e.IdentityType, msg)
+		}
+	}
+	if e.ScopeCode != nil {
+		if v, msg := e.ScopeCode.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "user_identity", "ScopeCode", e.ScopeCode, msg)
+		}
+	}
+	if e.ScopeName != nil {
+		if v, msg := e.ScopeName.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "user_identity", "ScopeName", e.ScopeName, msg)
+		}
+	}
+	if e.RoleCodes != nil {
+		if v, msg := e.RoleCodes.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "user_identity", "RoleCodes", e.RoleCodes, msg)
+		}
+	}
+	if e.Status != nil {
+		if v, msg := e.Status.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "user_identity", "Status", e.Status, msg)
+		}
+	}
+	if e.CreatedAtStart != nil {
+		if v, msg := e.CreatedAtStart.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "user_identity", "CreatedAtStart", e.CreatedAtStart, msg)
+		}
+	}
+	if e.CreatedAtEnd != nil {
+		if v, msg := e.CreatedAtEnd.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "user_identity", "CreatedAtEnd", e.CreatedAtEnd, msg)
+		}
+	}
+	if e.LastAtStart != nil {
+		if v, msg := e.LastAtStart.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "user_identity", "LastAtStart", e.LastAtStart, msg)
+		}
+	}
+	if e.LastAtEnd != nil {
+		if v, msg := e.LastAtEnd.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "user_identity", "LastAtEnd", e.LastAtEnd, msg)
+		}
+	}
+	return nil
+}
+
+// 更新用户身份
+type UserIdentityUpdate struct {
+	UserId       *zspecs.UserId `json:"userId"`       // 用户Id
+	IdentityType *zspecs.Code   `json:"identityType"` // 身份类型
+	ScopeCode    *zspecs.Code   `json:"scopeCode"`    // 作用域编码
+	ScopeName    *zspecs.Name   `json:"scopeName"`    // 作用域名称
+	RoleCodes    *zspecs.Remark `json:"roleCodes"`    // 角色编码集合（逗号分隔）
+	Status       *zspecs.Status `json:"status"`       // 状态
+}
+
+// 验证更新字段
+func (e *UserIdentityUpdate) Validate() error {
+	if e.UserId != nil {
+		if v, msg := e.UserId.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "user_identity", "UserId", e.UserId, msg)
+		}
+	}
+	if e.IdentityType != nil {
+		if v, msg := e.IdentityType.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "user_identity", "IdentityType", e.IdentityType, msg)
+		}
+	}
+	if e.ScopeCode != nil {
+		if v, msg := e.ScopeCode.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "user_identity", "ScopeCode", e.ScopeCode, msg)
+		}
+	}
+	if e.ScopeName != nil {
+		if v, msg := e.ScopeName.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "user_identity", "ScopeName", e.ScopeName, msg)
+		}
+	}
+	if e.RoleCodes != nil {
+		if v, msg := e.RoleCodes.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "user_identity", "RoleCodes", e.RoleCodes, msg)
+		}
+	}
+	if e.Status != nil {
+		if v, msg := e.Status.Validate(); !v {
+			return zerr.Err_1004002005.New().Sprintf("account", "user_identity", "Status", e.Status, msg)
 		}
 	}
 	return nil

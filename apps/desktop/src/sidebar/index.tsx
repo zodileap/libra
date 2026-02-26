@@ -664,8 +664,9 @@ function AgentSidebar({
           setHoveredContextMenuActionKey((current) => (current === params.key ? "" : current));
         }}
       >
-        <AriIcon
-          name={params.forceFill || hoveredContextMenuActionKey === params.key ? params.fillIcon : params.icon}
+        <AriTypography
+          variant="caption"
+          value={(params.forceFill || hoveredContextMenuActionKey === params.key) ? "●" : "○"}
         />
         <AriTypography variant="body" value={params.label} />
       </AriFlex>

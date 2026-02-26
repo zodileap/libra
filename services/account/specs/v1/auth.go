@@ -103,3 +103,83 @@ type AuthAvailableAgentItem struct {
 type AuthAvailableAgentListResp struct {
 	List []AuthAvailableAgentItem `json:"list"` // 可用智能体列表
 }
+
+// 描述：用户身份信息，可同时归属公司、部门或独立空间。
+type AuthIdentityItem struct {
+	IdentityId   string   `json:"identityId"`   // 身份ID
+	IdentityType string   `json:"identityType"` // 身份类型
+	ScopeName    string   `json:"scopeName"`    // 身份作用域名称
+	RoleCodes    []string `json:"roleCodes"`    // 身份绑定角色编码
+	Status       string   `json:"status"`       // 身份状态
+}
+
+// 描述：用户身份列表返回数据。
+type AuthIdentityListResp struct {
+	List []AuthIdentityItem `json:"list"` // 身份列表
+}
+
+// 描述：权限模板项，表示可授权能力。
+type AuthPermissionTemplateItem struct {
+	Code         string `json:"code"`         // 权限编码
+	Name         string `json:"name"`         // 权限名称
+	Description  string `json:"description"`  // 权限描述
+	ResourceType string `json:"resourceType"` // 资源类型
+}
+
+// 描述：权限模板列表返回数据。
+type AuthPermissionTemplateListResp struct {
+	List []AuthPermissionTemplateItem `json:"list"` // 权限模板列表
+}
+
+// 描述：权限授权记录项。
+type AuthPermissionGrantItem struct {
+	GrantId        string `json:"grantId"`        // 授权记录ID
+	ActorUserId    string `json:"actorUserId"`    // 操作人用户ID
+	TargetUserId   string `json:"targetUserId"`   // 目标用户ID
+	TargetUserName string `json:"targetUserName"` // 目标用户名称
+	PermissionCode string `json:"permissionCode"` // 权限编码
+	ResourceType   string `json:"resourceType"`   // 资源类型
+	ResourceName   string `json:"resourceName"`   // 资源名称
+	GrantedBy      string `json:"grantedBy"`      // 授权人ID
+	Status         string `json:"status"`         // 授权状态
+	ExpiresAt      string `json:"expiresAt"`      // 过期时间
+	CreatedAt      string `json:"createdAt"`      // 创建时间
+	LastAt         string `json:"lastAt"`         // 更新时间
+}
+
+// 描述：查询权限授权记录请求。
+type AuthPermissionGrantListReq struct {
+	TargetUserId   string `json:"targetUserId" form:"targetUserId"`     // 目标用户ID
+	PermissionCode string `json:"permissionCode" form:"permissionCode"` // 权限编码
+	ResourceType   string `json:"resourceType" form:"resourceType"`     // 资源类型
+}
+
+// 描述：权限授权记录列表返回数据。
+type AuthPermissionGrantListResp struct {
+	List []AuthPermissionGrantItem `json:"list"` // 权限授权记录列表
+}
+
+// 描述：新增权限授权请求。
+type AuthGrantPermissionReq struct {
+	TargetUserId   string `json:"targetUserId" binding:"required"`   // 目标用户ID
+	TargetUserName string `json:"targetUserName" binding:"required"` // 目标用户名称
+	PermissionCode string `json:"permissionCode" binding:"required"` // 权限编码
+	ResourceType   string `json:"resourceType" binding:"required"`   // 资源类型
+	ResourceName   string `json:"resourceName" binding:"required"`   // 资源名称
+	ExpiresAt      string `json:"expiresAt"`                         // 过期时间
+}
+
+// 描述：新增权限授权返回数据。
+type AuthGrantPermissionResp struct {
+	Item AuthPermissionGrantItem `json:"item"` // 授权记录
+}
+
+// 描述：撤销权限授权请求。
+type AuthRevokePermissionReq struct {
+	GrantId string `json:"grantId" binding:"required"` // 授权记录ID
+}
+
+// 描述：撤销权限授权返回数据。
+type AuthRevokePermissionResp struct {
+	Success bool `json:"success"` // 是否撤销成功
+}

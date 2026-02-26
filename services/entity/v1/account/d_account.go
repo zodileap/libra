@@ -22,17 +22,23 @@ type Account struct {
 	Agents *agententityBuilder
 	// AgentAccesss 用户智能体授权
 	AgentAccesss *agentaccessentityBuilder
+	// PermissionGrants 权限授权记录
+	PermissionGrants *permissiongrantentityBuilder
 	// Users 平台用户
 	Users *userentityBuilder
+	// UserIdentitys 用户身份
+	UserIdentitys *useridentityentityBuilder
 }
 
 type accountEntityFlag interface {
 	isAccountEntity()
 }
 
-func (e *AgentEntity) isAccountEntity()       {}
-func (e *AgentAccessEntity) isAccountEntity() {}
-func (e *UserEntity) isAccountEntity()        {}
+func (e *AgentEntity) isAccountEntity()           {}
+func (e *AgentAccessEntity) isAccountEntity()     {}
+func (e *PermissionGrantEntity) isAccountEntity() {}
+func (e *UserEntity) isAccountEntity()            {}
+func (e *UserIdentityEntity) isAccountEntity()    {}
 
 // NewAccount creates a new Account instance.
 func NewAccount() (*Account, error) {
@@ -79,8 +85,12 @@ func (d *Account) Remove(e accountEntityFlag) error {
 		d.Agents.Remove(e.(*AgentEntity))
 	case *AgentAccessEntity:
 		d.AgentAccesss.Remove(e.(*AgentAccessEntity))
+	case *PermissionGrantEntity:
+		d.PermissionGrants.Remove(e.(*PermissionGrantEntity))
 	case *UserEntity:
 		d.Users.Remove(e.(*UserEntity))
+	case *UserIdentityEntity:
+		d.UserIdentitys.Remove(e.(*UserIdentityEntity))
 	default:
 		return fmt.Errorf("database Account does not support entity type %T", e)
 	}
@@ -90,7 +100,9 @@ func (d *Account) Remove(e accountEntityFlag) error {
 func (d *Account) init() {
 	agententityConfig := newAgentEntityConfig(d.Dialect)
 	agentaccessentityConfig := newAgentAccessEntityConfig(d.Dialect)
+	permissiongrantentityConfig := newPermissionGrantEntityConfig(d.Dialect)
 	userentityConfig := newUserEntityConfig(d.Dialect)
+	useridentityentityConfig := newUserIdentityEntityConfig(d.Dialect)
 
 	d.Agents = newAgentEntityBuilder(agententityConfig, d.tracker)
 	d.tracker.Add(d.Agents)
@@ -98,6 +110,12 @@ func (d *Account) init() {
 	d.AgentAccesss = newAgentAccessEntityBuilder(agentaccessentityConfig, d.tracker)
 	d.tracker.Add(d.AgentAccesss)
 
+	d.PermissionGrants = newPermissionGrantEntityBuilder(permissiongrantentityConfig, d.tracker)
+	d.tracker.Add(d.PermissionGrants)
+
 	d.Users = newUserEntityBuilder(userentityConfig, d.tracker)
 	d.tracker.Add(d.Users)
+
+	d.UserIdentitys = newUserIdentityEntityBuilder(useridentityentityConfig, d.tracker)
+	d.tracker.Add(d.UserIdentitys)
 }

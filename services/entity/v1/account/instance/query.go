@@ -441,6 +441,318 @@ func (r *Agent) queryAgent(db *AccountDB, q *entity.AgentEntityQuery, query Agen
 
 	return q, nil
 }
+func (r *PermissionGrant) queryPermissionGrant(db *AccountDB, q *entity.PermissionGrantEntityQuery, query PermissionGrantQuery, includeDelete bool) (*entity.PermissionGrantEntityQuery, error) {
+	hasAnyCondition := false
+	if err := query.Validate(); err != nil {
+		return nil, zerr.Must(err)
+	}
+	if query.Id != nil {
+		q = q.Where(db.PermissionGrants.Id.EQ(query.Id.Int64()))
+		hasAnyCondition = true
+	}
+	if query.Ids != nil {
+		Ids := []int64{}
+		for _, v := range query.Ids {
+			Ids = append(Ids, v.Int64())
+		}
+		q = q.Where(db.PermissionGrants.Id.In(Ids...))
+		hasAnyCondition = true
+	}
+	if query.ActorUserId != nil {
+		q = q.Where(db.PermissionGrants.ActorUserId.EQ(query.ActorUserId.String()))
+		hasAnyCondition = true
+	}
+	if query.ActorUserIds != nil {
+		ActorUserIds := []string{}
+		for _, v := range query.ActorUserIds {
+			ActorUserIds = append(ActorUserIds, v.String())
+		}
+		q = q.Where(db.PermissionGrants.ActorUserId.In(ActorUserIds...))
+		hasAnyCondition = true
+	}
+	if query.TargetUserId != nil {
+		q = q.Where(db.PermissionGrants.TargetUserId.EQ(query.TargetUserId.String()))
+		hasAnyCondition = true
+	}
+	if query.TargetUserIds != nil {
+		TargetUserIds := []string{}
+		for _, v := range query.TargetUserIds {
+			TargetUserIds = append(TargetUserIds, v.String())
+		}
+		q = q.Where(db.PermissionGrants.TargetUserId.In(TargetUserIds...))
+		hasAnyCondition = true
+	}
+	if query.TargetUserName != nil {
+		q = q.Where(db.PermissionGrants.TargetUserName.EQ(query.TargetUserName.String()))
+		hasAnyCondition = true
+	}
+	if query.TargetUserNames != nil {
+		TargetUserNames := []string{}
+		for _, v := range query.TargetUserNames {
+			TargetUserNames = append(TargetUserNames, v.String())
+		}
+		q = q.Where(db.PermissionGrants.TargetUserName.In(TargetUserNames...))
+		hasAnyCondition = true
+	}
+	if query.PermissionCode != nil {
+		q = q.Where(db.PermissionGrants.PermissionCode.EQ(query.PermissionCode.String()))
+		hasAnyCondition = true
+	}
+	if query.PermissionCodes != nil {
+		PermissionCodes := []string{}
+		for _, v := range query.PermissionCodes {
+			PermissionCodes = append(PermissionCodes, v.String())
+		}
+		q = q.Where(db.PermissionGrants.PermissionCode.In(PermissionCodes...))
+		hasAnyCondition = true
+	}
+	if query.ResourceType != nil {
+		q = q.Where(db.PermissionGrants.ResourceType.EQ(query.ResourceType.String()))
+		hasAnyCondition = true
+	}
+	if query.ResourceTypes != nil {
+		ResourceTypes := []string{}
+		for _, v := range query.ResourceTypes {
+			ResourceTypes = append(ResourceTypes, v.String())
+		}
+		q = q.Where(db.PermissionGrants.ResourceType.In(ResourceTypes...))
+		hasAnyCondition = true
+	}
+	if query.ResourceName != nil {
+		q = q.Where(db.PermissionGrants.ResourceName.EQ(query.ResourceName.String()))
+		hasAnyCondition = true
+	}
+	if query.ResourceNames != nil {
+		ResourceNames := []string{}
+		for _, v := range query.ResourceNames {
+			ResourceNames = append(ResourceNames, v.String())
+		}
+		q = q.Where(db.PermissionGrants.ResourceName.In(ResourceNames...))
+		hasAnyCondition = true
+	}
+	if query.GrantedBy != nil {
+		q = q.Where(db.PermissionGrants.GrantedBy.EQ(query.GrantedBy.String()))
+		hasAnyCondition = true
+	}
+	if query.GrantedBys != nil {
+		GrantedBys := []string{}
+		for _, v := range query.GrantedBys {
+			GrantedBys = append(GrantedBys, v.String())
+		}
+		q = q.Where(db.PermissionGrants.GrantedBy.In(GrantedBys...))
+		hasAnyCondition = true
+	}
+	if query.Status != nil {
+		q = q.Where(db.PermissionGrants.Status.EQ(query.Status.Int16()))
+		hasAnyCondition = true
+	}
+	if query.Statuss != nil {
+		Statuss := []int16{}
+		for _, v := range query.Statuss {
+			Statuss = append(Statuss, v.Int16())
+		}
+		q = q.Where(db.PermissionGrants.Status.In(Statuss...))
+		hasAnyCondition = true
+	}
+	if query.ExpiresAt != nil {
+		q = q.Where(db.PermissionGrants.ExpiresAt.EQ(query.ExpiresAt.String()))
+		hasAnyCondition = true
+	}
+	if query.ExpiresAts != nil {
+		ExpiresAts := []string{}
+		for _, v := range query.ExpiresAts {
+			ExpiresAts = append(ExpiresAts, v.String())
+		}
+		q = q.Where(db.PermissionGrants.ExpiresAt.In(ExpiresAts...))
+		hasAnyCondition = true
+	}
+
+	// 创建时间开始时间
+	if query.CreatedAtStart != nil {
+		q = q.Where(db.PermissionGrants.CreatedAt.GTE(query.CreatedAtStart.Time()))
+		hasAnyCondition = true
+	}
+
+	// 创建时间结束时间
+	if query.CreatedAtEnd != nil {
+		q = q.Where(db.PermissionGrants.CreatedAt.LTE(query.CreatedAtEnd.Time()))
+		hasAnyCondition = true
+	}
+
+	// 最后更新时间开始时间
+	if query.LastAtStart != nil {
+		q = q.Where(db.PermissionGrants.LastAt.GTE(query.LastAtStart.Time()))
+		hasAnyCondition = true
+	}
+
+	// 最后更新时间结束时间
+	if query.LastAtEnd != nil {
+		q = q.Where(db.PermissionGrants.LastAt.LTE(query.LastAtEnd.Time()))
+		hasAnyCondition = true
+	}
+
+	// 是否已经逻辑删除
+	if !includeDelete {
+		if hasAnyCondition {
+			q.Where(
+				entitysql.And,
+				db.PermissionGrants.DeletedAt.IsNull(),
+			)
+		} else {
+			q.Where(
+				db.PermissionGrants.DeletedAt.IsNull(),
+			)
+		}
+	}
+
+	// 排序
+	if query.ById != nil {
+		switch *query.ById {
+		case zspecs.OrderByAsc:
+			q.Order(db.PermissionGrants.ById.Asc())
+		case zspecs.OrderByDesc:
+			q.Order(db.PermissionGrants.ById.Desc())
+		case zspecs.OrderByNullsFirst:
+			q.Order(db.PermissionGrants.ById.NullsFirst())
+		case zspecs.OrderByNullsLast:
+			q.Order(db.PermissionGrants.ById.NullsLast())
+		}
+	}
+	if query.ByActorUserId != nil {
+		switch *query.ByActorUserId {
+		case zspecs.OrderByAsc:
+			q.Order(db.PermissionGrants.ByActorUserId.Asc())
+		case zspecs.OrderByDesc:
+			q.Order(db.PermissionGrants.ByActorUserId.Desc())
+		case zspecs.OrderByNullsFirst:
+			q.Order(db.PermissionGrants.ByActorUserId.NullsFirst())
+		case zspecs.OrderByNullsLast:
+			q.Order(db.PermissionGrants.ByActorUserId.NullsLast())
+		}
+	}
+	if query.ByTargetUserId != nil {
+		switch *query.ByTargetUserId {
+		case zspecs.OrderByAsc:
+			q.Order(db.PermissionGrants.ByTargetUserId.Asc())
+		case zspecs.OrderByDesc:
+			q.Order(db.PermissionGrants.ByTargetUserId.Desc())
+		case zspecs.OrderByNullsFirst:
+			q.Order(db.PermissionGrants.ByTargetUserId.NullsFirst())
+		case zspecs.OrderByNullsLast:
+			q.Order(db.PermissionGrants.ByTargetUserId.NullsLast())
+		}
+	}
+	if query.ByTargetUserName != nil {
+		switch *query.ByTargetUserName {
+		case zspecs.OrderByAsc:
+			q.Order(db.PermissionGrants.ByTargetUserName.Asc())
+		case zspecs.OrderByDesc:
+			q.Order(db.PermissionGrants.ByTargetUserName.Desc())
+		case zspecs.OrderByNullsFirst:
+			q.Order(db.PermissionGrants.ByTargetUserName.NullsFirst())
+		case zspecs.OrderByNullsLast:
+			q.Order(db.PermissionGrants.ByTargetUserName.NullsLast())
+		}
+	}
+	if query.ByPermissionCode != nil {
+		switch *query.ByPermissionCode {
+		case zspecs.OrderByAsc:
+			q.Order(db.PermissionGrants.ByPermissionCode.Asc())
+		case zspecs.OrderByDesc:
+			q.Order(db.PermissionGrants.ByPermissionCode.Desc())
+		case zspecs.OrderByNullsFirst:
+			q.Order(db.PermissionGrants.ByPermissionCode.NullsFirst())
+		case zspecs.OrderByNullsLast:
+			q.Order(db.PermissionGrants.ByPermissionCode.NullsLast())
+		}
+	}
+	if query.ByResourceType != nil {
+		switch *query.ByResourceType {
+		case zspecs.OrderByAsc:
+			q.Order(db.PermissionGrants.ByResourceType.Asc())
+		case zspecs.OrderByDesc:
+			q.Order(db.PermissionGrants.ByResourceType.Desc())
+		case zspecs.OrderByNullsFirst:
+			q.Order(db.PermissionGrants.ByResourceType.NullsFirst())
+		case zspecs.OrderByNullsLast:
+			q.Order(db.PermissionGrants.ByResourceType.NullsLast())
+		}
+	}
+	if query.ByResourceName != nil {
+		switch *query.ByResourceName {
+		case zspecs.OrderByAsc:
+			q.Order(db.PermissionGrants.ByResourceName.Asc())
+		case zspecs.OrderByDesc:
+			q.Order(db.PermissionGrants.ByResourceName.Desc())
+		case zspecs.OrderByNullsFirst:
+			q.Order(db.PermissionGrants.ByResourceName.NullsFirst())
+		case zspecs.OrderByNullsLast:
+			q.Order(db.PermissionGrants.ByResourceName.NullsLast())
+		}
+	}
+	if query.ByGrantedBy != nil {
+		switch *query.ByGrantedBy {
+		case zspecs.OrderByAsc:
+			q.Order(db.PermissionGrants.ByGrantedBy.Asc())
+		case zspecs.OrderByDesc:
+			q.Order(db.PermissionGrants.ByGrantedBy.Desc())
+		case zspecs.OrderByNullsFirst:
+			q.Order(db.PermissionGrants.ByGrantedBy.NullsFirst())
+		case zspecs.OrderByNullsLast:
+			q.Order(db.PermissionGrants.ByGrantedBy.NullsLast())
+		}
+	}
+	if query.ByStatus != nil {
+		switch *query.ByStatus {
+		case zspecs.OrderByAsc:
+			q.Order(db.PermissionGrants.ByStatus.Asc())
+		case zspecs.OrderByDesc:
+			q.Order(db.PermissionGrants.ByStatus.Desc())
+		case zspecs.OrderByNullsFirst:
+			q.Order(db.PermissionGrants.ByStatus.NullsFirst())
+		case zspecs.OrderByNullsLast:
+			q.Order(db.PermissionGrants.ByStatus.NullsLast())
+		}
+	}
+	if query.ByExpiresAt != nil {
+		switch *query.ByExpiresAt {
+		case zspecs.OrderByAsc:
+			q.Order(db.PermissionGrants.ByExpiresAt.Asc())
+		case zspecs.OrderByDesc:
+			q.Order(db.PermissionGrants.ByExpiresAt.Desc())
+		case zspecs.OrderByNullsFirst:
+			q.Order(db.PermissionGrants.ByExpiresAt.NullsFirst())
+		case zspecs.OrderByNullsLast:
+			q.Order(db.PermissionGrants.ByExpiresAt.NullsLast())
+		}
+	}
+	if query.ByCreatedAt != nil {
+		switch *query.ByCreatedAt {
+		case zspecs.OrderByAsc:
+			q.Order(db.PermissionGrants.ByCreatedAt.Asc())
+		case zspecs.OrderByDesc:
+			q.Order(db.PermissionGrants.ByCreatedAt.Desc())
+		case zspecs.OrderByNullsFirst:
+			q.Order(db.PermissionGrants.ByCreatedAt.NullsFirst())
+		case zspecs.OrderByNullsLast:
+			q.Order(db.PermissionGrants.ByCreatedAt.NullsLast())
+		}
+	}
+	if query.ByLastAt != nil {
+		switch *query.ByLastAt {
+		case zspecs.OrderByAsc:
+			q.Order(db.PermissionGrants.ByLastAt.Asc())
+		case zspecs.OrderByDesc:
+			q.Order(db.PermissionGrants.ByLastAt.Desc())
+		case zspecs.OrderByNullsFirst:
+			q.Order(db.PermissionGrants.ByLastAt.NullsFirst())
+		case zspecs.OrderByNullsLast:
+			q.Order(db.PermissionGrants.ByLastAt.NullsLast())
+		}
+	}
+
+	return q, nil
+}
 func (r *User) queryUser(db *AccountDB, q *entity.UserEntityQuery, query UserQuery, includeDelete bool) (*entity.UserEntityQuery, error) {
 	hasAnyCondition := false
 	if err := query.Validate(); err != nil {
@@ -652,6 +964,246 @@ func (r *User) queryUser(db *AccountDB, q *entity.UserEntityQuery, query UserQue
 			q.Order(db.Users.ByLastAt.NullsFirst())
 		case zspecs.OrderByNullsLast:
 			q.Order(db.Users.ByLastAt.NullsLast())
+		}
+	}
+
+	return q, nil
+}
+func (r *UserIdentity) queryUserIdentity(db *AccountDB, q *entity.UserIdentityEntityQuery, query UserIdentityQuery, includeDelete bool) (*entity.UserIdentityEntityQuery, error) {
+	hasAnyCondition := false
+	if err := query.Validate(); err != nil {
+		return nil, zerr.Must(err)
+	}
+	if query.Id != nil {
+		q = q.Where(db.UserIdentitys.Id.EQ(query.Id.Int64()))
+		hasAnyCondition = true
+	}
+	if query.Ids != nil {
+		Ids := []int64{}
+		for _, v := range query.Ids {
+			Ids = append(Ids, v.Int64())
+		}
+		q = q.Where(db.UserIdentitys.Id.In(Ids...))
+		hasAnyCondition = true
+	}
+	if query.UserId != nil {
+		q = q.Where(db.UserIdentitys.UserId.EQ(query.UserId.String()))
+		hasAnyCondition = true
+	}
+	if query.UserIds != nil {
+		UserIds := []string{}
+		for _, v := range query.UserIds {
+			UserIds = append(UserIds, v.String())
+		}
+		q = q.Where(db.UserIdentitys.UserId.In(UserIds...))
+		hasAnyCondition = true
+	}
+	if query.IdentityType != nil {
+		q = q.Where(db.UserIdentitys.IdentityType.EQ(query.IdentityType.String()))
+		hasAnyCondition = true
+	}
+	if query.IdentityTypes != nil {
+		IdentityTypes := []string{}
+		for _, v := range query.IdentityTypes {
+			IdentityTypes = append(IdentityTypes, v.String())
+		}
+		q = q.Where(db.UserIdentitys.IdentityType.In(IdentityTypes...))
+		hasAnyCondition = true
+	}
+	if query.ScopeCode != nil {
+		q = q.Where(db.UserIdentitys.ScopeCode.EQ(query.ScopeCode.String()))
+		hasAnyCondition = true
+	}
+	if query.ScopeCodes != nil {
+		ScopeCodes := []string{}
+		for _, v := range query.ScopeCodes {
+			ScopeCodes = append(ScopeCodes, v.String())
+		}
+		q = q.Where(db.UserIdentitys.ScopeCode.In(ScopeCodes...))
+		hasAnyCondition = true
+	}
+	if query.ScopeName != nil {
+		q = q.Where(db.UserIdentitys.ScopeName.EQ(query.ScopeName.String()))
+		hasAnyCondition = true
+	}
+	if query.ScopeNames != nil {
+		ScopeNames := []string{}
+		for _, v := range query.ScopeNames {
+			ScopeNames = append(ScopeNames, v.String())
+		}
+		q = q.Where(db.UserIdentitys.ScopeName.In(ScopeNames...))
+		hasAnyCondition = true
+	}
+	if query.RoleCodes != nil {
+		q = q.Where(db.UserIdentitys.RoleCodes.EQ(query.RoleCodes.String()))
+		hasAnyCondition = true
+	}
+	if query.RoleCodess != nil {
+		RoleCodess := []string{}
+		for _, v := range query.RoleCodess {
+			RoleCodess = append(RoleCodess, v.String())
+		}
+		q = q.Where(db.UserIdentitys.RoleCodes.In(RoleCodess...))
+		hasAnyCondition = true
+	}
+	if query.Status != nil {
+		q = q.Where(db.UserIdentitys.Status.EQ(query.Status.Int16()))
+		hasAnyCondition = true
+	}
+	if query.Statuss != nil {
+		Statuss := []int16{}
+		for _, v := range query.Statuss {
+			Statuss = append(Statuss, v.Int16())
+		}
+		q = q.Where(db.UserIdentitys.Status.In(Statuss...))
+		hasAnyCondition = true
+	}
+
+	// 创建时间开始时间
+	if query.CreatedAtStart != nil {
+		q = q.Where(db.UserIdentitys.CreatedAt.GTE(query.CreatedAtStart.Time()))
+		hasAnyCondition = true
+	}
+
+	// 创建时间结束时间
+	if query.CreatedAtEnd != nil {
+		q = q.Where(db.UserIdentitys.CreatedAt.LTE(query.CreatedAtEnd.Time()))
+		hasAnyCondition = true
+	}
+
+	// 最后更新时间开始时间
+	if query.LastAtStart != nil {
+		q = q.Where(db.UserIdentitys.LastAt.GTE(query.LastAtStart.Time()))
+		hasAnyCondition = true
+	}
+
+	// 最后更新时间结束时间
+	if query.LastAtEnd != nil {
+		q = q.Where(db.UserIdentitys.LastAt.LTE(query.LastAtEnd.Time()))
+		hasAnyCondition = true
+	}
+
+	// 是否已经逻辑删除
+	if !includeDelete {
+		if hasAnyCondition {
+			q.Where(
+				entitysql.And,
+				db.UserIdentitys.DeletedAt.IsNull(),
+			)
+		} else {
+			q.Where(
+				db.UserIdentitys.DeletedAt.IsNull(),
+			)
+		}
+	}
+
+	// 排序
+	if query.ById != nil {
+		switch *query.ById {
+		case zspecs.OrderByAsc:
+			q.Order(db.UserIdentitys.ById.Asc())
+		case zspecs.OrderByDesc:
+			q.Order(db.UserIdentitys.ById.Desc())
+		case zspecs.OrderByNullsFirst:
+			q.Order(db.UserIdentitys.ById.NullsFirst())
+		case zspecs.OrderByNullsLast:
+			q.Order(db.UserIdentitys.ById.NullsLast())
+		}
+	}
+	if query.ByUserId != nil {
+		switch *query.ByUserId {
+		case zspecs.OrderByAsc:
+			q.Order(db.UserIdentitys.ByUserId.Asc())
+		case zspecs.OrderByDesc:
+			q.Order(db.UserIdentitys.ByUserId.Desc())
+		case zspecs.OrderByNullsFirst:
+			q.Order(db.UserIdentitys.ByUserId.NullsFirst())
+		case zspecs.OrderByNullsLast:
+			q.Order(db.UserIdentitys.ByUserId.NullsLast())
+		}
+	}
+	if query.ByIdentityType != nil {
+		switch *query.ByIdentityType {
+		case zspecs.OrderByAsc:
+			q.Order(db.UserIdentitys.ByIdentityType.Asc())
+		case zspecs.OrderByDesc:
+			q.Order(db.UserIdentitys.ByIdentityType.Desc())
+		case zspecs.OrderByNullsFirst:
+			q.Order(db.UserIdentitys.ByIdentityType.NullsFirst())
+		case zspecs.OrderByNullsLast:
+			q.Order(db.UserIdentitys.ByIdentityType.NullsLast())
+		}
+	}
+	if query.ByScopeCode != nil {
+		switch *query.ByScopeCode {
+		case zspecs.OrderByAsc:
+			q.Order(db.UserIdentitys.ByScopeCode.Asc())
+		case zspecs.OrderByDesc:
+			q.Order(db.UserIdentitys.ByScopeCode.Desc())
+		case zspecs.OrderByNullsFirst:
+			q.Order(db.UserIdentitys.ByScopeCode.NullsFirst())
+		case zspecs.OrderByNullsLast:
+			q.Order(db.UserIdentitys.ByScopeCode.NullsLast())
+		}
+	}
+	if query.ByScopeName != nil {
+		switch *query.ByScopeName {
+		case zspecs.OrderByAsc:
+			q.Order(db.UserIdentitys.ByScopeName.Asc())
+		case zspecs.OrderByDesc:
+			q.Order(db.UserIdentitys.ByScopeName.Desc())
+		case zspecs.OrderByNullsFirst:
+			q.Order(db.UserIdentitys.ByScopeName.NullsFirst())
+		case zspecs.OrderByNullsLast:
+			q.Order(db.UserIdentitys.ByScopeName.NullsLast())
+		}
+	}
+	if query.ByRoleCodes != nil {
+		switch *query.ByRoleCodes {
+		case zspecs.OrderByAsc:
+			q.Order(db.UserIdentitys.ByRoleCodes.Asc())
+		case zspecs.OrderByDesc:
+			q.Order(db.UserIdentitys.ByRoleCodes.Desc())
+		case zspecs.OrderByNullsFirst:
+			q.Order(db.UserIdentitys.ByRoleCodes.NullsFirst())
+		case zspecs.OrderByNullsLast:
+			q.Order(db.UserIdentitys.ByRoleCodes.NullsLast())
+		}
+	}
+	if query.ByStatus != nil {
+		switch *query.ByStatus {
+		case zspecs.OrderByAsc:
+			q.Order(db.UserIdentitys.ByStatus.Asc())
+		case zspecs.OrderByDesc:
+			q.Order(db.UserIdentitys.ByStatus.Desc())
+		case zspecs.OrderByNullsFirst:
+			q.Order(db.UserIdentitys.ByStatus.NullsFirst())
+		case zspecs.OrderByNullsLast:
+			q.Order(db.UserIdentitys.ByStatus.NullsLast())
+		}
+	}
+	if query.ByCreatedAt != nil {
+		switch *query.ByCreatedAt {
+		case zspecs.OrderByAsc:
+			q.Order(db.UserIdentitys.ByCreatedAt.Asc())
+		case zspecs.OrderByDesc:
+			q.Order(db.UserIdentitys.ByCreatedAt.Desc())
+		case zspecs.OrderByNullsFirst:
+			q.Order(db.UserIdentitys.ByCreatedAt.NullsFirst())
+		case zspecs.OrderByNullsLast:
+			q.Order(db.UserIdentitys.ByCreatedAt.NullsLast())
+		}
+	}
+	if query.ByLastAt != nil {
+		switch *query.ByLastAt {
+		case zspecs.OrderByAsc:
+			q.Order(db.UserIdentitys.ByLastAt.Asc())
+		case zspecs.OrderByDesc:
+			q.Order(db.UserIdentitys.ByLastAt.Desc())
+		case zspecs.OrderByNullsFirst:
+			q.Order(db.UserIdentitys.ByLastAt.NullsFirst())
+		case zspecs.OrderByNullsLast:
+			q.Order(db.UserIdentitys.ByLastAt.NullsLast())
 		}
 	}
 
