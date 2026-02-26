@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react-swc";
 
 function patchAriesDynamicImport() {
@@ -26,10 +26,17 @@ function patchAriesDynamicImport() {
   };
 }
 
-export default defineConfig({
-  plugins: [patchAriesDynamicImport(), react()],
-  clearScreen: false,
-  server: {
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), "");
+  const enabledModulesRaw = env.VITE_DESKTOP_ENABLED_MODULES || "*";
+
+  return {
+    plugins: [patchAriesDynamicImport(), react()],
+    clearScreen: false,
+    define: {
+      __DESKTOP_ENABLED_MODULES__: JSON.stringify(enabledModulesRaw),
+    },
+    server: {
     host: "127.0.0.1",
     port: 1420,
     strictPort: true,
@@ -56,8 +63,8 @@ export default defineConfig({
       }
     }
   },
-  envPrefix: ["VITE_", "TAURI_"],
-  resolve: {
+    envPrefix: ["VITE_", "TAURI_"],
+    resolve: {
     dedupe: ["react", "react-dom"],
     alias: [
       {
@@ -100,5 +107,6 @@ export default defineConfig({
         replacement: "/Users/yoho/code/client/aries_react/dist/"
       }
     ]
-  }
+    }
+  };
 });

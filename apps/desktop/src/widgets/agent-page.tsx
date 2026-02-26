@@ -9,7 +9,7 @@ import {
   AriModal,
   AriTypography,
 } from "aries_react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   AGENTS,
   bindCodeSessionWorkspace,
@@ -18,9 +18,9 @@ import {
   setLastUsedCodeWorkspaceId,
   upsertCodeWorkspaceGroup,
   upsertModelProject,
-} from "../data";
-import { createRuntimeSession } from "../services/backend-api";
-import type { AgentKey, LoginUser, ModelMcpCapabilities } from "../types";
+} from "../shared/data";
+import { createRuntimeSession } from "../shared/services/backend-api";
+import type { AgentKey, LoginUser, ModelMcpCapabilities } from "../shared/types";
 
 interface GitCliHealthResponse {
   available: boolean;
@@ -33,10 +33,6 @@ interface GitCloneResponse {
   path: string;
   name: string;
   message: string;
-}
-
-function normalizeAgentKey(value: string | undefined): AgentKey {
-  return value === "model" ? "model" : "code";
 }
 
 // 描述：根据用户首条消息生成默认会话标题，避免出现“会话详情”这类无语义标题。
@@ -61,12 +57,12 @@ function buildSessionTitleFromPrompt(prompt: string, fallbackTitle: string): str
 }
 
 interface AgentPageProps {
+  agentKey: AgentKey;
   modelMcpCapabilities: ModelMcpCapabilities;
   currentUser: LoginUser | null;
 }
 
-export function AgentPage({ modelMcpCapabilities: _modelMcpCapabilities, currentUser }: AgentPageProps) {
-  const params = useParams<{ agentKey: string }>();
+export function AgentPage({ agentKey, modelMcpCapabilities: _modelMcpCapabilities, currentUser }: AgentPageProps) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [prompt, setPrompt] = useState("");
@@ -79,7 +75,6 @@ export function AgentPage({ modelMcpCapabilities: _modelMcpCapabilities, current
   const [folderPickLoading, setFolderPickLoading] = useState(false);
   const [gitInstallModalVisible, setGitInstallModalVisible] = useState(false);
   const [gitInstallMessage, setGitInstallMessage] = useState("");
-  const agentKey = normalizeAgentKey(params.agentKey);
   const isCodeAgent = agentKey === "code";
 
   const agent = useMemo(

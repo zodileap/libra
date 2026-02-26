@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { AriButton, AriContainer, AriFlex, AriSwitch } from "aries_react";
 import type { ColorThemeMode } from "../types";
-import { DeskPageHeader, DeskSectionTitle, DeskSettingsRow } from "../widgets/settings-primitives";
+import { DeskPageHeader, DeskSectionTitle, DeskSettingsRow } from "../../../widgets/settings-primitives";
 
 interface SettingsGeneralPageProps {
   colorThemeMode: ColorThemeMode;

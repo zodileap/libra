@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AriButton, AriContainer, AriFlex, AriSwitch } from "aries_react";
-import { DeskPageHeader, DeskSectionTitle, DeskSettingsRow, DeskStatusText } from "../widgets/settings-primitives";
+import { DeskPageHeader, DeskSectionTitle, DeskSettingsRow, DeskStatusText } from "../../../widgets/settings-primitives";
 
 // 描述：
 //

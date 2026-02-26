@@ -12,7 +12,7 @@ import type {
   BlenderBridgeRuntime,
   ModelMcpCapabilities,
 } from "../types";
-import { DeskPageHeader, DeskSectionTitle, DeskSettingsRow, DeskStatusText } from "../widgets/settings-primitives";
+import { DeskPageHeader, DeskSectionTitle, DeskSettingsRow, DeskStatusText } from "../../../widgets/settings-primitives";
 
 interface ModelAgentSettingsPageProps {
   modelMcpCapabilities: ModelMcpCapabilities;

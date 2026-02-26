@@ -1,21 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
-import type { MouseEvent, ReactNode } from "react";
+import type { MouseEvent } from "react";
 import {
   AriButton,
   AriContainer,
   AriContextMenu,
   AriFlex,
-  AriIcon,
   AriInput,
   AriMessage,
   AriMenu,
   AriModal,
-  AriTooltip,
   AriTypography,
 } from "aries_react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
-  AGENTS,
   bindCodeSessionWorkspace,
   getCodeWorkspaceIdBySessionId,
   getLastUsedCodeWorkspaceId,
@@ -29,9 +26,9 @@ import {
   setLastUsedCodeWorkspaceId,
   togglePinnedAgentSession,
   type CodeWorkspaceGroup,
-} from "../../data";
-import { listRuntimeSessions, updateRuntimeSessionStatus } from "../../services/backend-api";
-import type { AgentKey, AgentSession, AuthAvailableAgentItem, LoginUser } from "../../types";
+} from "@/shell/data";
+import { listRuntimeSessions, updateRuntimeSessionStatus } from "@/shell/services/backend-api";
+import type { AgentKey, AgentSession, AuthAvailableAgentItem, LoginUser } from "@/shell/types";
 import {
   createCodeWorkflowFromTemplate,
   createModelWorkflowFromTemplate,
@@ -39,12 +36,32 @@ import {
   deleteModelWorkflow,
   listCodeWorkflows,
   listModelWorkflows,
-} from "../../workflow";
+} from "@/shell/workflow";
+import {
+  AI_KEY_SIDEBAR_CONTENT,
+  resolveHomeSidebarAgentItems,
+  resolveSettingsSidebarItems,
+} from "../modules/common/routes";
+import {
+  CODE_AGENT_ROOT_PATH,
+  CODE_SIDEBAR_QUICK_ACTIONS,
+  resolveCodeWorkflowPath,
+} from "../modules/code/routes";
+import {
+  MODEL_AGENT_ROOT_PATH,
+  MODEL_SIDEBAR_QUICK_ACTIONS,
+  resolveModelWorkflowPath,
+} from "../modules/model/routes";
+import type { RouteAccess } from "../router/types";
+import { SidebarBackHeader } from "./widgets/sidebar-back-header";
+import { SidebarQuickAction } from "./widgets/sidebar-quick-action";
+import { UserHoverMenu } from "./widgets/user-hover-menu";
 
 interface ClientSidebarProps {
   user: LoginUser;
   onLogout: () => Promise<void>;
   availableAgents: AuthAvailableAgentItem[];
+  routeAccess: RouteAccess;
 }
 
 interface AgentSidebarSession extends AgentSession {
@@ -94,211 +111,56 @@ function toSessionUpdatedAtText(lastAt?: string): string {
   });
 }
 
-// 描述：统一管理侧边栏入口图标的 fill 变体，避免在 JSX 中散落硬编码。
-const SIDEBAR_ICON_FILL_MAP: Record<string, string> = {
-  person: "person_fill",
-  settings: "settings_fill",
-  account_tree: "account_tree_fill",
-};
-
-// 描述：根据 hover/focus 状态返回入口图标名，优先使用 fill 图标，不存在则回退原图标。
-//
-// Params:
-//
-//   - icon: 基础图标名。
-//   - highlighted: 是否高亮（hover/focus）。
-//
-// Returns:
-//
-//   - 当前应展示的图标名。
-function resolveSidebarEntryIcon(icon: string, highlighted: boolean): string {
-  if (!highlighted) {
-    return icon;
-  }
-  return SIDEBAR_ICON_FILL_MAP[icon] || icon;
-}
-
-// 描述：渲染侧边栏统一入口内容，保证“左图标 + 右文本”在用户入口和快捷入口间一致。
-//
-// Params:
-//
-//   - icon: 左侧图标名称。
-//   - label: 入口文本。
-//   - highlighted: 是否进入 hover/focus 高亮态。
-function SidebarEntryContent({
-  icon,
-  label,
-  highlighted,
-}: {
-  icon: string;
-  label: string;
-  highlighted: boolean;
-}) {
-  return (
-    <AriFlex className="desk-sidebar-entry-content" align="center" space={8}>
-      <AriIcon name={resolveSidebarEntryIcon(icon, highlighted)} />
-      <AriTypography className="desk-sidebar-entry-text" variant="body" value={label} />
-    </AriFlex>
-  );
-}
-
-function UserHoverMenu({
-  user,
-  onLogout,
-}: {
-  user: LoginUser;
-  onLogout: () => Promise<void>;
-}) {
-  const navigate = useNavigate();
-  const [entryHovered, setEntryHovered] = useState(false);
-  const menuItems = useMemo(
-    () => [
-      {
-        key: "settings",
-        label: "设置",
-        icon: "settings",
-      },
-      {
-        key: "ai-key",
-        label: "AI Key",
-        icon: "vpn_key",
-      },
-      {
-        key: "logout",
-        label: "登出",
-        icon: "logout",
-      },
-    ],
-    [],
-  );
-
-  const content = (
-    <AriMenu
-      items={menuItems}
-      onSelect={(key) => {
-        if (key === "settings") navigate("/settings/general");
-        if (key === "ai-key") navigate("/ai-keys");
-        if (key === "logout") {
-          void onLogout();
-        }
-      }}
-    />
-  );
-
-  return (
-    <AriTooltip content={content} position="top" matchTriggerWidth>
-      <AriContainer
-        className="desk-user-trigger-wrap"
-        onMouseEnter={() => setEntryHovered(true)}
-        onMouseLeave={() => setEntryHovered(false)}
-      >
-        <button
-          type="button"
-          className="desk-user-trigger desk-user-trigger-btn"
-          aria-label="用户菜单"
-          onFocus={() => setEntryHovered(true)}
-          onBlur={() => setEntryHovered(false)}
-        >
-          <SidebarEntryContent
-            icon="person"
-            label={user.name}
-            highlighted={entryHovered}
-          />
-        </button>
-      </AriContainer>
-    </AriTooltip>
-  );
-}
-
-// 描述：渲染侧边栏快捷入口，与用户入口保持同款样式，避免底部视觉割裂。
-//
-// Params:
-//
-//   - label: 入口文案。
-//   - icon: 入口图标名称。
-//   - onClick: 点击回调。
-function SidebarQuickAction({
-  label,
-  icon,
-  onClick,
-}: {
-  label: string;
-  icon: string;
-  onClick: () => void;
-}) {
-  const [entryHovered, setEntryHovered] = useState(false);
-
-  return (
-    <AriContainer
-      className="desk-user-trigger-wrap"
-      onMouseEnter={() => setEntryHovered(true)}
-      onMouseLeave={() => setEntryHovered(false)}
-    >
-      <button
-        type="button"
-        className="desk-user-trigger desk-user-trigger-btn desk-sidebar-quick-action"
-        onClick={onClick}
-        onFocus={() => setEntryHovered(true)}
-        onBlur={() => setEntryHovered(false)}
-      >
-        <SidebarEntryContent icon={icon} label={label} highlighted={entryHovered} />
-      </button>
-    </AriContainer>
-  );
-}
-
-function SidebarBackHeader({
-  onBack,
-  label = "Back",
-  rightAction,
-}: {
-  onBack: () => void;
-  label?: string;
-  rightAction?: ReactNode;
-}) {
-  return (
-    <AriFlex justify="space-between" align="center">
-      <AriButton icon="arrow_back_ios" label={label} onClick={onBack} />
-      {rightAction || <AriContainer />}
-    </AriFlex>
-  );
-}
 
 function HomeSidebar({
   user,
   onLogout,
   availableAgents,
+  routeAccess,
 }: {
   user: LoginUser;
   onLogout: () => Promise<void>;
   availableAgents: AuthAvailableAgentItem[];
+  routeAccess: RouteAccess;
 }) {
   const navigate = useNavigate();
   const location = useLocation();
   const selectedKey = location.pathname.startsWith("/agents/")
     ? location.pathname.split("/")[2] || ""
     : "";
-
-  const authorizedCodes = useMemo(
-    () => new Set(availableAgents.map((item) => item.code.toLowerCase())),
-    [availableAgents],
+  const homeSidebarItems = useMemo(
+    () => resolveHomeSidebarAgentItems(availableAgents, routeAccess),
+    [availableAgents, routeAccess],
   );
 
   return (
     <AriContainer className="desk-sidebar">
       <AriContainer className="desk-agent-menu">
         <AriMenu
-          items={AGENTS.map((agent) => ({
-            key: agent.key,
-            label: `${agent.name}${authorizedCodes.has(agent.key) ? "（已授权）" : "（未授权）"}`,
+          items={homeSidebarItems.map((item) => ({
+            key: item.key,
+            label: item.label,
           }))}
           selectedKey={selectedKey}
-          onSelect={(key) => navigate(`/agents/${key}`)}
+          onSelect={(key: string) => {
+            const target = homeSidebarItems.find((item) => item.key === key);
+            if (!target) {
+              return;
+            }
+            if (!target.enabled) {
+              AriMessage.warning({
+                content: target.deniedMessage || "当前入口不可用。",
+                duration: 2500,
+              });
+              return;
+            }
+            navigate(target.path);
+          }}
         />
       </AriContainer>
 
       <AriContainer style={{ flex: 1 }} />
-      <UserHoverMenu user={user} onLogout={onLogout} />
+      <UserHoverMenu user={user} onLogout={onLogout} routeAccess={routeAccess} />
     </AriContainer>
   );
 }
@@ -307,10 +169,12 @@ function AgentSidebar({
   user,
   onLogout,
   agentKey,
+  routeAccess,
 }: {
   user: LoginUser;
   onLogout: () => Promise<void>;
   agentKey: AgentKey;
+  routeAccess: RouteAccess;
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -432,10 +296,10 @@ function AgentSidebar({
   const handleCreateSession = () => {
     setPendingDeleteSessionId("");
     if (isCodeAgent) {
-      navigate("/agents/code");
+      navigate(CODE_AGENT_ROOT_PATH);
       return;
     }
-    navigate(`/agents/${agentKey}`);
+    navigate(MODEL_AGENT_ROOT_PATH);
   };
 
   // 描述：删除会话按钮采用二次确认，首次点击进入确认态，二次点击后执行删除。
@@ -602,7 +466,7 @@ function AgentSidebar({
       return;
     }
     if (!isCodeAgent) {
-      navigate(`/agents/${agentKey}/session/${sessionKey}`);
+      navigate(`${MODEL_AGENT_ROOT_PATH}/session/${sessionKey}`);
       return;
     }
     const workspaceId = getCodeWorkspaceIdBySessionId(sessionKey)
@@ -614,7 +478,7 @@ function AgentSidebar({
       setLastUsedCodeWorkspaceId(workspaceId);
     }
     const search = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : "";
-    navigate(`/agents/code/session/${sessionKey}${search}`);
+    navigate(`${CODE_AGENT_ROOT_PATH}/session/${sessionKey}${search}`);
   };
 
   // 描述：将当前会话列表按目录分组映射成二级结构。
@@ -659,7 +523,7 @@ function AgentSidebar({
           onMouseLeave={() => {
             setHoveredPinSessionId((current) => (current === item.id ? "" : current));
           }}
-          onClick={(event) => {
+          onClick={(event: MouseEvent<HTMLButtonElement>) => {
             handleTogglePinnedSession(event, item.id);
           }}
         />
@@ -682,7 +546,7 @@ function AgentSidebar({
           onMouseLeave={() => {
             setHoveredDeleteSessionId((current) => (current === item.id ? "" : current));
           }}
-          onClick={(event) => {
+          onClick={(event: MouseEvent<HTMLButtonElement>) => {
             void handleDeleteSession(event, item.id);
           }}
         />
@@ -709,7 +573,7 @@ function AgentSidebar({
             size="sm"
             type="text"
             icon="open_in_new"
-            onClick={(event) => {
+            onClick={(event: MouseEvent<HTMLElement>) => {
               event.preventDefault();
               event.stopPropagation();
               openWorkspaceComposePage(group.workspace.id);
@@ -719,7 +583,7 @@ function AgentSidebar({
             size="sm"
             type="text"
             icon="edit"
-            onClick={(event) => {
+            onClick={(event: MouseEvent<HTMLElement>) => {
               event.preventDefault();
               event.stopPropagation();
               handleOpenWorkspaceRenameModal(group.workspace.id);
@@ -730,7 +594,7 @@ function AgentSidebar({
             type="text"
             color="danger"
             icon="delete"
-            onClick={(event) => {
+            onClick={(event: MouseEvent<HTMLElement>) => {
               event.preventDefault();
               event.stopPropagation();
               handleDeleteWorkspace(group.workspace.id);
@@ -909,13 +773,13 @@ function AgentSidebar({
       <AriContextMenu
         className="desk-history-context-menu"
         items={contextMenuItems}
-        onOpenChange={(open) => {
+        onOpenChange={(open: boolean) => {
           if (!open) {
             setContextSessionId("");
             setHoveredContextMenuActionKey("");
           }
         }}
-        onSelect={(key) => {
+        onSelect={(key: string) => {
           const targetId = contextSessionId;
           if (!targetId) {
             return;
@@ -945,7 +809,7 @@ function AgentSidebar({
                 defaultExpandedKeys={defaultExpandedWorkspaceKeys}
                 expandedKeys={codeWorkspaceExpandedKeys}
                 onExpand={setCodeWorkspaceExpandedKeys}
-                onSelect={(key) => {
+                onSelect={(key: string) => {
                   handleSelectCodeWorkspaceMenuItem(key);
                 }}
               />
@@ -966,19 +830,21 @@ function AgentSidebar({
       </AriContextMenu>
 
       <AriContainer style={{ flex: 1 }} />
-      <AriContainer className="desk-sidebar-quick-actions">
-        <SidebarQuickAction
-          label="智能体设置"
-          icon="settings"
-          onClick={() => navigate(`/agents/${agentKey}/settings`)}
-        />
-        <SidebarQuickAction
-          label="工作流设置"
-          icon="account_tree"
-          onClick={() => navigate(`/agents/${agentKey}/workflows`)}
-        />
-      </AriContainer>
-      <UserHoverMenu user={user} onLogout={onLogout} />
+      {routeAccess.isModuleEnabled("settings") || routeAccess.isModuleEnabled("workflow") ? (
+        <AriContainer className="desk-sidebar-quick-actions">
+          {(isCodeAgent ? CODE_SIDEBAR_QUICK_ACTIONS : MODEL_SIDEBAR_QUICK_ACTIONS)
+            .filter((item) => routeAccess.isModuleEnabled(item.key === "workflow" ? "workflow" : "settings"))
+            .map((item) => (
+              <SidebarQuickAction
+                key={item.key}
+                label={item.label}
+                icon={item.icon}
+                onClick={() => navigate(item.path)}
+              />
+            ))}
+        </AriContainer>
+      ) : null}
+      <UserHoverMenu user={user} onLogout={onLogout} routeAccess={routeAccess} />
 
       <AriModal
         visible={renameModalVisible}
@@ -1055,10 +921,12 @@ function WorkflowsSidebar({
   user,
   onLogout,
   agentKey,
+  routeAccess,
 }: {
   user: LoginUser;
   onLogout: () => Promise<void>;
   agentKey: AgentKey;
+  routeAccess: RouteAccess;
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -1090,11 +958,10 @@ function WorkflowsSidebar({
 
   // 描述：导航到工作流编辑页并携带 workflowId 参数，保证画布页和侧边栏选中态一致。
   const navigateToWorkflowPage = (workflowId: string, replace = false) => {
-    const search = workflowId ? `?workflowId=${encodeURIComponent(workflowId)}` : "";
-    navigate(
-      `/agents/${agentKey}/workflows${search}`,
-      replace ? { replace: true } : undefined,
-    );
+    const targetPath = isModelAgent
+      ? resolveModelWorkflowPath(workflowId)
+      : resolveCodeWorkflowPath(workflowId);
+    navigate(targetPath, replace ? { replace: true } : undefined);
   };
 
   // 描述：当 query 丢失或无效时自动修正 URL，避免画布页和侧边栏选中不一致。
@@ -1178,7 +1045,7 @@ function WorkflowsSidebar({
             onMouseLeave={() => {
               setHoveredDeleteWorkflowId((current) => (current === item.id ? "" : current));
             }}
-            onClick={(event) => {
+            onClick={(event: MouseEvent<HTMLElement>) => {
               handleDeleteWorkflow(event, item.id);
             }}
           />
@@ -1213,7 +1080,7 @@ function WorkflowsSidebar({
           className="desk-sidebar-nav"
           items={workflowMenuItems}
           selectedKey={selectedWorkflowId}
-          onSelect={(key) => {
+          onSelect={(key: string) => {
             setPendingDeleteWorkflowId("");
             navigateToWorkflowPage(key);
           }}
@@ -1221,85 +1088,112 @@ function WorkflowsSidebar({
       </AriContainer>
 
       <AriContainer style={{ flex: 1 }} />
-      <UserHoverMenu user={user} onLogout={onLogout} />
+      <UserHoverMenu user={user} onLogout={onLogout} routeAccess={routeAccess} />
     </AriContainer>
   );
 }
 
-function SettingsSidebar({ user, onLogout }: { user: LoginUser; onLogout: () => Promise<void> }) {
+function SettingsSidebar({
+  user,
+  onLogout,
+  routeAccess,
+}: {
+  user: LoginUser;
+  onLogout: () => Promise<void>;
+  routeAccess: RouteAccess;
+}) {
   const navigate = useNavigate();
   const location = useLocation();
+  const settingItems = useMemo(() => resolveSettingsSidebarItems(routeAccess), [routeAccess]);
+  const selectedSettingKey = useMemo(() => {
+    if (location.pathname.includes("/agents/model/settings") && routeAccess.isAgentEnabled("model")) {
+      return "model";
+    }
+    if (location.pathname.includes("/agents/code/settings") && routeAccess.isAgentEnabled("code")) {
+      return "code";
+    }
+    return "general";
+  }, [location.pathname, routeAccess]);
+
   return (
     <AriContainer className="desk-sidebar">
       <SidebarBackHeader onBack={() => navigate("/home")} label="Home" />
       <AriContainer className="desk-sidebar-section">
         <AriMenu
-          items={[
-            { key: "general", label: "General" },
-            { key: "code", label: "Code Agent" },
-            { key: "model", label: "Model Agent" },
-          ]}
-          selectedKey={
-            location.pathname.includes("/agents/model/settings")
-              ? "model"
-              : location.pathname.includes("/agents/code/settings")
-                ? "code"
-                : "general"
-          }
-          onSelect={(key) => {
-            if (key === "model") {
-              navigate("/agents/model/settings");
+          items={settingItems}
+          selectedKey={selectedSettingKey}
+          onSelect={(key: string) => {
+            const target = settingItems.find((item) => item.key === key);
+            if (!target) {
               return;
             }
-            if (key === "code") {
-              navigate("/agents/code/settings");
-              return;
-            }
-            navigate("/settings/general");
+            navigate(target.path);
           }}
         />
       </AriContainer>
       <AriContainer style={{ flex: 1 }} />
-      <UserHoverMenu user={user} onLogout={onLogout} />
+      <UserHoverMenu user={user} onLogout={onLogout} routeAccess={routeAccess} />
     </AriContainer>
   );
 }
 
-function AiKeySidebar({ user, onLogout }: { user: LoginUser; onLogout: () => Promise<void> }) {
+function AiKeySidebar({
+  user,
+  onLogout,
+  routeAccess,
+}: {
+  user: LoginUser;
+  onLogout: () => Promise<void>;
+  routeAccess: RouteAccess;
+}) {
   const navigate = useNavigate();
   return (
     <AriContainer className="desk-sidebar">
       <SidebarBackHeader onBack={() => navigate("/home")} label="Home" />
       <AriContainer className="desk-sidebar-section">
-        <AriTypography variant="h4" value="AI Key 管理" />
-        <AriTypography variant="caption" value="管理本地可用模型提供方密钥。" />
+        <AriTypography variant="h4" value={AI_KEY_SIDEBAR_CONTENT.title} />
+        <AriTypography variant="caption" value={AI_KEY_SIDEBAR_CONTENT.description} />
       </AriContainer>
       <AriContainer style={{ flex: 1 }} />
-      <UserHoverMenu user={user} onLogout={onLogout} />
+      <UserHoverMenu user={user} onLogout={onLogout} routeAccess={routeAccess} />
     </AriContainer>
   );
 }
 
-export function ClientSidebar({ user, onLogout, availableAgents }: ClientSidebarProps) {
+export function ClientSidebar({ user, onLogout, availableAgents, routeAccess }: ClientSidebarProps) {
   const location = useLocation();
   const mode = matchSidebarMode(location.pathname);
   const agentKey = matchAgentKey(location.pathname);
 
   if (mode === "settings") {
-    return <SettingsSidebar user={user} onLogout={onLogout} />;
+    return <SettingsSidebar user={user} onLogout={onLogout} routeAccess={routeAccess} />;
   }
 
   if (mode === "ai-key") {
-    return <AiKeySidebar user={user} onLogout={onLogout} />;
+    return <AiKeySidebar user={user} onLogout={onLogout} routeAccess={routeAccess} />;
   }
 
   if (mode === "workflow" && agentKey) {
-    return <WorkflowsSidebar user={user} onLogout={onLogout} agentKey={agentKey} />;
+    return (
+      <WorkflowsSidebar
+        user={user}
+        onLogout={onLogout}
+        agentKey={agentKey}
+        routeAccess={routeAccess}
+      />
+    );
   }
 
   if (mode === "agent" && agentKey) {
-    return <AgentSidebar user={user} onLogout={onLogout} agentKey={agentKey} />;
+    return <AgentSidebar user={user} onLogout={onLogout} agentKey={agentKey} routeAccess={routeAccess} />;
   }
 
-  return <HomeSidebar user={user} onLogout={onLogout} availableAgents={availableAgents} />;
+  return (
+    <HomeSidebar
+      user={user}
+      onLogout={onLogout}
+      availableAgents={availableAgents}
+      routeAccess={routeAccess}
+    />
+  );
 }

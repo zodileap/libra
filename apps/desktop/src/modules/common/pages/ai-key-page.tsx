@@ -4,7 +4,7 @@ import {
   DeskEmptyState,
   DeskPageHeader,
   DeskSettingsRow,
-} from "../widgets/settings-primitives";
+} from "../../../widgets/settings-primitives";
 
 interface AiKeyPageProps {
   aiKeys: AiKeyItem[];

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { AriButton, AriCard, AriContainer, AriTypography } from "aries_react";
 import { listen } from "@tauri-apps/api/event";
-import type { AgentLogEvent } from "../types";
+import type { AgentLogEvent } from "../shared/types";
 
 interface SessionDebugSnapshot {
   sessionId?: string;

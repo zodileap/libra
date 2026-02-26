@@ -6,8 +6,8 @@ interface LoginPageProps {
 }
 
 export function LoginPage({ onLogin }: LoginPageProps) {
-  const [account, setAccount] = useState("test@zodileap.com");
-  const [password, setPassword] = useState("Test@123456");
+  const [account, setAccount] = useState("");
+  const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [passwordError, setPasswordError] = useState("");
 
@@ -24,8 +24,15 @@ export function LoginPage({ onLogin }: LoginPageProps) {
     if (submitting) {
       return;
     }
-    const normalizedAccount = account.trim() || "demo@zodileap.com";
+    const normalizedAccount = account.trim();
     const normalizedPassword = password;
+    if (!normalizedAccount) {
+      AriMessage.warning({
+        content: "请输入账号后再登录。",
+        duration: 2500,
+      });
+      return;
+    }
     if (!normalizedPassword.trim()) {
       const text = "请输入密码后再登录。";
       setPasswordError(text);

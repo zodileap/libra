@@ -1,6 +1,6 @@
 import { AriCard, AriContainer, AriFlex, AriTypography } from "aries_react";
-import { SHORTCUTS } from "../data";
-import type { AuthAvailableAgentItem } from "../types";
+import { SHORTCUTS } from "../../../shared/data";
+import type { AuthAvailableAgentItem } from "../../../shared/types";
 
 interface HomePageProps {
   availableAgents: AuthAvailableAgentItem[];

@@ -20,25 +20,30 @@ import {
   AriMessage,
   AriTypography,
 } from "aries_react";
-import { useParams, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import {
   listCodeWorkflows,
   listModelWorkflows,
   saveCodeWorkflow,
   saveModelWorkflow,
-} from "../workflow";
+} from "../shared/workflow";
 import type {
   CodeWorkflowDefinition,
   WorkflowDefinition,
   WorkflowGraph,
   WorkflowGraphNode,
-} from "../workflow";
-import { DeskPageHeader } from "../widgets/settings-primitives";
+} from "../shared/workflow";
+import { DeskPageHeader } from "./settings-primitives";
+import type { AgentKey } from "../shared/types";
 
 interface CanvasNodeData {
   label: string;
   title: string;
   description: string;
+}
+
+interface WorkflowCanvasPageProps {
+  agentKey: AgentKey;
 }
 
 // 描述：
@@ -58,21 +63,6 @@ function resolveThemeInset(): number {
     .trim();
   const value = Number.parseFloat(raw);
   return Number.isFinite(value) && value > 0 ? value : 16;
-}
-
-// 描述：
-//
-//   - 归一化路由中的智能体标识，确保页面仅处理 model/code 两种类型。
-//
-// Params:
-//
-//   - value: 路由参数中的 agentKey。
-//
-// Returns:
-//
-//   - 归一化后的智能体类型。
-function normalizeAgentKey(value: string | undefined): "code" | "model" {
-  return value === "model" ? "model" : "code";
 }
 
 // 描述：
@@ -194,10 +184,15 @@ function resolveNewNodePosition(count: number): { x: number; y: number } {
   };
 }
 
-export function WorkflowCanvasPage() {
-  const params = useParams<{ agentKey: string }>();
+// 描述：
+//
+//   - 渲染工作流编辑器页面，按智能体类型加载并保存对应工作流数据。
+//
+// Params:
+//
+//   - agentKey: 智能体标识（code/model）。
+export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
   const [searchParams] = useSearchParams();
-  const agentKey = normalizeAgentKey(params.agentKey);
   const preferredWorkflowId = searchParams.get("workflowId") || "";
 
   const [workflowVersion, setWorkflowVersion] = useState(0);
