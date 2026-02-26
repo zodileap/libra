@@ -4,4 +4,5 @@
    *   - 覆盖 aries_react 默认基础圆角，Desktop 端统一使用 18px 的基础圆角。
    */
   --z-border-radius: 18px;
+  --z-color-bg-app-layout: transparent !important;
 }

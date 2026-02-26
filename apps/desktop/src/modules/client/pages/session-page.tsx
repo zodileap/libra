@@ -11,7 +11,7 @@ import {
 } from "aries_react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   AGENT_SESSIONS,
   getModelProjectById,
@@ -39,6 +39,7 @@ import type {
   BlenderBridgeEnsureOptions,
   BlenderBridgeEnsureResult,
   BlenderBridgeRuntime,
+  LoginUser,
   ModelMcpCapabilities,
   ProtocolUiHint,
 } from "../types";
@@ -57,10 +58,16 @@ import type {
 } from "../workflow";
 
 interface SessionPageProps {
+  currentUser?: LoginUser | null;
   modelMcpCapabilities: ModelMcpCapabilities;
   blenderBridgeRuntime: BlenderBridgeRuntime;
   ensureBlenderBridge: (options?: BlenderBridgeEnsureOptions) => Promise<BlenderBridgeEnsureResult>;
   aiKeys: AiKeyItem[];
+}
+
+interface SessionRouteState {
+  autoPrompt?: string;
+  workspaceId?: string;
 }
 
 interface AgentRunResponse {
@@ -512,13 +519,17 @@ function upsertAssistantMessageById(messages: MessageItem[], messageId: string, 
 }
 
 export function SessionPage({
+  currentUser: _currentUser,
   modelMcpCapabilities,
   blenderBridgeRuntime,
   ensureBlenderBridge,
   aiKeys,
 }: SessionPageProps) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { sessionId, agentKey } = useParams<{ sessionId: string; agentKey: string }>();
+  const routeState = (location.state || {}) as SessionRouteState;
+  const routeAutoPrompt = String(routeState.autoPrompt || "").trim();
   const [input, setInput] = useState("");
   const [status, setStatus] = useState("");
   const [sending, setSending] = useState(false);
@@ -613,6 +624,7 @@ export function SessionPage({
   const assistantRunHeartbeatCountRef = useRef(0);
   const assistantRunStageRef = useRef<AssistantRunStage>("planning");
   const assistantRunStatusRef = useRef<AssistantRunMeta["status"] | "idle">("idle");
+  const autoPromptDispatchedRef = useRef(false);
 
   // 描述：停止当前会话流式渲染调度，避免会话切换后残留异步刷新。
   const stopStreamTypingTimer = () => {
@@ -920,6 +932,7 @@ export function SessionPage({
     assistantRunLastActivityAtRef.current = 0;
     assistantRunStageRef.current = "planning";
     assistantRunStatusRef.current = "idle";
+    autoPromptDispatchedRef.current = false;
     setUiHint(null);
     setTraceRecords([]);
     setDebugFlowRecords([]);
@@ -1595,6 +1608,37 @@ export function SessionPage({
     await executePrompt(content, { allowDangerousAction: false, appendUserMessage: true });
   };
 
+  useEffect(() => {
+    if (!routeAutoPrompt) {
+      return;
+    }
+    if (!sessionId || sending || autoPromptDispatchedRef.current) {
+      return;
+    }
+    if (!messagesHydrated || hydratedSessionKey !== sessionStorageKey) {
+      return;
+    }
+    if (messages.length > 0) {
+      autoPromptDispatchedRef.current = true;
+      return;
+    }
+    autoPromptDispatchedRef.current = true;
+    void executePrompt(routeAutoPrompt, { allowDangerousAction: false, appendUserMessage: true });
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: {} });
+  }, [
+    executePrompt,
+    hydratedSessionKey,
+    location.pathname,
+    location.search,
+    messages.length,
+    messagesHydrated,
+    navigate,
+    routeAutoPrompt,
+    sending,
+    sessionId,
+    sessionStorageKey,
+  ]);
+
   // 描述：
   //
   //   - 处理会话输入框键盘热键：Enter 发送、Escape 失焦。
@@ -1736,6 +1780,28 @@ export function SessionPage({
 
         <AriContainer className="desk-session-thread-wrap">
           <AriContainer className="desk-thread">
+            {messages.length === 0 ? (
+              <AriContainer className="desk-session-empty-state">
+                <AriCard className="desk-session-empty-card">
+                  <AriTypography variant="h4" value="快速开始" />
+                  <AriTypography
+                    variant="caption"
+                    value={isModelAgent
+                      ? "描述你要在 Blender 中完成的目标，智能体会按步骤执行并流式反馈。"
+                      : "描述你要修改的代码模块与目标目录，智能体会在当前会话中持续执行。"}
+                  />
+                </AriCard>
+                <AriCard className="desk-session-empty-card">
+                  <AriTypography variant="h4" value="提示" />
+                  <AriTypography
+                    variant="caption"
+                    value={isModelAgent
+                      ? "可直接输入“打开 blender 并创建立方体后贴图”这类完整任务。"
+                      : "建议明确路径、技术栈和输出要求，结果更稳定。"}
+                  />
+                </AriCard>
+              </AriContainer>
+            ) : null}
             {messages.map((message, index) => {
               const roleClass = message.role === "user" ? "user" : "assistant";
               const runMeta = message.id ? assistantRunMetaMap[message.id] : undefined;
@@ -1831,6 +1897,7 @@ export function SessionPage({
               className="desk-session-prompt-input"
               value={input}
               onChange={setInput}
+              variant="borderless"
               onKeyDown={handlePromptInputKeyDown}
               rows={3}
               autoSize={{ minRows: 3, maxRows: 10 }}

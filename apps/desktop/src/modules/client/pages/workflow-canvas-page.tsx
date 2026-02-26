@@ -18,15 +18,10 @@ import {
   AriFlex,
   AriInput,
   AriMessage,
-  AriModal,
   AriTypography,
 } from "aries_react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import {
-  createCodeWorkflowFromTemplate,
-  createModelWorkflowFromTemplate,
-  deleteCodeWorkflow,
-  deleteModelWorkflow,
   listCodeWorkflows,
   listModelWorkflows,
   saveCodeWorkflow,
@@ -78,23 +73,6 @@ function resolveThemeInset(): number {
 //   - 归一化后的智能体类型。
 function normalizeAgentKey(value: string | undefined): "code" | "model" {
   return value === "model" ? "model" : "code";
-}
-
-// 描述：
-//
-//   - 将工作流对象格式化为侧边栏展示文案。
-//
-// Params:
-//
-//   - workflow: 工作流定义。
-//
-// Returns:
-//
-//   - 含版本与分享状态的标签文本。
-function getWorkflowOptionLabel(
-  workflow: WorkflowDefinition | CodeWorkflowDefinition,
-): string {
-  return `${workflow.name} (v${workflow.version})`;
 }
 
 // 描述：
@@ -217,34 +195,28 @@ function resolveNewNodePosition(count: number): { x: number; y: number } {
 }
 
 export function WorkflowCanvasPage() {
-  const navigate = useNavigate();
   const params = useParams<{ agentKey: string }>();
   const [searchParams] = useSearchParams();
   const agentKey = normalizeAgentKey(params.agentKey);
   const preferredWorkflowId = searchParams.get("workflowId") || "";
 
   const [workflowVersion, setWorkflowVersion] = useState(0);
-  const [selectedWorkflowId, setSelectedWorkflowId] = useState(
-    () => preferredWorkflowId,
-  );
   const [workflowName, setWorkflowName] = useState("");
   const [workflowDescription, setWorkflowDescription] = useState("");
   const [workflowPromptPrefix, setWorkflowPromptPrefix] = useState("");
-  const [deleteModalVisible, setDeleteModalVisible] = useState(false);
-  const [pendingDeleteWorkflowId, setPendingDeleteWorkflowId] = useState("");
   const [selectedNodeId, setSelectedNodeId] = useState("");
   const [selectedEdgeId, setSelectedEdgeId] = useState("");
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<CanvasNodeData>>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
 
-  const modelWorkflows = useMemo(() => listModelWorkflows(), [workflowVersion]);
-  const codeWorkflows = useMemo(() => listCodeWorkflows(), [workflowVersion]);
+  const modelWorkflows = useMemo(() => listModelWorkflows(), [workflowVersion, preferredWorkflowId]);
+  const codeWorkflows = useMemo(() => listCodeWorkflows(), [workflowVersion, preferredWorkflowId]);
   const workflows = agentKey === "model" ? modelWorkflows : codeWorkflows;
 
   const selectedWorkflow = useMemo(
-    () => workflows.find((item) => item.id === selectedWorkflowId) || workflows[0] || null,
-    [selectedWorkflowId, workflows],
+    () => workflows.find((item) => item.id === preferredWorkflowId) || workflows[0] || null,
+    [preferredWorkflowId, workflows],
   );
 
   const selectedNode = useMemo(
@@ -255,13 +227,6 @@ export function WorkflowCanvasPage() {
   const refreshWorkflows = () => setWorkflowVersion((value) => value + 1);
 
   useEffect(() => {
-    if (!preferredWorkflowId) {
-      return;
-    }
-    setSelectedWorkflowId(preferredWorkflowId);
-  }, [preferredWorkflowId]);
-
-  useEffect(() => {
     if (!selectedWorkflow) {
       setWorkflowName("");
       setWorkflowDescription("");
@@ -270,11 +235,6 @@ export function WorkflowCanvasPage() {
       setEdges([]);
       setSelectedNodeId("");
       setSelectedEdgeId("");
-      return;
-    }
-
-    if (selectedWorkflow.id !== selectedWorkflowId) {
-      setSelectedWorkflowId(selectedWorkflow.id);
       return;
     }
 
@@ -291,7 +251,7 @@ export function WorkflowCanvasPage() {
     setEdges(toFlowEdges(graph));
     setSelectedNodeId("");
     setSelectedEdgeId("");
-  }, [selectedWorkflow, selectedWorkflowId, setEdges, setNodes]);
+  }, [selectedWorkflow, setEdges, setNodes]);
 
   const onConnect = useCallback(
     (connection: Connection) => {
@@ -393,43 +353,6 @@ export function WorkflowCanvasPage() {
     setSelectedEdgeId("");
   };
 
-  // 描述：
-  //
-  //   - 基于当前工作流创建新工作流，并切换到新版本继续编辑。
-  function createWorkflow() {
-    const created =
-      agentKey === "model"
-        ? createModelWorkflowFromTemplate(selectedWorkflow?.id)
-        : createCodeWorkflowFromTemplate(selectedWorkflow?.id);
-    setSelectedWorkflowId(created.id);
-    refreshWorkflows();
-  }
-
-  // 描述：
-  //
-  //   - 切换当前编辑工作流，并清空节点/连线选中状态。
-  //
-  // Params:
-  //
-  //   - workflowId: 工作流 ID。
-  function editWorkflow(workflowId: string) {
-    setSelectedWorkflowId(workflowId);
-    setSelectedNodeId("");
-    setSelectedEdgeId("");
-  }
-
-  // 描述：
-  //
-  //   - 打开删除工作流确认弹窗，并记录待删除 ID。
-  //
-  // Params:
-  //
-  //   - workflowId: 待删除工作流 ID。
-  function askDeleteWorkflow(workflowId: string) {
-    setPendingDeleteWorkflowId(workflowId);
-    setDeleteModalVisible(true);
-  }
-
   const saveCurrentWorkflow = () => {
     if (!selectedWorkflow) {
       return;
@@ -474,48 +397,15 @@ export function WorkflowCanvasPage() {
     });
   };
 
-  const deleteCurrentWorkflow = () => {
-    const targetWorkflowId = pendingDeleteWorkflowId || selectedWorkflow?.id || "";
-    if (!targetWorkflowId) {
-      setDeleteModalVisible(false);
-      return;
-    }
-
-    const deleted =
-      agentKey === "model"
-        ? deleteModelWorkflow(targetWorkflowId)
-        : deleteCodeWorkflow(targetWorkflowId);
-
-    if (!deleted) {
-      AriMessage.warning({
-        content: "默认工作流不可删除，请先复制后再管理。",
-        duration: 3000,
-        showClose: true,
-      });
-      setDeleteModalVisible(false);
-      setPendingDeleteWorkflowId("");
-      return;
-    }
-
-    setDeleteModalVisible(false);
-    if (selectedWorkflow?.id === targetWorkflowId) {
-      setSelectedWorkflowId("");
-    }
-    setPendingDeleteWorkflowId("");
-    refreshWorkflows();
-  };
-
   const selectedNodeData = selectedNode ? parseCanvasNodeData(selectedNode.data) : null;
   const selectedEdge = edges.find((item) => item.id === selectedEdgeId) || null;
-  const settingsPath =
-    agentKey === "model" ? "/agents/model/settings" : "/agents/code/settings";
 
   return (
     <AriContainer className="desk-content" height="100%">
       <AriContainer className="desk-workflow-editor-shell" height="100%">
         <DeskPageHeader
           title={agentKey === "model" ? "模型工作流编辑器" : "代码工作流编辑器"}
-          description="左侧切换工作流，右侧画布排版节点；点击空白编辑工作流属性，点击节点编辑节点属性。"
+          description="在全局侧边栏切换工作流；右侧画布排版节点，点击空白编辑工作流属性，点击节点编辑节点属性。"
           actions={(
             <AriFlex align="center" space={8}>
               <AriButton color="primary" label="保存工作流" onClick={saveCurrentWorkflow} />
@@ -523,44 +413,7 @@ export function WorkflowCanvasPage() {
           )}
         />
 
-        <AriContainer className="desk-workflow-editor-layout" height="100%">
-          <AriCard className="desk-workflow-editor-sidebar">
-            <AriFlex className="desk-workflow-editor-sidebar-header" align="center" justify="space-between">
-              <AriButton label="返回设置" onClick={() => navigate(settingsPath)} />
-              <AriButton label="新增工作流" onClick={createWorkflow} />
-            </AriFlex>
-            <AriContainer className="desk-workflow-editor-sidebar-list">
-              {workflows.map((item) => (
-                <AriContainer
-                  key={item.id}
-                  className={`desk-workflow-editor-sidebar-item${item.id === selectedWorkflow?.id ? " is-active" : ""}`}
-                >
-                  <button
-                    type="button"
-                    className="desk-workflow-editor-sidebar-item-main-trigger"
-                    onClick={() => editWorkflow(item.id)}
-                  >
-                    <AriTypography variant="h4" value={item.name} />
-                    <AriTypography
-                      variant="caption"
-                      value={getWorkflowOptionLabel(item)}
-                    />
-                  </button>
-                  <AriFlex className="desk-workflow-editor-sidebar-item-actions" align="center" justify="space-between" space={8}>
-                    <AriTypography
-                      variant="caption"
-                      value={item.id === selectedWorkflow?.id ? "编辑中" : "点击编辑"}
-                    />
-                    <AriFlex align="center" space={8}>
-                      <AriButton label="编辑" onClick={() => editWorkflow(item.id)} />
-                      <AriButton color="danger" label="删除" onClick={() => askDeleteWorkflow(item.id)} />
-                    </AriFlex>
-                  </AriFlex>
-                </AriContainer>
-              ))}
-            </AriContainer>
-          </AriCard>
-
+        <AriContainer className="desk-workflow-editor-main" height="100%">
           <AriContainer className="desk-workflow-editor-stage" positionType="relative" height="100%">
             <AriContainer
               className="desk-workflow-reactflow-wrap desk-workflow-editor-reactflow-wrap"
@@ -696,29 +549,6 @@ export function WorkflowCanvasPage() {
           </AriContainer>
         </AriContainer>
       </AriContainer>
-
-      <AriModal
-        visible={deleteModalVisible}
-        title={`删除${agentKey === "model" ? "模型" : "代码"}工作流`}
-        onClose={() => {
-          setDeleteModalVisible(false);
-          setPendingDeleteWorkflowId("");
-        }}
-        footer={(
-          <AriFlex justify="flex-end" align="center" space={8}>
-            <AriButton
-              label="取消"
-              onClick={() => {
-                setDeleteModalVisible(false);
-                setPendingDeleteWorkflowId("");
-              }}
-            />
-            <AriButton color="danger" label="确认删除" onClick={deleteCurrentWorkflow} />
-          </AriFlex>
-        )}
-      >
-        {`该操作不可撤销，确认删除工作流“${workflows.find((item) => item.id === pendingDeleteWorkflowId)?.name || ""}”吗？`}
-      </AriModal>
     </AriContainer>
   );
 }

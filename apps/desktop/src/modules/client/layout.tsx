@@ -13,7 +13,8 @@ export function DesktopLayout({ user, onLogout, availableAgents }: DesktopLayout
   return (
     <AriContainer className="desk-app">
       <ClientSidebar user={user} onLogout={onLogout} availableAgents={availableAgents} />
-      <AriContainer className="desk-main">
+      {/* 描述：主内容区容器固定启用阴影效果，确保视觉层级稳定。 */}
+      <AriContainer className="desk-main" shadowMode="always">
         <Outlet />
       </AriContainer>
     </AriContainer>

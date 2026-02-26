@@ -24,13 +24,15 @@ test("TestAgentSidebarHeaderUsesCreateActionInsteadOfRefresh", () => {
 
   // 描述:
   //
-  //   - 侧边栏头部按钮应改为新增会话入口，并调用创建会话 API 后跳转到新会话。
+  //   - 侧边栏头部按钮应改为新增会话入口，并跳转到独立代码项目选择页。
   assert.match(source, /icon=\{createButtonHovered \? "note_stack_add_fill" : "note_stack_add"\}/);
   assert.match(source, /onMouseEnter=\{\(\) => \{\s*setCreateButtonHovered\(true\);\s*\}\}/s);
   assert.match(source, /onMouseLeave=\{\(\) => \{\s*setCreateButtonHovered\(false\);\s*\}\}/s);
-  assert.match(source, /label=\{creating \? "新增中" : "新增"\}/);
-  assert.match(source, /const session = await createRuntimeSession\(user\.id, agentKey\);/);
-  assert.match(source, /navigate\(`\/agents\/\$\{agentKey\}\/session\/\$\{session\.id\}`\);/);
+  assert.match(source, /label="新增"/);
+  assert.match(source, /const handleCreateSession = \(\) => \{/);
+  assert.match(source, /navigate\("\/agents\/code"\);/);
+  assert.match(source, /navigate\(`\/agents\/\$\{agentKey\}`\);/);
+  assert.doesNotMatch(source, /createRuntimeSession\(/);
 });
 
 test("TestAgentSidebarShouldSeparateAgentAndWorkflowSettingsWithUnifiedStyle", () => {
@@ -100,7 +102,7 @@ test("TestAgentSidebarContextMenuOrderIsPinRenameDelete", () => {
   assert.match(source, /fillIcon: "delete_fill"/);
   assert.match(source, /name=\{params\.forceFill \|\| hoveredContextMenuActionKey === params\.key \? params\.fillIcon : params\.icon\}/);
   assert.match(source, /items=\{contextMenuItems\}/);
-  assert.match(source, /onContextMenu: \(event\) => \{\s*handleOpenSessionContextMenu\(event, item\.id\);\s*\}/s);
+  assert.match(source, /onContextMenu: \(event(?:: [^)]+)?\) => \{\s*handleOpenSessionContextMenu\(event, item\.id\);\s*\}/s);
   assert.match(source, /key: "pin",[\s\S]*key: "rename",[\s\S]*key: "delete"/);
   assert.match(source, /label: contextTargetSession\?\.pinned \? "取消固定会话" : "固定会话"/);
   assert.match(source, /onOpenChange=\{\(open\) => \{/);
@@ -119,6 +121,27 @@ test("TestAgentSidebarSessionListFiltersDeletedItems", () => {
   assert.match(backendSource, /const query = toQueryString\(\{ userId, agentCode, status \}\);/);
 });
 
+test("TestCodeAgentSidebarShouldUseWorkspaceTreeAndWorkspaceActions", () => {
+  const source = readDesktopSource("src/modules/client/widgets/sidebar/index.tsx");
+
+  // 描述:
+  //
+  //   - 代码智能体侧边栏应基于 AriMenu children 渲染“目录分组 -> 会话列表”多级菜单，并提供目录操作入口。
+  assert.match(source, /interface CodeWorkspaceSessionGroup/);
+  assert.match(source, /const codeWorkspaceSessionGroups = useMemo<CodeWorkspaceSessionGroup\[]>/);
+  assert.match(source, /const buildWorkspaceMenuKey = \(workspaceId: string\) => `workspace:\$\{workspaceId\}`;/);
+  assert.match(source, /children: buildSessionMenuItems\(group\.sessions\)/);
+  assert.match(source, /className="desk-sidebar-nav desk-code-workspace-tree"/);
+  assert.match(source, /mode="vertical"/);
+  assert.match(source, /items=\{codeWorkspaceMenuItems\}/);
+  assert.match(source, /defaultExpandedKeys=\{defaultExpandedWorkspaceKeys\}/);
+  assert.match(source, /expandedKeys=\{codeWorkspaceExpandedKeys\}/);
+  assert.match(source, /onExpand=\{setCodeWorkspaceExpandedKeys\}/);
+  assert.match(source, /icon="open_in_new"/);
+  assert.match(source, /icon="edit"/);
+  assert.match(source, /icon="delete"/);
+});
+
 test("TestAgentSidebarTitleUsesUnifiedResolver", () => {
   const sidebarSource = readDesktopSource("src/modules/client/widgets/sidebar/index.tsx");
   const dataSource = readDesktopSource("src/modules/client/data.ts");
@@ -129,6 +152,18 @@ test("TestAgentSidebarTitleUsesUnifiedResolver", () => {
   assert.match(sidebarSource, /resolveAgentSessionTitle\(agentKey, item\.id\)/);
   assert.match(dataSource, /export function resolveAgentSessionTitle\(agentKey: "code" \| "model", sessionId\?: string \| null\): string/);
   assert.match(dataSource, /return "会话详情";/);
+});
+
+test("TestAgentSidebarRenameModalsShouldUseBorderlessInput", () => {
+  const source = readDesktopSource("src/modules/client/widgets/sidebar/index.tsx");
+
+  // 描述:
+  //
+  //   - 侧边栏重命名对话框输入框应使用无边框样式，统一新输入视觉规范。
+  assert.match(source, /placeholder="输入新的会话标题"/);
+  assert.match(source, /placeholder="输入目录展示名称"/);
+  assert.match(source, /<AriInput\s+variant="borderless"\s+value=\{renameValue\}/s);
+  assert.match(source, /<AriInput\s+variant="borderless"\s+value=\{workspaceRenameValue\}/s);
 });
 
 test("TestSessionPageSyncsTitleAfterRenameEvent", () => {

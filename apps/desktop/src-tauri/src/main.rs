@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::Emitter;
 use tauri::Manager;
+use tauri::window::{Effect, EffectState, EffectsBuilder};
 use zodileap_agent_core::llm::{call_model, parse_provider};
 use zodileap_agent_core::{
     run_agent_with_protocol_error_stream, AgentRunRequest, AgentStreamEvent,
@@ -202,6 +203,21 @@ struct CodexCliHealthResponse {
     message: String,
 }
 
+#[derive(Serialize)]
+struct GitCliHealthResponse {
+    available: bool,
+    version: String,
+    bin_path: String,
+    message: String,
+}
+
+#[derive(Serialize)]
+struct GitCloneResponse {
+    path: String,
+    name: String,
+    message: String,
+}
+
 #[derive(Deserialize)]
 struct LlmModelPlanResponse {
     steps: Vec<LlmModelPlanStep>,
@@ -289,6 +305,66 @@ fn resolve_codex_bins() -> Vec<String> {
         );
     }
     bins
+}
+
+/// 描述：解析可用于执行 Git 命令的候选二进制路径列表。
+fn resolve_git_bins() -> Vec<String> {
+    let mut bins: Vec<String> = Vec::new();
+    if let Ok(path) = env::var("ZODILEAP_GIT_BIN") {
+        let path = path.trim().to_string();
+        if !path.is_empty() {
+            bins.push(path);
+        }
+    }
+    bins.push("git".to_string());
+    bins.push("/usr/bin/git".to_string());
+    bins.push("/opt/homebrew/bin/git".to_string());
+    bins
+}
+
+/// 描述：读取 Git 版本号，命中失败时返回 None。
+fn read_git_version(bin: &str) -> Option<String> {
+    let output = Command::new(bin).arg("--version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout).to_string();
+    extract_semver(&text)
+}
+
+/// 描述：返回第一个可用 Git 二进制路径与版本号。
+fn detect_available_git() -> Option<(String, String)> {
+    for bin in resolve_git_bins() {
+        if let Some(version) = read_git_version(&bin) {
+            return Some((bin, version));
+        }
+    }
+    None
+}
+
+/// 描述：从 Git 仓库地址推断目录名，并进行安全字符归一化。
+fn infer_repo_name_from_url(raw: &str) -> String {
+    let trimmed = raw.trim().trim_end_matches('/').trim_end_matches(".git");
+    let tail = trimmed
+        .rsplit(['/', ':'])
+        .next()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("project");
+    let mut normalized = String::with_capacity(tail.len());
+    for ch in tail.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+            normalized.push(ch);
+        } else {
+            normalized.push('-');
+        }
+    }
+    let normalized = normalized.trim_matches('-').to_string();
+    if normalized.is_empty() {
+        "project".to_string()
+    } else {
+        normalized
+    }
 }
 
 fn read_codex_version(bin: &str) -> Option<String> {
@@ -1187,6 +1263,152 @@ fn check_codex_cli_health_inner(minimum_version: Option<String>) -> CodexCliHeal
         bin_path: "".to_string(),
         message: "未检测到可用的 Codex CLI，请先安装或配置 ZODILEAP_CODEX_BIN".to_string(),
     }
+}
+
+#[tauri::command]
+async fn check_git_cli_health() -> GitCliHealthResponse {
+    tauri::async_runtime::spawn_blocking(check_git_cli_health_inner)
+        .await
+        .unwrap_or_else(|err| GitCliHealthResponse {
+            available: false,
+            version: "".to_string(),
+            bin_path: "".to_string(),
+            message: format!("check git health task join failed: {}", err),
+        })
+}
+
+/// 描述：执行 Git CLI 健康检查，返回可用性、版本与命中路径。
+fn check_git_cli_health_inner() -> GitCliHealthResponse {
+    if let Some((bin, version)) = detect_available_git() {
+        return GitCliHealthResponse {
+            available: true,
+            version: version.clone(),
+            bin_path: bin.clone(),
+            message: format!("Git 可用：{} ({})", version, bin),
+        };
+    }
+
+    GitCliHealthResponse {
+        available: false,
+        version: "".to_string(),
+        bin_path: "".to_string(),
+        message: "未检测到可用的 Git，请先安装 Git。".to_string(),
+    }
+}
+
+#[tauri::command]
+async fn pick_local_project_folder() -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let selected = rfd::FileDialog::new().pick_folder();
+        Ok(selected.map(|path| path.to_string_lossy().to_string()))
+    })
+    .await
+    .map_err(|err| format!("pick local project folder task join failed: {}", err))?
+}
+
+#[tauri::command]
+async fn open_external_url(url: String) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || open_external_url_inner(url.as_str()))
+        .await
+        .map_err(|err| format!("open external url task join failed: {}", err))?
+}
+
+/// 描述：打开外部网址，当前仅允许 http/https 协议。
+fn open_external_url_inner(url: &str) -> Result<bool, String> {
+    let normalized = url.trim();
+    if !(normalized.starts_with("https://") || normalized.starts_with("http://")) {
+        return Err("仅支持打开 http/https 外链".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    let status = Command::new("open").arg(normalized).status();
+
+    #[cfg(target_os = "windows")]
+    let status = Command::new("cmd")
+        .args(["/C", "start", "", normalized])
+        .status();
+
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    let status = Command::new("xdg-open").arg(normalized).status();
+
+    let status = status.map_err(|err| format!("open external url failed: {}", err))?;
+    if !status.success() {
+        return Err(format!(
+            "open external url returned non-zero code: {:?}",
+            status.code()
+        ));
+    }
+    Ok(true)
+}
+
+#[tauri::command]
+async fn clone_git_repository(
+    app: tauri::AppHandle,
+    repo_url: String,
+) -> Result<GitCloneResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || clone_git_repository_inner(app, repo_url))
+        .await
+        .map_err(|err| format!("clone git repository task join failed: {}", err))?
+}
+
+/// 描述：将远端 Git 仓库克隆到应用数据目录下，并返回本地项目路径。
+fn clone_git_repository_inner(
+    app: tauri::AppHandle,
+    repo_url: String,
+) -> Result<GitCloneResponse, String> {
+    let normalized_url = repo_url.trim().to_string();
+    if normalized_url.is_empty() {
+        return Err("仓库地址不能为空".to_string());
+    }
+    if !normalized_url.contains('/') {
+        return Err("仓库地址格式不正确，请输入完整 URL".to_string());
+    }
+
+    let (git_bin, _) = detect_available_git().ok_or_else(|| "未检测到可用的 Git，请先安装 Git".to_string())?;
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|err| format!("无法定位应用数据目录: {}", err))?;
+    let workspace_root = app_data_dir.join("code_workspace_repos");
+    fs::create_dir_all(&workspace_root)
+        .map_err(|err| format!("create code workspace root failed: {}", err))?;
+
+    let project_name = infer_repo_name_from_url(normalized_url.as_str());
+    let mut destination = workspace_root.join(project_name.as_str());
+    let mut suffix: u32 = 2;
+    while destination.exists() {
+        destination = workspace_root.join(format!("{}-{}", project_name, suffix));
+        suffix += 1;
+    }
+
+    let output = Command::new(git_bin.as_str())
+        .arg("clone")
+        .arg("--depth")
+        .arg("1")
+        .arg(normalized_url.as_str())
+        .arg(destination.as_os_str())
+        .output()
+        .map_err(|err| format!("run git clone failed: {}", err))?;
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "git clone 失败（code={:?}）：{} {}",
+            output.status.code(),
+            stdout.trim(),
+            stderr.trim()
+        ));
+    }
+
+    Ok(GitCloneResponse {
+        path: destination.to_string_lossy().to_string(),
+        name: destination
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or(project_name.as_str())
+            .to_string(),
+        message: format!("已克隆仓库到 {}", destination.to_string_lossy()),
+    })
 }
 
 fn now_millis() -> u128 {
@@ -5710,8 +5932,45 @@ fn summarize_model_session_result_inner(
     })
 }
 
+/// 描述：为主窗口应用系统材质效果，提升 Desktop 端玻璃质感表现。
+///
+/// Params:
+///
+///   - app: Tauri 应用句柄。
+fn apply_main_window_effects(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    if let Err(err) = window.set_background_color(None) {
+        eprintln!("clear webview window background color failed: {}", err);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let effects = EffectsBuilder::new()
+            .effect(Effect::HudWindow)
+            .state(EffectState::Active)
+            .build();
+        if let Err(err) = window.set_effects(effects) {
+            eprintln!("apply macOS window effects failed: {}", err);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let effects = EffectsBuilder::new().effect(Effect::Acrylic).build();
+        if let Err(err) = window.set_effects(effects) {
+            eprintln!("apply Windows window effects failed: {}", err);
+        }
+    }
+}
+
 fn main() {
     tauri::Builder::default()
+        .setup(|app| {
+            apply_main_window_effects(app.handle());
+            Ok(())
+        })
         .manage(ModelSessionStore::default())
         .invoke_handler(tauri::generate_handler![
             export_model_command,
@@ -5719,6 +5978,10 @@ fn main() {
             check_blender_bridge,
             run_agent_command,
             check_codex_cli_health,
+            check_git_cli_health,
+            pick_local_project_folder,
+            open_external_url,
+            clone_git_repository,
             run_model_session_command,
             retry_model_session_last_step,
             undo_model_session_step,

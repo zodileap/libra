@@ -43,6 +43,9 @@ export const AGENT_SESSIONS: AgentSession[] = [
 const MODEL_PROJECT_STORAGE_KEY = "zodileap.desktop.model.projects";
 const SESSION_META_STORAGE_KEY = "zodileap.desktop.session.meta";
 const SESSION_MESSAGES_STORAGE_KEY = "zodileap.desktop.session.messages";
+const CODE_WORKSPACE_GROUP_STORAGE_KEY = "zodileap.desktop.code.workspace.groups";
+const CODE_SESSION_WORKSPACE_MAP_STORAGE_KEY = "zodileap.desktop.code.session.workspace.map";
+const CODE_LAST_WORKSPACE_ID_STORAGE_KEY = "zodileap.desktop.code.workspace.last";
 export const SESSION_TITLE_UPDATED_EVENT = "zodileap:session-title-updated";
 
 interface StoredModelProject {
@@ -73,6 +76,18 @@ interface StoredSessionMessageGroup {
   sessionId: string;
   agentKey: "code" | "model";
   messages: StoredSessionMessage[];
+}
+
+export interface CodeWorkspaceGroup {
+  id: string;
+  path: string;
+  name: string;
+  updatedAt: string;
+}
+
+interface StoredCodeSessionWorkspace {
+  sessionId: string;
+  workspaceId: string;
 }
 
 function readModelProjects(): StoredModelProject[] {
@@ -199,6 +214,147 @@ function writeSessionMessages(groups: StoredSessionMessageGroup[]) {
   window.localStorage.setItem(SESSION_MESSAGES_STORAGE_KEY, JSON.stringify(groups));
 }
 
+// 描述：提取路径最后一级目录名称，作为代码工作目录分组默认标题。
+//
+// Params:
+//
+//   - fullPath: 目录绝对路径。
+//
+// Returns:
+//
+//   - 路径尾部名称；若无法解析则回退原始路径。
+function resolveWorkspaceNameFromPath(fullPath: string): string {
+  const normalized = fullPath.trim().replace(/\\/g, "/").replace(/\/+$/g, "");
+  if (!normalized) {
+    return "";
+  }
+  const segments = normalized.split("/");
+  const name = segments[segments.length - 1] || normalized;
+  return name.trim() || normalized;
+}
+
+// 描述：规范化代码工作目录路径，统一去除首尾空白与尾部斜杠。
+//
+// Params:
+//
+//   - path: 原始目录路径。
+//
+// Returns:
+//
+//   - 规范化路径。
+function normalizeWorkspacePath(path: string): string {
+  return path.trim().replace(/\\/g, "/").replace(/\/+$/g, "");
+}
+
+// 描述：读取代码目录分组列表。
+//
+// Returns:
+//
+//   - 代码目录分组数组。
+function readCodeWorkspaceGroups(): CodeWorkspaceGroup[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+  const raw = window.localStorage.getItem(CODE_WORKSPACE_GROUP_STORAGE_KEY);
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .filter((item) => item?.id && item?.path)
+      .map((item) => ({
+        id: String(item.id),
+        path: normalizeWorkspacePath(String(item.path)),
+        name: String(item.name || "").trim() || resolveWorkspaceNameFromPath(String(item.path)),
+        updatedAt: String(item.updatedAt || ""),
+      }))
+      .filter((item) => Boolean(item.path));
+  } catch (_err) {
+    return [];
+  }
+}
+
+// 描述：写入代码目录分组列表到本地存储。
+//
+// Params:
+//
+//   - groups: 目录分组数组。
+function writeCodeWorkspaceGroups(groups: CodeWorkspaceGroup[]) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(CODE_WORKSPACE_GROUP_STORAGE_KEY, JSON.stringify(groups));
+}
+
+// 描述：读取“会话 -> 代码目录分组”映射。
+//
+// Returns:
+//
+//   - 映射数组。
+function readCodeSessionWorkspaceMap(): StoredCodeSessionWorkspace[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+  const raw = window.localStorage.getItem(CODE_SESSION_WORKSPACE_MAP_STORAGE_KEY);
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .filter((item) => item?.sessionId && item?.workspaceId)
+      .map((item) => ({
+        sessionId: String(item.sessionId),
+        workspaceId: String(item.workspaceId),
+      }));
+  } catch (_err) {
+    return [];
+  }
+}
+
+// 描述：写入“会话 -> 代码目录分组”映射。
+//
+// Params:
+//
+//   - mapItems: 映射数组。
+function writeCodeSessionWorkspaceMap(mapItems: StoredCodeSessionWorkspace[]) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(CODE_SESSION_WORKSPACE_MAP_STORAGE_KEY, JSON.stringify(mapItems));
+}
+
+// 描述：读取最近一次使用的代码目录分组 ID。
+//
+// Returns:
+//
+//   - 分组 ID；未命中时返回空字符串。
+function readLastCodeWorkspaceId(): string {
+  if (typeof window === "undefined") {
+    return "";
+  }
+  return String(window.localStorage.getItem(CODE_LAST_WORKSPACE_ID_STORAGE_KEY) || "").trim();
+}
+
+// 描述：写入最近一次使用的代码目录分组 ID。
+//
+// Params:
+//
+//   - workspaceId: 分组 ID。
+function writeLastCodeWorkspaceId(workspaceId: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(CODE_LAST_WORKSPACE_ID_STORAGE_KEY, workspaceId);
+}
+
 export function getModelProjectById(id: string): StoredModelProject | null {
   return readModelProjects().find((item) => item.id === id) || null;
 }
@@ -313,6 +469,11 @@ export function removeAgentSession(agentKey: "code" | "model", sessionId: string
   writeSessionMessages(
     groups.filter((item) => !(item.agentKey === agentKey && item.sessionId === sessionId)),
   );
+
+  if (agentKey === "code") {
+    const mapItems = readCodeSessionWorkspaceMap();
+    writeCodeSessionWorkspaceMap(mapItems.filter((item) => item.sessionId !== sessionId));
+  }
 }
 
 export function getSessionMessages(
@@ -371,4 +532,201 @@ export function getAgentSessions(agentKey: "code" | "model"): AgentSession[] {
     if (aPinned === bPinned) return 0;
     return aPinned ? -1 : 1;
   });
+}
+
+// 描述：返回当前代码目录分组列表，按最近更新时间倒序排列。
+//
+// Returns:
+//
+//   - 目录分组数组。
+export function listCodeWorkspaceGroups(): CodeWorkspaceGroup[] {
+  const groups = readCodeWorkspaceGroups();
+  return [...groups].sort((a, b) => {
+    const aTs = new Date(a.updatedAt || 0).getTime();
+    const bTs = new Date(b.updatedAt || 0).getTime();
+    return bTs - aTs;
+  });
+}
+
+// 描述：创建或更新代码目录分组，路径相同则复用已有分组并刷新最近使用时间。
+//
+// Params:
+//
+//   - path: 目录路径。
+//
+// Returns:
+//
+//   - 新建或命中的目录分组。
+export function upsertCodeWorkspaceGroup(path: string): CodeWorkspaceGroup | null {
+  const normalizedPath = normalizeWorkspacePath(path);
+  if (!normalizedPath) {
+    return null;
+  }
+  const now = new Date().toISOString();
+  const groups = readCodeWorkspaceGroups();
+  const hit = groups.find((item) => normalizeWorkspacePath(item.path) === normalizedPath);
+  if (hit) {
+    const next: CodeWorkspaceGroup = {
+      ...hit,
+      path: normalizedPath,
+      name: hit.name || resolveWorkspaceNameFromPath(normalizedPath),
+      updatedAt: now,
+    };
+    writeCodeWorkspaceGroups([
+      next,
+      ...groups.filter((item) => item.id !== hit.id),
+    ]);
+    writeLastCodeWorkspaceId(next.id);
+    return next;
+  }
+
+  const created: CodeWorkspaceGroup = {
+    id: `code-ws-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    path: normalizedPath,
+    name: resolveWorkspaceNameFromPath(normalizedPath),
+    updatedAt: now,
+  };
+  writeCodeWorkspaceGroups([created, ...groups]);
+  writeLastCodeWorkspaceId(created.id);
+  return created;
+}
+
+// 描述：重命名代码目录分组。
+//
+// Params:
+//
+//   - workspaceId: 分组 ID。
+//   - name: 新名称。
+//
+// Returns:
+//
+//   - 是否重命名成功。
+export function renameCodeWorkspaceGroup(workspaceId: string, name: string): boolean {
+  const trimmed = name.trim();
+  if (!workspaceId || !trimmed) {
+    return false;
+  }
+  const groups = readCodeWorkspaceGroups();
+  const hit = groups.find((item) => item.id === workspaceId);
+  if (!hit) {
+    return false;
+  }
+  writeCodeWorkspaceGroups(
+    groups.map((item) => (item.id === workspaceId
+      ? {
+        ...item,
+        name: trimmed,
+        updatedAt: new Date().toISOString(),
+      }
+      : item)),
+  );
+  return true;
+}
+
+// 描述：删除代码目录分组，并清理关联会话映射与最近使用目录引用。
+//
+// Params:
+//
+//   - workspaceId: 分组 ID。
+export function removeCodeWorkspaceGroup(workspaceId: string) {
+  if (!workspaceId) {
+    return;
+  }
+  const groups = readCodeWorkspaceGroups();
+  writeCodeWorkspaceGroups(groups.filter((item) => item.id !== workspaceId));
+  const mapItems = readCodeSessionWorkspaceMap();
+  writeCodeSessionWorkspaceMap(mapItems.filter((item) => item.workspaceId !== workspaceId));
+  if (readLastCodeWorkspaceId() === workspaceId) {
+    const next = listCodeWorkspaceGroups()[0];
+    writeLastCodeWorkspaceId(next?.id || "");
+  }
+}
+
+// 描述：记录代码会话所属目录分组，并刷新该目录分组的最近使用时间。
+//
+// Params:
+//
+//   - sessionId: 会话 ID。
+//   - workspaceId: 目录分组 ID。
+export function bindCodeSessionWorkspace(sessionId: string, workspaceId: string) {
+  if (!sessionId || !workspaceId) {
+    return;
+  }
+  const mapItems = readCodeSessionWorkspaceMap();
+  const nextItems: StoredCodeSessionWorkspace[] = [
+    { sessionId, workspaceId },
+    ...mapItems.filter((item) => item.sessionId !== sessionId),
+  ];
+  writeCodeSessionWorkspaceMap(nextItems);
+
+  const groups = readCodeWorkspaceGroups();
+  const hit = groups.find((item) => item.id === workspaceId);
+  if (hit) {
+    writeCodeWorkspaceGroups([
+      {
+        ...hit,
+        updatedAt: new Date().toISOString(),
+      },
+      ...groups.filter((item) => item.id !== workspaceId),
+    ]);
+  }
+  writeLastCodeWorkspaceId(workspaceId);
+}
+
+// 描述：读取代码会话绑定的目录分组 ID。
+//
+// Params:
+//
+//   - sessionId: 会话 ID。
+//
+// Returns:
+//
+//   - 目录分组 ID；未命中返回空字符串。
+export function getCodeWorkspaceIdBySessionId(sessionId: string): string {
+  if (!sessionId) {
+    return "";
+  }
+  const hit = readCodeSessionWorkspaceMap().find((item) => item.sessionId === sessionId);
+  return hit?.workspaceId || "";
+}
+
+// 描述：根据目录分组 ID 返回目录详情。
+//
+// Params:
+//
+//   - workspaceId: 目录分组 ID。
+//
+// Returns:
+//
+//   - 目录分组详情；未命中返回 null。
+export function getCodeWorkspaceGroupById(workspaceId: string): CodeWorkspaceGroup | null {
+  if (!workspaceId) {
+    return null;
+  }
+  return readCodeWorkspaceGroups().find((item) => item.id === workspaceId) || null;
+}
+
+// 描述：读取最近一次编辑会话使用的代码目录分组 ID。
+//
+// Returns:
+//
+//   - 最近目录分组 ID；若不存在则回退首个目录分组。
+export function getLastUsedCodeWorkspaceId(): string {
+  const lastId = readLastCodeWorkspaceId();
+  if (lastId && readCodeWorkspaceGroups().some((item) => item.id === lastId)) {
+    return lastId;
+  }
+  return listCodeWorkspaceGroups()[0]?.id || "";
+}
+
+// 描述：显式设置最近使用代码目录分组。
+//
+// Params:
+//
+//   - workspaceId: 目录分组 ID。
+export function setLastUsedCodeWorkspaceId(workspaceId: string) {
+  if (!workspaceId) {
+    return;
+  }
+  writeLastCodeWorkspaceId(workspaceId);
 }

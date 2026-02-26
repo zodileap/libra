@@ -301,20 +301,25 @@ function cloneNodes(nodes: WorkflowNodeDefinition[]): WorkflowNodeDefinition[] {
 //   - 返回当前可用模型工作流列表，包含默认模板与本地自定义覆盖项。
 export function listModelWorkflows(): WorkflowDefinition[] {
   const saved = readSavedWorkflows();
-  const merged: WorkflowDefinition[] = [...DEFAULT_MODEL_WORKFLOWS.map((item) => ({ ...item, nodes: cloneNodes(item.nodes) }))];
+  const merged: WorkflowDefinition[] = DEFAULT_MODEL_WORKFLOWS.map((item) =>
+    normalizeWorkflow({
+      ...item,
+      nodes: cloneNodes(item.nodes),
+    }),
+  );
 
   for (const workflow of saved) {
     const index = merged.findIndex((item) => item.id === workflow.id);
     if (index >= 0) {
-      merged[index] = {
-        ...workflow,
-        nodes: cloneNodes(workflow.nodes || []),
-      };
-    } else {
-      merged.push({
+      merged[index] = normalizeWorkflow({
         ...workflow,
         nodes: cloneNodes(workflow.nodes || []),
       });
+    } else {
+      merged.push(normalizeWorkflow({
+        ...workflow,
+        nodes: cloneNodes(workflow.nodes || []),
+      }));
     }
   }
 

@@ -120,6 +120,7 @@ test("TestSessionPromptInputShouldSupportKeyboardHotkeys", () => {
   assert.match(source, /if \(event\.nativeEvent\.isComposing\)/);
   assert.match(source, /<AriInput\.TextArea/);
   assert.match(source, /className="desk-session-prompt-input"/);
+  assert.match(source, /variant="borderless"/);
   assert.match(source, /autoSize=\{\{ minRows: 3, maxRows: 10 \}\}/);
   assert.match(source, /onKeyDown=\{handlePromptInputKeyDown\}/);
 });
@@ -155,6 +156,23 @@ test("TestTauriShouldExposeModelSummaryCommandAndDebugTrace", () => {
   assert.match(source, /summarize_model_session_result/);
   assert.match(source, /emit_model_debug_trace_event/);
   assert.match(source, /\"model:debug_trace\"/);
+});
+
+test("TestTauriShouldExposeCodeWorkspaceGitCommands", () => {
+  const source = readDesktopSource("src-tauri/src/main.rs");
+
+  // 描述:
+  //
+  //   - Tauri 层应暴露代码目录选择与 Git 克隆命令，供代码智能体目录引导页使用。
+  assert.match(source, /async fn check_git_cli_health\(\)/);
+  assert.match(source, /async fn pick_local_project_folder\(\)/);
+  assert.match(source, /async fn open_external_url\(url: String\)/);
+  assert.match(source, /async fn clone_git_repository\(/);
+  assert.match(source, /infer_repo_name_from_url/);
+  assert.match(source, /check_git_cli_health,/);
+  assert.match(source, /pick_local_project_folder,/);
+  assert.match(source, /open_external_url,/);
+  assert.match(source, /clone_git_repository,/);
 });
 
 test("TestDevDebugFloatShouldShowFlowAndSupportLineWrap", () => {
