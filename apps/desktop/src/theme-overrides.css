@@ -5,4 +5,6 @@
    */
   --z-border-radius-container: 18px;
   --z-color-bg-app-layout: transparent !important;
+
+  --z-font-size: 12px;
 }

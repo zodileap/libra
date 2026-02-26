@@ -70,6 +70,7 @@ body,
 
 body {
   background: var(--z-color-use-bg);
+  font-size: var(--z-font-size);
 }
 
 .desk-app {
@@ -365,7 +366,6 @@ body {
 
 .desk-prompt-card {
   margin-top: var(--z-inset);
-  padding: calc(var(--z-inset) * 0.875);
 }
 
 .desk-prompt-actions {
@@ -1065,6 +1065,16 @@ body {
   padding: var(--z-inset-sm);
   display: grid;
   gap: var(--z-inset-sm);
+}
+
+.desk-session-content .desk-prompt-dock .desk-action-slot {
+  position: relative;
+  z-index: 1;
+  margin-bottom: calc(var(--z-inset) * -2);
+  padding-bottom: calc(var(--z-inset) * 2 + var(--z-inset));
+  padding-top: var(--z-inset);
+  padding-left: calc(var(--z-inset-sm) + var(--z-inset-container-horizontal));
+  background-color: var(--z-color-bg-active);
 }
 
 .desk-action-slot-warning {

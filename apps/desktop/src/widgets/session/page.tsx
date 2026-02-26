@@ -310,6 +310,32 @@ function buildAssistantHeartbeatSegment(
   };
 }
 
+// 描述：将底部状态文案压缩为短文本，避免在操作槽中展示过长错误原文。
+//
+// Params:
+//
+//   - rawStatus: 原始状态文案。
+//
+// Returns:
+//
+//   - 适合在 `desk-action-slot` 展示的简短状态文案。
+function buildCompactActionSlotStatus(rawStatus: string): string {
+  const normalizedStatus = rawStatus.trim();
+  if (!normalizedStatus) {
+    return "";
+  }
+
+  if (normalizedStatus.startsWith("执行失败")) {
+    return "执行失败，请查看对话详情后重试。";
+  }
+
+  if (normalizedStatus.length > 72) {
+    return `${normalizedStatus.slice(0, 72)}…`;
+  }
+
+  return normalizedStatus;
+}
+
 const OUTPUT_DIR_QUOTED_REGEX =
   /(?:导出到|导出至|输出到|保存到|export\s+to|save\s+to)\s*[“"']([^"”']+)[”"']/i;
 const OUTPUT_DIR_PLAIN_REGEX =
@@ -551,6 +577,7 @@ export function SessionPage({
   const [pendingDangerousToken, setPendingDangerousToken] = useState("");
   const [messagesHydrated, setMessagesHydrated] = useState(false);
   const [hydratedSessionKey, setHydratedSessionKey] = useState("");
+  const compactActionSlotStatus = useMemo(() => buildCompactActionSlotStatus(status), [status]);
   const resolvedSessionUiConfig = sessionUiConfig || resolveSessionUiConfig(agentKey);
   const isWorkflowSession = resolvedSessionUiConfig.sessionKind === "workflow";
   const normalizedAgentKey = agentKey;
@@ -1808,23 +1835,39 @@ export function SessionPage({
             ) : null}
             {messages.map((message, index) => {
               const roleClass = message.role === "user" ? "user" : "assistant";
-              const runMeta = message.id ? assistantRunMetaMap[message.id] : undefined;
-              const useRunLayout = message.role === "assistant" && Boolean(runMeta);
+              const runMeta = message.id
+                ? assistantRunMetaMap[message.id]
+                : undefined;
+              const useRunLayout =
+                message.role === "assistant" && Boolean(runMeta);
               const dividerTitle = runMeta
                 ? runMeta.status === "failed"
                   ? `执行中断，用时 ${formatElapsedDuration(runMeta.startedAt, runMeta.finishedAt)}`
                   : `已完成，用时 ${formatElapsedDuration(runMeta.startedAt, runMeta.finishedAt)}`
                 : "";
               return (
-                <AriCard key={message.id || `message-${index}`} className={`desk-msg ${roleClass}`}>
-                  <AriTypography variant="caption" value={message.role === "user" ? "你" : "智能体"} />
+                <AriCard
+                  key={message.id || `message-${index}`}
+                  className={`desk-msg ${roleClass}`}
+                >
+                  <AriTypography
+                    variant="caption"
+                    value={message.role === "user" ? "你" : "智能体"}
+                  />
                   {useRunLayout && runMeta ? (
                     <AriContainer className="desk-run-flow">
                       {runMeta.status === "running" ? (
                         <AriContainer className="desk-run-segments">
                           {runMeta.segments.map((segment) => (
-                            <AriContainer key={segment.key} className="desk-run-segment">
-                              <AriTypography className="desk-run-intro" variant="caption" value={segment.intro} />
+                            <AriContainer
+                              key={segment.key}
+                              className="desk-run-segment"
+                            >
+                              <AriTypography
+                                className="desk-run-intro"
+                                variant="caption"
+                                value={segment.intro}
+                              />
                               <AriTypography
                                 className={`desk-run-step ${segment.status === "running" ? "desk-run-step-running" : ""}`}
                                 variant="caption"
@@ -1845,22 +1888,41 @@ export function SessionPage({
                             }}
                           >
                             <span className="desk-run-divider-line" />
-                            <span className="desk-run-divider-text">{dividerTitle}</span>
-                            <span className={`desk-run-divider-arrow ${runMeta.collapsed ? "" : "open"}`}>▾</span>
+                            <span className="desk-run-divider-text">
+                              {dividerTitle}
+                            </span>
+                            <span
+                              className={`desk-run-divider-arrow ${runMeta.collapsed ? "" : "open"}`}
+                            >
+                              ▾
+                            </span>
                             <span className="desk-run-divider-line" />
                           </button>
                           {!runMeta.collapsed ? (
                             <AriContainer className="desk-run-segments desk-run-segments-collapsed">
                               {runMeta.segments.map((segment) => (
-                                <AriContainer key={`collapsed-${segment.key}`} className="desk-run-segment">
-                                  <AriTypography className="desk-run-intro" variant="caption" value={segment.intro} />
-                                  <AriTypography className="desk-run-step" variant="caption" value={segment.step} />
+                                <AriContainer
+                                  key={`collapsed-${segment.key}`}
+                                  className="desk-run-segment"
+                                >
+                                  <AriTypography
+                                    className="desk-run-intro"
+                                    variant="caption"
+                                    value={segment.intro}
+                                  />
+                                  <AriTypography
+                                    className="desk-run-step"
+                                    variant="caption"
+                                    value={segment.step}
+                                  />
                                 </AriContainer>
                               ))}
                             </AriContainer>
                           ) : null}
                           <AriContainer className="desk-run-summary">
-                            <ChatMarkdown content={runMeta.summary || message.text} />
+                            <ChatMarkdown
+                              content={runMeta.summary || message.text}
+                            />
                           </AriContainer>
                         </>
                       )}
@@ -1868,7 +1930,11 @@ export function SessionPage({
                   ) : (
                     <ChatMarkdown
                       content={message.text}
-                      plainText={sending && Boolean(message.id) && message.id === streamMessageIdRef.current}
+                      plainText={
+                        sending &&
+                        Boolean(message.id) &&
+                        message.id === streamMessageIdRef.current
+                      }
                     />
                   )}
                 </AriCard>
@@ -1878,22 +1944,41 @@ export function SessionPage({
         </AriContainer>
 
         <AriContainer className="desk-prompt-dock">
-          {uiHint ? (
-            <AriCard className={`desk-action-slot desk-action-slot-${uiHint.level}`}>
-              <AriTypography variant="h4" value={uiHint.title} />
-              <AriTypography variant="caption" value={uiHint.message} />
-              <AriFlex align="center" space={8} className="desk-action-slot-actions">
-                {uiHint.actions.map((action, index) => (
-                  <AriButton
-                    key={`${uiHint.key}-${action.kind}-${index}`}
-                    color={action.intent === "primary" ? "primary" : undefined}
-                    label={action.label}
-                    onClick={() => {
-                      void handleUiHintAction(action);
-                    }}
-                  />
-                ))}
-              </AriFlex>
+          {uiHint || compactActionSlotStatus ? (
+            <AriCard
+              className={`desk-action-slot ${uiHint ? `desk-action-slot-${uiHint.level}` : ""}`}
+            >
+              {uiHint ? (
+                <>
+                  <AriTypography variant="h4" value={uiHint.title} />
+                  <AriTypography variant="caption" value={uiHint.message} />
+                  <AriFlex
+                    align="center"
+                    space={8}
+                    className="desk-action-slot-actions"
+                  >
+                    {uiHint.actions.map((action, index) => (
+                      <AriButton
+                        key={`${uiHint.key}-${action.kind}-${index}`}
+                        color={
+                          action.intent === "primary" ? "primary" : undefined
+                        }
+                        label={action.label}
+                        onClick={() => {
+                          void handleUiHintAction(action);
+                        }}
+                      />
+                    ))}
+                  </AriFlex>
+                </>
+              ) : null}
+              {compactActionSlotStatus ? (
+                <AriTypography
+                  className="desk-prompt-status"
+                  variant="caption"
+                  value={compactActionSlotStatus}
+                />
+              ) : null}
             </AriCard>
           ) : null}
           <AriCard className="desk-prompt-card desk-session-prompt-card">
@@ -1906,10 +1991,18 @@ export function SessionPage({
               rows={3}
               autoSize={{ minRows: 3, maxRows: 10 }}
               placeholder={resolvedSessionUiConfig.inputPlaceholder}
+              enableHoverFocusEffect = {false}
             />
-            <AriTypography className="desk-prompt-status" variant="caption" value={status || ""} />
-            <AriFlex justify="space-between" align="center" className="desk-prompt-toolbar">
-              <AriFlex align="center" space={8} className="desk-prompt-toolbar-left">
+            <AriFlex
+              justify="space-between"
+              align="center"
+              className="desk-prompt-toolbar"
+            >
+              <AriFlex
+                align="center"
+                space={8}
+                className="desk-prompt-toolbar-left"
+              >
                 <AriButton
                   type="text"
                   icon="add"
@@ -1917,7 +2010,7 @@ export function SessionPage({
                   disabled={sending}
                 />
                 <AriTooltip
-                  content={(
+                  content={
                     <AriMenu
                       items={availableAiKeys.map((item) => ({
                         key: item.provider,
@@ -1926,7 +2019,7 @@ export function SessionPage({
                       selectedKey={selectedAi?.provider || ""}
                       onSelect={(key) => setSelectedProvider(key)}
                     />
-                  )}
+                  }
                 >
                   <AriButton
                     type="text"
@@ -1936,10 +2029,14 @@ export function SessionPage({
                   />
                 </AriTooltip>
                 <AriTooltip
-                  content={(
+                  content={
                     <AriMenu
                       items={workflowMenuItems}
-                      selectedKey={isWorkflowSession ? selectedModelWorkflow?.id || "" : selectedCodeWorkflow?.id || ""}
+                      selectedKey={
+                        isWorkflowSession
+                          ? selectedModelWorkflow?.id || ""
+                          : selectedCodeWorkflow?.id || ""
+                      }
                       onSelect={(key) => {
                         if (isWorkflowSession) {
                           setSelectedModelWorkflowId(key);
@@ -1948,13 +2045,17 @@ export function SessionPage({
                         setSelectedCodeWorkflowId(key);
                       }}
                     />
-                  )}
+                  }
                 >
                   <AriButton
                     type="text"
-                    label={isWorkflowSession
-                      ? selectedModelWorkflow?.name || resolvedSessionUiConfig.workflowFallbackLabel
-                      : selectedCodeWorkflow?.name || resolvedSessionUiConfig.workflowFallbackLabel}
+                    label={
+                      isWorkflowSession
+                        ? selectedModelWorkflow?.name ||
+                          resolvedSessionUiConfig.workflowFallbackLabel
+                        : selectedCodeWorkflow?.name ||
+                          resolvedSessionUiConfig.workflowFallbackLabel
+                    }
                     icon="arrow_drop_down"
                     disabled={workflowMenuItems.length === 0}
                   />
@@ -1967,7 +2068,10 @@ export function SessionPage({
                 icon={sending ? "hourglass_top" : "arrow_upward"}
                 className="desk-prompt-icon-btn"
                 onClick={sendMessage}
-                disabled={sending || (isWorkflowSession && blenderBridgeRuntime.checking)}
+                disabled={
+                  sending ||
+                  (isWorkflowSession && blenderBridgeRuntime.checking)
+                }
               />
             </AriFlex>
           </AriCard>
