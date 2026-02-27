@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { createPortal } from "react-dom";
 import {
   AriButton,
   AriCard,
@@ -14,10 +15,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
-  AGENT_SESSIONS,
   getCodeWorkspaceGroupById,
   getCodeWorkspaceIdBySessionId,
-  getModelProjectById,
   getSessionMessages,
   resolveAgentSessionTitle,
   SESSION_TITLE_UPDATED_EVENT,
@@ -59,6 +58,7 @@ import {
   listModelWorkflows,
   runModelWorkflow,
 } from "../../shared/workflow";
+import { DevDebugFloat } from "../dev-debug-float";
 import type {
   CodeWorkflowDefinition,
   WorkflowDefinition,
@@ -67,6 +67,9 @@ import type {
 } from "../../shared/workflow";
 import { resolveSessionUiConfig, type SessionAgentUiConfig } from "./config";
 
+// 描述:
+//
+//   - 定义会话页面组件入参，统一传入会话上下文、用户信息与能力依赖。
 interface SessionPageProps {
   agentKey: AgentKey;
   sessionId: string;
@@ -78,11 +81,17 @@ interface SessionPageProps {
   aiKeys: AiKeyItem[];
 }
 
+// 描述:
+//
+//   - 定义会话路由 state 结构，用于跨页透传自动提问与目录上下文。
 interface SessionRouteState {
   autoPrompt?: string;
   workspaceId?: string;
 }
 
+// 描述:
+//
+//   - 定义通用智能体执行响应结构，兼容动作、步骤、事件与资产返回。
 interface AgentRunResponse {
   trace_id: string;
   message: string;
@@ -94,6 +103,9 @@ interface AgentRunResponse {
   ui_hint?: ProtocolUiHint;
 }
 
+// 描述:
+//
+//   - 定义模型会话重试等流程的响应结构。
 interface ModelSessionRunResponse {
   trace_id: string;
   message: string;
@@ -104,14 +116,23 @@ interface ModelSessionRunResponse {
   ui_hint?: ProtocolUiHint;
 }
 
+// 描述:
+//
+//   - 定义会话消息结构，统一管理角色与文本内容。
 interface MessageItem {
   id?: string;
   role: "user" | "assistant";
   text: string;
 }
 
+// 描述:
+//
+//   - 定义运行片段状态枚举。
 type AssistantRunSegmentStatus = "running" | "finished" | "failed";
 
+// 描述:
+//
+//   - 定义运行轨迹中的单个片段展示结构。
 interface AssistantRunSegment {
   key: string;
   intro: string;
@@ -119,6 +140,9 @@ interface AssistantRunSegment {
   status: AssistantRunSegmentStatus;
 }
 
+// 描述:
+//
+//   - 定义单次助手运行过程的聚合元数据。
 interface AssistantRunMeta {
   status: "running" | "finished" | "failed";
   startedAt: number;
@@ -128,8 +152,14 @@ interface AssistantRunMeta {
   segments: AssistantRunSegment[];
 }
 
+// 描述:
+//
+//   - 定义助手运行阶段枚举，用于心跳与状态文案映射。
 type AssistantRunStage = "planning" | "bridge" | "executing" | "finalizing";
 
+// 描述:
+//
+//   - 定义模型会话流式事件结构，包含步骤与事件增量。
 interface ModelSessionStreamEvent {
   session_id: string;
   trace_id: string;
@@ -139,6 +169,9 @@ interface ModelSessionStreamEvent {
   event?: ModelEventRecord;
 }
 
+// 描述:
+//
+//   - 定义通用文本流事件结构。
 interface AgentTextStreamEvent {
   trace_id: string;
   session_id?: string;
@@ -147,6 +180,9 @@ interface AgentTextStreamEvent {
   delta?: string;
 }
 
+// 描述:
+//
+//   - 定义模型调试轨迹事件结构，供调试面板展示。
 interface ModelDebugTraceEvent {
   session_id: string;
   trace_id: string;
@@ -156,6 +192,9 @@ interface ModelDebugTraceEvent {
   timestamp_ms: number;
 }
 
+// 描述:
+//
+//   - 定义模型会话 AI 总结响应结构。
 interface ModelSessionAiSummaryResponse {
   summary: string;
   prompt: string;
@@ -163,6 +202,9 @@ interface ModelSessionAiSummaryResponse {
   provider: string;
 }
 
+// 描述:
+//
+//   - 定义会话调试流记录结构，统一 UI 与后端来源字段。
 interface SessionDebugFlowRecord {
   id: string;
   source: "ui" | "backend";
@@ -184,7 +226,8 @@ interface SessionDebugFlowRecord {
 //   - 中文耗时文案（如“2分13秒”）。
 function formatElapsedDuration(startedAt: number, finishedAt?: number): string {
   const safeStartedAt = Number.isFinite(startedAt) ? startedAt : Date.now();
-  const safeFinishedAt = Number.isFinite(finishedAt) ? finishedAt : Date.now();
+  const normalizedFinishedAt = finishedAt ?? Date.now();
+  const safeFinishedAt = Number.isFinite(normalizedFinishedAt) ? normalizedFinishedAt : Date.now();
   const totalSeconds = Math.max(0, Math.floor((safeFinishedAt - safeStartedAt) / 1000));
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
@@ -344,12 +387,31 @@ function buildCompactActionSlotStatus(rawStatus: string): string {
   return normalizedStatus;
 }
 
+// 描述:
+//
+//   - 匹配引号包裹的导出目录表达。
 const OUTPUT_DIR_QUOTED_REGEX =
   /(?:导出到|导出至|输出到|保存到|export\s+to|save\s+to)\s*[“"']([^"”']+)[”"']/i;
+
+// 描述:
+//
+//   - 匹配未使用引号包裹的导出目录表达。
 const OUTPUT_DIR_PLAIN_REGEX =
   /(?:导出到|导出至|输出到|保存到|export\s+to|save\s+to)\s*(\/[^\s`"'，。；！？]+|[a-zA-Z]:\\[^\s`"'，。；！？]+)/i;
+
+// 描述:
+//
+//   - 匹配提示词中的纹理图片路径。
 const IMAGE_PATH_REGEX = /((?:\/|[a-zA-Z]:\\)[^\s`"'，。；！？]+?\.(?:png|jpe?g|webp|bmp|gif|tiff?))/i;
+
+// 描述:
+//
+//   - 模型工作流当前选择项本地存储键。
 const MODEL_WORKFLOW_SELECTED_KEY = "zodileap.desktop.model.selectedWorkflowId";
+
+// 描述:
+//
+//   - 代码工作流当前选择项本地存储键。
 const CODE_WORKFLOW_SELECTED_KEY = "zodileap.desktop.code.selectedWorkflowId";
 
 // 描述：
@@ -371,6 +433,17 @@ function readSelectedWorkflowId(storageKey: string): string {
   return String(value || "").trim();
 }
 
+// 描述:
+//
+//   - 清理导出路径尾部噪声字符，提升路径解析命中率。
+//
+// Params:
+//
+//   - path: 原始路径文本。
+//
+// Returns:
+//
+//   - 清理后的路径文本。
 function trimOutputSuffix(path: string): string {
   let result = path.trim().replace(/[，。；！？、]+$/u, "");
   result = result.replace(/[)"'`”]+$/u, "");
@@ -380,6 +453,17 @@ function trimOutputSuffix(path: string): string {
   return result;
 }
 
+// 描述:
+//
+//   - 从提示词中提取导出目录路径。
+//
+// Params:
+//
+//   - prompt: 用户提示词。
+//
+// Returns:
+//
+//   - 导出目录；未命中返回 undefined。
 function extractOutputDirFromPrompt(prompt: string): string | undefined {
   const quotedMatch = prompt.match(OUTPUT_DIR_QUOTED_REGEX);
   if (quotedMatch?.[1]) {
@@ -500,6 +584,7 @@ function buildUserReadableModelSummary(
   );
   return lines.join("\n").trim();
 }
+  // 描述：渲染通用会话页，统一承载 code/model 会话交互、流式渲染与工作流执行。
 
 interface TraceRecord {
   traceId: string;
@@ -586,26 +671,31 @@ export function SessionPage({
   const [renameModalVisible, setRenameModalVisible] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [sessionMenuVersion, setSessionMenuVersion] = useState(0);
+  const [debugFloatVisible, setDebugFloatVisible] = useState(false);
+  const [headerSlotElement, setHeaderSlotElement] = useState<HTMLElement | null>(null);
   const [messagesHydrated, setMessagesHydrated] = useState(false);
   const [hydratedSessionKey, setHydratedSessionKey] = useState("");
+  // 描述：将底部状态文案压缩为适合 action slot 展示的短文案。
   const compactActionSlotStatus = useMemo(() => buildCompactActionSlotStatus(status), [status]);
+  // 描述：解析当前会话 UI 配置，未传入时按智能体类型回退默认配置。
   const resolvedSessionUiConfig = sessionUiConfig || resolveSessionUiConfig(agentKey);
   const isWorkflowSession = resolvedSessionUiConfig.sessionKind === "workflow";
   const normalizedAgentKey = agentKey;
   const [sessionTitle, setSessionTitle] = useState(() => resolveAgentSessionTitle(normalizedAgentKey, sessionId));
   const sessionStorageKey = `${normalizedAgentKey}:${sessionId || "__none__"}`;
-  const modelProject = sessionId ? getModelProjectById(sessionId) : null;
-  const session = AGENT_SESSIONS.find((item) => item.id === sessionId);
   const title = sessionTitle || resolveAgentSessionTitle(normalizedAgentKey, sessionId);
   const workspaceIdFromRouteState = String(routeState.workspaceId || "").trim();
+  // 描述：从 URL 查询参数中提取目录上下文，兼容侧边栏与页面跳转携带方式。
   const workspaceIdFromQuery = useMemo(
     () => new URLSearchParams(location.search).get("workspaceId")?.trim() || "",
     [location.search],
   );
+  // 描述：从本地会话绑定关系中恢复 code 会话所属目录。
   const workspaceIdFromBinding = useMemo(
     () => (normalizedAgentKey === "code" ? getCodeWorkspaceIdBySessionId(sessionId) : ""),
     [normalizedAgentKey, sessionId],
   );
+  // 描述：解析当前 code 会话所属目录名称，用于标题后一级菜单提示。
   const codeWorkspaceGroupName = useMemo(() => {
     if (normalizedAgentKey !== "code") {
       return "";
@@ -629,6 +719,10 @@ export function SessionPage({
         label: isSessionPinned ? "取消固定会话" : "固定会话",
       },
       {
+        key: "copy_session",
+        label: "复制会话内容",
+      },
+      {
         key: "rename",
         label: "重命名会话",
       },
@@ -639,9 +733,9 @@ export function SessionPage({
     ],
     [isSessionPinned],
   );
-  const updatedAt = modelProject?.updatedAt || session?.updatedAt || "-";
   const [messages, setMessages] = useState<MessageItem[]>([]);
   const [assistantRunMetaMap, setAssistantRunMetaMap] = useState<Record<string, AssistantRunMeta>>({});
+  // 描述：过滤可用 AI Provider 列表，保留已启用项或已配置 key 的项。
   const availableAiKeys = useMemo(
     () =>
       aiKeys.filter(
@@ -652,6 +746,7 @@ export function SessionPage({
     [aiKeys],
   );
   const [selectedProvider, setSelectedProvider] = useState<string>("");
+  // 描述：解析当前选中的 Provider，未命中时回退到列表首项。
   const selectedAi = useMemo(
     () => availableAiKeys.find((item) => item.provider === selectedProvider) || availableAiKeys[0] || null,
     [availableAiKeys, selectedProvider],
@@ -693,6 +788,8 @@ export function SessionPage({
       label: workflow.name,
     }));
   }, [codeWorkflows, isWorkflowSession, modelWorkflows]);
+
+  // 描述：以下 refs 用于维护流式渲染、去重、心跳与定时器状态，避免高频更新触发重复渲染。
   const streamMessageIdRef = useRef("");
   const stepRecordsRef = useRef<ModelStepRecord[]>([]);
   const eventRecordsRef = useRef<ModelEventRecord[]>([]);
@@ -1901,11 +1998,52 @@ export function SessionPage({
     }
   };
 
+  // 描述：构建可复制的完整会话文本，按消息顺序拼接“角色 + 内容”。
+  //
+  // Params:
+  //
+  //   - items: 当前会话消息列表。
+  //
+  // Returns:
+  //
+  //   - 可直接写入剪贴板的完整会话文本。
+  const buildSessionConversationText = (items: MessageItem[]) => {
+    if (!items.length) {
+      return `会话：${title}\n\n（当前会话暂无消息）`;
+    }
+
+    const lines = items.map((item, index) => {
+      const roleLabel = item.role === "user" ? "用户" : "助手";
+      const content = String(item.text || "").trim() || "（空消息）";
+      return `${index + 1}. ${roleLabel}：\n${content}`;
+    });
+    return [`会话：${title}`, "", ...lines].join("\n\n");
+  };
+
+  // 描述：复制完整会话内容到系统剪贴板，成功或失败均反馈用户可读提示。
+  const handleCopySessionContentByHeaderMenu = async () => {
+    try {
+      if (!navigator?.clipboard?.writeText) {
+        setStatus("复制失败，请检查系统剪贴板权限");
+        return;
+      }
+      const fullConversationText = buildSessionConversationText(messages);
+      await navigator.clipboard.writeText(fullConversationText);
+      setStatus("会话内容已复制");
+    } catch {
+      setStatus("复制失败，请检查系统剪贴板权限");
+    }
+  };
+
   // 描述：处理 Header 更多菜单动作，复用侧边栏右键会话菜单同款能力。
   const handleSelectSessionHeadMenu = (key: string) => {
     if (key === "pin") {
       togglePinnedAgentSession(sessionId);
       setSessionMenuVersion((current) => current + 1);
+      return;
+    }
+    if (key === "copy_session") {
+      void handleCopySessionContentByHeaderMenu();
       return;
     }
     if (key === "rename") {
@@ -1917,53 +2055,72 @@ export function SessionPage({
     }
   };
 
-  return (
-    <AriContainer className="desk-content desk-session-content" height="100%">
-      <AriContainer className="desk-session-head-wrap" padding={0}>
-        <AriFlex
-          className="desk-session-head-bar"
-          align="center"
-          justify="space-between"
-        >
-          <AriFlex className="desk-session-head-main" align="center" space={8}>
+  // 描述：定位桌面全局标题栏插槽，用于把会话头部挂载到固定 header。
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+    setHeaderSlotElement(document.getElementById("desk-app-header-slot"));
+  }, []);
+
+  const sessionHeaderNode = (
+    <AriContainer className="desk-session-head-wrap" padding={0}>
+      <AriFlex
+        className="desk-session-head-bar"
+        align="center"
+        justify="space-between"
+      >
+        <AriFlex className="desk-session-head-main" align="center" space={8}>
+          <AriTypography
+            className="desk-session-head-title"
+            variant="h4"
+            value={title}
+          />
+          {sessionHeadParentHint ? (
             <AriTypography
-              className="desk-session-head-title"
-              variant="h4"
-              value={title}
-            />
-            {sessionHeadParentHint ? (
-              <AriTypography
-                className="desk-session-head-parent-hint"
-                variant="caption"
-                value={sessionHeadParentHint}
-              />
-            ) : null}
-            <AriTooltip
-              position="bottom"
-              content={(
-                <AriMenu
-                  items={sessionHeadMenuItems}
-                  onSelect={handleSelectSessionHeadMenu}
-                />
-              )}
-            >
-              <AriButton
-                type="text"
-                className="desk-session-head-more-btn"
-                icon="more_horiz"
-                aria-label="更多操作"
-              />
-            </AriTooltip>
-          </AriFlex>
-          <AriFlex className="desk-session-head-extra" align="center" space={8}>
-            <AriTypography
-              className="desk-session-head-updated"
+              className="desk-session-head-parent-hint"
               variant="caption"
-              value={`更新：${updatedAt}`}
+              value={sessionHeadParentHint}
             />
-          </AriFlex>
+          ) : null}
+          <AriTooltip
+            position="bottom"
+            content={(
+              <AriMenu
+                items={sessionHeadMenuItems}
+                onSelect={handleSelectSessionHeadMenu}
+              />
+            )}
+          >
+            <AriButton
+              type="text"
+              className="desk-session-head-more-btn"
+              icon="more_horiz"
+              aria-label="更多操作"
+            />
+          </AriTooltip>
         </AriFlex>
-      </AriContainer>
+        <AriFlex className="desk-session-head-extra" align="center">
+          {import.meta.env.DEV ? (
+            <AriButton
+              type="text"
+              icon="bug_report"
+              color={debugFloatVisible ? "primary" : "default"}
+              aria-label={debugFloatVisible ? "关闭 Dev 调试窗口" : "打开 Dev 调试窗口"}
+              onClick={() => {
+                setDebugFloatVisible((current) => !current);
+              }}
+            />
+          ) : null}
+        </AriFlex>
+      </AriFlex>
+    </AriContainer>
+  );
+
+  return (
+    <AriContainer className="desk-content desk-session-content" height="100%" padding={0}>
+      {headerSlotElement ? createPortal(sessionHeaderNode, headerSlotElement) : sessionHeaderNode}
+      <DevDebugFloat visible={debugFloatVisible} />
       <AriModal
         visible={renameModalVisible}
         title="重命名会话"
@@ -2200,7 +2357,7 @@ export function SessionPage({
                         label: item.providerLabel,
                       }))}
                       selectedKey={selectedAi?.provider || ""}
-                      onSelect={(key) => setSelectedProvider(key)}
+                      onSelect={(key: string) => setSelectedProvider(key)}
                     />
                   }
                 >
@@ -2220,7 +2377,7 @@ export function SessionPage({
                           ? selectedModelWorkflow?.id || ""
                           : selectedCodeWorkflow?.id || ""
                       }
-                      onSelect={(key) => {
+                      onSelect={(key: string) => {
                         if (isWorkflowSession) {
                           setSelectedModelWorkflowId(key);
                           return;

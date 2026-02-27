@@ -26,6 +26,8 @@
   --desk-scrollbar-size: var(--z-inset-sm);
   --desk-window-min-width: calc(var(--z-inset) * 64);
   --desk-window-min-height: calc(var(--z-inset) * 42);
+  --desk-titlebar-height: var(--z-element-size-lg);
+  --desk-app-header-height: 40px;
   --desk-breakpoint-lg: calc(var(--z-inset) * 80);
   --desk-breakpoint-md: calc(var(--z-inset) * 64);
   --desk-breakpoint-sm: calc(var(--z-inset) * 56);
@@ -74,6 +76,7 @@ body {
 }
 
 .desk-app {
+  --desk-active-sidebar-width: var(--desk-sidebar-width);
   height: 100%;
   display: grid;
   grid-template-columns: var(--desk-sidebar-width) 1fr;
@@ -81,18 +84,81 @@ body {
   min-height: var(--desk-window-min-height);
 }
 
+.desk-app.is-sidebar-collapsed {
+  --desk-active-sidebar-width: 0;
+  grid-template-columns: 0 1fr;
+}
+
+.desk-app-header {
+  --desk-app-header-padding-left: calc(var(--z-inset-sm) + var(--z-inset-sm));
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--desk-app-header-height);
+  z-index: 998;
+  background: transparent;
+  border: 0;
+  overflow: hidden;
+  -webkit-app-region: drag;
+}
+
+.desk-app-header button,
+.desk-app-header [role="button"],
+.desk-app-header a,
+.desk-app-header input,
+.desk-app-header textarea,
+.desk-app-header select {
+  -webkit-app-region: no-drag;
+}
+
+.desk-app-header-inner {
+  width: 100%;
+  height: 100%;
+  padding-left: var(--desk-app-header-padding-left);
+  padding-right: var(--z-inset);
+}
+
+.desk-app-header-leading {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-shrink: 0;
+}
+
+.desk-platform-macos .desk-app-header-inner {
+  --desk-app-header-padding-left: calc(calc(var(--z-inset) * 4.5) + var(--z-inset-sm));
+}
+
+.desk-app-header-leading.is-expanded {
+  width: calc(var(--desk-active-sidebar-width) - var(--desk-app-header-padding-left));
+}
+
+.desk-app-header-slot {
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+}
+
+.desk-app-sidebar-wrap {
+  min-width: 0;
+  overflow: hidden;
+}
+
 .desk-sidebar {
   height: 100%;
   border-right: var(--z-border-width) solid var(--z-color-border-glass);
   background: var(--desk-sidebar-bg);
-  padding: var(--z-inset);
+  padding: calc(var(--z-inset) + var(--desk-app-header-height)) var(--z-inset) var(--z-inset);
   display: flex;
   flex-direction: column;
   position: relative;
 }
 
 .desk-agent-sidebar {
-  padding-top: var(--z-inset-sm);
+  padding-top: calc(var(--desk-app-header-height) + var(--z-inset-sm));
   padding-bottom: var(--z-inset-sm);
 }
 
@@ -198,7 +264,10 @@ body {
   height: 100%;
   overflow: auto;
   background: var(--desk-main-bg);
-  padding: var(--desk-layout-padding-y) var(--desk-layout-padding-x);
+  padding:
+    calc(var(--desk-layout-padding-y) + var(--desk-app-header-height))
+    var(--desk-layout-padding-x)
+    var(--desk-layout-padding-y);
   min-height: 0;
   display: flex;
   scrollbar-gutter: stable;
@@ -367,10 +436,13 @@ body {
 }
 
 .desk-workflow-editor-canvas-toolbar {
-  display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: var(--z-inset-sm);
+}
+
+.desk-workflow-editor-canvas-toolbar-divider {
+  margin: 0;
+  align-self: stretch;
+  min-height: calc(var(--z-inset) * 1.5);
 }
 
 .desk-workflow-editor-reactflow-wrap {
@@ -380,32 +452,22 @@ body {
 }
 
 .desk-workflow-editor-canvas-toolbar-float {
-  position: absolute;
   left: 50%;
   bottom: var(--z-inset);
   transform: translateX(-50%);
   z-index: calc(var(--z-z-index-sticky) + 1);
   width: max-content;
   max-width: calc(100% - var(--z-inset) * 2);
-  justify-content: center;
-  border: var(--z-border-width) solid var(--desk-workflow-card-border);
-  border-radius: var(--z-border-radius-lg);
-  padding: var(--z-inset-xs) var(--z-inset-sm);
-  background: var(--desk-container-bg);
-  box-shadow: var(--z-shadow);
 }
 
-.desk-workflow-editor-reactflow-wrap .desk-workflow-editor-floating-panel {
-  position: absolute;
+.desk-workflow-editor-floating-panel {
   right: var(--z-inset);
   top: var(--z-inset);
-  width: min(100%, var(--desk-workflow-floating-width));
+  width: var(--desk-workflow-floating-width);
+  max-width: calc(100% - var(--z-inset) * 2);
   max-height: calc(100% - var(--z-inset) * 2);
   overflow: auto;
   z-index: var(--z-z-index-sticky);
-  border: var(--z-border-width) solid var(--desk-workflow-card-border);
-  background: var(--desk-container-bg);
-  box-shadow: var(--z-shadow);
 }
 
 .desk-workflow-editor-floating-meta {
@@ -470,24 +532,36 @@ body {
   background: var(--desk-container-bg);
   box-shadow: var(--z-shadow);
   color: var(--z-color-font);
+  transition:
+    border-color var(--z-duration-fast-4),
+    background-color var(--z-duration-fast-4),
+    box-shadow var(--z-duration-fast-4);
 }
 
-.desk-workflow-reactflow .react-flow__node-default.desk-workflow-flow-node.selected {
+.desk-workflow-reactflow .react-flow__node-default.desk-workflow-flow-node.selected,
+.desk-workflow-reactflow .react-flow__node-default.desk-workflow-flow-node.is-active {
   border-color: color-mix(in srgb, var(--z-color-primary) 76%, var(--z-color-border-glass));
-  background: var(--desk-container-bg);
+  background: color-mix(in srgb, var(--z-color-primary) 10%, var(--desk-container-bg));
+  box-shadow:
+    0 0 0 var(--z-border-width) color-mix(in srgb, var(--z-color-primary) 62%, transparent),
+    var(--z-shadow);
 }
 
-.desk-workflow-reactflow .react-flow__edge-path.desk-workflow-flow-edge,
+.desk-workflow-reactflow .react-flow__edge.desk-workflow-flow-edge .react-flow__edge-path,
 .desk-workflow-reactflow .react-flow__connection-path {
   stroke: color-mix(in srgb, var(--z-color-primary) 68%, var(--z-color-border-glass));
   stroke-width: var(--desk-workflow-edge-width);
+  transition:
+    stroke var(--z-duration-fast-4),
+    stroke-width var(--z-duration-fast-4);
 }
 
-.desk-workflow-reactflow .react-flow__edge.selected .react-flow__edge-path {
+.desk-workflow-reactflow .react-flow__edge.desk-workflow-flow-edge.selected .react-flow__edge-path,
+.desk-workflow-reactflow .react-flow__edge.desk-workflow-flow-edge.is-active .react-flow__edge-path {
   stroke: color-mix(in srgb, var(--z-color-warning) 70%, var(--z-color-primary));
+  stroke-width: calc(var(--desk-workflow-edge-width) + var(--z-border-width));
 }
 
-.desk-workflow-reactflow .react-flow__controls,
 .desk-workflow-reactflow .react-flow__minimap {
   border: var(--z-border-width) solid var(--desk-workflow-card-border);
   border-radius: var(--z-border-radius);
@@ -513,15 +587,9 @@ body {
 }
 
 .desk-session-head-wrap {
-  width: 100%;
   min-height: 0;
-  position: sticky;
-  top: calc(var(--z-inset) * -0.5);
-  z-index: 3;
-  padding: var(--z-inset-xs) 0;
-  border-bottom: var(--z-border-width) solid var(--z-color-border-glass);
-  background: color-mix(in srgb, var(--desk-main-bg) 94%, transparent);
-  backdrop-filter: blur(var(--z-inset-sm));
+  padding: 0;
+  width: 100%;
 }
 
 .desk-session-shell {
@@ -540,21 +608,30 @@ body {
 }
 
 .desk-session-head-bar {
-  min-height: calc(var(--z-inset) * 2.25);
+  min-height: var(--desk-app-header-height);
   width: 100%;
+  white-space: nowrap;
 }
 
 .desk-session-head-main {
   min-width: 0;
   flex: 1;
+  overflow: hidden;
 }
 
 .desk-session-head-extra {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
   flex-shrink: 0;
+  min-width: 0;
 }
 
 .desk-session-head-title {
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .desk-session-head-parent-hint {
@@ -566,11 +643,6 @@ body {
   min-width: calc(var(--z-inset) * 1.5);
   min-height: calc(var(--z-inset) * 1.5);
   padding: 0;
-}
-
-.desk-session-head-updated {
-  flex-shrink: 0;
-  color: color-mix(in srgb, var(--z-color-font) 66%, var(--z-color-border-glass));
 }
 
 .desk-session-thread-wrap {
@@ -658,7 +730,7 @@ body {
 .desk-dev-debug-float {
   position: fixed;
   right: var(--z-inset);
-  top: var(--z-inset);
+  top: calc(var(--desk-app-header-height) + var(--z-inset-sm));
   bottom: auto;
   width: min(calc(var(--z-inset) * 30), 62vw);
   max-width: calc(100vw - calc(var(--z-inset) * 2));
@@ -761,8 +833,33 @@ body {
   width: min(100%, calc(var(--z-inset) * 34));
   border: var(--z-border-width) solid var(--z-color-border-glass);
   background: var(--desk-container-bg);
+}
+
+.desk-code-workspace-method-list {
+  margin-top: var(--z-inset-sm);
   display: grid;
   gap: var(--z-inset-sm);
+}
+
+.desk-code-workspace-method-card {
+  border: var(--z-border-width) solid var(--z-color-border-glass);
+  background: var(--z-color-use-bg);
+}
+
+.desk-code-workspace-method-row {
+  width: 100%;
+  gap: var(--z-inset-sm);
+}
+
+.desk-code-workspace-method-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: var(--z-inset-xs);
+}
+
+.desk-code-workspace-method-action {
+  flex-shrink: 0;
 }
 
 .desk-thread {
@@ -1063,11 +1160,15 @@ body {
 
 @media (max-width: var(--desk-breakpoint-lg)) {
   .desk-app {
+    --desk-active-sidebar-width: var(--desk-sidebar-width-compact);
     grid-template-columns: var(--desk-sidebar-width-compact) 1fr;
   }
 
   .desk-main {
-    padding: calc(var(--z-inset) * 1.25) var(--z-inset);
+    padding:
+      calc(calc(var(--z-inset) * 1.25) + var(--desk-app-header-height))
+      var(--z-inset)
+      calc(var(--z-inset) * 1.25);
   }
 
   .desk-shortcuts {
@@ -1111,7 +1212,10 @@ body {
 
 @media (max-width: var(--desk-breakpoint-md)) {
   .desk-sidebar {
-    padding: var(--z-inset-sm);
+    padding:
+      calc(var(--z-inset-sm) + var(--desk-app-header-height))
+      var(--z-inset-sm)
+      var(--z-inset-sm);
   }
 
   .desk-dev-debug-float {
@@ -1138,6 +1242,9 @@ body {
   }
 
   .desk-main {
-    padding: var(--z-inset-sm);
+    padding:
+      calc(var(--z-inset-sm) + var(--desk-app-header-height))
+      var(--z-inset-sm)
+      var(--z-inset-sm);
   }
 }

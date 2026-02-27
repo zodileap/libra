@@ -3,6 +3,16 @@ import { AriButton, AriCard, AriContainer, AriTypography } from "aries_react";
 import { listen } from "@tauri-apps/api/event";
 import type { AgentLogEvent } from "../shared/types";
 
+// 描述:
+//
+//   - 定义 Dev 调试浮窗组件入参。
+interface DevDebugFloatProps {
+  visible?: boolean;
+}
+
+// 描述:
+//
+//   - 定义会话调试快照结构，统一承载前端调试窗口展示数据。
 interface SessionDebugSnapshot {
   sessionId?: string;
   agentKey?: string;
@@ -25,6 +35,9 @@ interface SessionDebugSnapshot {
   timestamp?: number;
 }
 
+// 描述:
+//
+//   - 定义模型调试链路事件结构。
 interface ModelDebugTraceEvent {
   session_id?: string;
   trace_id?: string;
@@ -34,16 +47,24 @@ interface ModelDebugTraceEvent {
   timestamp_ms?: number;
 }
 
-export function DevDebugFloat() {
+// 描述:
+//
+//   - 在开发环境渲染调试浮层并订阅会话与后端调试事件。
+export function DevDebugFloat({ visible = true }: DevDebugFloatProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
   const [snapshot, setSnapshot] = useState<SessionDebugSnapshot | null>(null);
   const [modelDebugTraces, setModelDebugTraces] = useState<ModelDebugTraceEvent[]>([]);
 
   useEffect(() => {
+    if (!import.meta.env.DEV || !visible) {
+      return undefined;
+    }
+
     let disposed = false;
     let unlisten: (() => void) | null = null;
 
+    // 描述：绑定 Tauri 事件监听并在卸载时释放句柄。
     const setup = async () => {
       const handler = await listen<AgentLogEvent>("agent:log", (event) => {
         if (disposed) return;
@@ -67,6 +88,7 @@ export function DevDebugFloat() {
       }
     };
 
+    // 描述：接收页面调试广播并更新当前会话调试快照。
     const handleSessionDebug = (event: Event) => {
       const customEvent = event as CustomEvent<SessionDebugSnapshot>;
       setSnapshot(customEvent.detail || null);
@@ -80,9 +102,9 @@ export function DevDebugFloat() {
       if (unlisten) unlisten();
       window.removeEventListener("zodileap:session-debug", handleSessionDebug as EventListener);
     };
-  }, []);
+  }, [visible]);
 
-  if (!import.meta.env.DEV) {
+  if (!import.meta.env.DEV || !visible) {
     return null;
   }
 

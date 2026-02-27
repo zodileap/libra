@@ -14,7 +14,6 @@ import {
 	setAuthToken,
 	setUnauthorizedHandler,
 } from "./shared/services/backend-api";
-import { DevDebugFloat } from "./widgets/dev-debug-float";
 import type { AuthState } from "./router/types";
 import type {
 	AiKeyItem,
@@ -27,6 +26,9 @@ import type {
 	ModelMcpCapabilities,
 } from "./shared/types";
 
+// 描述:
+//
+//   - 定义 Codex CLI 健康检查结果结构。
 interface CodexCliHealthResponse {
 	available: boolean;
 	outdated: boolean;
@@ -36,16 +38,26 @@ interface CodexCliHealthResponse {
 	message: string;
 }
 
+// 描述:
+//
+//   - 初始化全局应用配置。
 const appConfig = setAppConfig({
 	baseUrl: import.meta.env.VITE_APP_API_URL || "http://localhost:11001",
 	localImgSrc: import.meta.env.VITE_APP_LOCAL_IMG_SRC || "",
 	theme: "brand"
 });
 
+// 描述:
+//
+//   - 渲染桌面端应用根组件，负责认证恢复、主题同步与全局能力注入。
 export default function App() {
+	// 描述：当前登录用户状态。
 	const [user, setUser] = useState<LoginUser | null>(null);
+	// 描述：当前用户可访问的智能体列表。
 	const [availableAgents, setAvailableAgents] = useState<AuthAvailableAgentItem[]>([]);
+	// 描述：认证恢复中标记，用于首屏路由守卫。
 	const [restoringAuth, setRestoringAuth] = useState(true);
+	// 描述：主题模式（亮色/暗色/跟随系统）。
 	const [colorThemeMode, setColorThemeMode] = useState<ColorThemeMode>(() => {
 		const saved = localStorage.getItem("zodileap.desktop.colorThemeMode");
 		if (saved === "light" || saved === "dark" || saved === "system") {
@@ -53,6 +65,7 @@ export default function App() {
 		}
 		return "system";
 	});
+	// 描述：模型智能体 MCP 能力开关集合。
 	const [modelMcpCapabilities, setModelMcpCapabilities] = useState<ModelMcpCapabilities>(() => {
 		const saved = localStorage.getItem("zodileap.desktop.modelMcpCapabilities");
 		if (saved) {
@@ -83,6 +96,7 @@ export default function App() {
 			file: true,
 		};
 	});
+	// 描述：AI Provider 配置与启用状态列表。
 	const [aiKeys, setAiKeys] = useState<AiKeyItem[]>(() => {
 		const saved = localStorage.getItem("zodileap.desktop.aiKeys");
 		if (saved) {
@@ -120,17 +134,21 @@ export default function App() {
 			},
 		];
 	});
+	// 描述：Blender Bridge 运行态（检测中/可用性/提示文案）。
 	const [blenderBridgeRuntime, setBlenderBridgeRuntime] = useState<BlenderBridgeRuntime>({
 		checking: false,
 		ok: null,
 		message: "Bridge 未检测",
 	});
+	// 描述：缓存 Bridge 检测任务，避免并发触发重复检测。
 	const bridgeTaskRef = useRef<Promise<BlenderBridgeEnsureResult> | null>(null);
+	// 描述：记录已展示过的 Codex 提示弹窗，防止同一提示重复弹出。
 	const codexPopupShownRef = useRef<Set<string>>(new Set());
 
 	useEffect(() => {
 		localStorage.setItem("zodileap.desktop.colorThemeMode", colorThemeMode);
 
+		// 描述：根据当前主题模式应用实际色彩主题。
 		const applyMode = () => {
 			if (colorThemeMode === "system") {
 				const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
@@ -200,12 +218,14 @@ export default function App() {
 	}, [refreshAuthState]);
 
 	useEffect(() => {
+		// 描述：仅当启用 Codex Provider 时执行本地 CLI 可用性探测。
 		const codexEnabled = aiKeys.some((item) => item.provider === "codex" && item.enabled);
 		if (!codexEnabled) {
 			return;
 		}
 
 		let disposed = false;
+		// 描述：执行 Codex CLI 检查并在异常场景展示一次性提示。
 		const check = async () => {
 			try {
 				const health = await invoke<CodexCliHealthResponse>("check_codex_cli_health", {});
@@ -250,6 +270,7 @@ export default function App() {
 		};
 	}, [aiKeys]);
 
+	// 描述：统一执行 Blender Bridge 检测并同步运行态，含并发去重。
 	const ensureBlenderBridgeRuntime = useCallback(async (options?: BlenderBridgeEnsureOptions) => {
 		if (bridgeTaskRef.current) {
 			return bridgeTaskRef.current;
@@ -281,6 +302,7 @@ export default function App() {
 		void ensureBlenderBridgeRuntime();
 	}, [ensureBlenderBridgeRuntime]);
 
+	// 描述：聚合路由层所需的认证上下文对象。
 	const auth: AuthState = useMemo(
 		() => ({
 			user,
@@ -330,7 +352,6 @@ export default function App() {
 				<HashRouter>
 					<DesktopRouter auth={auth} />
 				</HashRouter>
-				{import.meta.env.DEV ? <DevDebugFloat /> : null}
 			</AriApp>
 		</StrictMode>
 	);
