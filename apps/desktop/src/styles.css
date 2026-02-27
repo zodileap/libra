@@ -81,23 +81,6 @@ body {
   min-height: var(--desk-window-min-height);
 }
 
-.desk-skip-link {
-  position: fixed;
-  left: var(--z-inset);
-  top: calc(var(--z-inset) * -4);
-  z-index: 10000;
-  padding: var(--z-inset-xs) var(--z-inset-sm);
-  border: var(--z-border-width) solid var(--z-color-border-glass);
-  border-radius: var(--z-border-radius);
-  background: var(--z-color-use-bg);
-  color: var(--z-color-font);
-  text-decoration: none;
-}
-
-.desk-skip-link:focus-visible {
-  top: var(--z-inset);
-}
-
 .desk-sidebar {
   height: 100%;
   border-right: var(--z-border-width) solid var(--z-color-border-glass);
@@ -122,11 +105,6 @@ body {
   width: 100%;
 }
 
-.desk-code-workspace-list {
-  display: grid;
-  gap: var(--z-inset-xs);
-}
-
 .desk-code-workspace-empty {
   border: var(--z-border-width) solid var(--z-color-border-glass);
   border-radius: var(--z-border-radius);
@@ -134,74 +112,14 @@ body {
   padding: var(--z-inset-sm);
 }
 
-.desk-code-workspace-item {
-  border: var(--z-border-width) solid transparent;
-  border-radius: var(--z-border-radius);
-  background: var(--desk-container-bg);
-  transition:
-    border-color var(--z-duration-fast-4),
-    background-color var(--z-duration-fast-4);
-}
-
-.desk-code-workspace-item.is-active {
-  border-color: var(--z-color-border-brand);
-}
-
-.desk-code-workspace-item:hover {
-  border-color: var(--z-color-border-brand);
-  background: var(--desk-container-bg);
-}
-
-.desk-code-workspace-head {
-  padding: var(--z-inset-xs);
-}
-
-.desk-code-workspace-main {
-  appearance: none;
-  border: none;
-  background: transparent;
-  color: var(--z-color-font);
-  cursor: pointer;
-  min-width: 0;
-  flex: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: var(--z-inset-xs);
-  padding: 0;
-}
-
-.desk-code-workspace-main .z-icon {
-  color: color-mix(in srgb, var(--z-color-font) 84%, var(--z-color-border-glass));
-}
-
-.desk-code-workspace-actions {
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--z-duration-fast-4);
-}
-
-.desk-code-workspace-item:hover .desk-code-workspace-actions {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.desk-code-workspace-item.is-active .desk-code-workspace-actions {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.desk-code-workspace-session-list {
-  padding: 0 var(--z-inset-xs) var(--z-inset-xs);
-}
-
-.desk-code-workspace-session-list .desk-sidebar-nav {
-  width: 100%;
-}
-
 .desk-context-menu-item-label {
   width: 100%;
   min-width: 0;
+}
+
+.desk-context-menu-item-icon {
+  color: color-mix(in srgb, var(--z-color-font) 82%, var(--z-color-border-glass));
+  flex-shrink: 0;
 }
 
 .desk-session-item-title {
@@ -276,10 +194,6 @@ body {
   box-shadow: var(--z-shadow);
 }
 
-.desk-user-tooltip-content {
-  padding: var(--z-inset-sm);
-}
-
 .desk-main {
   height: 100%;
   overflow: auto;
@@ -336,40 +250,8 @@ body {
   );
 }
 
-.desk-bar-size-1 {
-  height: calc(var(--z-inset) * 1.625);
-}
-
-.desk-bar-size-2 {
-  height: calc(var(--z-inset) * 2.375);
-}
-
-.desk-bar-size-3 {
-  height: calc(var(--z-inset) * 1.125);
-}
-
-.desk-bar-size-4 {
-  height: calc(var(--z-inset) * 3.25);
-}
-
-.desk-bar-size-5 {
-  height: calc(var(--z-inset) * 2.25);
-}
-
-.desk-bar-size-6 {
-  height: calc(var(--z-inset) * 2.625);
-}
-
-.desk-bar-size-7 {
-  height: calc(var(--z-inset) * 4);
-}
-
 .desk-prompt-card {
   margin-top: var(--z-inset);
-}
-
-.desk-prompt-actions {
-  margin-top: var(--desk-block-gap-md);
 }
 
 .desk-inline-gap {
@@ -381,21 +263,6 @@ body {
   margin-top: var(--z-inset-sm);
 }
 
-.desk-debug-panel {
-  margin-top: var(--z-inset-sm);
-  border: var(--z-border-width) solid var(--z-color-border-glass);
-  border-radius: var(--z-border-radius);
-  padding: var(--z-inset-sm);
-  background: var(--desk-container-bg);
-}
-
-.desk-debug-list {
-  margin-top: var(--z-inset-sm);
-  max-height: calc(var(--z-inset) * 10);
-  overflow: auto;
-  display: grid;
-  gap: var(--z-inset-sm);
-}
 
 .desk-settings-shell {
   width: min(100%, calc(var(--z-inset) * 68));
@@ -471,11 +338,6 @@ body {
   justify-content: flex-end;
 }
 
-.desk-workflow-settings-shell,
-.desk-workflow-studio-shell {
-  max-width: none;
-}
-
 .desk-workflow-editor-shell {
   width: 100%;
   min-height: 100%;
@@ -484,111 +346,12 @@ body {
   gap: var(--z-inset);
 }
 
-.desk-workflow-editor-layout {
-  width: 100%;
-  flex: 1 1 auto;
-  display: grid;
-  grid-template-columns: minmax(0, var(--desk-workflow-sidebar-width)) minmax(0, 1fr);
-  gap: var(--z-inset);
-  min-height: 0;
-  align-items: stretch;
-}
-
 .desk-workflow-editor-main {
   width: 100%;
   flex: 1 1 auto;
   min-height: 0;
 }
 
-.desk-workflow-editor-sidebar {
-  width: 100%;
-  border: var(--z-border-width) solid var(--desk-workflow-card-border);
-  border-radius: var(--z-border-radius-lg);
-  box-shadow: var(--z-shadow);
-  min-height: var(--desk-workflow-canvas-height);
-  padding: var(--z-inset);
-  background: var(--desk-container-bg);
-  overflow: hidden;
-}
-
-.desk-workflow-editor-sidebar-header {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--z-inset-sm);
-  padding-bottom: var(--z-inset-sm);
-  border-bottom: var(--z-border-width) solid var(--z-color-border-glass);
-}
-
-.desk-workflow-editor-sidebar-list {
-  width: 100%;
-  display: grid;
-  gap: var(--z-inset-sm);
-  align-content: start;
-  max-height: 100%;
-  overflow: auto;
-  min-width: 0;
-}
-
-.desk-workflow-editor-sidebar-item {
-  width: 100%;
-  border-radius: var(--z-border-radius-lg);
-  background: var(--desk-container-bg);
-  padding: var(--z-inset-sm);
-  color: var(--z-color-font);
-  display: flex;
-  align-items: center;
-  transition:
-    border-color var(--z-duration-fast-4),
-    transform var(--z-duration-fast-4);
-}
-
-.desk-workflow-editor-sidebar-item:hover {
-  border-color: color-mix(in srgb, var(--z-color-primary) 62%, var(--z-color-border-glass));
-  transform: translateY(calc(var(--z-border-width) * -1));
-}
-
-.desk-workflow-editor-sidebar-item.is-active {
-  border-color: var(--z-color-border-brand);
-}
-
-.desk-workflow-editor-sidebar-item-row {
-  width: 100%;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--z-inset-xs);
-}
-
-.desk-workflow-editor-sidebar-item-main-trigger {
-  appearance: none;
-  width: 100%;
-  flex: 1 1 auto;
-  border: none;
-  background: transparent;
-  padding: 0;
-  text-align: left;
-  color: inherit;
-  min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  cursor: pointer;
-}
-
-.desk-workflow-editor-sidebar-item-title {
-  width: 100%;
-  min-width: 0;
-  color: var(--z-color-font);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.desk-workflow-editor-sidebar-item-title.is-active {
-  color: var(--z-color-primary);
-}
 
 .desk-workflow-editor-stage {
   min-height: 0;
@@ -654,240 +417,6 @@ body {
   background: var(--desk-container-bg);
 }
 
-.desk-workflow-editor-floating-actions {
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
-.desk-workflow-list-card {
-  width: min(100%, var(--desk-workflow-shell-width));
-  border: var(--z-border-width) solid var(--desk-workflow-card-border);
-  border-radius: var(--z-border-radius-lg);
-  background: var(--desk-container-bg);
-  box-shadow: var(--z-shadow);
-  padding: var(--desk-workflow-card-padding);
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: var(--z-inset-sm);
-  margin: 0 auto;
-}
-
-.desk-workflow-list-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--z-inset-sm);
-  padding-bottom: var(--z-inset-xs);
-  border-bottom: var(--z-border-width) solid var(--z-color-border-glass);
-}
-
-.desk-workflow-list {
-  display: grid;
-  gap: var(--z-inset-sm);
-}
-
-.desk-workflow-list-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--z-inset-sm);
-  border: var(--z-border-width) solid var(--z-color-border-glass);
-  border-radius: var(--z-border-radius);
-  background: var(--desk-container-bg);
-  padding: var(--z-inset-sm);
-}
-
-.desk-workflow-list-item-main {
-  min-width: 0;
-  display: grid;
-  gap: var(--z-inset-xs);
-}
-
-.desk-workflow-list-item-actions {
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
-.desk-workflow-hero-card,
-.desk-workflow-action-card,
-.desk-workflow-detail-card,
-.desk-workflow-studio-overview-card,
-.desk-workflow-canvas-card,
-.desk-workflow-inspector-card {
-  border: var(--z-border-width) solid var(--desk-workflow-card-border);
-  background: var(--desk-container-bg);
-  box-shadow: var(--z-shadow);
-}
-
-.desk-workflow-hero-card {
-  padding: var(--desk-workflow-card-padding);
-  background:
-    linear-gradient(
-      135deg,
-      color-mix(in srgb, var(--z-color-primary) 16%, transparent) 0%,
-      transparent 62%
-    ),
-    var(--desk-container-bg);
-}
-
-.desk-workflow-hero-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
-  gap: var(--z-inset);
-}
-
-.desk-workflow-hero-main {
-  display: grid;
-  gap: var(--desk-workflow-card-gap);
-  align-content: flex-start;
-}
-
-.desk-workflow-hero-desc {
-  color: var(--desk-workflow-muted-text);
-}
-
-.desk-workflow-hero-select {
-  width: min(100%, calc(var(--z-inset) * 30));
-  max-width: 100%;
-}
-
-.desk-workflow-hero-side {
-  border: var(--z-border-width) solid color-mix(in srgb, var(--z-color-primary) 30%, var(--z-color-border-glass));
-  border-radius: var(--z-border-radius-lg);
-  padding: var(--z-inset-sm);
-  background: var(--desk-container-bg);
-  display: grid;
-  gap: var(--z-inset-sm);
-}
-
-.desk-workflow-summary-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(var(--desk-workflow-summary-min-width), 1fr));
-  gap: var(--z-inset-sm);
-}
-
-.desk-workflow-summary-item {
-  border: var(--z-border-width) solid var(--z-color-border-glass);
-  border-radius: var(--z-border-radius);
-  padding: var(--z-inset-sm);
-  background: var(--desk-container-bg);
-  display: grid;
-  gap: var(--z-inset-xs);
-}
-
-.desk-workflow-action-card {
-  padding: var(--z-inset-sm);
-}
-
-.desk-workflow-action-row {
-  flex-wrap: wrap;
-}
-
-.desk-workflow-detail-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--z-inset);
-}
-
-.desk-workflow-detail-card {
-  padding: var(--z-inset-sm);
-  display: grid;
-  gap: var(--z-inset-sm);
-  align-content: flex-start;
-}
-
-.desk-workflow-detail-guide-card {
-  background:
-    linear-gradient(
-      160deg,
-      color-mix(in srgb, var(--z-color-success) 10%, transparent) 0%,
-      transparent 60%
-    ),
-    var(--desk-container-bg);
-}
-
-.desk-workflow-detail-list {
-  display: grid;
-  gap: var(--z-inset-xs);
-  color: var(--desk-workflow-muted-text);
-}
-
-.desk-workflow-sub-panel {
-  background: var(--desk-container-bg);
-}
-
-.desk-workflow-studio-overview-card {
-  padding: var(--desk-workflow-card-padding);
-}
-
-.desk-workflow-studio-overview-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
-  gap: var(--z-inset);
-}
-
-.desk-workflow-studio-overview-main {
-  display: grid;
-  gap: var(--z-inset-sm);
-}
-
-.desk-workflow-studio-meta-card {
-  border: var(--z-border-width) solid color-mix(in srgb, var(--z-color-primary) 28%, var(--z-color-border-glass));
-  border-radius: var(--z-border-radius-lg);
-  padding: var(--z-inset-sm);
-  background: var(--desk-container-bg);
-  display: grid;
-  gap: var(--z-inset-sm);
-  align-content: flex-start;
-}
-
-.desk-workflow-toolbar-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--z-inset-sm);
-}
-
-.desk-workflow-studio-main {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--desk-workflow-inspector-width);
-  gap: var(--z-inset);
-  min-height: 0;
-}
-
-.desk-workflow-canvas-card {
-  padding: var(--desk-workflow-card-padding);
-  display: grid;
-  gap: var(--z-inset-sm);
-}
-
-.desk-workflow-canvas-toolbar {
-  border: var(--z-border-width) solid var(--z-color-border-glass);
-  border-radius: var(--z-border-radius);
-  background: var(--desk-container-bg);
-  padding: var(--z-inset-sm);
-  display: grid;
-  gap: var(--z-inset-xs);
-}
-
-.desk-workflow-canvas-toolbar-row {
-  min-height: var(--desk-workflow-toolbar-min-height);
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--z-inset-sm);
-}
-
-.desk-workflow-canvas-toolbar-note {
-  color: var(--desk-workflow-muted-text);
-}
-
-.desk-workflow-inspector-card {
-  padding: var(--desk-workflow-card-padding);
-  display: grid;
-  align-content: flex-start;
-  gap: var(--z-inset-sm);
-}
 
 .desk-workflow-inspector-header {
   display: flex;
@@ -971,11 +500,6 @@ body {
   gap: var(--z-inset-sm);
 }
 
-.desk-settings-select {
-  width: min(100%, var(--desk-control-max-width));
-  min-width: var(--desk-control-min-width);
-}
-
 .desk-theme-group {
   flex-wrap: wrap;
   justify-content: flex-end;
@@ -984,12 +508,26 @@ body {
 .desk-session-content {
   height: 100%;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.desk-session-head-wrap {
+  width: 100%;
+  min-height: 0;
+  position: sticky;
+  top: calc(var(--z-inset) * -0.5);
+  z-index: 3;
+  padding: var(--z-inset-xs) 0;
+  border-bottom: var(--z-border-width) solid var(--z-color-border-glass);
+  background: color-mix(in srgb, var(--desk-main-bg) 94%, transparent);
+  backdrop-filter: blur(var(--z-inset-sm));
 }
 
 .desk-session-shell {
   width: min(100%, calc(var(--z-inset) * 68));
   margin: 0 auto;
-  height: 100%;
+  flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -997,18 +535,42 @@ body {
 }
 
 .desk-session-head {
-  display: grid;
-  gap: var(--z-inset-sm);
-  position: sticky;
-  top: calc(var(--z-inset) * -0.5);
-  z-index: 2;
-  padding: var(--z-inset-xs) 0;
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--desk-main-bg) 98%, transparent) 0%,
-    color-mix(in srgb, var(--desk-main-bg) 72%, transparent) 100%
-  );
-  backdrop-filter: blur(var(--z-inset-sm));
+  width: 100%;
+  min-height: 0;
+}
+
+.desk-session-head-bar {
+  min-height: calc(var(--z-inset) * 2.25);
+  width: 100%;
+}
+
+.desk-session-head-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.desk-session-head-extra {
+  flex-shrink: 0;
+}
+
+.desk-session-head-title {
+  min-width: 0;
+}
+
+.desk-session-head-parent-hint {
+  color: color-mix(in srgb, var(--z-color-font) 64%, var(--z-color-border-glass));
+  white-space: nowrap;
+}
+
+.desk-session-head-more-btn {
+  min-width: calc(var(--z-inset) * 1.5);
+  min-height: calc(var(--z-inset) * 1.5);
+  padding: 0;
+}
+
+.desk-session-head-updated {
+  flex-shrink: 0;
+  color: color-mix(in srgb, var(--z-color-font) 66%, var(--z-color-border-glass));
 }
 
 .desk-session-thread-wrap {
@@ -1214,6 +776,7 @@ body {
 .desk-msg {
   width: min(100%, var(--desk-chat-bubble-max-width));
   align-self: flex-start;
+  border-radius: var(--z-border-radius-xl) !important;
 }
 
 .desk-msg.assistant {
@@ -1328,7 +891,6 @@ body {
 }
 
 .desk-chat-markdown {
-  margin-top: var(--z-inset-sm);
   color: var(--z-color-font);
   display: grid;
   gap: var(--z-inset-sm);
@@ -1414,12 +976,6 @@ body {
   max-height: calc(var(--z-inset) * 26);
 }
 
-.desk-model-step-list {
-  margin-top: var(--z-inset-sm);
-  display: grid;
-  gap: calc(var(--z-inset-sm) * 0.7);
-}
-
 .desk-feedback-state {
   margin-bottom: var(--z-inset-sm);
   border: var(--z-border-width) solid var(--z-color-border-glass);
@@ -1461,12 +1017,6 @@ body {
   color: var(--z-color-danger);
 }
 
-.desk-settings-node-editor-actions {
-  margin-top: var(--desk-block-gap-md);
-  display: flex;
-  gap: var(--z-inset-sm);
-}
-
 .desk-empty-state {
   padding: var(--z-inset);
   display: grid;
@@ -1477,13 +1027,8 @@ body {
   color: var(--z-color-primary);
 }
 
-.desk-sidebar-spacer {
-  flex: 1;
-}
-
 .desk-main,
 .desk-session-thread-wrap,
-.desk-debug-list,
 .desk-dev-debug-list {
   scrollbar-color: color-mix(in srgb, var(--z-color-primary) 40%, var(--z-color-border-glass))
     color-mix(in srgb, var(--z-color-use-bg) 60%, transparent);
@@ -1492,7 +1037,6 @@ body {
 
 .desk-main::-webkit-scrollbar,
 .desk-session-thread-wrap::-webkit-scrollbar,
-.desk-debug-list::-webkit-scrollbar,
 .desk-dev-debug-list::-webkit-scrollbar {
   width: var(--desk-scrollbar-size);
   height: var(--desk-scrollbar-size);
@@ -1500,7 +1044,6 @@ body {
 
 .desk-main::-webkit-scrollbar-thumb,
 .desk-session-thread-wrap::-webkit-scrollbar-thumb,
-.desk-debug-list::-webkit-scrollbar-thumb,
 .desk-dev-debug-list::-webkit-scrollbar-thumb {
   border-radius: var(--z-border-radius-sm);
   background: color-mix(in srgb, var(--z-color-primary) 45%, var(--z-color-border-glass));
@@ -1508,7 +1051,6 @@ body {
 
 .desk-main::-webkit-scrollbar-track,
 .desk-session-thread-wrap::-webkit-scrollbar-track,
-.desk-debug-list::-webkit-scrollbar-track,
 .desk-dev-debug-list::-webkit-scrollbar-track {
   border-radius: var(--z-border-radius-sm);
   background: color-mix(in srgb, var(--z-color-use-bg) 65%, transparent);
@@ -1552,11 +1094,6 @@ body {
     justify-content: flex-start;
   }
 
-  .desk-settings-select {
-    width: 100%;
-    min-width: 0;
-  }
-
   .desk-page-header {
     flex-direction: column;
     align-items: flex-start;
@@ -1566,35 +1103,10 @@ body {
     width: 100%;
   }
 
-  .desk-workflow-hero-grid,
-  .desk-workflow-detail-grid,
-  .desk-workflow-studio-overview-grid,
-  .desk-workflow-studio-main,
-  .desk-workflow-editor-layout {
-    grid-template-columns: 1fr;
-  }
-
-  .desk-workflow-hero-select {
-    width: 100%;
-  }
-
-  .desk-workflow-list-item {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .desk-workflow-list-item-actions {
-    width: 100%;
-    justify-content: flex-start;
-  }
-
   .desk-workflow-reactflow-wrap {
     height: calc(var(--z-inset) * 28);
   }
 
-  .desk-workflow-editor-sidebar {
-    min-height: auto;
-  }
 }
 
 @media (max-width: var(--desk-breakpoint-md)) {
@@ -1610,9 +1122,6 @@ body {
     padding-right: 0;
   }
 
-  .desk-workflow-summary-grid {
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (max-width: var(--desk-breakpoint-sm)) {

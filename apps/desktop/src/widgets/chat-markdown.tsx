@@ -211,7 +211,7 @@ function renderTextBlock(text: string, blockIndex: number): ReactNode {
   }
 
   return (
-    <AriContainer className="desk-md-text-block" key={`text-${blockIndex}`}>
+    <AriContainer className="desk-md-text-block" key={`text-${blockIndex}`} padding={0}>
       {nodes}
     </AriContainer>
   );
@@ -224,7 +224,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 }: ChatMarkdownProps) {
   if (plainText) {
     return (
-      <AriContainer className={`desk-chat-markdown ${className || ""}`.trim()}>
+      <AriContainer className={`desk-chat-markdown ${className || ""}`.trim()} padding={0}>
         <pre className="desk-chat-plain-text">{content}</pre>
       </AriContainer>
     );
@@ -233,11 +233,11 @@ export const ChatMarkdown = memo(function ChatMarkdown({
   const blocks = splitMarkdownBlocks(content || "");
 
   return (
-    <AriContainer className={`desk-chat-markdown ${className || ""}`.trim()}>
+    <AriContainer className={`desk-chat-markdown ${className || ""}`.trim()} padding={0}>
       {blocks.map((block, blockIndex) => {
         if (block.type === "code") {
           return (
-            <AriContainer key={`code-${blockIndex}`} className="desk-md-code-wrap">
+            <AriContainer key={`code-${blockIndex}`} className="desk-md-code-wrap" padding={0}>
               <AriCode
                 language={block.language}
                 value={block.code}

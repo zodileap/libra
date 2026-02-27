@@ -1,8 +1,8 @@
 import { lazy, type ComponentType } from "react";
 import { useParams } from "react-router-dom";
-import { AgentPage } from "../../widgets/agent-page";
 import { SessionPage } from "../../widgets/session/page";
 import { CODE_SESSION_UI_CONFIG } from "../../widgets/session/config";
+import { CodeAgentPage } from "./pages/code-agent-page";
 import { CodeAgentSettingsPage } from "./pages/code-agent-settings-page";
 import { CodeWorkflowPage } from "./pages/code-workflow-page";
 
@@ -13,11 +13,6 @@ export const CODE_AGENT_ROOT_PATH = "/agents/code" as const;
 export const CODE_AGENT_SETTINGS_PATH = "/agents/code/settings" as const;
 export const CODE_WORKFLOW_PATH = "/agents/code/workflows" as const;
 
-// 描述：代码智能体入口页桥接组件，避免路由文件对页面包装器产生额外解析依赖。
-function CodeAgentRoutePage(props: any) {
-  return <AgentPage agentKey="code" {...props} />;
-}
-
 // 描述：代码智能体会话页桥接组件，统一从路由参数读取 sessionId 并透传通用会话能力。
 function CodeSessionRoutePage(props: any) {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -26,7 +21,7 @@ function CodeSessionRoutePage(props: any) {
 
 // 描述：代码智能体入口页懒加载。
 export const CodeAgentPageLazy = lazy(async () => {
-  return { default: CodeAgentRoutePage as ComponentType<any> };
+  return { default: CodeAgentPage as ComponentType<any> };
 });
 
 // 描述：代码智能体会话页懒加载。

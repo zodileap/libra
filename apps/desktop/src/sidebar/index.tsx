@@ -5,6 +5,7 @@ import {
   AriContainer,
   AriContextMenu,
   AriFlex,
+  AriIcon,
   AriInput,
   AriMessage,
   AriMenu,
@@ -36,7 +37,7 @@ import {
   deleteModelWorkflow,
   listCodeWorkflows,
   listModelWorkflows,
-} from "@/shell/workflow";
+} from "@/widgets/workflow";
 import {
   AI_KEY_SIDEBAR_CONTENT,
   resolveHomeSidebarAgentItems,
@@ -664,9 +665,9 @@ function AgentSidebar({
           setHoveredContextMenuActionKey((current) => (current === params.key ? "" : current));
         }}
       >
-        <AriTypography
-          variant="caption"
-          value={(params.forceFill || hoveredContextMenuActionKey === params.key) ? "●" : "○"}
+        <AriIcon
+          className="desk-context-menu-item-icon"
+          name={(params.forceFill || hoveredContextMenuActionKey === params.key) ? params.fillIcon : params.icon}
         />
         <AriTypography variant="body" value={params.label} />
       </AriFlex>

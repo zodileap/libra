@@ -6,6 +6,7 @@ import {
   AriFlex,
   AriInput,
   AriMenu,
+  AriModal,
   AriTooltip,
   AriTypography,
 } from "aries_react";
@@ -14,13 +15,20 @@ import { listen } from "@tauri-apps/api/event";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   AGENT_SESSIONS,
+  getCodeWorkspaceGroupById,
+  getCodeWorkspaceIdBySessionId,
   getModelProjectById,
   getSessionMessages,
   resolveAgentSessionTitle,
   SESSION_TITLE_UPDATED_EVENT,
   upsertModelProject,
   upsertSessionMessages,
+  getAgentSessionMetaSnapshot,
+  removeAgentSession,
+  renameAgentSession,
+  togglePinnedAgentSession,
 } from "../../shared/data";
+import { updateRuntimeSessionStatus } from "../../shared/services/backend-api";
 import {
   DEFAULT_BLENDER_BRIDGE_ADDR,
   normalizeInvokeError,
@@ -553,7 +561,7 @@ export function SessionPage({
   agentKey,
   sessionId,
   sessionUiConfig,
-  currentUser: _currentUser,
+  currentUser,
   modelMcpCapabilities,
   blenderBridgeRuntime,
   ensureBlenderBridge,
@@ -575,6 +583,9 @@ export function SessionPage({
   const [debugFlowRecords, setDebugFlowRecords] = useState<SessionDebugFlowRecord[]>([]);
   const [pendingDangerousPrompt, setPendingDangerousPrompt] = useState("");
   const [pendingDangerousToken, setPendingDangerousToken] = useState("");
+  const [renameModalVisible, setRenameModalVisible] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const [sessionMenuVersion, setSessionMenuVersion] = useState(0);
   const [messagesHydrated, setMessagesHydrated] = useState(false);
   const [hydratedSessionKey, setHydratedSessionKey] = useState("");
   const compactActionSlotStatus = useMemo(() => buildCompactActionSlotStatus(status), [status]);
@@ -586,6 +597,48 @@ export function SessionPage({
   const modelProject = sessionId ? getModelProjectById(sessionId) : null;
   const session = AGENT_SESSIONS.find((item) => item.id === sessionId);
   const title = sessionTitle || resolveAgentSessionTitle(normalizedAgentKey, sessionId);
+  const workspaceIdFromRouteState = String(routeState.workspaceId || "").trim();
+  const workspaceIdFromQuery = useMemo(
+    () => new URLSearchParams(location.search).get("workspaceId")?.trim() || "",
+    [location.search],
+  );
+  const workspaceIdFromBinding = useMemo(
+    () => (normalizedAgentKey === "code" ? getCodeWorkspaceIdBySessionId(sessionId) : ""),
+    [normalizedAgentKey, sessionId],
+  );
+  const codeWorkspaceGroupName = useMemo(() => {
+    if (normalizedAgentKey !== "code") {
+      return "";
+    }
+    const workspaceId = workspaceIdFromRouteState || workspaceIdFromQuery || workspaceIdFromBinding;
+    if (!workspaceId) {
+      return "";
+    }
+    return getCodeWorkspaceGroupById(workspaceId)?.name?.trim() || "";
+  }, [normalizedAgentKey, workspaceIdFromBinding, workspaceIdFromQuery, workspaceIdFromRouteState]);
+  // 描述：当会话处于二级目录（如 code workspace）时，在标题后展示一级菜单名（纯名字）。
+  const sessionHeadParentHint = codeWorkspaceGroupName;
+  const isSessionPinned = useMemo(
+    () => getAgentSessionMetaSnapshot().pinnedIds.includes(sessionId),
+    [sessionId, sessionMenuVersion],
+  );
+  const sessionHeadMenuItems = useMemo(
+    () => [
+      {
+        key: "pin",
+        label: isSessionPinned ? "取消固定会话" : "固定会话",
+      },
+      {
+        key: "rename",
+        label: "重命名会话",
+      },
+      {
+        key: "delete",
+        label: "删除会话",
+      },
+    ],
+    [isSessionPinned],
+  );
   const updatedAt = modelProject?.updatedAt || session?.updatedAt || "-";
   const [messages, setMessages] = useState<MessageItem[]>([]);
   const [assistantRunMetaMap, setAssistantRunMetaMap] = useState<Record<string, AssistantRunMeta>>({});
@@ -1805,14 +1858,146 @@ export function SessionPage({
     }
   };
 
+  // 描述：打开会话重命名弹窗，默认文案使用当前标题。
+  const handleOpenRenameSessionModal = () => {
+    setRenameValue(title || "");
+    setRenameModalVisible(true);
+  };
+
+  // 描述：确认会话重命名，仅更新本地会话元信息并刷新当前页标题。
+  const handleConfirmRenameSession = () => {
+    const nextTitle = renameValue.trim();
+    if (!nextTitle) {
+      return;
+    }
+    renameAgentSession(sessionId, nextTitle);
+    setSessionTitle(nextTitle);
+    setRenameModalVisible(false);
+    setRenameValue("");
+  };
+
+  // 描述：删除当前会话，行为与侧边栏右键菜单一致：先本地移除，再异步更新后端状态。
+  const handleDeleteSessionByHeaderMenu = async () => {
+    if (!sessionId) {
+      return;
+    }
+    const deletingWorkspaceId = normalizedAgentKey === "code"
+      ? workspaceIdFromRouteState || workspaceIdFromQuery || workspaceIdFromBinding
+      : "";
+    removeAgentSession(normalizedAgentKey, sessionId);
+    if (normalizedAgentKey === "code") {
+      const search = deletingWorkspaceId ? `?workspaceId=${encodeURIComponent(deletingWorkspaceId)}` : "";
+      navigate(`/agents/code${search}`);
+    } else {
+      navigate("/agents/model");
+    }
+    if (!currentUser?.id) {
+      return;
+    }
+    try {
+      await updateRuntimeSessionStatus(currentUser.id, sessionId, 0);
+    } catch {
+      // 描述：后端删除失败时保留本地删除结果，避免会话在界面上反复出现。
+    }
+  };
+
+  // 描述：处理 Header 更多菜单动作，复用侧边栏右键会话菜单同款能力。
+  const handleSelectSessionHeadMenu = (key: string) => {
+    if (key === "pin") {
+      togglePinnedAgentSession(sessionId);
+      setSessionMenuVersion((current) => current + 1);
+      return;
+    }
+    if (key === "rename") {
+      handleOpenRenameSessionModal();
+      return;
+    }
+    if (key === "delete") {
+      void handleDeleteSessionByHeaderMenu();
+    }
+  };
+
   return (
     <AriContainer className="desk-content desk-session-content" height="100%">
+      <AriContainer className="desk-session-head-wrap" padding={0}>
+        <AriFlex
+          className="desk-session-head-bar"
+          align="center"
+          justify="space-between"
+        >
+          <AriFlex className="desk-session-head-main" align="center" space={8}>
+            <AriTypography
+              className="desk-session-head-title"
+              variant="h4"
+              value={title}
+            />
+            {sessionHeadParentHint ? (
+              <AriTypography
+                className="desk-session-head-parent-hint"
+                variant="caption"
+                value={sessionHeadParentHint}
+              />
+            ) : null}
+            <AriTooltip
+              position="bottom"
+              content={(
+                <AriMenu
+                  items={sessionHeadMenuItems}
+                  onSelect={handleSelectSessionHeadMenu}
+                />
+              )}
+            >
+              <AriButton
+                type="text"
+                className="desk-session-head-more-btn"
+                icon="more_horiz"
+                aria-label="更多操作"
+              />
+            </AriTooltip>
+          </AriFlex>
+          <AriFlex className="desk-session-head-extra" align="center" space={8}>
+            <AriTypography
+              className="desk-session-head-updated"
+              variant="caption"
+              value={`更新：${updatedAt}`}
+            />
+          </AriFlex>
+        </AriFlex>
+      </AriContainer>
+      <AriModal
+        visible={renameModalVisible}
+        title="重命名会话"
+        onClose={() => {
+          setRenameModalVisible(false);
+          setRenameValue("");
+        }}
+        footer={(
+          <AriFlex justify="flex-end" align="center" space={8}>
+            <AriButton
+              type="default"
+              label="取消"
+              onClick={() => {
+                setRenameModalVisible(false);
+                setRenameValue("");
+              }}
+            />
+            <AriButton
+              type="default"
+              color="brand"
+              label="确定"
+              onClick={handleConfirmRenameSession}
+            />
+          </AriFlex>
+        )}
+      >
+        <AriInput
+          value={renameValue}
+          onChange={setRenameValue}
+          placeholder="请输入会话名称"
+          maxLength={60}
+        />
+      </AriModal>
       <AriContainer className="desk-session-shell">
-        <AriContainer className="desk-session-head">
-          <AriTypography variant="h1" value={title} />
-          <AriTypography variant="caption" value={`最近更新：${updatedAt}`} />
-        </AriContainer>
-
         <AriContainer className="desk-session-thread-wrap">
           <AriContainer className="desk-thread">
             {messages.length === 0 ? (
@@ -1850,18 +2035,15 @@ export function SessionPage({
                   key={message.id || `message-${index}`}
                   className={`desk-msg ${roleClass}`}
                 >
-                  <AriTypography
-                    variant="caption"
-                    value={message.role === "user" ? "你" : "智能体"}
-                  />
                   {useRunLayout && runMeta ? (
-                    <AriContainer className="desk-run-flow">
+                    <AriContainer className="desk-run-flow" padding={0}>
                       {runMeta.status === "running" ? (
-                        <AriContainer className="desk-run-segments">
+                        <AriContainer className="desk-run-segments" padding={0}>
                           {runMeta.segments.map((segment) => (
                             <AriContainer
                               key={segment.key}
                               className="desk-run-segment"
+                              padding={0}
                             >
                               <AriTypography
                                 className="desk-run-intro"
@@ -1899,11 +2081,12 @@ export function SessionPage({
                             <span className="desk-run-divider-line" />
                           </button>
                           {!runMeta.collapsed ? (
-                            <AriContainer className="desk-run-segments desk-run-segments-collapsed">
+                            <AriContainer className="desk-run-segments desk-run-segments-collapsed" padding={0}>
                               {runMeta.segments.map((segment) => (
                                 <AriContainer
                                   key={`collapsed-${segment.key}`}
                                   className="desk-run-segment"
+                                  padding={0}
                                 >
                                   <AriTypography
                                     className="desk-run-intro"
@@ -1919,7 +2102,7 @@ export function SessionPage({
                               ))}
                             </AriContainer>
                           ) : null}
-                          <AriContainer className="desk-run-summary">
+                          <AriContainer className="desk-run-summary" padding={0}>
                             <ChatMarkdown
                               content={runMeta.summary || message.text}
                             />

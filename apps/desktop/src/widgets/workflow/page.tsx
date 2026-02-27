@@ -26,15 +26,15 @@ import {
   listModelWorkflows,
   saveCodeWorkflow,
   saveModelWorkflow,
-} from "../shared/workflow";
+} from "../../shared/workflow";
 import type {
   CodeWorkflowDefinition,
   WorkflowDefinition,
   WorkflowGraph,
   WorkflowGraphNode,
-} from "../shared/workflow";
-import { DeskPageHeader } from "./settings-primitives";
-import type { AgentKey } from "../shared/types";
+} from "../../shared/workflow";
+import type { AgentKey } from "../../shared/types";
+import { DeskPageHeader } from "../settings-primitives";
 
 interface CanvasNodeData {
   label: string;
