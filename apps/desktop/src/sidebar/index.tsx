@@ -569,6 +569,7 @@ function AgentSidebar({
         <AriButton
           size="sm"
           type="text"
+          ghost
           color={pendingDeleteSessionId === item.id || deletingSessionId === item.id ? "danger" : "default"}
           icon={
             pendingDeleteSessionId === item.id || deletingSessionId === item.id
@@ -631,6 +632,7 @@ function AgentSidebar({
           <AriButton
             size="sm"
             type="text"
+            ghost
             color="danger"
             icon="delete"
             onClick={(event: MouseEvent<HTMLElement>) => {
@@ -925,7 +927,7 @@ function AgentSidebar({
               }}
             />
             <AriButton
-              color="primary"
+              color="brand"
               label="确定"
               onClick={handleConfirmRename}
             />
@@ -1061,12 +1063,18 @@ function WorkflowsSidebar({
       return;
     }
 
+    const targetWorkflow = workflows.find((item) => item.id === workflowId);
     const deleted = isModelAgent
       ? deleteModelWorkflow(workflowId)
       : deleteCodeWorkflow(workflowId);
     if (!deleted) {
+      const warningContent = !targetWorkflow
+        ? "工作流不存在或已删除，请刷新后重试。"
+        : targetWorkflow.shared
+          ? "默认工作流不可删除，请先复制后再管理。"
+          : "工作流删除失败，请稍后重试。";
       AriMessage.warning({
-        content: "默认工作流不可删除，请先复制后再管理。",
+        content: warningContent,
         duration: 3000,
         showClose: true,
       });
@@ -1092,7 +1100,8 @@ function WorkflowsSidebar({
         actions: (
           <AriButton
             size="sm"
-            type="text"
+            type={pendingDeleteWorkflowId === item.id ? "default" : "text"}
+            ghost={pendingDeleteWorkflowId !== item.id}
             color={pendingDeleteWorkflowId === item.id ? "danger" : "default"}
             icon={
               pendingDeleteWorkflowId === item.id
@@ -1107,6 +1116,7 @@ function WorkflowsSidebar({
             }}
             onMouseLeave={() => {
               setHoveredDeleteWorkflowId((current) => (current === item.id ? "" : current));
+              setPendingDeleteWorkflowId((current) => (current === item.id ? "" : current));
             }}
             onClick={(event: MouseEvent<HTMLElement>) => {
               handleDeleteWorkflow(event, item.id);

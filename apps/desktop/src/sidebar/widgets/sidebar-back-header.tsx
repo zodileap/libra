@@ -14,7 +14,7 @@ interface SidebarBackHeaderProps {
 export function SidebarBackHeader({ onBack, label = "Back", rightAction }: SidebarBackHeaderProps) {
   return (
     <AriFlex justify="space-between" align="center">
-      <AriButton icon="arrow_back_ios" label={label} onClick={onBack} />
+      <AriButton icon="arrow_left_alt" label={label} onClick={onBack} />
       {rightAction || <AriContainer />}
     </AriFlex>
   );
