@@ -43,5 +43,8 @@ test("TestDesktopShouldRenderFloatingHeaderWithDragRegion", () => {
   //   - 样式层应定义悬浮 header 高度，并支持侧边栏折叠布局。
   assert.match(styleSource, /\.desk-app-header \{/);
   assert.match(styleSource, /height:\s*var\(--desk-app-header-height\);/);
+  assert.match(styleSource, /\.desk-app-header-slot,\s*\.desk-app-header-slot \*\s*\{[\s\S]*-webkit-app-region:\s*drag;/);
+  assert.match(styleSource, /\.desk-app-header button,[\s\S]*-webkit-app-region:\s*no-drag;/);
+  assert.doesNotMatch(styleSource, /\.desk-app-header \[role="button"\]/);
   assert.match(styleSource, /\.desk-app\.is-sidebar-collapsed \{/);
 });

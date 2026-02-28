@@ -13,7 +13,7 @@ interface HomePageProps {
 export function HomePage({ availableAgents }: HomePageProps) {
   return (
     <AriContainer className="desk-content" showBorderRadius={false}>
-      <AriFlex vertical align="flex-start" justify="flex-start" space={16}>
+      <AriFlex className="desk-home-hero" vertical align="flex-start" justify="flex-start" space={16}>
         <AriTypography variant="h1" value="欢迎使用 Zodileap Agen" />
         <AriTypography
           variant="body"

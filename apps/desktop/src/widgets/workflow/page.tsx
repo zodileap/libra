@@ -24,6 +24,7 @@ import {
   AriIcon,
   AriInput,
   AriMessage,
+  AriTag,
   AriTypography,
 } from "aries_react";
 import { useSearchParams } from "react-router-dom";
@@ -105,10 +106,14 @@ function resolveThemeInset(): number {
 // Returns:
 //
 //   - 标题与说明字段。
-function parseCanvasNodeData(data: unknown): Pick<WorkflowGraphNode, "title" | "description"> {
+function parseCanvasNodeData(
+  data: unknown,
+): Pick<WorkflowGraphNode, "title" | "description"> {
   const source = (data || {}) as Partial<CanvasNodeData>;
   return {
-    title: String(source.title || source.label || "未命名节点").trim() || "未命名节点",
+    title:
+      String(source.title || source.label || "未命名节点").trim() ||
+      "未命名节点",
     description: String(source.description || "").trim(),
   };
 }
@@ -174,7 +179,9 @@ function resolveNodeRoleIcon(roleLabel: string): string {
 //
 //   - CSS 变量表达的颜色值。
 function resolveWorkflowEdgeColor(isActive: boolean): string {
-  return isActive ? "var(--z-color-border-active)" : "var(--z-color-border-brand)";
+  return isActive
+    ? "var(--z-color-border-active)"
+    : "var(--z-color-border-brand)";
 }
 
 // 描述：
@@ -203,12 +210,15 @@ function buildWorkflowEdgeMarkerEnd(isActive = false) {
 //
 //   - data: 节点业务数据。
 //   - selected: 当前节点是否被选中。
-function WorkflowCanvasFlowNode({ data, selected }: NodeProps<WorkflowCanvasNode>) {
+function WorkflowCanvasFlowNode({
+  data,
+  selected,
+}: NodeProps<WorkflowCanvasNode>) {
   const parsed = parseCanvasNodeData(data);
   const nodeKind = parseNodeKind(parsed.description);
   const roleLabel = resolveNodeRoleLabel(nodeKind);
   const roleIcon = resolveNodeRoleIcon(roleLabel);
-  const contentValue = nodeKind ? `kind=${nodeKind}` : "等待配置节点内容";
+  const contentValue = parsed.description;
   const inset = resolveThemeInset();
 
   return (
@@ -226,30 +236,55 @@ function WorkflowCanvasFlowNode({ data, selected }: NodeProps<WorkflowCanvasNode
         position={Position.Left}
         className="desk-workflow-node-handle"
       />
-      <AriContainer className="desk-workflow-node-body" padding={0}>
-        <AriFlex className="desk-workflow-node-head" align="center" justify="space-between" space={8}>
-          <AriFlex className="desk-workflow-node-head-main" align="center" space={8}>
-            <AriIcon className="desk-workflow-node-head-icon" name={roleIcon} />
+      <AriContainer
+        className="desk-workflow-node-body"
+        padding={0}
+        ghost={true}
+        showBorderRadius={false}
+      >
+        <AriFlex
+          className="desk-workflow-node-head"
+          align="center"
+          justify="space-between"
+          space={8}
+          ghost={false}
+          showBorderRadius={false}
+        >
+          <AriFlex
+            className="desk-workflow-node-head-main"
+            align="center"
+            space={8}
+          >
+            <AriIcon
+              className="desk-workflow-node-head-icon"
+              name={roleIcon}
+              size="sm"
+              color="var(--z-color-text-brand)"
+            />
             <AriTypography
               className="desk-workflow-node-title"
               variant="body"
               value={parsed.title}
             />
           </AriFlex>
-          <AriContainer className="desk-workflow-node-kind-pill" padding={0}>
-            <AriTypography
-              className="desk-workflow-node-kind-pill-text"
-              variant="caption"
-              value={roleLabel}
-            />
-          </AriContainer>
+          <AriTag bordered size="sm" color="var(--z-color-text-brand)">
+            {roleLabel}
+          </AriTag>
         </AriFlex>
-        <AriContainer className="desk-workflow-node-content" padding={0}>
-          <AriTypography
-            className="desk-workflow-node-description"
-            variant="caption"
-            value={contentValue}
-          />
+        <AriContainer
+          className="desk-workflow-node-content"
+          padding={0}
+          bgVariant="ghost"
+                  showBorderRadius={false}
+                  showBorder={false}
+        >
+          {contentValue ? (
+            <AriTypography
+              className="desk-workflow-node-description"
+              variant="caption"
+              value={contentValue}
+            />
+          ) : null}
         </AriContainer>
       </AriContainer>
       <Handle
@@ -319,7 +354,10 @@ function toFlowEdges(graph: WorkflowGraph): Edge[] {
 // Returns:
 //
 //   - 可直接持久化的工作流图结构。
-function toWorkflowGraph(nodes: WorkflowCanvasNode[], edges: Edge[]): WorkflowGraph {
+function toWorkflowGraph(
+  nodes: WorkflowCanvasNode[],
+  edges: Edge[],
+): WorkflowGraph {
   return {
     nodes: nodes.map((node) => {
       const parsed = parseCanvasNodeData(node.data);
@@ -381,22 +419,34 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
   const [selectedNodeId, setSelectedNodeId] = useState("");
   const [selectedEdgeId, setSelectedEdgeId] = useState("");
   const [canvasMode, setCanvasMode] = useState<WorkflowCanvasMode>("select");
-  const [contextTarget, setContextTarget] = useState<WorkflowContextTarget | null>(null);
+  const [contextTarget, setContextTarget] =
+    useState<WorkflowContextTarget | null>(null);
   const reconnectRadius = useMemo(() => resolveThemeInset() * 0.375, []);
   // 描述：
   //
   //   - 绑定画布 DOM 引用，供 AriContextMenu 通过 targetRef 监听原生右键事件。
   const canvasRef = useRef<HTMLDivElement>(null);
 
-  const [nodes, setNodes, onNodesChange] = useNodesState<WorkflowCanvasNode>([]);
+  const [nodes, setNodes, onNodesChange] = useNodesState<WorkflowCanvasNode>(
+    [],
+  );
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
 
-  const modelWorkflows = useMemo(() => listModelWorkflows(), [workflowVersion, preferredWorkflowId]);
-  const codeWorkflows = useMemo(() => listCodeWorkflows(), [workflowVersion, preferredWorkflowId]);
+  const modelWorkflows = useMemo(
+    () => listModelWorkflows(),
+    [workflowVersion, preferredWorkflowId],
+  );
+  const codeWorkflows = useMemo(
+    () => listCodeWorkflows(),
+    [workflowVersion, preferredWorkflowId],
+  );
   const workflows = agentKey === "model" ? modelWorkflows : codeWorkflows;
 
   const selectedWorkflow = useMemo(
-    () => workflows.find((item) => item.id === preferredWorkflowId) || workflows[0] || null,
+    () =>
+      workflows.find((item) => item.id === preferredWorkflowId) ||
+      workflows[0] ||
+      null,
     [preferredWorkflowId, workflows],
   );
 
@@ -477,7 +527,9 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
 
       setEdges((currentEdges) => {
         const exists = currentEdges.some(
-          (edge) => edge.source === connection.source && edge.target === connection.target,
+          (edge) =>
+            edge.source === connection.source &&
+            edge.target === connection.target,
         );
         if (exists) {
           return currentEdges;
@@ -550,7 +602,9 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
     setSelectedEdgeId("");
   };
 
-  const patchSelectedNode = (patch: Partial<Pick<CanvasNodeData, "title" | "description">>) => {
+  const patchSelectedNode = (
+    patch: Partial<Pick<CanvasNodeData, "title" | "description">>,
+  ) => {
     if (!selectedNodeId) {
       return;
     }
@@ -588,7 +642,9 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
     if (!nodeId) {
       return;
     }
-    setNodes((currentNodes) => currentNodes.filter((node) => node.id !== nodeId));
+    setNodes((currentNodes) =>
+      currentNodes.filter((node) => node.id !== nodeId),
+    );
     setEdges((currentEdges) =>
       currentEdges.filter(
         (edge) => edge.source !== nodeId && edge.target !== nodeId,
@@ -613,7 +669,9 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
     if (!edgeId) {
       return;
     }
-    setEdges((currentEdges) => currentEdges.filter((edge) => edge.id !== edgeId));
+    setEdges((currentEdges) =>
+      currentEdges.filter((edge) => edge.id !== edgeId),
+    );
     setSelectedEdgeId("");
   };
 
@@ -661,25 +719,30 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
     });
   };
 
-  const selectedNodeData = selectedNode ? parseCanvasNodeData(selectedNode.data) : null;
+  const selectedNodeData = selectedNode
+    ? parseCanvasNodeData(selectedNode.data)
+    : null;
   const selectedEdge = edges.find((item) => item.id === selectedEdgeId) || null;
   // 描述：
   //
   //   - 仅在右键目标发生变化时更新状态，避免重复 setState 导致渲染链路抖动。
-  const patchContextTarget = useCallback((nextTarget: WorkflowContextTarget | null) => {
-    setContextTarget((currentTarget) => {
-      if (!currentTarget && !nextTarget) {
-        return currentTarget;
-      }
-      if (
-        currentTarget?.type === nextTarget?.type
-        && currentTarget?.id === nextTarget?.id
-      ) {
-        return currentTarget;
-      }
-      return nextTarget;
-    });
-  }, []);
+  const patchContextTarget = useCallback(
+    (nextTarget: WorkflowContextTarget | null) => {
+      setContextTarget((currentTarget) => {
+        if (!currentTarget && !nextTarget) {
+          return currentTarget;
+        }
+        if (
+          currentTarget?.type === nextTarget?.type &&
+          currentTarget?.id === nextTarget?.id
+        ) {
+          return currentTarget;
+        }
+        return nextTarget;
+      });
+    },
+    [],
+  );
   const workflowContextMenuItems = useMemo(
     () => [
       {
@@ -693,7 +756,11 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
   );
 
   const workflowHeaderNode = (
-    <AriContainer className="desk-workflow-head-wrap" padding={0} data-tauri-drag-region>
+    <AriContainer
+      className="desk-workflow-head-wrap"
+      padding={0}
+      data-tauri-drag-region
+    >
       <AriFlex
         className="desk-workflow-head-bar"
         align="center"
@@ -705,7 +772,11 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
           variant="h4"
           value={agentKey === "model" ? "模型工作流编辑器" : "代码工作流编辑器"}
         />
-        <AriFlex className="desk-workflow-head-actions" align="center" space={8}>
+        <AriFlex
+          className="desk-workflow-head-actions"
+          align="center"
+          space={8}
+        >
           <AriButton
             type="text"
             icon="save"
@@ -718,7 +789,11 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
   );
 
   return (
-    <AriContainer className="desk-content" height="100%" showBorderRadius={false}>
+    <AriContainer
+      className="desk-content"
+      height="100%"
+      showBorderRadius={false}
+    >
       {headerSlotElement
         ? createPortal(workflowHeaderNode, headerSlotElement)
         : null}
@@ -728,7 +803,11 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
         padding={0}
         bgColor="bg-tertiary"
       >
-        <AriContainer className="desk-workflow-editor-stage" positionType="relative" height="100%">
+        <AriContainer
+          className="desk-workflow-editor-stage"
+          positionType="relative"
+          height="100%"
+        >
           <AriContextMenu
             targetRef={canvasRef}
             items={workflowContextMenuItems}
@@ -748,72 +827,72 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
             className="desk-workflow-reactflow-wrap desk-workflow-editor-reactflow-wrap"
           >
             <ReactFlow
-                nodes={renderedNodes}
-                edges={renderedEdges}
-                nodeTypes={workflowNodeTypes}
-                fitView
-                proOptions={{ hideAttribution: true }}
-                onNodesChange={onNodesChange}
-                onEdgesChange={onEdgesChange}
-                onConnect={onConnect}
-                onReconnect={onReconnect}
-                reconnectRadius={reconnectRadius}
-                elementsSelectable={canvasMode === "select"}
-                nodesDraggable={canvasMode === "select"}
-                nodesConnectable={canvasMode === "select"}
-                edgesReconnectable={canvasMode === "select"}
-                selectNodesOnDrag={canvasMode === "select"}
-                selectionOnDrag={canvasMode === "select"}
-                panOnDrag={canvasMode === "pan" ? [0] : false}
-                onNodeClick={(_event, node) => {
-                  if (canvasMode !== "select") {
-                    return;
-                  }
-                  setSelectedNodeId(node.id);
-                  setSelectedEdgeId("");
-                }}
-                onEdgeClick={(_event, edge) => {
-                  if (canvasMode !== "select") {
-                    return;
-                  }
-                  setSelectedEdgeId(edge.id);
-                  setSelectedNodeId("");
-                }}
-                onNodeContextMenu={(event, node) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  setSelectedNodeId(node.id);
-                  setSelectedEdgeId("");
-                  patchContextTarget({
-                    type: "node",
-                    id: node.id,
-                  });
-                }}
-                onEdgeContextMenu={(event, edge) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  setSelectedEdgeId(edge.id);
-                  setSelectedNodeId("");
-                  patchContextTarget({
-                    type: "edge",
-                    id: edge.id,
-                  });
-                }}
-                onPaneContextMenu={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  patchContextTarget(null);
-                }}
-                onPaneClick={() => {
-                  setSelectedNodeId("");
-                  setSelectedEdgeId("");
-                  patchContextTarget(null);
-                }}
-                className="desk-workflow-reactflow"
-                defaultEdgeOptions={{
-                  markerEnd: buildWorkflowEdgeMarkerEnd(false),
-                  className: "desk-workflow-flow-edge",
-                }}
+              nodes={renderedNodes}
+              edges={renderedEdges}
+              nodeTypes={workflowNodeTypes}
+              fitView
+              proOptions={{ hideAttribution: true }}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onConnect={onConnect}
+              onReconnect={onReconnect}
+              reconnectRadius={reconnectRadius}
+              elementsSelectable={canvasMode === "select"}
+              nodesDraggable={canvasMode === "select"}
+              nodesConnectable={canvasMode === "select"}
+              edgesReconnectable={canvasMode === "select"}
+              selectNodesOnDrag={canvasMode === "select"}
+              selectionOnDrag={canvasMode === "select"}
+              panOnDrag={canvasMode === "pan" ? [0] : false}
+              onNodeClick={(_event, node) => {
+                if (canvasMode !== "select") {
+                  return;
+                }
+                setSelectedNodeId(node.id);
+                setSelectedEdgeId("");
+              }}
+              onEdgeClick={(_event, edge) => {
+                if (canvasMode !== "select") {
+                  return;
+                }
+                setSelectedEdgeId(edge.id);
+                setSelectedNodeId("");
+              }}
+              onNodeContextMenu={(event, node) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setSelectedNodeId(node.id);
+                setSelectedEdgeId("");
+                patchContextTarget({
+                  type: "node",
+                  id: node.id,
+                });
+              }}
+              onEdgeContextMenu={(event, edge) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setSelectedEdgeId(edge.id);
+                setSelectedNodeId("");
+                patchContextTarget({
+                  type: "edge",
+                  id: edge.id,
+                });
+              }}
+              onPaneContextMenu={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                patchContextTarget(null);
+              }}
+              onPaneClick={() => {
+                setSelectedNodeId("");
+                setSelectedEdgeId("");
+                patchContextTarget(null);
+              }}
+              className="desk-workflow-reactflow"
+              defaultEdgeOptions={{
+                markerEnd: buildWorkflowEdgeMarkerEnd(false),
+                className: "desk-workflow-flow-edge",
+              }}
             >
               <Background
                 variant="dots"
@@ -835,97 +914,111 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
               justify="center"
               space={8}
             >
-              <AriButton
-                icon="arrow_selector_tool"
-                color={canvasMode === "select" ? "primary" : "default"}
-                type={canvasMode === "select" ? "default" : "text"}
-                onClick={() => {
-                  setCanvasMode("select");
-                }}
-              />
-              <AriButton
-                icon="pan_tool_alt"
-                color={canvasMode === "pan" ? "primary" : "default"}
-                type={canvasMode === "pan" ? "default" : "text"}
-                onClick={() => {
-                  setCanvasMode("pan");
-                }}
-              />
-              <AriDivider type="vertical" className="desk-workflow-editor-canvas-toolbar-divider" />
+                  <AriButton
+                    icon="arrow_selector_tool"
+                    color={canvasMode === "select" ? "brand" : "default"}
+                    ghost={canvasMode !== "select"}
+                    onClick={() => {
+                      setCanvasMode("select");
+                    }}
+                  />
+                  <AriButton
+                    icon="pan_tool_alt"
+                    color={canvasMode === "pan" ? "brand" : "default"}
+                    ghost={canvasMode !== "pan"}
+                    onClick={() => {
+                      setCanvasMode("pan");
+                    }}
+                  />
+                  <AriDivider type="vertical" className="desk-workflow-editor-canvas-toolbar-divider" />
               <AriButton ghost icon="add" onClick={addNode} />
             </AriFlex>
           </AriContainer>
 
-            <AriCard
-              className="desk-workflow-editor-floating-panel"
-              positionType="absolute"
+          <AriCard
+            className="desk-workflow-editor-floating-panel"
+            positionType="absolute"
+          >
+            <AriFlex
+              className="desk-workflow-inspector-header"
+              align="center"
+              justify="space-between"
             >
-              <AriFlex className="desk-workflow-inspector-header" align="center" justify="space-between">
-                <AriTypography
-                  variant="h4"
-                  value={selectedNodeData ? "节点属性" : "工作流属性"}
-                />
-                <AriTypography
-                  variant="caption"
-                  value={selectedNodeData ? "点击空白返回工作流属性" : "点击节点切换节点属性"}
-                />
-              </AriFlex>
+              <AriTypography
+                variant="h4"
+                value={selectedNodeData ? "节点属性" : "工作流属性"}
+              />
+              <AriTypography
+                variant="caption"
+                value={
+                  selectedNodeData
+                    ? "点击空白返回工作流属性"
+                    : "点击节点切换节点属性"
+                }
+              />
+            </AriFlex>
 
-              {selectedNodeData ? (
-                <AriContainer className="desk-workflow-inspector-grid">
+            {selectedNodeData ? (
+              <AriContainer className="desk-workflow-inspector-grid">
+                <AriInput
+                  value={selectedNodeData.title}
+                  onChange={(value) => patchSelectedNode({ title: value })}
+                  placeholder="节点标题"
+                />
+                <AriInput
+                  value={selectedNodeData.description}
+                  onChange={(value) =>
+                    patchSelectedNode({ description: value })
+                  }
+                  placeholder="节点说明"
+                />
+                <AriButton
+                  color="danger"
+                  label="删除该节点"
+                  onClick={deleteSelectedNode}
+                />
+              </AriContainer>
+            ) : (
+              <AriContainer className="desk-workflow-inspector-grid">
+                <AriInput
+                  value={workflowName}
+                  onChange={setWorkflowName}
+                  placeholder="工作流名称"
+                />
+                <AriInput
+                  value={workflowDescription}
+                  onChange={setWorkflowDescription}
+                  placeholder="工作流说明"
+                />
+                {agentKey === "code" ? (
                   <AriInput
-                    value={selectedNodeData.title}
-                    onChange={(value) => patchSelectedNode({ title: value })}
-                    placeholder="节点标题"
+                    value={workflowPromptPrefix}
+                    onChange={setWorkflowPromptPrefix}
+                    placeholder="代码工作流执行前缀"
                   />
-                  <AriInput
-                    value={selectedNodeData.description}
-                    onChange={(value) => patchSelectedNode({ description: value })}
-                    placeholder="节点说明"
+                ) : null}
+                <AriContainer className="desk-workflow-editor-floating-meta">
+                  <AriTypography
+                    variant="caption"
+                    value={`版本：v${selectedWorkflow?.version || 0}`}
                   />
-                  <AriButton
-                    color="danger"
-                    label="删除该节点"
-                    onClick={deleteSelectedNode}
+                  <AriTypography
+                    variant="caption"
+                    value={`节点：${nodes.length} · 连线：${edges.length}`}
+                  />
+                  <AriTypography
+                    variant="caption"
+                    value={
+                      selectedEdge
+                        ? `已选连线：${selectedEdge.source} -> ${selectedEdge.target}`
+                        : "当前：工作流属性"
+                    }
                   />
                 </AriContainer>
-              ) : (
-                <AriContainer className="desk-workflow-inspector-grid">
-                  <AriInput
-                    value={workflowName}
-                    onChange={setWorkflowName}
-                    placeholder="工作流名称"
-                  />
-                  <AriInput
-                    value={workflowDescription}
-                    onChange={setWorkflowDescription}
-                    placeholder="工作流说明"
-                  />
-                  {agentKey === "code" ? (
-                    <AriInput
-                      value={workflowPromptPrefix}
-                      onChange={setWorkflowPromptPrefix}
-                      placeholder="代码工作流执行前缀"
-                    />
-                  ) : null}
-                  <AriContainer className="desk-workflow-editor-floating-meta">
-                    <AriTypography
-                      variant="caption"
-                      value={`版本：v${selectedWorkflow?.version || 0}`}
-                    />
-                    <AriTypography
-                      variant="caption"
-                      value={`节点：${nodes.length} · 连线：${edges.length}`}
-                    />
-                    <AriTypography
-                      variant="caption"
-                      value={selectedEdge ? `已选连线：${selectedEdge.source} -> ${selectedEdge.target}` : "当前：工作流属性"}
-                    />
-                  </AriContainer>
-                </AriContainer>
-              )}
-            </AriCard>
-          </AriContainer>
+              </AriContainer>
+            )}
+          </AriCard>
+        </AriContainer>
       </AriContainer>
     </AriContainer>
   );

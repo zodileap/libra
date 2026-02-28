@@ -10,6 +10,12 @@
   --desk-sidebar-width-compact: calc(var(--z-inset) * 14.5);
   --desk-layout-padding-y: calc(var(--z-inset) * 1.5);
   --desk-layout-padding-x: calc(var(--z-inset) * 1.75);
+  /* 描述:
+   *
+   *   - 场景内容区横向内边距统一变量。
+   *   - 在移除 desk-main 内边距后，由具体页面按需复用该变量。
+   */
+  --desk-content-padding-x: var(--desk-layout-padding-x);
   --desk-block-gap-lg: calc(var(--z-inset) * 1.25);
   --desk-block-gap-md: calc(var(--z-inset) * 0.75);
   --desk-block-gap-sm: var(--z-inset-sm);
@@ -119,14 +125,24 @@ body {
   cursor: default;
 }
 
+/* 描述:
+ *
+ *   - 标题栏 slot 区域默认全部可拖拽，确保页面头部注入后仍可按住空白区域移动窗口。
+ */
+.desk-app-header-slot,
+.desk-app-header-slot * {
+  -webkit-app-region: drag;
+}
+
+/* 描述:
+ *
+ *   - 仅原生交互元素禁用拖拽，避免过宽的 role 选择器误伤整块标题栏区域。
+ */
 .desk-app-header button,
-.desk-app-header [role="button"],
 .desk-app-header a,
 .desk-app-header input,
 .desk-app-header textarea,
-.desk-app-header select,
-.desk-app-header .ari-menu,
-.desk-app-header .ari-menu * {
+.desk-app-header select {
   -webkit-app-region: no-drag;
 }
 
@@ -324,6 +340,17 @@ body {
 
 .desk-block {
   margin-top: var(--desk-block-gap-lg);
+  padding-left: var(--desk-content-padding-x);
+  padding-right: var(--desk-content-padding-x);
+}
+
+/* 描述:
+ *
+ *   - 首页顶部标题区横向内边距与内容块保持一致。
+ */
+.desk-home-hero {
+  padding-left: var(--desk-content-padding-x);
+  padding-right: var(--desk-content-padding-x);
 }
 
 .desk-shortcuts {
@@ -459,7 +486,6 @@ body {
 .desk-workflow-editor-stage {
   min-height: 0;
   height: 100%;
-  border: var(--desk-border-width) solid var(--desk-workflow-card-border);
   border-radius: var(--z-border-radius-lg);
   box-shadow: var(--z-color-box-shadow);
   background: var(--desk-container-bg);
@@ -523,7 +549,6 @@ body {
 
 .desk-workflow-reactflow-wrap {
   height: var(--desk-workflow-canvas-height);
-  border: var(--desk-border-width) solid color-mix(in srgb, var(--z-color-primary) 26%, var(--z-color-border-glass));
   border-radius: var(--z-border-radius-lg);
   overflow: hidden;
   background: var(--z-color-bg-tertiary);
@@ -562,15 +587,14 @@ body {
 .desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node,
 .desk-workflow-reactflow .react-flow__node-workflowNode.desk-workflow-flow-node {
   padding: 0;
-  border: calc(var(--desk-border-width) * 1.5) solid transparent;
+  border: var(--desk-border-width) solid transparent;
   border-radius: var(--z-border-radius-lg);
-  background: var(--desk-container-bg);
+  background: var(--z-ramp-white-1000);
   box-shadow: var(--z-color-box-shadow);
   color: var(--z-color-text);
   transition:
     border-color var(--z-duration-fast-4),
-    box-shadow var(--z-duration-fast-4),
-    transform var(--z-duration-fast-4);
+    box-shadow var(--z-duration-fast-4);
 }
 
 .desk-workflow-reactflow .react-flow__node-workflowNode.selected,
@@ -582,6 +606,12 @@ body {
   transform: translateY(calc(var(--desk-border-width) * -0.5));
 }
 
+.desk-workflow-reactflow .react-flow__node-workflowNode.dragging,
+.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.dragging,
+.desk-workflow-reactflow .react-flow__node-workflowNode.desk-workflow-flow-node.dragging {
+  transition: none !important;
+}
+
 .desk-workflow-node-body {
   display: flex;
   flex-direction: column;
@@ -589,14 +619,16 @@ body {
   min-height: calc(var(--desk-workflow-node-height) * 0.72);
   border: none;
   border-radius: inherit;
-  background: transparent;
+  background: var(--z-ramp-white-1000);
   overflow: hidden;
+  transition: none !important;
 }
 
-.desk-workflow-node-head {
+.desk-workflow-reactflow .react-flow__node-workflowNode .desk-workflow-node-head,
+.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node .desk-workflow-node-head {
   min-height: calc(var(--z-inset) * 2.35);
   padding: var(--z-inset-sm) var(--z-inset);
-  background: color-mix(in srgb, var(--z-color-border-brand) 14%, var(--desk-container-bg));
+  background: var(--z-color-brand-tertiary);
   border-bottom: var(--desk-border-width) solid
     color-mix(in srgb, var(--z-color-border-brand) 28%, var(--z-color-border-glass));
 }
@@ -608,61 +640,23 @@ body {
 
 .desk-workflow-node-head-icon {
   flex-shrink: 0;
-  color: color-mix(in srgb, var(--z-color-border-brand) 82%, var(--z-color-text));
 }
 
 .desk-workflow-reactflow .react-flow__node-workflowNode.selected .desk-workflow-node-head,
 .desk-workflow-reactflow .react-flow__node-workflowNode.is-active .desk-workflow-node-head,
 .desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.selected .desk-workflow-node-head,
 .desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.is-active .desk-workflow-node-head {
-  background: color-mix(in srgb, var(--z-color-border-active) 12%, var(--desk-container-bg));
+  background: var(--z-color-brand-tertiary);
   border-bottom-color: color-mix(in srgb, var(--z-color-border-active) 34%, var(--z-color-border-glass));
 }
 
-.desk-workflow-reactflow .react-flow__node-workflowNode.selected .desk-workflow-node-head-icon,
-.desk-workflow-reactflow .react-flow__node-workflowNode.is-active .desk-workflow-node-head-icon,
-.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.selected .desk-workflow-node-head-icon,
-.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.is-active .desk-workflow-node-head-icon {
-  color: color-mix(in srgb, var(--z-color-border-active) 80%, var(--z-color-text));
-}
-
-.desk-workflow-node-title {
+.desk-workflow-reactflow .react-flow__node-workflowNode .desk-workflow-node-title,
+.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node .desk-workflow-node-title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--z-color-text);
-}
-
-.desk-workflow-node-kind-pill {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  padding: calc(var(--z-inset-xs) * 0.75) var(--z-inset-sm);
-  border: var(--desk-border-width) solid
-    color-mix(in srgb, var(--z-color-border-brand) 70%, var(--z-color-border-glass));
-  border-radius: var(--z-border-radius);
-  background: color-mix(in srgb, var(--z-color-border-brand) 8%, var(--desk-container-bg));
-}
-
-.desk-workflow-node-kind-pill-text {
-  color: color-mix(in srgb, var(--z-color-border-brand) 82%, var(--z-color-text));
-}
-
-.desk-workflow-reactflow .react-flow__node-workflowNode.selected .desk-workflow-node-kind-pill,
-.desk-workflow-reactflow .react-flow__node-workflowNode.is-active .desk-workflow-node-kind-pill,
-.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.selected .desk-workflow-node-kind-pill,
-.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.is-active .desk-workflow-node-kind-pill {
-  border-color: color-mix(in srgb, var(--z-color-border-active) 70%, var(--z-color-border-glass));
-  background: color-mix(in srgb, var(--z-color-border-active) 10%, var(--desk-container-bg));
-}
-
-.desk-workflow-reactflow .react-flow__node-workflowNode.selected .desk-workflow-node-kind-pill-text,
-.desk-workflow-reactflow .react-flow__node-workflowNode.is-active .desk-workflow-node-kind-pill-text,
-.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.selected .desk-workflow-node-kind-pill-text,
-.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.is-active .desk-workflow-node-kind-pill-text {
-  color: color-mix(in srgb, var(--z-color-border-active) 82%, var(--z-color-text));
+  color: var(--z-color-text-brand);
 }
 
 .desk-workflow-node-content {
@@ -672,16 +666,8 @@ body {
   display: flex;
   align-items: center;
   border: var(--desk-border-width) solid
-    color-mix(in srgb, var(--z-color-border-brand) 32%, var(--z-color-border-glass));
+    color-mix(in srgb, var(--z-color-border-glass) 74%, transparent);
   border-radius: var(--z-border-radius);
-  background: color-mix(in srgb, var(--z-color-bg) 94%, var(--z-color-border-glass));
-}
-
-.desk-workflow-reactflow .react-flow__node-workflowNode.selected .desk-workflow-node-content,
-.desk-workflow-reactflow .react-flow__node-workflowNode.is-active .desk-workflow-node-content,
-.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.selected .desk-workflow-node-content,
-.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.is-active .desk-workflow-node-content {
-  border-color: color-mix(in srgb, var(--z-color-border-active) 44%, var(--z-color-border-glass));
 }
 
 .desk-workflow-node-description {
