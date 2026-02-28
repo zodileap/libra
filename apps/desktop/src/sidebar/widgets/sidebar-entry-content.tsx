@@ -15,6 +15,9 @@ function resolveSidebarEntryIcon(icon: string, highlighted: boolean): string {
   return SIDEBAR_ICON_FILL_MAP[icon] || icon;
 }
 
+// 描述:
+//
+//   - 定义侧边栏入口内容组件入参。
 interface SidebarEntryContentProps {
   icon: string;
   label: string;

@@ -6,11 +6,34 @@ import { CodeAgentPage } from "./pages/code-agent-page";
 import { CodeAgentSettingsPage } from "./pages/code-agent-settings-page";
 import { CodeWorkflowPage } from "./pages/code-workflow-page";
 
+// 描述:
+//
+//   - 智能体模块开关键。
 export const AGENT_MODULE_KEY = "agent" as const;
+
+// 描述:
+//
+//   - 会话模块开关键。
 export const SESSION_MODULE_KEY = "session" as const;
+
+// 描述:
+//
+//   - 工作流模块开关键。
 export const WORKFLOW_MODULE_KEY = "workflow" as const;
+
+// 描述:
+//
+//   - 代码智能体根路径。
 export const CODE_AGENT_ROOT_PATH = "/agents/code" as const;
+
+// 描述:
+//
+//   - 代码智能体设置页路径。
 export const CODE_AGENT_SETTINGS_PATH = "/agents/code/settings" as const;
+
+// 描述:
+//
+//   - 代码智能体工作流页路径。
 export const CODE_WORKFLOW_PATH = "/agents/code/workflows" as const;
 
 // 描述：代码智能体会话页桥接组件，统一从路由参数读取 sessionId 并透传通用会话能力。

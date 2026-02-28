@@ -3,6 +3,9 @@ import { AGENTS } from "../../shared/data";
 import type { AuthAvailableAgentItem } from "../../shared/types";
 import type { RouteAccess } from "../../router/types";
 
+// 描述:
+//
+//   - 设置模块开关键。
 export const SETTINGS_MODULE_KEY = "settings" as const;
 
 // 描述：通用模块中的登录页懒加载入口，属于所有构建和所有用户可见基础页面。
@@ -29,6 +32,9 @@ export const CommonAiKeyPageLazy = lazy(async () => {
   return { default: module.AiKeyPage };
 });
 
+// 描述:
+//
+//   - 定义首页侧边栏智能体入口项结构。
 interface HomeSidebarAgentItem {
   key: string;
   label: string;
@@ -60,6 +66,9 @@ export function resolveHomeSidebarAgentItems(
   });
 }
 
+// 描述:
+//
+//   - 定义设置侧边栏菜单项结构。
 interface SettingsSidebarItem {
   key: string;
   label: string;
@@ -82,6 +91,10 @@ export function resolveSettingsSidebarItems(routeAccess: RouteAccess): SettingsS
 }
 
 // 描述：AI Key 页面侧边栏文案，由 common 路由模块统一定义。
+//
+// Extends:
+//
+//   - AI Key 页面基础展示文案。
 export const AI_KEY_SIDEBAR_CONTENT = {
   title: "AI Key 管理",
   description: "管理本地可用模型提供方密钥。",

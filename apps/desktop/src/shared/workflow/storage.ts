@@ -10,7 +10,14 @@ import type {
   WorkflowNodeDefinition,
 } from "./types";
 
+// 描述:
+//
+//   - 模型工作流本地存储键。
 const MODEL_WORKFLOW_STORAGE_KEY = "zodileap.desktop.model.workflows";
+
+// 描述:
+//
+//   - 代码工作流本地存储键。
 const CODE_WORKFLOW_STORAGE_KEY = "zodileap.desktop.code.workflows";
 
 // 描述：
@@ -27,10 +34,32 @@ const DEFAULT_CODE_WORKFLOW_ID_SET = new Set(
   DEFAULT_CODE_WORKFLOWS.map((item) => item.id),
 );
 
+// 描述:
+//
+//   - 画布节点横向间距基准值。
 const GRAPH_NODE_HORIZONTAL_GAP = 240;
+
+// 描述:
+//
+//   - 画布节点默认起始 X 坐标。
 const GRAPH_CANVAS_BASE_X = 80;
+
+// 描述:
+//
+//   - 画布节点默认起始 Y 坐标。
 const GRAPH_CANVAS_BASE_Y = 160;
 
+// 描述:
+//
+//   - 规范化节点类型，确保类型落在支持集合中。
+//
+// Params:
+//
+//   - value: 原始节点类型值。
+//
+// Returns:
+//
+//   - 合法节点类型。
 function normalizeNodeType(value: unknown): WorkflowGraphNodeType {
   const raw = String(value || "").trim();
   if (
@@ -46,6 +75,17 @@ function normalizeNodeType(value: unknown): WorkflowGraphNodeType {
   return "node";
 }
 
+// 描述:
+//
+//   - 规范化连线类型，确保类型落在支持集合中。
+//
+// Params:
+//
+//   - value: 原始连线类型值。
+//
+// Returns:
+//
+//   - 合法连线类型。
 function normalizeEdgeType(value: unknown): WorkflowGraphEdgeType {
   const raw = String(value || "").trim();
   if (raw === "default" || raw === "branch" || raw === "loop") {
@@ -54,6 +94,17 @@ function normalizeEdgeType(value: unknown): WorkflowGraphEdgeType {
   return "default";
 }
 
+// 描述:
+//
+//   - 规范化单个画布节点，过滤无效节点并填充默认值。
+//
+// Params:
+//
+//   - node: 原始节点。
+//
+// Returns:
+//
+//   - 规范化节点；无效时返回 null。
 function normalizeGraphNode(node: WorkflowGraphNode): WorkflowGraphNode | null {
   if (!node?.id) {
     return null;
@@ -70,6 +121,17 @@ function normalizeGraphNode(node: WorkflowGraphNode): WorkflowGraphNode | null {
   };
 }
 
+// 描述:
+//
+//   - 规范化单条连线，过滤缺失关键字段的无效数据。
+//
+// Params:
+//
+//   - edge: 原始连线。
+//
+// Returns:
+//
+//   - 规范化连线；无效时返回 null。
 function normalizeGraphEdge(edge: WorkflowGraphEdge): WorkflowGraphEdge | null {
   if (!edge?.id || !edge?.sourceId || !edge?.targetId) {
     return null;
@@ -83,6 +145,17 @@ function normalizeGraphEdge(edge: WorkflowGraphEdge): WorkflowGraphEdge | null {
   };
 }
 
+// 描述:
+//
+//   - 规范化工作流图结构，自动剔除孤立或非法边。
+//
+// Params:
+//
+//   - graph: 原始工作流图。
+//
+// Returns:
+//
+//   - 规范化图结构；空图返回 undefined。
 function normalizeWorkflowGraph(graph?: WorkflowGraph): WorkflowGraph | undefined {
   if (!graph) {
     return undefined;
@@ -106,6 +179,9 @@ function normalizeWorkflowGraph(graph?: WorkflowGraph): WorkflowGraph | undefine
   return { nodes, edges };
 }
 
+// 描述:
+//
+//   - 基于模型工作流节点生成兜底图结构。
 function buildModelFallbackGraph(workflow: WorkflowDefinition): WorkflowGraph {
   const nodes = (workflow.nodes || []).map((node, index) => {
     return {
@@ -126,6 +202,9 @@ function buildModelFallbackGraph(workflow: WorkflowDefinition): WorkflowGraph {
   return { nodes, edges };
 }
 
+// 描述:
+//
+//   - 基于代码工作流生成默认四段式兜底图结构。
 function buildCodeFallbackGraph(workflow: CodeWorkflowDefinition): WorkflowGraph {
   const nodes: WorkflowGraphNode[] = [
     {
@@ -184,6 +263,9 @@ function buildCodeFallbackGraph(workflow: CodeWorkflowDefinition): WorkflowGraph
   return { nodes, edges };
 }
 
+// 描述:
+//
+//   - 规范化模型工作流节点定义，兼容历史字段与文案。
 function normalizeWorkflowNode(node: WorkflowNodeDefinition): WorkflowNodeDefinition {
   const nextNode: WorkflowNodeDefinition = {
     ...node,
@@ -205,6 +287,9 @@ function normalizeWorkflowNode(node: WorkflowNodeDefinition): WorkflowNodeDefini
   return nextNode;
 }
 
+// 描述:
+//
+//   - 规范化模型工作流定义并补齐兜底图结构。
 function normalizeWorkflow(workflow: WorkflowDefinition): WorkflowDefinition {
   const normalizedWorkflow: WorkflowDefinition = {
     ...workflow,
@@ -219,6 +304,9 @@ function normalizeWorkflow(workflow: WorkflowDefinition): WorkflowDefinition {
   };
 }
 
+// 描述:
+//
+//   - 规范化代码工作流定义并补齐兜底图结构。
 function normalizeCodeWorkflow(
   workflow: CodeWorkflowDefinition,
 ): CodeWorkflowDefinition {
@@ -236,6 +324,9 @@ function normalizeCodeWorkflow(
   };
 }
 
+// 描述:
+//
+//   - 读取本地保存的模型工作流列表。
 function readSavedWorkflows(): WorkflowDefinition[] {
   if (typeof window === "undefined") {
     return [];
@@ -257,6 +348,9 @@ function readSavedWorkflows(): WorkflowDefinition[] {
   }
 }
 
+// 描述:
+//
+//   - 读取本地保存的代码工作流列表。
 function readSavedCodeWorkflows(): CodeWorkflowDefinition[] {
   if (typeof window === "undefined") {
     return [];

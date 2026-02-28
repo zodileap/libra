@@ -20,16 +20,24 @@ function readDesktopSource(relativePath) {
 }
 
 test("TestSessionHeaderShouldToggleDevDebugFloatFromHeaderExtraItem", () => {
+  const headerSource = readDesktopSource("src/widgets/app-header/index.tsx");
+  const layoutSource = readDesktopSource("src/shell/layout.tsx");
   const sessionSource = readDesktopSource("src/widgets/session/page.tsx");
   const appSource = readDesktopSource("src/app.tsx");
 
   // 描述：
   //
-  //   - 会话头部第二个 item 应提供调试窗口开关按钮，并以状态控制可见性与激活色。
-  assert.match(sessionSource, /const \[debugFloatVisible, setDebugFloatVisible\] = useState\(false\);/);
-  assert.match(sessionSource, /icon="bug_report"/);
-  assert.match(sessionSource, /color=\{debugFloatVisible \? "primary" : "default"\}/);
-  assert.match(sessionSource, /<DevDebugFloat visible=\{debugFloatVisible\} \/>/);
+  //   - 全局标题栏应提供调试窗口开关按钮，并以状态控制可见性与激活色。
+  assert.match(headerSource, /icon="bug_report"/);
+  assert.match(headerSource, /color=\{debugFloatVisible \? "primary" : "default"\}/);
+  assert.match(layoutSource, /const \[debugFloatVisible, setDebugFloatVisible\] = useState\(false\);/);
+  assert.match(layoutSource, /<DevDebugFloat visible=\{debugFloatVisible\} \/>/);
+
+  // 描述：
+  //
+  //   - 会话页不应再内置调试浮窗开关，由全局标题栏统一管理。
+  assert.doesNotMatch(sessionSource, /icon="bug_report"/);
+  assert.doesNotMatch(sessionSource, /<DevDebugFloat visible=\{debugFloatVisible\} \/>/);
 
   // 描述：
   //

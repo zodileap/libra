@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent } from "react";
 import {
   AriButton,
@@ -58,6 +58,9 @@ import { SidebarBackHeader } from "./widgets/sidebar-back-header";
 import { SidebarQuickAction } from "./widgets/sidebar-quick-action";
 import { UserHoverMenu } from "./widgets/user-hover-menu";
 
+// 描述:
+//
+//   - 定义客户端侧边栏根组件入参。
 interface ClientSidebarProps {
   user: LoginUser;
   onLogout: () => Promise<void>;
@@ -65,21 +68,49 @@ interface ClientSidebarProps {
   routeAccess: RouteAccess;
 }
 
+// 描述:
+//
+//   - 定义侧边栏会话项结构，扩展固定状态字段。
 interface AgentSidebarSession extends AgentSession {
   pinned: boolean;
 }
 
+// 描述:
+//
+//   - 定义代码目录与会话分组结构。
 interface CodeWorkspaceSessionGroup {
   workspace: CodeWorkspaceGroup;
   sessions: AgentSidebarSession[];
 }
 
+// 描述:
+//
+//   - 根据路由路径解析智能体标识。
+//
+// Params:
+//
+//   - pathname: 当前路径。
+//
+// Returns:
+//
+//   - 智能体标识；未命中返回 null。
 function matchAgentKey(pathname: string): AgentKey | null {
   if (pathname.startsWith("/agents/code")) return "code";
   if (pathname.startsWith("/agents/model")) return "model";
   return null;
 }
 
+// 描述:
+//
+//   - 根据路径解析侧边栏模式。
+//
+// Params:
+//
+//   - pathname: 当前路径。
+//
+// Returns:
+//
+//   - 侧边栏模式标识。
 function matchSidebarMode(pathname: string): "home" | "agent" | "settings" | "ai-key" | "workflow" {
   if (pathname.startsWith("/settings")) return "settings";
   if (pathname.startsWith("/ai-keys")) return "ai-key";
@@ -113,6 +144,9 @@ function toSessionUpdatedAtText(lastAt?: string): string {
 }
 
 
+// 描述:
+//
+//   - 渲染首页侧边栏，展示可访问智能体入口与用户菜单。
 function HomeSidebar({
   user,
   onLogout,
@@ -166,6 +200,9 @@ function HomeSidebar({
   );
 }
 
+// 描述:
+//
+//   - 渲染智能体侧边栏，统一承载会话列表、目录树与右键菜单操作。
 function AgentSidebar({
   user,
   onLogout,
@@ -196,6 +233,7 @@ function AgentSidebar({
   const [workspaceRenamingId, setWorkspaceRenamingId] = useState("");
   const [workspaceRenameValue, setWorkspaceRenameValue] = useState("");
   const [workspaceRenameModalVisible, setWorkspaceRenameModalVisible] = useState(false);
+  const missingSessionSyncAttemptsRef = useRef<Record<string, number>>({});
 
   const isCodeAgent = agentKey === "code";
   const selectedSessionKey = location.pathname.includes("/session/")
@@ -644,7 +682,9 @@ function AgentSidebar({
     return [buildWorkspaceMenuKey(fallbackWorkspaceId)];
   }, [isCodeAgent, selectedWorkspaceFromQuery, workspaceGroups]);
 
+  // 描述：解析当前右键目标会话，供右键菜单文案与动作状态联动。
   const contextTargetSession = sessions.find((item) => item.id === contextSessionId) || null;
+  // 描述：构建会话右键菜单项，统一管理固定/重命名/删除行为入口。
   const contextMenuItems = useMemo(() => {
     // 描述：生成右键菜单项标签，并在 hover 时切换 fill 图标。
     const renderContextMenuItemLabel = (params: {
@@ -738,6 +778,24 @@ function AgentSidebar({
       setLastUsedCodeWorkspaceId(workspaceId);
     }
   }, [isCodeAgent, selectedSessionKey]);
+
+  useEffect(() => {
+    if (!selectedSessionKey) {
+      return;
+    }
+    if (sessions.some((item) => item.id === selectedSessionKey)) {
+      delete missingSessionSyncAttemptsRef.current[selectedSessionKey];
+      return;
+    }
+    const attempts = missingSessionSyncAttemptsRef.current[selectedSessionKey] || 0;
+    if (attempts >= 2) {
+      return;
+    }
+    // 描述：会话页已打开但侧边栏尚未出现该会话时，主动刷新列表，确保“新建后跳转”场景及时同步。
+    missingSessionSyncAttemptsRef.current[selectedSessionKey] = attempts + 1;
+    void refreshSessions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSessionKey, sessions, agentKey, user.id]);
 
   useEffect(() => {
     if (!isCodeAgent) {
@@ -919,6 +977,9 @@ function AgentSidebar({
   );
 }
 
+// 描述:
+//
+//   - 渲染工作流侧边栏，统一提供工作流切换、新建与删除能力。
 function WorkflowsSidebar({
   user,
   onLogout,
@@ -1095,6 +1156,9 @@ function WorkflowsSidebar({
   );
 }
 
+// 描述:
+//
+//   - 渲染设置页侧边栏，承载通用与智能体设置入口。
 function SettingsSidebar({
   user,
   onLogout,
@@ -1106,7 +1170,9 @@ function SettingsSidebar({
 }) {
   const navigate = useNavigate();
   const location = useLocation();
+  // 描述：根据权限与模块开关解析可见设置菜单项。
   const settingItems = useMemo(() => resolveSettingsSidebarItems(routeAccess), [routeAccess]);
+  // 描述：根据当前路径计算设置菜单选中态。
   const selectedSettingKey = useMemo(() => {
     if (location.pathname.includes("/agents/model/settings") && routeAccess.isAgentEnabled("model")) {
       return "model";
@@ -1139,6 +1205,9 @@ function SettingsSidebar({
   );
 }
 
+// 描述:
+//
+//   - 渲染 AI Key 页面侧边栏文案与返回入口。
 function AiKeySidebar({
   user,
   onLogout,
@@ -1162,6 +1231,9 @@ function AiKeySidebar({
   );
 }
 
+// 描述:
+//
+//   - 侧边栏总入口，根据路由模式切换 home/agent/settings/workflow/ai-key 视图。
 export function ClientSidebar({ user, onLogout, availableAgents, routeAccess }: ClientSidebarProps) {
   const location = useLocation();
   const mode = matchSidebarMode(location.pathname);

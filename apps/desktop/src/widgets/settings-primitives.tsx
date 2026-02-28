@@ -1,6 +1,9 @@
 import type { ReactNode } from "react";
 import { AriContainer, AriFlex, AriTypography } from "aries_react";
 
+// 描述:
+//
+//   - 定义页面头部组件入参。
 interface DeskPageHeaderProps {
   title: string;
   description?: string;
@@ -28,6 +31,9 @@ export function DeskPageHeader({ title, description, actions }: DeskPageHeaderPr
   );
 }
 
+// 描述:
+//
+//   - 定义分组标题组件入参。
 interface DeskSectionTitleProps {
   title: string;
 }
@@ -43,6 +49,9 @@ export function DeskSectionTitle({ title }: DeskSectionTitleProps) {
   return <AriTypography className="desk-settings-title" variant="h2" value={title} />;
 }
 
+// 描述:
+//
+//   - 定义分组标签组件入参。
 interface DeskSectionLabelProps {
   label: string;
 }
@@ -58,6 +67,9 @@ export function DeskSectionLabel({ label }: DeskSectionLabelProps) {
   return <AriTypography className="desk-section-label" variant="caption" value={label} />;
 }
 
+// 描述:
+//
+//   - 定义设置行组件入参。
 interface DeskSettingsRowProps {
   title?: string;
   description?: string;
@@ -88,6 +100,9 @@ export function DeskSettingsRow({ title, description, metaSlot, children }: Desk
   );
 }
 
+// 描述:
+//
+//   - 定义空状态组件入参。
 interface DeskEmptyStateProps {
   title: string;
   description: string;
@@ -110,6 +125,9 @@ export function DeskEmptyState({ title, description }: DeskEmptyStateProps) {
   );
 }
 
+// 描述:
+//
+//   - 定义状态文本组件入参。
 interface DeskStatusTextProps {
   value: string;
 }

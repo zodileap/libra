@@ -1,10 +1,16 @@
 import { useState } from "react";
 import { AriButton, AriCard, AriContainer, AriFlex, AriInput, AriMessage, AriTypography } from "aries_react";
 
+// 描述:
+//
+//   - 定义登录页组件入参。
 interface LoginPageProps {
   onLogin: (account: string, password: string) => Promise<void>;
 }
 
+// 描述:
+//
+//   - 渲染登录页面并处理账号密码校验与提交状态。
 export function LoginPage({ onLogin }: LoginPageProps) {
   const [account, setAccount] = useState("");
   const [password, setPassword] = useState("");

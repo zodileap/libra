@@ -58,7 +58,7 @@ import {
   listModelWorkflows,
   runModelWorkflow,
 } from "../../shared/workflow";
-import { DevDebugFloat } from "../dev-debug-float";
+import { useDesktopHeaderSlot } from "../app-header/header-slot-context";
 import type {
   CodeWorkflowDefinition,
   WorkflowDefinition,
@@ -671,10 +671,9 @@ export function SessionPage({
   const [renameModalVisible, setRenameModalVisible] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [sessionMenuVersion, setSessionMenuVersion] = useState(0);
-  const [debugFloatVisible, setDebugFloatVisible] = useState(false);
-  const [headerSlotElement, setHeaderSlotElement] = useState<HTMLElement | null>(null);
   const [messagesHydrated, setMessagesHydrated] = useState(false);
   const [hydratedSessionKey, setHydratedSessionKey] = useState("");
+  const headerSlotElement = useDesktopHeaderSlot();
   // 描述：将底部状态文案压缩为适合 action slot 展示的短文案。
   const compactActionSlotStatus = useMemo(() => buildCompactActionSlotStatus(status), [status]);
   // 描述：解析当前会话 UI 配置，未传入时按智能体类型回退默认配置。
@@ -2055,22 +2054,15 @@ export function SessionPage({
     }
   };
 
-  // 描述：定位桌面全局标题栏插槽，用于把会话头部挂载到固定 header。
-  useEffect(() => {
-    if (typeof document === "undefined") {
-      return;
-    }
-    setHeaderSlotElement(document.getElementById("desk-app-header-slot"));
-  }, []);
-
   const sessionHeaderNode = (
-    <AriContainer className="desk-session-head-wrap" padding={0}>
+    <AriContainer className="desk-session-head-wrap" padding={0} data-tauri-drag-region>
       <AriFlex
         className="desk-session-head-bar"
         align="center"
         justify="space-between"
+        data-tauri-drag-region
       >
-        <AriFlex className="desk-session-head-main" align="center" space={8}>
+        <AriFlex className="desk-session-head-main" align="center" space={8} data-tauri-drag-region>
           <AriTypography
             className="desk-session-head-title"
             variant="h4"
@@ -2100,27 +2092,14 @@ export function SessionPage({
             />
           </AriTooltip>
         </AriFlex>
-        <AriFlex className="desk-session-head-extra" align="center">
-          {import.meta.env.DEV ? (
-            <AriButton
-              type="text"
-              icon="bug_report"
-              color={debugFloatVisible ? "primary" : "default"}
-              aria-label={debugFloatVisible ? "关闭 Dev 调试窗口" : "打开 Dev 调试窗口"}
-              onClick={() => {
-                setDebugFloatVisible((current) => !current);
-              }}
-            />
-          ) : null}
-        </AriFlex>
+        <AriFlex className="desk-session-head-extra" align="center" />
       </AriFlex>
     </AriContainer>
   );
 
   return (
-    <AriContainer className="desk-content desk-session-content" height="100%" padding={0}>
-      {headerSlotElement ? createPortal(sessionHeaderNode, headerSlotElement) : sessionHeaderNode}
-      <DevDebugFloat visible={debugFloatVisible} />
+    <AriContainer className="desk-content desk-session-content" height="100%" showBorderRadius={false}>
+      {headerSlotElement ? createPortal(sessionHeaderNode, headerSlotElement) : null}
       <AriModal
         visible={renameModalVisible}
         title="重命名会话"

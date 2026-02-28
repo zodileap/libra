@@ -1,5 +1,8 @@
 import type { AgentSession, AgentSummary, ShortcutItem } from "./types";
 
+// 描述:
+//
+//   - 定义桌面端可用智能体摘要列表，供导航与页面入口渲染使用。
 export const AGENTS: AgentSummary[] = [
   {
     key: "code",
@@ -15,6 +18,9 @@ export const AGENTS: AgentSummary[] = [
   }
 ];
 
+// 描述:
+//
+//   - 定义首页快捷入口卡片数据。
 export const SHORTCUTS: ShortcutItem[] = [
   {
     id: "shortcut-build",
@@ -33,6 +39,9 @@ export const SHORTCUTS: ShortcutItem[] = [
   }
 ];
 
+// 描述:
+//
+//   - 定义本地会话初始数据快照，供未登录或离线场景兜底展示。
 export const AGENT_SESSIONS: AgentSession[] = [
   { id: "code-001", agentKey: "code", title: "React + aries_react 脚手架", updatedAt: "今天 09:40" },
   { id: "code-002", agentKey: "code", title: "权限后台页面重构", updatedAt: "昨天 21:15" },
@@ -40,14 +49,44 @@ export const AGENT_SESSIONS: AgentSession[] = [
   { id: "model-002", agentKey: "model", title: "低模角色风格探索", updatedAt: "昨天 18:22" }
 ];
 
+// 描述:
+//
+//   - 模型项目本地存储键。
 const MODEL_PROJECT_STORAGE_KEY = "zodileap.desktop.model.projects";
+
+// 描述:
+//
+//   - 会话元数据本地存储键（重命名/固定/删除状态）。
 const SESSION_META_STORAGE_KEY = "zodileap.desktop.session.meta";
+
+// 描述:
+//
+//   - 会话消息本地存储键。
 const SESSION_MESSAGES_STORAGE_KEY = "zodileap.desktop.session.messages";
+
+// 描述:
+//
+//   - 代码目录分组本地存储键。
 const CODE_WORKSPACE_GROUP_STORAGE_KEY = "zodileap.desktop.code.workspace.groups";
+
+// 描述:
+//
+//   - 代码会话与目录映射本地存储键。
 const CODE_SESSION_WORKSPACE_MAP_STORAGE_KEY = "zodileap.desktop.code.session.workspace.map";
+
+// 描述:
+//
+//   - 最近使用代码目录 ID 本地存储键。
 const CODE_LAST_WORKSPACE_ID_STORAGE_KEY = "zodileap.desktop.code.workspace.last";
+
+// 描述:
+//
+//   - 会话标题更新广播事件名。
 export const SESSION_TITLE_UPDATED_EVENT = "zodileap:session-title-updated";
 
+// 描述:
+//
+//   - 定义本地模型项目存储结构。
 interface StoredModelProject {
   id: string;
   title: string;
@@ -55,29 +94,44 @@ interface StoredModelProject {
   updatedAt: string;
 }
 
+// 描述:
+//
+//   - 定义会话元信息存储结构。
 interface SessionMeta {
   renamedTitles: Record<string, string>;
   pinnedIds: string[];
   removedIds: string[];
 }
 
+// 描述:
+//
+//   - 定义会话元信息只读快照结构，供页面读取状态。
 export interface AgentSessionMetaSnapshot {
   renamedTitles: Record<string, string>;
   pinnedIds: string[];
   removedIds: string[];
 }
 
+// 描述:
+//
+//   - 定义单条会话消息存储结构。
 interface StoredSessionMessage {
   role: "user" | "assistant";
   text: string;
 }
 
+// 描述:
+//
+//   - 定义会话消息分组存储结构。
 interface StoredSessionMessageGroup {
   sessionId: string;
   agentKey: "code" | "model";
   messages: StoredSessionMessage[];
 }
 
+// 描述:
+//
+//   - 定义代码目录分组结构。
 export interface CodeWorkspaceGroup {
   id: string;
   path: string;
@@ -85,11 +139,21 @@ export interface CodeWorkspaceGroup {
   updatedAt: string;
 }
 
+// 描述:
+//
+//   - 定义代码会话与目录映射结构。
 interface StoredCodeSessionWorkspace {
   sessionId: string;
   workspaceId: string;
 }
 
+// 描述:
+//
+//   - 读取本地模型项目列表。
+//
+// Returns:
+//
+//   - 模型项目数组。
 function readModelProjects(): StoredModelProject[] {
   if (typeof window === "undefined") {
     return [];
@@ -110,6 +174,13 @@ function readModelProjects(): StoredModelProject[] {
   }
 }
 
+// 描述:
+//
+//   - 写入本地模型项目列表。
+//
+// Params:
+//
+//   - list: 模型项目数组。
 function writeModelProjects(list: StoredModelProject[]) {
   if (typeof window === "undefined") {
     return;
@@ -117,6 +188,13 @@ function writeModelProjects(list: StoredModelProject[]) {
   window.localStorage.setItem(MODEL_PROJECT_STORAGE_KEY, JSON.stringify(list));
 }
 
+// 描述:
+//
+//   - 读取会话元信息。
+//
+// Returns:
+//
+//   - 会话元信息对象。
 function readSessionMeta(): SessionMeta {
   if (typeof window === "undefined") {
     return {
@@ -151,6 +229,13 @@ function readSessionMeta(): SessionMeta {
   }
 }
 
+// 描述:
+//
+//   - 写入会话元信息。
+//
+// Params:
+//
+//   - meta: 会话元信息。
 function writeSessionMeta(meta: SessionMeta) {
   if (typeof window === "undefined") {
     return;
@@ -183,6 +268,13 @@ function emitSessionTitleUpdated(sessionId: string, title: string) {
   );
 }
 
+// 描述:
+//
+//   - 读取会话消息分组列表。
+//
+// Returns:
+//
+//   - 会话消息分组数组。
 function readSessionMessages(): StoredSessionMessageGroup[] {
   if (typeof window === "undefined") {
     return [];
@@ -207,6 +299,13 @@ function readSessionMessages(): StoredSessionMessageGroup[] {
   }
 }
 
+// 描述:
+//
+//   - 写入会话消息分组列表。
+//
+// Params:
+//
+//   - groups: 会话消息分组数组。
 function writeSessionMessages(groups: StoredSessionMessageGroup[]) {
   if (typeof window === "undefined") {
     return;
@@ -355,6 +454,7 @@ function writeLastCodeWorkspaceId(workspaceId: string) {
   window.localStorage.setItem(CODE_LAST_WORKSPACE_ID_STORAGE_KEY, workspaceId);
 }
 
+// 描述：按 ID 查询模型项目详情。
 export function getModelProjectById(id: string): StoredModelProject | null {
   return readModelProjects().find((item) => item.id === id) || null;
 }
@@ -395,6 +495,7 @@ export function resolveAgentSessionTitle(agentKey: "code" | "model", sessionId?:
   return "会话详情";
 }
 
+// 描述：新增或覆盖模型项目记录，保持最近项目排在最前并限制数量。
 export function upsertModelProject(input: {
   id: string;
   title: string;
@@ -409,6 +510,7 @@ export function upsertModelProject(input: {
   writeModelProjects(next);
 }
 
+// 描述：重命名会话标题并同步广播，确保侧边栏与会话页即时更新。
 export function renameAgentSession(sessionId: string, title: string) {
   const trimmed = title.trim();
   const meta = readSessionMeta();
@@ -434,6 +536,7 @@ export function renameAgentSession(sessionId: string, title: string) {
   emitSessionTitleUpdated(sessionId, nextTitle);
 }
 
+// 描述：切换会话固定状态，返回切换后的固定结果。
 export function togglePinnedAgentSession(sessionId: string): boolean {
   const meta = readSessionMeta();
   const exists = meta.pinnedIds.includes(sessionId);
@@ -444,10 +547,12 @@ export function togglePinnedAgentSession(sessionId: string): boolean {
   return !exists;
 }
 
+// 描述：判断指定会话是否处于固定状态。
 export function isAgentSessionPinned(sessionId: string): boolean {
   return readSessionMeta().pinnedIds.includes(sessionId);
 }
 
+// 描述：移除会话及其关联本地数据（标题、固定态、消息、目录绑定）。
 export function removeAgentSession(agentKey: "code" | "model", sessionId: string) {
   if (agentKey === "model") {
     const projects = readModelProjects();
@@ -471,11 +576,13 @@ export function removeAgentSession(agentKey: "code" | "model", sessionId: string
   );
 
   if (agentKey === "code") {
+// 描述：按会话维度读取本地消息列表。
     const mapItems = readCodeSessionWorkspaceMap();
     writeCodeSessionWorkspaceMap(mapItems.filter((item) => item.sessionId !== sessionId));
   }
 }
 
+// 描述：按智能体与会话 ID 读取本地会话消息列表。
 export function getSessionMessages(
   agentKey: "code" | "model",
   sessionId: string,
@@ -486,6 +593,7 @@ export function getSessionMessages(
   return group?.messages || [];
 }
 
+// 描述：写入会话消息并按会话维度覆盖，限制总存储分组数量。
 export function upsertSessionMessages(input: {
   agentKey: "code" | "model";
   sessionId: string;
@@ -502,6 +610,7 @@ export function upsertSessionMessages(input: {
   writeSessionMessages(next);
 }
 
+// 描述：返回指定智能体可见会话列表，融合默认会话、动态会话与本地元数据。
 export function getAgentSessions(agentKey: "code" | "model"): AgentSession[] {
   const meta = readSessionMeta();
   const defaults = AGENT_SESSIONS.filter((item) => item.agentKey === agentKey);

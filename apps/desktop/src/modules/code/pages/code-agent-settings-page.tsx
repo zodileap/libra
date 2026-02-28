@@ -12,7 +12,7 @@ export function CodeAgentSettingsPage() {
   const [allowLongRun, setAllowLongRun] = useState(true);
 
   return (
-    <AriContainer className="desk-content">
+    <AriContainer className="desk-content" showBorderRadius={false}>
       <AriContainer className="desk-settings-shell">
         <DeskPageHeader
           title="代码智能体设置"

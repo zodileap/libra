@@ -6,5 +6,17 @@
   --z-border-radius-container: 18px;
   --z-color-bg-app-layout: transparent !important;
 
-  --z-font-size: 12px;
+  --z-base-font-size: 12px;
+
+  /* 描述:
+   *
+   *   - 全局放大 AriIcon 尺寸阶梯，统一提升 Desktop 端图标可读性。
+   *   - 当前在上一版基础上再上调一档，同时保持各尺寸阶梯比例稳定。
+   */
+  --z-icon-size-xs: calc(var(--z-base-font-size) * 0.75);
+  --z-icon-size-sm: calc(var(--z-base-font-size) * 1.125);
+  --z-icon-size: calc(var(--z-base-font-size) * 1.5);
+  --z-icon-size-lg: calc(var(--z-base-font-size) * 2.25);
+  --z-icon-size-xl: calc(var(--z-base-font-size) * 3);
+  --z-icon-size-xxl: calc(var(--z-base-font-size) * 4.5);
 }

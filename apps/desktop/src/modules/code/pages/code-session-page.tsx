@@ -10,6 +10,9 @@ import type {
   ModelMcpCapabilities,
 } from "../../../shared/types";
 
+// 描述:
+//
+//   - 定义代码会话页面包装组件入参。
 interface CodeSessionPageProps {
   currentUser?: LoginUser | null;
   modelMcpCapabilities: ModelMcpCapabilities;

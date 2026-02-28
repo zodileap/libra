@@ -24,6 +24,9 @@ import type {
   WorkflowUiHint,
 } from "./types";
 
+// 描述:
+//
+//   - 定义模型会话命令执行响应结构。
 interface ModelSessionRunResponse {
   trace_id: string;
   message: string;
@@ -34,6 +37,9 @@ interface ModelSessionRunResponse {
   ui_hint?: ProtocolUiHint;
 }
 
+// 描述:
+//
+//   - 定义工作流运行期间的上下文载体。
 interface WorkflowContext {
   prompt: string;
   referenceImages: string[];
@@ -45,12 +51,35 @@ interface WorkflowContext {
   exportedFile?: string;
 }
 
+// 描述:
+//
+//   - 判断请求中是否存在可用的 Gemini 生图 Key。
+//
+// Params:
+//
+//   - request: 工作流运行请求。
+//
+// Returns:
+//
+//   - 是否可执行 Gemini 生图节点。
 function hasGeminiImageProvider(request: WorkflowRunRequest) {
   return request.aiKeys.some(
     (item) => item.provider === "gemini" && item.enabled && item.keyValue.trim().length > 0,
   );
 }
 
+// 描述:
+//
+//   - 按起始节点类型截取可执行节点区间。
+//
+// Params:
+//
+//   - workflow: 工作流定义。
+//   - startKind: 起始节点类型。
+//
+// Returns:
+//
+//   - 截取后的节点序列。
 function buildNodeRange(workflow: WorkflowDefinition, startKind: WorkflowNodeKind) {
   const all = workflow.nodes;
   if (all.length === 0) {
@@ -63,8 +92,22 @@ function buildNodeRange(workflow: WorkflowDefinition, startKind: WorkflowNodeKin
   return all.slice(Math.max(0, index));
 }
 
+// 描述:
+//
+//   - 匹配提示词中可识别的图片路径扩展名。
 const IMAGE_EXT_REGEX = /\.(png|jpe?g|webp|bmp|gif|tiff?)$/i;
 
+// 描述:
+//
+//   - 从提示词中提取图片路径列表（去重后）。
+//
+// Params:
+//
+//   - prompt: 用户提示词。
+//
+// Returns:
+//
+//   - 图片路径数组。
 function extractImagePathsFromPrompt(prompt: string): string[] {
   const tokens = prompt
     .split(/\s+/)
@@ -77,6 +120,18 @@ function extractImagePathsFromPrompt(prompt: string): string[] {
   return Array.from(new Set(paths));
 }
 
+// 描述:
+//
+//   - 根据提示词语义与输入资源判断工作流入口节点。
+//
+// Params:
+//
+//   - prompt: 用户提示词。
+//   - referenceImages: 参考图路径列表。
+//
+// Returns:
+//
+//   - 入口节点类型。
 function detectEntryNodeKind(prompt: string, referenceImages: string[]): WorkflowNodeKind {
   const lower = prompt.toLowerCase();
 
@@ -151,6 +206,17 @@ function detectEntryNodeKind(prompt: string, referenceImages: string[]): Workflo
   return "input";
 }
 
+// 描述:
+//
+//   - 生成提示词摘要，用于结构化约束节点输出。
+//
+// Params:
+//
+//   - prompt: 用户提示词。
+//
+// Returns:
+//
+//   - 包含主体、风格与保留项的摘要对象。
 function summarizePrompt(prompt: string) {
   const words = prompt
     .replace(/[，。！？,.!?]/g, " ")

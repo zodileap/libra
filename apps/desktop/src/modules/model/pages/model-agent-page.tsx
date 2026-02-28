@@ -5,6 +5,9 @@ import { createRuntimeSession } from "../../../shared/services/backend-api";
 import { AgentPage } from "../../../widgets/agent/page";
 import type { LoginUser, ModelMcpCapabilities } from "../../../shared/types";
 
+// 描述:
+//
+//   - 定义模型智能体入口页入参。
 interface ModelAgentPageProps {
   modelMcpCapabilities: ModelMcpCapabilities;
   currentUser: LoginUser | null;

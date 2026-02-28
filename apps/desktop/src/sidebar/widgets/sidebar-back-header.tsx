@@ -1,6 +1,9 @@
 import type { ReactNode } from "react";
 import { AriButton, AriContainer, AriFlex } from "aries_react";
 
+// 描述:
+//
+//   - 定义侧边栏返回头组件入参。
 interface SidebarBackHeaderProps {
   onBack: () => void;
   label?: string;

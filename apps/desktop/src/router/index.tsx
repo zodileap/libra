@@ -28,6 +28,9 @@ import type { AgentKey } from "../shared/types";
 import { isAgentAuthorized, isModuleEnabled, resolveBuildEnabledModules } from "./module-access";
 import type { AuthState, DesktopRouteModuleKey, RouteAccess } from "./types";
 
+// 描述:
+//
+//   - 构建阶段可用模块集合，供路由守卫与导航控制复用。
 const buildEnabledModuleSet = resolveBuildEnabledModules(__DESKTOP_ENABLED_MODULES__);
 
 // 描述：提取路径中的智能体标识，供权限守卫统一复用。

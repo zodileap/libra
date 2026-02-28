@@ -2,6 +2,9 @@ import { AriCard, AriContainer, AriFlex, AriTypography } from "aries_react";
 import { SHORTCUTS } from "../../../shared/data";
 import type { AuthAvailableAgentItem } from "../../../shared/types";
 
+// 描述:
+//
+//   - 定义首页组件入参。
 interface HomePageProps {
   availableAgents: AuthAvailableAgentItem[];
 }
@@ -9,7 +12,7 @@ interface HomePageProps {
 // 描述：展示首页概览与当前用户授权智能体状态。
 export function HomePage({ availableAgents }: HomePageProps) {
   return (
-    <AriContainer className="desk-content">
+    <AriContainer className="desk-content" showBorderRadius={false}>
       <AriFlex vertical align="flex-start" justify="flex-start" space={16}>
         <AriTypography variant="h1" value="欢迎使用 Zodileap Agen" />
         <AriTypography

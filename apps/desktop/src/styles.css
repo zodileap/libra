@@ -1,10 +1,11 @@
 :root {
-  --desk-root-color: var(--z-color-font);
+  --desk-root-color: var(--z-color-text);
   --desk-root-bg: var(--z-color-bg-opacity-blur);
   --desk-sidebar-bg: var(--z-color-use-bg);
   --desk-main-bg: var(--z-color-bg);
   --desk-container-bg: var(--z-color-bg-secondary);
   --desk-font-size: var(--z-font-size);
+  --desk-border-width: calc(var(--z-inset-xs) * 0.25);
   --desk-sidebar-width: calc(var(--z-inset) * 17.5);
   --desk-sidebar-width-compact: calc(var(--z-inset) * 14.5);
   --desk-layout-padding-y: calc(var(--z-inset) * 1.5);
@@ -28,6 +29,7 @@
   --desk-window-min-height: calc(var(--z-inset) * 42);
   --desk-titlebar-height: var(--z-element-size-lg);
   --desk-app-header-height: 40px;
+  --desk-agent-surface-padding-top: calc(var(--desk-app-header-height));
   --desk-breakpoint-lg: calc(var(--z-inset) * 80);
   --desk-breakpoint-md: calc(var(--z-inset) * 64);
   --desk-breakpoint-sm: calc(var(--z-inset) * 56);
@@ -35,13 +37,13 @@
   --desk-workflow-node-height: calc(var(--z-inset) * 7.5);
   --desk-workflow-canvas-height: calc(var(--z-inset) * 36);
   --desk-workflow-inspector-width: calc(var(--z-inset) * 20);
-  --desk-workflow-edge-width: calc(var(--z-border-width) * 1.5);
+  --desk-workflow-edge-width: calc(var(--desk-border-width) * 1.5);
   --desk-workflow-grid-size: calc(var(--z-inset) * 1.5);
   --desk-workflow-shell-width: calc(var(--z-inset) * 86);
   --desk-workflow-card-gap: var(--z-inset-sm);
   --desk-workflow-card-padding: var(--z-inset);
   --desk-workflow-card-border: color-mix(in srgb, var(--z-color-primary) 24%, var(--z-color-border-glass));
-  --desk-workflow-muted-text: color-mix(in srgb, var(--z-color-font) 74%, var(--z-color-border-glass));
+  --desk-workflow-muted-text: color-mix(in srgb, var(--z-color-text) 74%, var(--z-color-border-glass));
   --desk-workflow-summary-min-width: calc(var(--z-inset) * 8.5);
   --desk-workflow-toolbar-min-height: calc(var(--z-inset) * 4.5);
   --desk-workflow-sidebar-width: calc(var(--z-inset) * 21);
@@ -102,12 +104,29 @@ body {
   -webkit-app-region: drag;
 }
 
+.desk-app-header-inner,
+.desk-app-header-leading,
+.desk-app-header-slot,
+.desk-app-header-slot-inner,
+.desk-app-header-slot-content,
+.desk-session-head-wrap,
+.desk-session-head-bar,
+.desk-session-head-main,
+.desk-session-head-title,
+.desk-session-head-parent-hint {
+  -webkit-app-region: drag;
+  user-select: none;
+  cursor: default;
+}
+
 .desk-app-header button,
 .desk-app-header [role="button"],
 .desk-app-header a,
 .desk-app-header input,
 .desk-app-header textarea,
-.desk-app-header select {
+.desk-app-header select,
+.desk-app-header .ari-menu,
+.desk-app-header .ari-menu * {
   -webkit-app-region: no-drag;
 }
 
@@ -137,9 +156,24 @@ body {
 .desk-app-header-slot {
   min-width: 0;
   height: 100%;
+  overflow: hidden;
+}
+
+.desk-app-header-slot-inner {
+  width: 100%;
+  height: 100%;
+}
+
+.desk-app-header-slot-content {
+  min-width: 0;
+  height: 100%;
   display: flex;
   align-items: center;
   overflow: hidden;
+}
+
+.desk-app-header-global-actions {
+  flex-shrink: 0;
 }
 
 .desk-app-sidebar-wrap {
@@ -149,7 +183,7 @@ body {
 
 .desk-sidebar {
   height: 100%;
-  border-right: var(--z-border-width) solid var(--z-color-border-glass);
+  border-right: var(--desk-border-width) solid var(--z-color-border-glass);
   background: var(--desk-sidebar-bg);
   padding: calc(var(--z-inset) + var(--desk-app-header-height)) var(--z-inset) var(--z-inset);
   display: flex;
@@ -158,7 +192,11 @@ body {
 }
 
 .desk-agent-sidebar {
-  padding-top: calc(var(--desk-app-header-height) + var(--z-inset-sm));
+  /* 描述:
+   *
+   *   - 智能体侧边栏与主内容区共用顶部留白，确保二者在固定标题栏下垂直起点一致。
+   */
+  padding-top: var(--desk-agent-surface-padding-top);
   padding-bottom: var(--z-inset-sm);
 }
 
@@ -172,7 +210,7 @@ body {
 }
 
 .desk-code-workspace-empty {
-  border: var(--z-border-width) solid var(--z-color-border-glass);
+  border: var(--desk-border-width) solid var(--z-color-border-glass);
   border-radius: var(--z-border-radius);
   background: var(--desk-container-bg);
   padding: var(--z-inset-sm);
@@ -184,7 +222,7 @@ body {
 }
 
 .desk-context-menu-item-icon {
-  color: color-mix(in srgb, var(--z-color-font) 82%, var(--z-color-border-glass));
+  color: color-mix(in srgb, var(--z-color-text) 82%, var(--z-color-border-glass));
   flex-shrink: 0;
 }
 
@@ -219,7 +257,7 @@ body {
   margin-top: var(--z-inset-sm);
   padding: var(--z-inset-sm) var(--z-inset);
   border-radius: var(--z-border-radius-lg);
-  border: var(--z-border-width) solid var(--z-color-border-glass);
+  border: var(--desk-border-width) solid var(--z-color-border-glass);
   background: var(--z-color-use-bg);
   cursor: pointer;
   transition:
@@ -245,29 +283,26 @@ body {
 .desk-user-trigger:hover {
   background: var(--desk-sidebar-entry-hover-bg);
   border-color: var(--desk-sidebar-entry-hover-border);
-  box-shadow: var(--z-shadow);
+  box-shadow: var(--z-color-box-shadow);
 }
 
 .desk-user-trigger-wrap:hover .desk-user-trigger {
   background: var(--desk-sidebar-entry-hover-bg);
   border-color: var(--desk-sidebar-entry-hover-border);
-  box-shadow: var(--z-shadow);
+  box-shadow: var(--z-color-box-shadow);
 }
 
 .desk-user-trigger:focus-visible {
   background: var(--desk-sidebar-entry-hover-bg);
   border-color: var(--desk-sidebar-entry-hover-border);
-  box-shadow: var(--z-shadow);
+  box-shadow: var(--z-color-box-shadow);
 }
 
 .desk-main {
   height: 100%;
   overflow: auto;
   background: var(--desk-main-bg);
-  padding:
-    calc(var(--desk-layout-padding-y) + var(--desk-app-header-height))
-    var(--desk-layout-padding-x)
-    var(--desk-layout-padding-y);
+  padding: 0;
   min-height: 0;
   display: flex;
   scrollbar-gutter: stable;
@@ -278,6 +313,13 @@ body {
   width: 100%;
   min-height: 100%;
   min-width: 0;
+  /* 描述:
+   *
+   *   - 主内容区统一由样式层管理内边距，避免在各页面容器重复传入 padding props。
+   *   - 主内容区顶部留白与智能体侧边栏保持一致，避免内容被固定标题栏遮挡。
+   */
+  padding: 0;
+  padding-top: var(--desk-agent-surface-padding-top);
 }
 
 .desk-block {
@@ -358,7 +400,7 @@ body {
 }
 
 .desk-section-label {
-  opacity: var(--z-opacity);
+  opacity: var(--z-color-opacity-disabled);
 }
 
 .desk-settings-title {
@@ -366,14 +408,14 @@ body {
 }
 
 .desk-settings-panel {
-  border: var(--z-border-width) solid var(--z-color-border-glass);
+  border: var(--desk-border-width) solid var(--z-color-border-glass);
   border-radius: var(--z-border-radius-lg);
   background: var(--desk-container-bg);
   overflow: hidden;
 }
 
 .desk-agent-settings-note-card {
-  border: var(--z-border-width) solid var(--z-color-border-glass);
+  border: var(--desk-border-width) solid var(--z-color-border-glass);
   border-radius: var(--z-border-radius-lg);
   background: var(--desk-container-bg);
   padding: var(--z-inset-sm) var(--z-inset);
@@ -385,7 +427,7 @@ body {
   justify-content: space-between;
   gap: var(--z-inset);
   padding: var(--z-inset);
-  border-bottom: var(--z-border-width) solid var(--z-color-border-glass);
+  border-bottom: var(--desk-border-width) solid var(--z-color-border-glass);
   min-height: calc(var(--z-inset) * 4);
 }
 
@@ -407,14 +449,6 @@ body {
   justify-content: flex-end;
 }
 
-.desk-workflow-editor-shell {
-  width: 100%;
-  min-height: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: var(--z-inset);
-}
-
 .desk-workflow-editor-main {
   width: 100%;
   flex: 1 1 auto;
@@ -425,9 +459,9 @@ body {
 .desk-workflow-editor-stage {
   min-height: 0;
   height: 100%;
-  border: var(--z-border-width) solid var(--desk-workflow-card-border);
+  border: var(--desk-border-width) solid var(--desk-workflow-card-border);
   border-radius: var(--z-border-radius-lg);
-  box-shadow: var(--z-shadow);
+  box-shadow: var(--z-color-box-shadow);
   background: var(--desk-container-bg);
   padding: var(--desk-workflow-stage-padding);
   display: flex;
@@ -471,7 +505,7 @@ body {
 }
 
 .desk-workflow-editor-floating-meta {
-  border: var(--z-border-width) solid var(--z-color-border-glass);
+  border: var(--desk-border-width) solid var(--z-color-border-glass);
   border-radius: var(--z-border-radius);
   padding: var(--z-inset-sm);
   display: grid;
@@ -489,29 +523,30 @@ body {
 
 .desk-workflow-reactflow-wrap {
   height: var(--desk-workflow-canvas-height);
-  border: var(--z-border-width) solid color-mix(in srgb, var(--z-color-primary) 26%, var(--z-color-border-glass));
+  border: var(--desk-border-width) solid color-mix(in srgb, var(--z-color-primary) 26%, var(--z-color-border-glass));
   border-radius: var(--z-border-radius-lg);
   overflow: hidden;
-  background: var(--desk-container-bg);
+  background: var(--z-color-bg-tertiary);
 }
 
 .desk-workflow-reactflow {
   width: 100%;
   height: 100%;
+  background-color: var(--z-color-bg-tertiary);
   background:
     radial-gradient(
       circle,
-      color-mix(in srgb, var(--z-color-primary) 16%, transparent) var(--z-border-width),
-      transparent var(--z-border-width)
+      color-mix(in srgb, var(--z-color-primary) 16%, transparent) var(--desk-border-width),
+      transparent var(--desk-border-width)
     ),
     linear-gradient(
       90deg,
-      color-mix(in srgb, var(--z-color-border-glass) 55%, transparent) var(--z-border-width),
-      transparent var(--z-border-width)
+      color-mix(in srgb, var(--z-color-border-glass) 55%, transparent) var(--desk-border-width),
+      transparent var(--desk-border-width)
     ),
     linear-gradient(
-      color-mix(in srgb, var(--z-color-border-glass) 55%, transparent) var(--z-border-width),
-      transparent var(--z-border-width)
+      color-mix(in srgb, var(--z-color-border-glass) 55%, transparent) var(--desk-border-width),
+      transparent var(--desk-border-width)
     );
   background-size:
     calc(var(--desk-workflow-grid-size) * 0.8) calc(var(--desk-workflow-grid-size) * 0.8),
@@ -520,58 +555,278 @@ body {
 }
 
 .desk-workflow-reactflow-bg {
-  opacity: var(--z-opacity);
+  opacity: var(--z-color-opacity-disabled);
 }
 
-.desk-workflow-reactflow .react-flow__node-default.desk-workflow-flow-node {
-  min-width: var(--desk-workflow-node-width);
-  min-height: calc(var(--desk-workflow-node-height) * 0.72);
-  border: var(--z-border-width) solid color-mix(in srgb, var(--z-color-primary) 28%, var(--z-color-border-glass));
+.desk-workflow-reactflow .react-flow__node-workflowNode,
+.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node,
+.desk-workflow-reactflow .react-flow__node-workflowNode.desk-workflow-flow-node {
+  padding: 0;
+  border: calc(var(--desk-border-width) * 1.5) solid transparent;
   border-radius: var(--z-border-radius-lg);
-  padding: var(--z-inset-sm);
   background: var(--desk-container-bg);
-  box-shadow: var(--z-shadow);
-  color: var(--z-color-font);
+  box-shadow: var(--z-color-box-shadow);
+  color: var(--z-color-text);
   transition:
     border-color var(--z-duration-fast-4),
-    background-color var(--z-duration-fast-4),
+    box-shadow var(--z-duration-fast-4),
+    transform var(--z-duration-fast-4);
+}
+
+.desk-workflow-reactflow .react-flow__node-workflowNode.selected,
+.desk-workflow-reactflow .react-flow__node-workflowNode.is-active,
+.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.selected,
+.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.is-active {
+  border-color: var(--z-color-border-active);
+  box-shadow: var(--z-color-box-shadow-popover);
+  transform: translateY(calc(var(--desk-border-width) * -0.5));
+}
+
+.desk-workflow-node-body {
+  display: flex;
+  flex-direction: column;
+  min-width: var(--desk-workflow-node-width);
+  min-height: calc(var(--desk-workflow-node-height) * 0.72);
+  border: none;
+  border-radius: inherit;
+  background: transparent;
+  overflow: hidden;
+}
+
+.desk-workflow-node-head {
+  min-height: calc(var(--z-inset) * 2.35);
+  padding: var(--z-inset-sm) var(--z-inset);
+  background: color-mix(in srgb, var(--z-color-border-brand) 14%, var(--desk-container-bg));
+  border-bottom: var(--desk-border-width) solid
+    color-mix(in srgb, var(--z-color-border-brand) 28%, var(--z-color-border-glass));
+}
+
+.desk-workflow-node-head-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.desk-workflow-node-head-icon {
+  flex-shrink: 0;
+  color: color-mix(in srgb, var(--z-color-border-brand) 82%, var(--z-color-text));
+}
+
+.desk-workflow-reactflow .react-flow__node-workflowNode.selected .desk-workflow-node-head,
+.desk-workflow-reactflow .react-flow__node-workflowNode.is-active .desk-workflow-node-head,
+.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.selected .desk-workflow-node-head,
+.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.is-active .desk-workflow-node-head {
+  background: color-mix(in srgb, var(--z-color-border-active) 12%, var(--desk-container-bg));
+  border-bottom-color: color-mix(in srgb, var(--z-color-border-active) 34%, var(--z-color-border-glass));
+}
+
+.desk-workflow-reactflow .react-flow__node-workflowNode.selected .desk-workflow-node-head-icon,
+.desk-workflow-reactflow .react-flow__node-workflowNode.is-active .desk-workflow-node-head-icon,
+.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.selected .desk-workflow-node-head-icon,
+.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.is-active .desk-workflow-node-head-icon {
+  color: color-mix(in srgb, var(--z-color-border-active) 80%, var(--z-color-text));
+}
+
+.desk-workflow-node-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--z-color-text);
+}
+
+.desk-workflow-node-kind-pill {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: calc(var(--z-inset-xs) * 0.75) var(--z-inset-sm);
+  border: var(--desk-border-width) solid
+    color-mix(in srgb, var(--z-color-border-brand) 70%, var(--z-color-border-glass));
+  border-radius: var(--z-border-radius);
+  background: color-mix(in srgb, var(--z-color-border-brand) 8%, var(--desk-container-bg));
+}
+
+.desk-workflow-node-kind-pill-text {
+  color: color-mix(in srgb, var(--z-color-border-brand) 82%, var(--z-color-text));
+}
+
+.desk-workflow-reactflow .react-flow__node-workflowNode.selected .desk-workflow-node-kind-pill,
+.desk-workflow-reactflow .react-flow__node-workflowNode.is-active .desk-workflow-node-kind-pill,
+.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.selected .desk-workflow-node-kind-pill,
+.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.is-active .desk-workflow-node-kind-pill {
+  border-color: color-mix(in srgb, var(--z-color-border-active) 70%, var(--z-color-border-glass));
+  background: color-mix(in srgb, var(--z-color-border-active) 10%, var(--desk-container-bg));
+}
+
+.desk-workflow-reactflow .react-flow__node-workflowNode.selected .desk-workflow-node-kind-pill-text,
+.desk-workflow-reactflow .react-flow__node-workflowNode.is-active .desk-workflow-node-kind-pill-text,
+.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.selected .desk-workflow-node-kind-pill-text,
+.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.is-active .desk-workflow-node-kind-pill-text {
+  color: color-mix(in srgb, var(--z-color-border-active) 82%, var(--z-color-text));
+}
+
+.desk-workflow-node-content {
+  margin: var(--z-inset-sm) var(--z-inset) var(--z-inset);
+  padding: var(--z-inset-sm);
+  min-height: calc(var(--z-inset) * 1.9);
+  display: flex;
+  align-items: center;
+  border: var(--desk-border-width) solid
+    color-mix(in srgb, var(--z-color-border-brand) 32%, var(--z-color-border-glass));
+  border-radius: var(--z-border-radius);
+  background: color-mix(in srgb, var(--z-color-bg) 94%, var(--z-color-border-glass));
+}
+
+.desk-workflow-reactflow .react-flow__node-workflowNode.selected .desk-workflow-node-content,
+.desk-workflow-reactflow .react-flow__node-workflowNode.is-active .desk-workflow-node-content,
+.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.selected .desk-workflow-node-content,
+.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.is-active .desk-workflow-node-content {
+  border-color: color-mix(in srgb, var(--z-color-border-active) 44%, var(--z-color-border-glass));
+}
+
+.desk-workflow-node-description {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--desk-workflow-muted-text);
+}
+
+.desk-workflow-reactflow .react-flow__handle.desk-workflow-node-handle {
+  width: calc(var(--z-inset-sm) * 0.78);
+  height: calc(var(--z-inset-sm) * 0.78);
+  border: var(--desk-border-width) solid color-mix(in srgb, var(--z-color-border-brand) 72%, var(--z-color-border-glass));
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--z-color-border-brand) 84%, var(--desk-container-bg));
+  box-shadow:
+    0 0 0 var(--desk-border-width) color-mix(in srgb, var(--z-color-border-brand) 30%, transparent),
+    0 0 calc(var(--z-inset-sm) * 0.66) color-mix(in srgb, var(--z-color-border-brand) 26%, transparent);
+  opacity: 0;
+  transform: scale(0.8);
+  transition:
+    opacity var(--z-duration-fast-4),
+    transform var(--z-duration-fast-4),
+    border-color var(--z-duration-fast-4),
     box-shadow var(--z-duration-fast-4);
 }
 
-.desk-workflow-reactflow .react-flow__node-default.desk-workflow-flow-node.selected,
-.desk-workflow-reactflow .react-flow__node-default.desk-workflow-flow-node.is-active {
-  border-color: color-mix(in srgb, var(--z-color-primary) 76%, var(--z-color-border-glass));
-  background: color-mix(in srgb, var(--z-color-primary) 10%, var(--desk-container-bg));
+.desk-workflow-reactflow .react-flow__node:hover .react-flow__handle.desk-workflow-node-handle,
+.desk-workflow-reactflow .react-flow__node.selected .react-flow__handle.desk-workflow-node-handle,
+.desk-workflow-reactflow .react-flow__node.is-active .react-flow__handle.desk-workflow-node-handle {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.desk-workflow-reactflow .react-flow__node.selected .react-flow__handle.desk-workflow-node-handle,
+.desk-workflow-reactflow .react-flow__node.is-active .react-flow__handle.desk-workflow-node-handle {
+  border-color: color-mix(in srgb, var(--z-color-border-active) 52%, var(--z-color-border-brand));
+  background: color-mix(in srgb, var(--z-color-border-active) 82%, var(--desk-container-bg));
   box-shadow:
-    0 0 0 var(--z-border-width) color-mix(in srgb, var(--z-color-primary) 62%, transparent),
-    var(--z-shadow);
+    0 0 0 var(--desk-border-width) color-mix(in srgb, var(--z-color-border-active) 40%, transparent),
+    0 0 calc(var(--z-inset-sm) * 0.75) color-mix(in srgb, var(--z-color-border-active) 30%, transparent);
+}
+
+.desk-workflow-node-resize-line {
+  border-color: color-mix(in srgb, var(--z-color-border-active) 72%, var(--z-color-border-glass));
+}
+
+.desk-workflow-node-resize-handle {
+  width: var(--z-inset-sm);
+  height: var(--z-inset-sm);
+  border: var(--desk-border-width) solid var(--z-color-border-active);
+  border-radius: var(--z-border-radius-sm);
+  background: var(--desk-container-bg);
 }
 
 .desk-workflow-reactflow .react-flow__edge.desk-workflow-flow-edge .react-flow__edge-path,
 .desk-workflow-reactflow .react-flow__connection-path {
-  stroke: color-mix(in srgb, var(--z-color-primary) 68%, var(--z-color-border-glass));
+  stroke: color-mix(in srgb, var(--z-color-border-brand) 68%, var(--z-color-border-glass));
   stroke-width: var(--desk-workflow-edge-width);
   transition:
     stroke var(--z-duration-fast-4),
     stroke-width var(--z-duration-fast-4);
 }
 
+.desk-workflow-reactflow .react-flow__edge.desk-workflow-flow-edge .react-flow__arrowhead path {
+  fill: color-mix(in srgb, var(--z-color-border-brand) 74%, var(--z-color-border-glass));
+  stroke: color-mix(in srgb, var(--z-color-border-brand) 74%, var(--z-color-border-glass));
+  transition:
+    fill var(--z-duration-fast-4),
+    stroke var(--z-duration-fast-4);
+}
+
 .desk-workflow-reactflow .react-flow__edge.desk-workflow-flow-edge.selected .react-flow__edge-path,
 .desk-workflow-reactflow .react-flow__edge.desk-workflow-flow-edge.is-active .react-flow__edge-path {
-  stroke: color-mix(in srgb, var(--z-color-warning) 70%, var(--z-color-primary));
-  stroke-width: calc(var(--desk-workflow-edge-width) + var(--z-border-width));
+  stroke: color-mix(in srgb, var(--z-color-border-active) 70%, var(--z-color-border-brand));
+  stroke-width: calc(var(--desk-workflow-edge-width) + var(--desk-border-width));
+}
+
+.desk-workflow-reactflow .react-flow__edge.desk-workflow-flow-edge.selected .react-flow__arrowhead path,
+.desk-workflow-reactflow .react-flow__edge.desk-workflow-flow-edge.is-active .react-flow__arrowhead path {
+  fill: color-mix(in srgb, var(--z-color-border-active) 74%, var(--z-color-border-brand));
+  stroke: color-mix(in srgb, var(--z-color-border-active) 74%, var(--z-color-border-brand));
+}
+
+.desk-workflow-reactflow .react-flow__edgeupdater {
+  fill: transparent;
+  stroke: transparent;
+  stroke-width: calc(var(--desk-border-width) * 1.4);
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: scale(0.66);
+  filter: none;
+  transition:
+    opacity var(--z-duration-fast-4),
+    transform var(--z-duration-fast-4),
+    fill var(--z-duration-fast-4),
+    stroke var(--z-duration-fast-4);
+}
+
+.desk-workflow-reactflow .react-flow__edge.selected .react-flow__edgeupdater,
+.desk-workflow-reactflow .react-flow__edge.is-active .react-flow__edgeupdater {
+  fill: color-mix(in srgb, var(--z-color-border-active) 56%, var(--z-color-border-brand));
+  stroke: color-mix(in srgb, var(--desk-container-bg) 70%, transparent);
+  opacity: 1;
+  transform: scale(0.78);
+  filter: drop-shadow(
+    0 0 calc(var(--z-inset-sm) * 0.4)
+      color-mix(in srgb, var(--z-color-border-active) 30%, transparent)
+  );
 }
 
 .desk-workflow-reactflow .react-flow__minimap {
-  border: var(--z-border-width) solid var(--desk-workflow-card-border);
+  border: var(--desk-border-width) solid var(--desk-workflow-card-border);
   border-radius: var(--z-border-radius);
   background: var(--desk-container-bg);
-  box-shadow: var(--z-shadow);
+  box-shadow: var(--z-color-box-shadow);
 }
 
 .desk-workflow-inspector-grid {
   display: grid;
   gap: var(--z-inset-sm);
+}
+
+.desk-workflow-head-wrap {
+  min-height: 0;
+  padding: 0;
+  width: 100%;
+}
+
+.desk-workflow-head-bar {
+  min-height: var(--desk-app-header-height);
+  width: 100%;
+}
+
+.desk-workflow-head-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desk-workflow-head-actions {
+  flex-shrink: 0;
 }
 
 .desk-theme-group {
@@ -635,7 +890,7 @@ body {
 }
 
 .desk-session-head-parent-hint {
-  color: color-mix(in srgb, var(--z-color-font) 64%, var(--z-color-border-glass));
+  color: color-mix(in srgb, var(--z-color-text) 64%, var(--z-color-border-glass));
   white-space: nowrap;
 }
 
@@ -684,16 +939,16 @@ body {
   bottom: 0;
   z-index: 1;
   padding: var(--z-inset-xs) var(--z-inset-sm);
-  border: var(--z-border-width) solid var(--z-color-border-glass);
+  border: var(--desk-border-width) solid var(--z-color-border-glass);
   border-radius: var(--z-border-radius-lg);
   background: var(--desk-container-bg);
-  box-shadow: var(--z-shadow);
+  box-shadow: var(--z-color-box-shadow);
   pointer-events: none;
 }
 
 .desk-action-slot {
   margin-bottom: var(--z-inset-sm);
-  border: var(--z-border-width) solid var(--z-color-border-glass);
+  border: var(--desk-border-width) solid var(--z-color-border-glass);
   border-radius: var(--z-border-radius);
   background: var(--desk-container-bg);
   padding: var(--z-inset-sm);
@@ -742,7 +997,7 @@ body {
 }
 
 .desk-dev-debug-card {
-  border: var(--z-border-width) solid var(--z-color-border-glass);
+  border: var(--desk-border-width) solid var(--z-color-border-glass);
   background: var(--desk-container-bg);
 }
 
@@ -760,7 +1015,7 @@ body {
 }
 
 .desk-dev-debug-section {
-  border: var(--z-border-width) solid var(--z-color-border-glass);
+  border: var(--desk-border-width) solid var(--z-color-border-glass);
   border-radius: var(--z-border-radius);
   padding: var(--z-inset-sm);
 }
@@ -818,7 +1073,7 @@ body {
 
 .desk-agent-guide-card {
   width: 100%;
-  border: var(--z-border-width) solid var(--z-color-border-glass);
+  border: var(--desk-border-width) solid var(--z-color-border-glass);
   background: var(--desk-container-bg);
 }
 
@@ -831,7 +1086,7 @@ body {
 
 .desk-code-workspace-onboarding-card {
   width: min(100%, calc(var(--z-inset) * 34));
-  border: var(--z-border-width) solid var(--z-color-border-glass);
+  border: var(--desk-border-width) solid var(--z-color-border-glass);
   background: var(--desk-container-bg);
 }
 
@@ -842,7 +1097,7 @@ body {
 }
 
 .desk-code-workspace-method-card {
-  border: var(--z-border-width) solid var(--z-color-border-glass);
+  border: var(--desk-border-width) solid var(--z-color-border-glass);
   background: var(--z-color-use-bg);
 }
 
@@ -904,11 +1159,11 @@ body {
 }
 
 .desk-run-intro {
-  color: var(--z-color-font);
+  color: var(--z-color-text);
 }
 
 .desk-run-step {
-  color: color-mix(in srgb, var(--z-color-font) 56%, var(--z-color-border-glass));
+  color: color-mix(in srgb, var(--z-color-text) 56%, var(--z-color-border-glass));
 }
 
 .desk-run-step-running {
@@ -925,18 +1180,18 @@ body {
   align-items: center;
   gap: var(--z-inset-sm);
   cursor: pointer;
-  color: var(--z-color-font);
+  color: var(--z-color-text);
 }
 
 .desk-run-divider-line {
   flex: 1;
-  height: var(--z-border-width);
+  height: var(--desk-border-width);
   background: color-mix(in srgb, var(--z-color-border-glass) 76%, var(--z-color-primary) 24%);
 }
 
 .desk-run-divider-text {
   white-space: nowrap;
-  color: color-mix(in srgb, var(--z-color-font) 68%, var(--z-color-border-glass));
+  color: color-mix(in srgb, var(--z-color-text) 68%, var(--z-color-border-glass));
 }
 
 .desk-run-divider-arrow {
@@ -949,14 +1204,14 @@ body {
 }
 
 .desk-run-segments-collapsed {
-  border: var(--z-border-width) solid var(--z-color-border-glass);
+  border: var(--desk-border-width) solid var(--z-color-border-glass);
   border-radius: var(--z-border-radius);
   padding: var(--z-inset-sm);
   background: var(--desk-container-bg);
 }
 
 .desk-run-summary {
-  border-top: var(--z-border-width) solid color-mix(in srgb, var(--z-color-border-glass) 72%, transparent);
+  border-top: var(--desk-border-width) solid color-mix(in srgb, var(--z-color-border-glass) 72%, transparent);
   padding-top: var(--z-inset-sm);
 }
 
@@ -968,7 +1223,7 @@ body {
 }
 
 .desk-session-empty-card {
-  border: var(--z-border-width) solid var(--z-color-border-glass);
+  border: var(--desk-border-width) solid var(--z-color-border-glass);
   background: var(--desk-container-bg);
 }
 
@@ -988,7 +1243,7 @@ body {
 }
 
 .desk-chat-markdown {
-  color: var(--z-color-font);
+  color: var(--z-color-text);
   display: grid;
   gap: var(--z-inset-sm);
 }
@@ -998,7 +1253,7 @@ body {
   white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.6;
-  font-family: var(--z-font-family);
+  font-family: var(--z-font-family-base);
 }
 
 .desk-md-text-block {
@@ -1008,7 +1263,7 @@ body {
 
 .desk-md-paragraph {
   margin: 0;
-  color: var(--z-color-font);
+  color: var(--z-color-text);
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1016,7 +1271,7 @@ body {
 
 .desk-md-heading {
   margin: 0;
-  color: var(--z-color-font);
+  color: var(--z-color-text);
   line-height: 1.4;
 }
 
@@ -1046,7 +1301,7 @@ body {
 .desk-md-quote {
   margin: 0;
   padding: var(--z-inset-sm) var(--z-inset);
-  border-left: var(--z-border-width) solid var(--z-color-border-glass);
+  border-left: var(--desk-border-width) solid var(--z-color-border-glass);
   background: var(--desk-container-bg);
   border-radius: var(--z-border-radius);
 }
@@ -1056,8 +1311,8 @@ body {
   padding: 0 calc(var(--z-inset-sm) * 0.8);
   border-radius: var(--z-border-radius-sm);
   background: var(--desk-container-bg);
-  border: var(--z-border-width) solid var(--z-color-border-glass);
-  font-family: var(--z-font-code-family);
+  border: var(--desk-border-width) solid var(--z-color-border-glass);
+  font-family: var(--z-font-family-mono);
   font-size: calc(var(--z-font-size) * 0.92);
 }
 
@@ -1067,7 +1322,7 @@ body {
 }
 
 .desk-md-code-wrap {
-  border: var(--z-border-width) solid var(--z-color-border-glass);
+  border: var(--desk-border-width) solid var(--z-color-border-glass);
   border-radius: var(--z-border-radius);
   overflow: hidden;
   max-height: calc(var(--z-inset) * 26);
@@ -1075,7 +1330,7 @@ body {
 
 .desk-feedback-state {
   margin-bottom: var(--z-inset-sm);
-  border: var(--z-border-width) solid var(--z-color-border-glass);
+  border: var(--desk-border-width) solid var(--z-color-border-glass);
   border-radius: var(--z-border-radius);
   background: var(--desk-container-bg);
   padding: var(--z-inset-sm) var(--z-inset);
@@ -1154,8 +1409,8 @@ body {
 }
 
 :where(button, [role="button"], a, input, textarea, select, [tabindex]):focus-visible {
-  outline: calc(var(--z-border-width) * 2) solid color-mix(in srgb, var(--z-color-primary) 70%, var(--z-color-use-bg));
-  outline-offset: var(--z-border-width);
+  outline: calc(var(--desk-border-width) * 2) solid color-mix(in srgb, var(--z-color-primary) 70%, var(--z-color-use-bg));
+  outline-offset: var(--desk-border-width);
 }
 
 @media (max-width: var(--desk-breakpoint-lg)) {
@@ -1165,10 +1420,7 @@ body {
   }
 
   .desk-main {
-    padding:
-      calc(calc(var(--z-inset) * 1.25) + var(--desk-app-header-height))
-      var(--z-inset)
-      calc(var(--z-inset) * 1.25);
+    padding: 0;
   }
 
   .desk-shortcuts {
@@ -1238,13 +1490,10 @@ body {
   .desk-sidebar {
     height: auto;
     border-right: none;
-    border-bottom: var(--z-border-width) solid var(--z-color-border-glass);
+    border-bottom: var(--desk-border-width) solid var(--z-color-border-glass);
   }
 
   .desk-main {
-    padding:
-      calc(var(--z-inset-sm) + var(--desk-app-header-height))
-      var(--z-inset-sm)
-      var(--z-inset-sm);
+    padding: 0;
   }
 }

@@ -3,6 +3,9 @@ import { AriButton, AriContainer, AriFlex, AriSwitch } from "aries_react";
 import type { ColorThemeMode } from "../types";
 import { DeskPageHeader, DeskSectionTitle, DeskSettingsRow } from "../../../widgets/settings-primitives";
 
+// 描述:
+//
+//   - 定义通用设置页组件入参。
 interface SettingsGeneralPageProps {
   colorThemeMode: ColorThemeMode;
   onColorThemeModeChange: (value: ColorThemeMode) => void;
@@ -19,7 +22,7 @@ export function SettingsGeneralPage({
   const [pointerCursor, setPointerCursor] = useState(false);
 
   return (
-    <AriContainer className="desk-content">
+    <AriContainer className="desk-content" showBorderRadius={false}>
       <AriContainer className="desk-settings-shell">
         <DeskPageHeader
           title="General"

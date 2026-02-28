@@ -50,7 +50,7 @@ export function AgentPage({
   }
 
   return (
-    <AriContainer className="desk-content desk-session-content" height="100%">
+    <AriContainer className="desk-content desk-session-content" height="100%" showBorderRadius={false}>
       <AriContainer className="desk-session-shell">
         <AriContainer className="desk-session-head">
           <AriTypography variant="h1" value={title} />

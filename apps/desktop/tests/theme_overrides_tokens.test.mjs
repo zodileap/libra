@@ -27,6 +27,18 @@ function readThemeOverrideSource() {
   return fs.readFileSync(sourcePath, "utf8");
 }
 
+// 描述：
+//
+//   - 读取 Desktop 全局样式文件，校验标题栏覆盖模式下的布局安全区。
+//
+// Returns:
+//
+//   - 全局样式源码文本。
+function readDesktopStyleSource() {
+  const sourcePath = path.resolve(process.cwd(), "src/styles.css");
+  return fs.readFileSync(sourcePath, "utf8");
+}
+
 test("TestDesktopThemeOverrideShouldSetBorderRadiusTo18Px", () => {
   const css = readThemeOverrideSource();
   assert.equal(
@@ -64,5 +76,36 @@ test("TestDesktopTauriWindowShouldEnableTransparent", () => {
     mainWindow?.transparent,
     true,
     "tauri 主窗口需启用 transparent，才能看到桌面透出效果"
+  );
+  assert.equal(
+    mainWindow?.titleBarStyle,
+    "Overlay",
+    "tauri 主窗口需启用 Overlay 标题栏，才能将窗口按钮区域融合进应用"
+  );
+  assert.equal(
+    mainWindow?.hiddenTitle,
+    true,
+    "tauri 主窗口需隐藏默认标题文本，避免与应用内容重复"
+  );
+});
+
+test("TestDesktopShouldEnableMacOsTitlebarSafeInset", () => {
+  const mainSource = readDesktopMainSource();
+  const styleSource = readDesktopStyleSource();
+
+  assert.match(
+    mainSource,
+    /document\.documentElement\.classList\.add\("desk-platform-macos"\)/,
+    "main.tsx 需在 macOS 下标记平台类名，供标题栏覆盖布局生效"
+  );
+  assert.match(
+    styleSource,
+    /\.desk-platform-macos \.desk-app \{/,
+    "styles.css 需定义 macOS 标题栏覆盖模式的安全区样式"
+  );
+  assert.match(
+    styleSource,
+    /padding-top:\s*env\(titlebar-area-height,\s*calc\(var\(--z-inset\)\s*\*\s*2\.25\)\);/,
+    "macOS 标题栏覆盖模式需为应用内容预留顶部安全区"
   );
 });

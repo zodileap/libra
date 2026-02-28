@@ -21,15 +21,22 @@ function readDesktopSource(relativePath) {
 
 test("TestDesktopShouldRenderFloatingHeaderWithDragRegion", () => {
   const layoutSource = readDesktopSource("src/shell/layout.tsx");
+  const headerWidgetSource = readDesktopSource("src/widgets/app-header/index.tsx");
   const styleSource = readDesktopSource("src/styles.css");
 
   // 描述：
   //
-  //   - 布局层应渲染固定 header 与 data-tauri-drag-region，支持拖动头部移动窗口。
-  assert.match(layoutSource, /className="desk-app-header"/);
-  assert.match(layoutSource, /data-tauri-drag-region/);
-  assert.match(layoutSource, /id="desk-app-header-slot"/);
+  //   - 布局层应接入全局标题栏组件，并保留侧边栏折叠与调试浮窗可见性状态。
+  assert.match(layoutSource, /<DesktopAppHeader/);
+  assert.match(layoutSource, /<DevDebugFloat visible=\{debugFloatVisible\} \/>/);
   assert.match(layoutSource, /setSidebarCollapsed/);
+
+  // 描述：
+  //
+  //   - 标题栏组件应提供 drag-region 与页面 slot。
+  assert.match(headerWidgetSource, /className="desk-app-header"/);
+  assert.match(headerWidgetSource, /data-tauri-drag-region/);
+  assert.match(headerWidgetSource, /id="desk-app-header-slot"/);
 
   // 描述：
   //

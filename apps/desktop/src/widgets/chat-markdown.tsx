@@ -1,23 +1,63 @@
 import { Fragment, memo, type ReactNode } from "react";
 import { AriCode, AriContainer } from "aries_react";
 
+// 描述:
+//
+//   - 定义聊天 Markdown 渲染组件的入参，统一承载文本内容、样式类与纯文本模式开关。
 interface ChatMarkdownProps {
   content: string;
   className?: string;
   plainText?: boolean;
 }
 
+// 描述:
+//
+//   - 定义 Markdown 分块结果，当前仅区分普通文本块与代码块。
 type MarkdownBlock =
   | { type: "text"; text: string }
   | { type: "code"; language: string; code: string };
 
+// 描述:
+//
+//   - 匹配三反引号包裹的代码块，并提取语言标签与代码正文。
 const CODE_FENCE_REGEX = /```([a-zA-Z0-9_+\-.#]*)\n?([\s\S]*?)```/g;
+
+// 描述:
+//
+//   - 匹配 Markdown 标题行（1-6 级）。
 const HEADING_REGEX = /^(#{1,6})\s+(.+)$/;
+
+// 描述:
+//
+//   - 匹配无序/有序列表项（"-"、"*"、"1." 等）。
 const LIST_REGEX = /^([-*]|\d+\.)\s+(.+)$/;
+
+// 描述:
+//
+//   - 匹配行内链接语法 [text](url)。
 const LINK_REGEX = /\[([^\]]+)\]\(([^)]+)\)/;
+
+// 描述:
+//
+//   - 匹配整段加粗语法 **text**。
 const BOLD_REGEX = /^\*\*([\s\S]+)\*\*$/;
+
+// 描述:
+//
+//   - 匹配整段斜体语法 *text*。
 const ITALIC_REGEX = /^\*([\s\S]+)\*$/;
 
+// 描述:
+//
+//   - 将原始 Markdown 按代码块切分，供后续分别走文本渲染与代码渲染流程。
+//
+// Params:
+//
+//   - content: 原始 Markdown 文本。
+//
+// Returns:
+//
+//   - 分块后的 Markdown 列表。
 function splitMarkdownBlocks(content: string): MarkdownBlock[] {
   const blocks: MarkdownBlock[] = [];
   let cursor = 0;
@@ -52,6 +92,17 @@ function splitMarkdownBlocks(content: string): MarkdownBlock[] {
   return blocks;
 }
 
+// 描述:
+//
+//   - 解析段落内联语法，支持行内代码、链接、加粗与斜体。
+//
+// Params:
+//
+//   - text: 行内文本。
+//
+// Returns:
+//
+//   - React 可渲染的节点列表。
 function renderInlineMarkdown(text: string): ReactNode[] {
   const parts = text.split(/(`[^`]+`)/g);
   const nodes: ReactNode[] = [];
@@ -101,21 +152,52 @@ function renderInlineMarkdown(text: string): ReactNode[] {
   return nodes;
 }
 
+// 描述:
+//
+//   - 将标题层级映射为统一样式类，控制字号与层次视觉。
+//
+// Params:
+//
+//   - level: 标题等级。
+//
+// Returns:
+//
+//   - 对应标题样式类名。
 function mapHeadingClass(level: number): string {
   if (level <= 1) return "desk-md-heading desk-md-heading-1";
   if (level === 2) return "desk-md-heading desk-md-heading-2";
   return "desk-md-heading desk-md-heading-3";
 }
 
+// 描述:
+//
+//   - 根据代码行数返回编辑器高度，统一使用主题变量避免硬编码像素。
+//
+// Params:
+//
+//   - code: 代码文本。
+//
+// Returns:
+//
+//   - 代码块高度表达式。
 function codeBlockHeight(code: string): string {
-  // 描述:
-  //
-  //   - 根据代码行数返回编辑器高度，统一使用主题变量避免硬编码像素。
   const lineCount = Math.max(code.split("\n").length, 1);
   const blockUnits = Math.min(Math.max(lineCount + 2, 8), 26);
   return `calc(var(--z-inset) * ${blockUnits})`;
 }
 
+// 描述:
+//
+//   - 渲染 Markdown 文本块，支持段落、标题、引用和列表等结构。
+//
+// Params:
+//
+//   - text: 文本块内容。
+//   - blockIndex: 块索引（用于 key 生成）。
+//
+// Returns:
+//
+//   - 文本块对应的渲染节点。
 function renderTextBlock(text: string, blockIndex: number): ReactNode {
   const lines = text.split("\n");
   const nodes: ReactNode[] = [];
@@ -217,6 +299,9 @@ function renderTextBlock(text: string, blockIndex: number): ReactNode {
   );
 }
 
+// 描述:
+//
+//   - 渲染聊天 Markdown 内容，按代码块与文本块分路处理，保证聊天输出可读性。
 export const ChatMarkdown = memo(function ChatMarkdown({
   content,
   className,

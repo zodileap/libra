@@ -2,6 +2,9 @@ import { useState } from "react";
 import { AriContainer } from "aries_react";
 import { SidebarEntryContent } from "./sidebar-entry-content";
 
+// 描述:
+//
+//   - 定义侧边栏快捷入口组件入参。
 interface SidebarQuickActionProps {
   label: string;
   icon: string;

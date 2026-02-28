@@ -14,6 +14,9 @@ import type {
 } from "../types";
 import { DeskPageHeader, DeskSectionTitle, DeskSettingsRow, DeskStatusText } from "../../../widgets/settings-primitives";
 
+// 描述:
+//
+//   - 定义模型智能体设置页入参。
 interface ModelAgentSettingsPageProps {
   modelMcpCapabilities: ModelMcpCapabilities;
   onModelMcpCapabilitiesChange: (value: ModelMcpCapabilities) => void;
@@ -39,6 +42,8 @@ const CAPABILITY_ITEMS: Array<{
   { key: "material", title: "材质贴图", description: "允许创建材质、贴图与通道调整。" },
   { key: "file", title: "文件管理", description: "允许导入/导出/另存以及文件级管理。" },
 ];
+
+// 描述:
 //
 //   - 渲染模型智能体设置页，仅提供能力配置与 Bridge 状态管理。
 //
@@ -90,7 +95,7 @@ export function ModelAgentSettingsPage(props: ModelAgentSettingsPageProps) {
   };
 
   return (
-    <AriContainer className="desk-content">
+    <AriContainer className="desk-content" showBorderRadius={false}>
       <AriContainer className="desk-settings-shell">
         <DeskPageHeader
           title="模型智能体设置"

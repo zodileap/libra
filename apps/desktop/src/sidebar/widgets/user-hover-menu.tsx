@@ -5,6 +5,9 @@ import type { RouteAccess } from "../../router/types";
 import type { LoginUser } from "../../shell/types";
 import { SidebarEntryContent } from "./sidebar-entry-content";
 
+// 描述:
+//
+//   - 定义用户悬浮菜单组件入参。
 interface UserHoverMenuProps {
   user: LoginUser;
   onLogout: () => Promise<void>;
@@ -15,6 +18,7 @@ interface UserHoverMenuProps {
 export function UserHoverMenu({ user, onLogout, routeAccess }: UserHoverMenuProps) {
   const navigate = useNavigate();
   const [entryHovered, setEntryHovered] = useState(false);
+  // 描述：根据模块开关生成用户菜单项列表。
   const menuItems = useMemo(() => {
     const next = [] as Array<{ key: string; label: string; icon: string }>;
 
@@ -27,6 +31,7 @@ export function UserHoverMenu({ user, onLogout, routeAccess }: UserHoverMenuProp
     return next;
   }, [routeAccess]);
 
+  // 描述：用户悬浮菜单弹层内容。
   const content = (
     <AriMenu
       items={menuItems}

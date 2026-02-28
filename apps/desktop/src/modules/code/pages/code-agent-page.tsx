@@ -22,11 +22,17 @@ import { createRuntimeSession } from "../../../shared/services/backend-api";
 import { AgentPage } from "../../../widgets/agent/page";
 import type { LoginUser, ModelMcpCapabilities } from "../../../shared/types";
 
+// 描述:
+//
+//   - 定义代码智能体入口页入参。
 interface CodeAgentPageProps {
   modelMcpCapabilities: ModelMcpCapabilities;
   currentUser: LoginUser | null;
 }
 
+// 描述:
+//
+//   - 定义 Git CLI 检测接口响应结构。
 interface GitCliHealthResponse {
   available: boolean;
   version: string;
@@ -34,6 +40,9 @@ interface GitCliHealthResponse {
   message: string;
 }
 
+// 描述:
+//
+//   - 定义 Git 克隆命令响应结构。
 interface GitCloneResponse {
   path: string;
   name: string;
@@ -66,11 +75,13 @@ export function CodeAgentPage(props: CodeAgentPageProps) {
     refreshWorkspaceGroups();
   }, []);
 
+  // 描述：从 URL 查询参数中读取当前选中的代码目录 ID。
   const selectedWorkspaceIdFromQuery = useMemo(
     () => searchParams.get("workspaceId")?.trim() || "",
     [searchParams],
   );
 
+  // 描述：根据目录 ID 解析当前选中的目录分组实体。
   const selectedWorkspace = useMemo(() => {
     if (!selectedWorkspaceIdFromQuery) {
       return null;
@@ -78,6 +89,7 @@ export function CodeAgentPage(props: CodeAgentPageProps) {
     return workspaceGroups.find((item) => item.id === selectedWorkspaceIdFromQuery) || null;
   }, [selectedWorkspaceIdFromQuery, workspaceGroups]);
 
+  // 描述：当目录选择变化时，持久化最近使用目录，便于下次进入默认定位。
   useEffect(() => {
     if (!selectedWorkspace?.id) {
       return;
@@ -243,6 +255,7 @@ export function CodeAgentPage(props: CodeAgentPageProps) {
     }
   };
 
+  // 描述：定义代码智能体入口页的默认引导卡片文案。
   const starterItems = [
     {
       title: "快速开始",
@@ -254,46 +267,87 @@ export function CodeAgentPage(props: CodeAgentPageProps) {
     },
   ];
 
+  // 描述：当未选中代码目录时展示项目接入引导内容。
   const onboardingContent = !selectedWorkspace ? (
-    <AriContainer className="desk-content desk-code-workspace-onboarding" height="100%">
+    <AriContainer
+      className="desk-content desk-code-workspace-onboarding"
+      height="100%"
+      showBorderRadius={false}
+    >
       <AriCard className="desk-code-workspace-onboarding-card">
-        <AriTypography variant="h3" value="选择代码项目" />
+        <AriTypography variant="h4" value="选择代码项目" />
+
+        {/* 描述：将“项目接入方式”拆分为独立卡片并纵向排列，降低首次接入认知负担。 */}
+        <AriContainer className="desk-code-workspace-method-list">
+          <AriCard className="desk-code-workspace-method-card">
+            <AriFlex
+              justify="flex-start"
+              align="center"
+              className="desk-code-workspace-method-row"
+              flexItem={[{ index: 0, flex: 1, overflow: "visible" }]}
+            >
+              <AriContainer className="desk-code-workspace-method-main">
+                <AriTypography variant="body" value="本地文件夹" />
+              </AriContainer>
+              <AriFlex
+                vertical
+                justify="center"
+                align="flex-end"
+                className="desk-code-workspace-method-action"
+              >
+                <AriButton
+                  color="info"
+                  label={folderPickLoading ? "打开中..." : "选择"}
+                  disabled={folderPickLoading || gitCloneLoading}
+                  onClick={() => {
+                    void handlePickLocalFolder();
+                  }}
+                />
+              </AriFlex>
+            </AriFlex>
+          </AriCard>
+
+          <AriCard className="desk-code-workspace-method-card">
+            <AriFlex
+              justify="flex-start"
+              align="center"
+              className="desk-code-workspace-method-row"
+              flexItem={[{ index: 0, flex: 1, overflow: "visible" }]}
+            >
+              <AriContainer className="desk-code-workspace-method-main">
+                <AriTypography variant="body" value="Git 仓库" />
+                <AriInput
+                  variant="borderless"
+                  value={gitRepoUrl}
+                  onChange={setGitRepoUrl}
+                  placeholder="输入 Git 地址"
+                  className="desk-code-workspace-git-input"
+                />
+              </AriContainer>
+              <AriFlex
+                vertical
+                justify="center"
+                align="flex-end"
+                className="desk-code-workspace-method-action"
+              >
+                <AriButton
+                  color="info"
+                  label={gitCloneLoading ? "开启中..." : "开启"}
+                  disabled={gitCloneLoading || folderPickLoading}
+                  onClick={() => {
+                    void handleCloneGitRepository();
+                  }}
+                />
+              </AriFlex>
+            </AriFlex>
+          </AriCard>
+        </AriContainer>
+
         <AriTypography
+          className="desk-prompt-status"
           variant="caption"
-          value="请选择本地文件夹，或输入 Git 仓库地址创建项目。"
+          value={status || ""}
         />
-
-        <AriContainer className="desk-inline-gap" />
-
-        <AriButton
-          color="primary"
-          icon="folder"
-          label={folderPickLoading ? "打开中..." : "选择本地文件夹"}
-          disabled={folderPickLoading || gitCloneLoading}
-          onClick={() => {
-            void handlePickLocalFolder();
-          }}
-        />
-
-        <AriContainer className="desk-inline-gap" />
-
-        <AriInput
-          variant="borderless"
-          value={gitRepoUrl}
-          onChange={setGitRepoUrl}
-          placeholder="输入 Git 仓库地址，例如：https://github.com/user/repo.git"
-        />
-        <AriFlex justify="flex-end" align="center" className="desk-prompt-toolbar">
-          <AriButton
-            label={gitCloneLoading ? "开启中..." : "开启这个项目"}
-            disabled={gitCloneLoading || folderPickLoading}
-            onClick={() => {
-              void handleCloneGitRepository();
-            }}
-          />
-        </AriFlex>
-
-        <AriTypography className="desk-prompt-status" variant="caption" value={status || ""} />
       </AriCard>
 
       <AriModal
@@ -302,7 +356,7 @@ export function CodeAgentPage(props: CodeAgentPageProps) {
         onClose={() => {
           setGitInstallModalVisible(false);
         }}
-        footer={(
+        footer={
           <AriFlex justify="flex-end" align="center" space={8}>
             <AriButton
               label="取消"
@@ -318,13 +372,17 @@ export function CodeAgentPage(props: CodeAgentPageProps) {
               }}
             />
           </AriFlex>
-        )}
+        }
       >
-        <AriTypography variant="body" value={gitInstallMessage || "未检测到 Git，请先安装后再继续。"} />
+        <AriTypography
+          variant="body"
+          value={gitInstallMessage || "未检测到 Git，请先安装后再继续。"}
+        />
       </AriModal>
     </AriContainer>
   ) : undefined;
 
+  // 描述：当已选中代码目录时展示当前项目信息与切换入口。
   const guideContent = selectedWorkspace ? (
     <AriCard className="desk-agent-guide-card">
       <AriTypography variant="h4" value="当前项目" />

@@ -6,6 +6,9 @@ import {
   DeskSettingsRow,
 } from "../../../widgets/settings-primitives";
 
+// 描述:
+//
+//   - 定义 AI Key 设置页入参。
 interface AiKeyPageProps {
   aiKeys: AiKeyItem[];
   onAiKeysChange: (value: AiKeyItem[]) => void;
@@ -80,7 +83,7 @@ export function AiKeyPage({ aiKeys, onAiKeysChange }: AiKeyPageProps) {
   };
 
   return (
-    <AriContainer className="desk-content">
+    <AriContainer className="desk-content" showBorderRadius={false}>
       <AriContainer className="desk-settings-shell">
         <DeskPageHeader
           title="AI Key"
