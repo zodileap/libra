@@ -4,6 +4,7 @@ import { SessionPage } from "../../widgets/session/page";
 import { CODE_SESSION_UI_CONFIG } from "../../widgets/session/config";
 import { CodeAgentPage } from "./pages/code-agent-page";
 import { CodeAgentSettingsPage } from "./pages/code-agent-settings-page";
+import { CodeProjectSettingsPage } from "./pages/code-project-settings-page";
 import { CodeWorkflowPage } from "./pages/code-workflow-page";
 
 // 描述:
@@ -36,6 +37,11 @@ export const CODE_AGENT_SETTINGS_PATH = "/agents/code/settings" as const;
 //   - 代码智能体工作流页路径。
 export const CODE_WORKFLOW_PATH = "/agents/code/workflows" as const;
 
+// 描述:
+//
+//   - 代码项目设置页路径。
+export const CODE_PROJECT_SETTINGS_PATH = "/agents/code/project-settings" as const;
+
 // 描述：代码智能体会话页桥接组件，统一从路由参数读取 sessionId 并透传通用会话能力。
 function CodeSessionRoutePage(props: any) {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -60,6 +66,11 @@ export const CodeAgentSettingsPageLazy = lazy(async () => {
 // 描述：代码智能体工作流页懒加载入口。
 export const CodeWorkflowPageLazy = lazy(async () => {
   return { default: CodeWorkflowPage as ComponentType<any> };
+});
+
+// 描述：代码项目设置页懒加载入口。
+export const CodeProjectSettingsPageLazy = lazy(async () => {
+  return { default: CodeProjectSettingsPage as ComponentType<any> };
 });
 
 // 描述：代码智能体侧边栏快捷入口配置，由 code 路由模块定义。

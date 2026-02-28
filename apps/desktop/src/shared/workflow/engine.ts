@@ -230,10 +230,106 @@ function summarizePrompt(prompt: string) {
   };
 }
 
+// 描述：
+//
+//   - 判断字符串是否是支持的工作流节点 kind。
+//
+// Params:
+//
+//   - value: 待判断的节点 kind 文本。
+//
+// Returns:
+//
+//   - true: 是合法节点 kind。
+//   - false: 不是合法节点 kind。
+function isWorkflowNodeKind(value: string): value is WorkflowNodeKind {
+  return (
+    value === "input"
+    || value === "image_generate"
+    || value === "structured_constraints"
+    || value === "meshy_image_to_3d"
+    || value === "meshy_refine"
+    || value === "blender_refine_export"
+  );
+}
+
+// 描述：
+//
+//   - 从画布节点描述中解析 kind=xxx 语义，供执行链路匹配节点级指令。
+//
+// Params:
+//
+//   - description: 画布节点描述。
+//
+// Returns:
+//
+//   - 解析出的节点 kind；无法识别时返回空字符串。
+function parseWorkflowNodeKindFromGraphDescription(description: string): WorkflowNodeKind | "" {
+  const trimmed = String(description || "").trim();
+  if (!trimmed.startsWith("kind=")) {
+    return "";
+  }
+  const rawKind = trimmed.slice("kind=".length).trim();
+  if (!isWorkflowNodeKind(rawKind)) {
+    return "";
+  }
+  return rawKind;
+}
+
+// 描述：
+//
+//   - 从工作流画布图中提取每个 kind 的节点级指令，用于命中节点后的提示词增强。
+//
+// Params:
+//
+//   - workflow: 当前执行的工作流定义。
+//
+// Returns:
+//
+//   - kind 到 instruction 的映射表（仅包含非空指令）。
+function buildWorkflowNodeInstructionMap(
+  workflow: WorkflowDefinition,
+): Partial<Record<WorkflowNodeKind, string>> {
+  const instructionMap: Partial<Record<WorkflowNodeKind, string>> = {};
+  for (const graphNode of workflow.graph?.nodes || []) {
+    const kind = parseWorkflowNodeKindFromGraphDescription(graphNode.description);
+    if (!kind || instructionMap[kind]) {
+      continue;
+    }
+    const instruction = String(graphNode.instruction || "").trim();
+    if (!instruction) {
+      continue;
+    }
+    instructionMap[kind] = instruction;
+  }
+  return instructionMap;
+}
+
+// 描述：
+//
+//   - 将节点级指令拼接到用户提示词中，确保该节点执行时可感知额外约束与目标。
+//
+// Params:
+//
+//   - prompt: 当前上下文提示词。
+//   - nodeInstruction: 节点级指令。
+//
+// Returns:
+//
+//   - 拼接后的提示词。
+function mergePromptWithNodeInstruction(prompt: string, nodeInstruction: string): string {
+  const trimmedInstruction = String(nodeInstruction || "").trim();
+  if (!trimmedInstruction) {
+    return prompt;
+  }
+  return `${prompt}\n\n【节点指令】\n${trimmedInstruction}`;
+}
+
 async function runNode(
   node: WorkflowNodeDefinition,
   ctx: WorkflowContext,
   request: WorkflowRunRequest,
+  nodeInstruction = "",
 ): Promise<{ summary: string; output?: Record<string, unknown>; exportedFile?: string; modelSession?: ModelSessionRunResponse }> {
   if (!node.enabled) {
     return {
@@ -241,13 +337,17 @@ async function runNode(
       output: { skipped: true },
     };
   }
+  const promptWithNodeInstruction = mergePromptWithNodeInstruction(
+    ctx.prompt,
+    nodeInstruction,
+  );
 
   switch (node.kind) {
     case "input": {
       return {
         summary: `已接收输入，参考图 ${ctx.referenceImages.length}，风格图 ${ctx.styleImages.length}`,
         output: {
-          prompt: ctx.prompt,
+          prompt: promptWithNodeInstruction,
           referenceImages: ctx.referenceImages,
           styleImages: ctx.styleImages,
         },
@@ -269,7 +369,7 @@ async function runNode(
       };
     }
     case "structured_constraints": {
-      const structured = summarizePrompt(ctx.prompt);
+      const structured = summarizePrompt(promptWithNodeInstruction);
       ctx.structured = structured;
       return {
         summary: "已生成结构化约束（主体/风格/保留特征）",
@@ -310,7 +410,7 @@ async function runNode(
     case "blender_refine_export": {
       const response = await invoke<ModelSessionRunResponse>("run_model_session_command", {
         sessionId: request.sessionId,
-        prompt: ctx.prompt,
+        prompt: promptWithNodeInstruction,
         provider: request.provider,
         traceId: `trace-${Date.now()}`,
         projectName: request.projectName,
@@ -395,6 +495,7 @@ export async function runModelWorkflow(request: WorkflowRunRequest): Promise<Wor
   let modelSession: ModelSessionRunResponse | undefined;
   let exportedFile: string | undefined;
   let mappedUiHint: WorkflowUiHint | undefined;
+  const nodeInstructionMap = buildWorkflowNodeInstructionMap(workflow);
 
   for (const node of nodes) {
     const maxAttempts = Math.max(1, (node.retryCount || 0) + 1);
@@ -405,7 +506,8 @@ export async function runModelWorkflow(request: WorkflowRunRequest): Promise<Wor
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       const startedAt = Date.now();
       try {
-        const result = await runNode(node, ctx, request);
+        const nodeInstruction = String(nodeInstructionMap[node.kind] || "").trim();
+        const result = await runNode(node, ctx, request, nodeInstruction);
         stepRecords.push({
           nodeId: node.id,
           kind: node.kind,
@@ -448,7 +550,15 @@ export async function runModelWorkflow(request: WorkflowRunRequest): Promise<Wor
       if (fallbackNode) {
         try {
           const startedAt = Date.now();
-          const fallbackResult = await runNode(fallbackNode, ctx, request);
+          const fallbackInstruction = String(
+            nodeInstructionMap[fallbackNode.kind] || "",
+          ).trim();
+          const fallbackResult = await runNode(
+            fallbackNode,
+            ctx,
+            request,
+            fallbackInstruction,
+          );
           stepRecords.push({
             nodeId: fallbackNode.id,
             kind: fallbackNode.kind,

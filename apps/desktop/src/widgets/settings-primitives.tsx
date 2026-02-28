@@ -13,6 +13,7 @@ interface DeskPageHeaderProps {
 // 描述:
 //
 //   - 渲染设置页统一头部，约束标题、说明、右侧操作位的层级和间距。
+//   - 标题统一使用 h4 并通过组件 bold 属性加粗，避免设置页标题层级过大。
 //
 // Params:
 //
@@ -23,7 +24,7 @@ export function DeskPageHeader({ title, description, actions }: DeskPageHeaderPr
   return (
     <AriFlex className="desk-page-header" align="flex-start" justify="space-between">
       <AriContainer className="desk-page-header-main">
-        <AriTypography variant="h1" value={title} />
+        <AriTypography variant="h4" bold value={title} />
         {description ? <AriTypography variant="caption" value={description} /> : null}
       </AriContainer>
       {actions ? <AriContainer className="desk-page-header-actions">{actions}</AriContainer> : null}
@@ -40,13 +41,13 @@ interface DeskSectionTitleProps {
 
 // 描述:
 //
-//   - 渲染设置页分组标题，统一 H2 层级和顶部间距。
+//   - 渲染设置页分组标题，统一 H4 层级和顶部间距。
 //
 // Params:
 //
 //   - title: 分组标题文案。
 export function DeskSectionTitle({ title }: DeskSectionTitleProps) {
-  return <AriTypography className="desk-settings-title" variant="h2" value={title} />;
+  return <AriTypography className="desk-settings-title" variant="h4" bold value={title} />;
 }
 
 // 描述:
@@ -90,7 +91,7 @@ interface DeskSettingsRowProps {
 export function DeskSettingsRow({ title, description, metaSlot, children }: DeskSettingsRowProps) {
   return (
     <AriFlex className="desk-settings-row" align="center" justify="space-between">
-      <AriContainer className="desk-settings-meta">
+      <AriContainer padding={0}>
         {title ? <AriTypography variant="h4" value={title} /> : null}
         {description ? <AriTypography variant="caption" value={description} /> : null}
         {metaSlot}

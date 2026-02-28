@@ -56,9 +56,9 @@ test("TestSidebarDeleteButtonsShouldUseGhostAndColor", () => {
 
   // 描述:
   //
-  //   - 目录删除按钮应使用 ghost + danger，展示危险文本语义。
-  assert.match(
-    source,
-    /size="sm"[\s\S]*?type="text"[\s\S]*?ghost[\s\S]*?color="danger"[\s\S]*?icon="delete"/,
-  );
+  //   - 目录级操作应收敛为“更多”按钮，并在菜单里提供“编辑/删除”。
+  assert.match(source, /trigger="click"/);
+  assert.match(source, /icon="more_horiz"/);
+  assert.match(source, /\{ key: "edit", label: "编辑", icon: "edit" \}/);
+  assert.match(source, /\{ key: "delete", label: "删除", icon: "delete", fillIcon: "delete_fill" \}/);
 });

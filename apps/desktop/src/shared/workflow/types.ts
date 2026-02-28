@@ -87,6 +87,7 @@ export interface WorkflowGraphNode {
   id: string;
   title: string;
   description: string;
+  instruction?: string;
   type: WorkflowGraphNodeType;
   x: number;
   y: number;

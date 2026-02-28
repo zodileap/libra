@@ -126,7 +126,7 @@ test("TestCodeAgentSidebarShouldUseWorkspaceTreeAndWorkspaceActions", () => {
 
   // 描述:
   //
-  //   - 代码智能体侧边栏应基于 AriMenu children 渲染“目录分组 -> 会话列表”多级菜单，并提供目录操作入口。
+  //   - 代码智能体侧边栏应基于 AriMenu children 渲染“目录分组 -> 会话列表”多级菜单，并将目录操作收敛到“更多”菜单。
   assert.match(source, /interface CodeWorkspaceSessionGroup/);
   assert.match(source, /const codeWorkspaceSessionGroups = useMemo<CodeWorkspaceSessionGroup\[]>/);
   assert.match(source, /const buildWorkspaceMenuKey = \(workspaceId: string\) => `workspace:\$\{workspaceId\}`;/);
@@ -137,9 +137,10 @@ test("TestCodeAgentSidebarShouldUseWorkspaceTreeAndWorkspaceActions", () => {
   assert.match(source, /defaultExpandedKeys=\{defaultExpandedWorkspaceKeys\}/);
   assert.match(source, /expandedKeys=\{codeWorkspaceExpandedKeys\}/);
   assert.match(source, /onExpand=\{setCodeWorkspaceExpandedKeys\}/);
-  assert.match(source, /icon="open_in_new"/);
-  assert.match(source, /icon="edit"/);
-  assert.match(source, /icon="delete"/);
+  assert.match(source, /icon="more_horiz"/);
+  assert.match(source, /trigger="click"/);
+  assert.match(source, /\{ key: "edit", label: "编辑", icon: "edit" \}/);
+  assert.match(source, /\{ key: "delete", label: "删除", icon: "delete", fillIcon: "delete_fill" \}/);
 });
 
 test("TestAgentSidebarTitleUsesUnifiedResolver", () => {
@@ -159,11 +160,11 @@ test("TestAgentSidebarRenameModalsShouldUseBorderlessInput", () => {
 
   // 描述:
   //
-  //   - 侧边栏重命名对话框输入框应使用无边框样式，统一新输入视觉规范。
+  //   - 侧边栏会话重命名对话框输入框应使用无边框样式；目录重命名弹窗已迁移为项目设置页编辑。
   assert.match(source, /placeholder="输入新的会话标题"/);
-  assert.match(source, /placeholder="输入目录展示名称"/);
   assert.match(source, /<AriInput\s+variant="borderless"\s+value=\{renameValue\}/s);
-  assert.match(source, /<AriInput\s+variant="borderless"\s+value=\{workspaceRenameValue\}/s);
+  assert.doesNotMatch(source, /workspaceRenameModalVisible/);
+  assert.doesNotMatch(source, /placeholder="输入目录展示名称"/);
 });
 
 test("TestSessionPageSyncsTitleAfterRenameEvent", () => {

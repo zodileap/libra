@@ -136,6 +136,7 @@ export interface CodeWorkspaceGroup {
   id: string;
   path: string;
   name: string;
+  dependencyRules: string[];
   updatedAt: string;
 }
 
@@ -345,6 +346,25 @@ function normalizeWorkspacePath(path: string): string {
   return path.trim().replace(/\\/g, "/").replace(/\/+$/g, "");
 }
 
+// 描述：规范化项目依赖限制列表，去除空值、去重并保留原始顺序。
+//
+// Params:
+//
+//   - rules: 原始依赖限制列表。
+//
+// Returns:
+//
+//   - 规范化后的依赖限制列表。
+function normalizeWorkspaceDependencyRules(rules: unknown): string[] {
+  if (!Array.isArray(rules)) {
+    return [];
+  }
+  const normalized = rules
+    .map((item) => String(item || "").trim())
+    .filter((item) => Boolean(item));
+  return normalized.filter((item, index) => normalized.indexOf(item) === index);
+}
+
 // 描述：读取代码目录分组列表。
 //
 // Returns:
@@ -369,6 +389,7 @@ function readCodeWorkspaceGroups(): CodeWorkspaceGroup[] {
         id: String(item.id),
         path: normalizeWorkspacePath(String(item.path)),
         name: String(item.name || "").trim() || resolveWorkspaceNameFromPath(String(item.path)),
+        dependencyRules: normalizeWorkspaceDependencyRules(item.dependencyRules),
         updatedAt: String(item.updatedAt || ""),
       }))
       .filter((item) => Boolean(item.path));
@@ -679,6 +700,7 @@ export function upsertCodeWorkspaceGroup(path: string): CodeWorkspaceGroup | nul
       ...hit,
       path: normalizedPath,
       name: hit.name || resolveWorkspaceNameFromPath(normalizedPath),
+      dependencyRules: normalizeWorkspaceDependencyRules(hit.dependencyRules),
       updatedAt: now,
     };
     writeCodeWorkspaceGroups([
@@ -693,6 +715,7 @@ export function upsertCodeWorkspaceGroup(path: string): CodeWorkspaceGroup | nul
     id: `code-ws-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     path: normalizedPath,
     name: resolveWorkspaceNameFromPath(normalizedPath),
+    dependencyRules: [],
     updatedAt: now,
   };
   writeCodeWorkspaceGroups([created, ...groups]);
@@ -725,6 +748,52 @@ export function renameCodeWorkspaceGroup(workspaceId: string, name: string): boo
       ? {
         ...item,
         name: trimmed,
+        updatedAt: new Date().toISOString(),
+      }
+      : item)),
+  );
+  return true;
+}
+
+// 描述：更新代码目录分组设置，统一维护项目名称与依赖限制列表。
+//
+// Params:
+//
+//   - workspaceId: 分组 ID。
+//   - settings: 项目设置更新内容。
+//
+// Returns:
+//
+//   - 是否更新成功。
+export function updateCodeWorkspaceGroupSettings(
+  workspaceId: string,
+  settings: {
+    name: string;
+    dependencyRules: string[];
+  },
+): boolean {
+  if (!workspaceId) {
+    return false;
+  }
+
+  const trimmedName = String(settings.name || "").trim();
+  if (!trimmedName) {
+    return false;
+  }
+
+  const normalizedRules = normalizeWorkspaceDependencyRules(settings.dependencyRules);
+  const groups = readCodeWorkspaceGroups();
+  const hit = groups.find((item) => item.id === workspaceId);
+  if (!hit) {
+    return false;
+  }
+
+  writeCodeWorkspaceGroups(
+    groups.map((item) => (item.id === workspaceId
+      ? {
+        ...item,
+        name: trimmedName,
+        dependencyRules: normalizedRules,
         updatedAt: new Date().toISOString(),
       }
       : item)),
@@ -774,6 +843,7 @@ export function bindCodeSessionWorkspace(sessionId: string, workspaceId: string)
     writeCodeWorkspaceGroups([
       {
         ...hit,
+        dependencyRules: normalizeWorkspaceDependencyRules(hit.dependencyRules),
         updatedAt: new Date().toISOString(),
       },
       ...groups.filter((item) => item.id !== workspaceId),

@@ -115,6 +115,7 @@ function normalizeGraphNode(node: WorkflowGraphNode): WorkflowGraphNode | null {
     id: String(node.id),
     title: String(node.title || "").trim() || "未命名节点",
     description: String(node.description || "").trim(),
+    instruction: String(node.instruction || "").trim(),
     type: normalizeNodeType(node.type),
     x,
     y,

@@ -26,12 +26,44 @@ test("TestWorkflowCanvasShouldSupportModeSwitchAndContextDelete", () => {
   //
   //   - 工作流工具栏应支持“选择模式 / 拖动模式”切换，并以图标按钮提供新增节点入口。
   assert.match(source, /type WorkflowCanvasMode = "select" \| "pan"/);
-  assert.match(source, /icon="arrow_selector_tool"/);
-  assert.match(source, /icon="pan_tool_alt"/);
-  assert.match(source, /<AriDivider type="vertical" className="desk-workflow-editor-canvas-toolbar-divider" \/>/);
+  assert.match(source, /icon="select_tool"/);
+  assert.match(source, /icon="hand_tool"/);
+  assert.match(source, /<AriDivider\s+type="vertical"\s+className="desk-workflow-editor-canvas-toolbar-divider"\s+\/>/s);
   assert.match(source, /<AriButton ghost icon="add" onClick={addNode} \/>/);
-  assert.match(source, /icon="save"/);
-  assert.match(source, /aria-label="保存工作流"/);
+  assert.match(source, /icon="edit"/);
+  assert.match(source, /aria-label="编辑工作流"/);
+  assert.match(source, /icon="delete"/);
+  assert.match(source, /aria-label="删除工作流"/);
+  assert.doesNotMatch(source, /icon="save"/);
+  assert.doesNotMatch(source, /aria-label="保存工作流"/);
+  assert.doesNotMatch(source, /const saveCurrentWorkflow = \(\) =>/);
+  assert.match(source, /const hasPendingWorkflowChanges = useMemo\(\(\) =>/);
+  assert.match(source, /useEffect\(\(\) => \{\s*if \(!selectedWorkflow \|\| !hasPendingWorkflowChanges\) \{\s*return;\s*\}/s);
+  assert.match(source, /window\.setTimeout\(\(\) =>/);
+  assert.match(source, /setWorkflowVersion\(\(value\) => value \+ 1\)/);
+  assert.match(source, /const workflowLoadIdentityRef = useRef\(\"\"\);/);
+  assert.match(source, /const nextWorkflowIdentity = `\$\{agentKey\}:\$\{selectedWorkflow\.id\}`;/);
+  assert.match(source, /if \(workflowLoadIdentityRef\.current === nextWorkflowIdentity\) \{\s*return;\s*\}/s);
+  assert.match(source, /const openWorkflowEditModal = \(\) =>/);
+  assert.match(source, /const confirmWorkflowEdit = \(\) =>/);
+  assert.match(source, /const deleteCurrentWorkflow = \(\) =>/);
+  assert.match(source, /<AriModal/);
+  assert.match(source, /title="编辑工作流"/);
+  assert.match(source, /label="工作流名称"/);
+  assert.match(source, /label="工作流说明"/);
+  assert.match(source, /deleteModelWorkflow\(selectedWorkflow\.id\)/);
+  assert.match(source, /deleteCodeWorkflow\(selectedWorkflow\.id\)/);
+  assert.match(source, /instruction:\s*String\(source\.instruction \|\| ""\)\.trim\(\)/);
+  assert.match(source, /instruction:\s*String\(node\.instruction \|\| ""\)\.trim\(\)/);
+  assert.match(source, /instruction:\s*parsed\.instruction/);
+  assert.match(source, /name="selectedNode\.instruction"/);
+  assert.match(source, /patchSelectedNode\(\{\s*instruction:\s*value\s*\}\)/);
+  assert.match(source, /placeholder="请输入该节点命中后的 AI 提示词"/);
+  assert.match(source, /<AriInput\.TextArea/);
+  assert.match(source, /rows=\{3\}/);
+  assert.match(source, /autoSize=\{\{\s*minRows:\s*3,\s*maxRows:\s*8\s*\}\}/);
+  assert.match(source, /value=\{workflowInfoName\}/);
+  assert.match(source, /value=\{\`\$\{agentKey === "model" \? "模型工作流" : "代码工作流"\} · \$\{workflowInfoDescription\} · v\$\{workflowInfoVersion\}\`\}/);
   assert.match(source, /const WORKFLOW_NODE_TYPE = "workflowNode";/);
   assert.match(source, /<NodeResizer/);
   assert.match(source, /isVisible=\{Boolean\(selected\)\}/);
@@ -53,18 +85,34 @@ test("TestWorkflowCanvasShouldSupportModeSwitchAndContextDelete", () => {
   assert.match(source, /createPortal\(workflowHeaderNode, headerSlotElement\)/);
   assert.doesNotMatch(source, /setHeaderSlotElement\(document\.getElementById\("desk-app-header-slot"\)\);/);
   assert.doesNotMatch(source, /<DeskPageHeader/);
+  assert.match(source, /\{selectedNodeData \? \(\s*<AriCard[\s\S]*className="desk-workflow-editor-floating-panel"/s);
+  assert.match(source, /value=\{selectedNodeData\.title\}/);
+  assert.doesNotMatch(source, /selectedNodeData\?\.title \|\| workflowInfoName/);
+  assert.doesNotMatch(source, /name="workflow\.name"/);
+  assert.doesNotMatch(source, /name="workflow\.description"/);
+  assert.doesNotMatch(source, /name="workflow\.promptPrefix"/);
 
   // 描述：
   //
   //   - 右键节点/连线后应设置当前选中目标，并通过 AriContextMenu(targetRef) 提供“删除”动作。
   assert.match(source, /<AriContextMenu/);
   assert.match(source, /const canvasRef = useRef<HTMLDivElement>\(null\)/);
+  assert.match(source, /const \[contextMenuOpen,\s*setContextMenuOpen\] = useState\(false\);/);
   assert.match(source, /targetRef={canvasRef}/);
+  assert.match(source, /open={contextMenuOpen}/);
+  assert.match(source, /onOpenChange=\{\(nextOpen\) => \{[\s\S]*if \(!nextOpen\) \{[\s\S]*setContextMenuOpen\(false\);[\s\S]*\}[\s\S]*\}\}/);
   assert.match(source, /<div\s+ref={canvasRef}\s+className="desk-workflow-reactflow-wrap desk-workflow-editor-reactflow-wrap"/);
+  assert.match(source, /contextTarget\?\.id[\s\S]*\?[\s\S]*key: "delete"[\s\S]*:\s*\[\]/s);
   assert.match(source, /key: "delete"/);
   assert.match(source, /label: "删除"/);
   assert.match(source, /onNodeContextMenu=\{\(event, node\) =>/);
   assert.match(source, /onEdgeContextMenu=\{\(event, edge\) =>/);
   assert.match(source, /patchContextTarget\(\{\s*type: "node",\s*id: node\.id,\s*\}\)/s);
   assert.match(source, /patchContextTarget\(\{\s*type: "edge",\s*id: edge\.id,\s*\}\)/s);
+  assert.match(source, /onNodeContextMenu=\{\(event, node\) =>[\s\S]*setContextMenuOpen\(true\);[\s\S]*\}/s);
+  assert.match(source, /onEdgeContextMenu=\{\(event, edge\) =>[\s\S]*setContextMenuOpen\(true\);[\s\S]*\}/s);
+  assert.match(source, /onPaneContextMenu=\{\(event\) => \{[\s\S]*patchContextTarget\(null\);[\s\S]*setContextMenuOpen\(false\);[\s\S]*\}\}/);
+  assert.match(source, /onPaneClick=\{\(\) => \{[\s\S]*patchContextTarget\(null\);[\s\S]*setContextMenuOpen\(false\);[\s\S]*\}\}/);
+  assert.match(source, /onNodeClick=\{\(_event, node\) => \{[\s\S]*setContextMenuOpen\(false\);[\s\S]*\}\}/s);
+  assert.match(source, /onEdgeClick=\{\(_event, edge\) => \{[\s\S]*setContextMenuOpen\(false\);[\s\S]*\}\}/s);
 });

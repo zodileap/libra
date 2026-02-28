@@ -10,6 +10,7 @@ import {
   AriMessage,
   AriMenu,
   AriModal,
+  AriTooltip,
   AriTypography,
 } from "aries_react";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -21,7 +22,6 @@ import {
   listCodeWorkspaceGroups,
   removeAgentSession,
   removeCodeWorkspaceGroup,
-  renameCodeWorkspaceGroup,
   renameAgentSession,
   resolveAgentSessionTitle,
   setLastUsedCodeWorkspaceId,
@@ -45,6 +45,7 @@ import {
 } from "../modules/common/routes";
 import {
   CODE_AGENT_ROOT_PATH,
+  CODE_PROJECT_SETTINGS_PATH,
   CODE_SIDEBAR_QUICK_ACTIONS,
   resolveCodeWorkflowPath,
 } from "../modules/code/routes";
@@ -230,9 +231,7 @@ function AgentSidebar({
   const [hoveredContextMenuActionKey, setHoveredContextMenuActionKey] = useState("");
   const [workspaceGroups, setWorkspaceGroups] = useState<CodeWorkspaceGroup[]>([]);
   const [codeWorkspaceExpandedKeys, setCodeWorkspaceExpandedKeys] = useState<string[]>([]);
-  const [workspaceRenamingId, setWorkspaceRenamingId] = useState("");
-  const [workspaceRenameValue, setWorkspaceRenameValue] = useState("");
-  const [workspaceRenameModalVisible, setWorkspaceRenameModalVisible] = useState(false);
+  const [workspaceActionMenuVersion, setWorkspaceActionMenuVersion] = useState(0);
   const missingSessionSyncAttemptsRef = useRef<Record<string, number>>({});
 
   const isCodeAgent = agentKey === "code";
@@ -245,6 +244,7 @@ function AgentSidebar({
     }
     return new URLSearchParams(location.search).get("workspaceId")?.trim() || "";
   }, [isCodeAgent, location.search]);
+  const isCodeProjectSettingsPath = isCodeAgent && location.pathname.startsWith(CODE_PROJECT_SETTINGS_PATH);
 
   // 描述：构建代码目录父菜单 key，避免与会话 key 冲突。
   const buildWorkspaceMenuKey = (workspaceId: string) => `workspace:${workspaceId}`;
@@ -413,26 +413,6 @@ function AgentSidebar({
     void refreshSessions();
   };
 
-  // 描述：打开目录重命名弹窗。
-  const handleOpenWorkspaceRenameModal = (workspaceId: string) => {
-    const target = workspaceGroups.find((item) => item.id === workspaceId);
-    setWorkspaceRenamingId(workspaceId);
-    setWorkspaceRenameValue(target?.name || "");
-    setWorkspaceRenameModalVisible(true);
-  };
-
-  // 描述：确认目录重命名并刷新目录分组。
-  const handleConfirmWorkspaceRename = () => {
-    if (!workspaceRenamingId) {
-      return;
-    }
-    renameCodeWorkspaceGroup(workspaceRenamingId, workspaceRenameValue);
-    setWorkspaceRenameModalVisible(false);
-    setWorkspaceRenamingId("");
-    setWorkspaceRenameValue("");
-    refreshWorkspaceGroups();
-  };
-
   // 描述：删除目录分组，并在必要时回退到最近可用目录。
   const handleDeleteWorkspace = (workspaceId: string) => {
     if (!workspaceId) {
@@ -458,6 +438,20 @@ function AgentSidebar({
     }
     setLastUsedCodeWorkspaceId(workspaceId);
     navigate(`/agents/code?workspaceId=${encodeURIComponent(workspaceId)}`);
+  };
+
+  // 描述：打开项目设置页面，保持目录上下文并仅切换主内容区域。
+  const openWorkspaceSettingsPage = (workspaceId: string) => {
+    if (!workspaceId) {
+      return;
+    }
+    const workspaceMenuKey = buildWorkspaceMenuKey(workspaceId);
+    setCodeWorkspaceExpandedKeys((current) => {
+      const next = new Set([...current, workspaceMenuKey]);
+      return [...next];
+    });
+    setLastUsedCodeWorkspaceId(workspaceId);
+    navigate(`${CODE_PROJECT_SETTINGS_PATH}?workspaceId=${encodeURIComponent(workspaceId)}`);
   };
 
   // 描述：在菜单项右键事件中直接绑定会话 ID，保持触发逻辑与组件 preview 示例一致。
@@ -548,7 +542,7 @@ function AgentSidebar({
   // 描述：构建会话菜单项定义，复用会话 hover 动作与右键菜单触发。
   const buildSessionMenuItems = (items: AgentSidebarSession[]) => items.map((item) => ({
     key: item.id,
-    label: <AriTypography className="desk-session-item-title" variant="body" value={item.title} />,
+    label: item.title,
     actions: (
       <AriFlex align="center" space={4}>
         <AriButton
@@ -609,44 +603,44 @@ function AgentSidebar({
       icon: "folder",
       actions: (
         <AriFlex align="center" space={4}>
-          <AriButton
-            size="sm"
-            type="text"
-            icon="open_in_new"
-            onClick={(event: MouseEvent<HTMLElement>) => {
-              event.preventDefault();
-              event.stopPropagation();
-              openWorkspaceComposePage(group.workspace.id);
-            }}
-          />
-          <AriButton
-            size="sm"
-            type="text"
-            icon="edit"
-            onClick={(event: MouseEvent<HTMLElement>) => {
-              event.preventDefault();
-              event.stopPropagation();
-              handleOpenWorkspaceRenameModal(group.workspace.id);
-            }}
-          />
-          <AriButton
-            size="sm"
-            type="text"
-            ghost
-            color="danger"
-            icon="delete"
-            onClick={(event: MouseEvent<HTMLElement>) => {
-              event.preventDefault();
-              event.stopPropagation();
-              handleDeleteWorkspace(group.workspace.id);
-            }}
-          />
+          <AriTooltip
+            key={`${group.workspace.id}-${workspaceActionMenuVersion}`}
+            trigger="click"
+            position="bottom"
+            content={(
+              <AriMenu
+                items={[
+                  { key: "edit", label: "编辑", icon: "edit" },
+                  { key: "delete", label: "删除", icon: "delete", fillIcon: "delete_fill" },
+                ]}
+                onSelect={(key: string) => {
+                  // 描述：菜单项执行后强制重建 tooltip，确保“更多”菜单立即关闭。
+                  setWorkspaceActionMenuVersion((current) => current + 1);
+                  if (key === "edit") {
+                    openWorkspaceSettingsPage(group.workspace.id);
+                    return;
+                  }
+                  if (key === "delete") {
+                    handleDeleteWorkspace(group.workspace.id);
+                  }
+                }}
+              />
+            )}
+          >
+            <AriButton
+              size="sm"
+              type="text"
+              ghost
+              icon="more_horiz"
+              aria-label="项目更多操作"
+            />
+          </AriTooltip>
         </AriFlex>
       ),
       showActionsOnHover: true,
       children: buildSessionMenuItems(group.sessions),
     }));
-  }, [codeWorkspaceSessionGroups, isCodeAgent]);
+  }, [codeWorkspaceSessionGroups, isCodeAgent, workspaceActionMenuVersion]);
 
   // 描述：处理代码目录树菜单点击，父节点用于切换目录，子节点用于进入会话。
   const handleSelectCodeWorkspaceMenuItem = (key: string) => {
@@ -663,6 +657,9 @@ function AgentSidebar({
     if (!isCodeAgent) {
       return "";
     }
+    if (isCodeProjectSettingsPath) {
+      return "";
+    }
     if (selectedSessionKey) {
       return selectedSessionKey;
     }
@@ -670,7 +667,7 @@ function AgentSidebar({
       return buildWorkspaceMenuKey(selectedWorkspaceFromQuery);
     }
     return "";
-  }, [isCodeAgent, selectedSessionKey, selectedWorkspaceFromQuery]);
+  }, [isCodeAgent, isCodeProjectSettingsPath, selectedSessionKey, selectedWorkspaceFromQuery]);
 
   // 描述：计算代码目录树默认展开项，确保当前目录对应父节点默认展开。
   const defaultExpandedWorkspaceKeys = useMemo(() => {
@@ -939,40 +936,6 @@ function AgentSidebar({
           value={renameValue}
           onChange={setRenameValue}
           placeholder="输入新的会话标题"
-        />
-      </AriModal>
-
-      <AriModal
-        visible={workspaceRenameModalVisible}
-        title="编辑目录名字"
-        onClose={() => {
-          setWorkspaceRenameModalVisible(false);
-          setWorkspaceRenamingId("");
-          setWorkspaceRenameValue("");
-        }}
-        footer={(
-          <AriFlex justify="flex-end" align="center" space={8}>
-            <AriButton
-              label="取消"
-              onClick={() => {
-                setWorkspaceRenameModalVisible(false);
-                setWorkspaceRenamingId("");
-                setWorkspaceRenameValue("");
-              }}
-            />
-            <AriButton
-              color="primary"
-              label="确定"
-              onClick={handleConfirmWorkspaceRename}
-            />
-          </AriFlex>
-        )}
-      >
-        <AriInput
-          variant="borderless"
-          value={workspaceRenameValue}
-          onChange={setWorkspaceRenameValue}
-          placeholder="输入目录展示名称"
         />
       </AriModal>
     </AriContainer>

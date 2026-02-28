@@ -11,6 +11,7 @@ import {
 import {
   AGENT_MODULE_KEY,
   CodeAgentPageLazy,
+  CodeProjectSettingsPageLazy,
   CodeAgentSettingsPageLazy,
   SESSION_MODULE_KEY,
   CodeSessionPageLazy,
@@ -258,6 +259,19 @@ export function DesktopRouter({ auth }: { auth: AuthState }) {
                 withRouteLoading(
                   <RouteGuard auth={auth} routeAccess={routeAccess}>
                     <CodeAgentPageLazy modelMcpCapabilities={auth.modelMcpCapabilities} currentUser={auth.user} />
+                  </RouteGuard>,
+                )
+              }
+            />
+          ) : null}
+
+          {routeAccess.isModuleEnabled(AGENT_MODULE_KEY) ? (
+            <Route
+              path="agents/code/project-settings"
+              element={
+                withRouteLoading(
+                  <RouteGuard auth={auth} routeAccess={routeAccess}>
+                    <CodeProjectSettingsPageLazy />
                   </RouteGuard>,
                 )
               }
