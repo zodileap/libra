@@ -7,18 +7,27 @@ import {
   toQueryString,
 } from "./backend-api-core.mjs";
 
+// 描述:
+//
+//   - 定义后端统一响应包结构。
 interface BackendEnvelope<T> {
   code: number;
   message: string;
   data: T;
 }
 
+// 描述:
+//
+//   - 定义通用请求参数结构。
 interface RequestOptions {
   method?: "GET" | "POST" | "PUT" | "DELETE";
   body?: unknown;
   auth?: boolean;
 }
 
+// 描述:
+//
+//   - 定义可用智能体列表项结构。
 export interface AuthAvailableAgentItem {
   agentId: string;
   code: string;
@@ -32,6 +41,9 @@ export interface AuthAvailableAgentItem {
   accessStatus?: number;
 }
 
+// 描述:
+//
+//   - 定义运行时会话实体结构。
 export interface RuntimeSessionEntity {
   id: string;
   user_id: string;
@@ -42,6 +54,9 @@ export interface RuntimeSessionEntity {
   deleted_at?: string;
 }
 
+// 描述:
+//
+//   - 定义会话消息实体结构。
 export interface RuntimeSessionMessageItem {
   messageId: string;
   sessionId: string;
@@ -51,24 +66,36 @@ export interface RuntimeSessionMessageItem {
   createdAt?: string;
 }
 
+// 描述:
+//
+//   - 定义代码执行步骤结构。
 export interface CodeExecuteAction {
   step: string;
   description: string;
   status: number;
 }
 
+// 描述:
+//
+//   - 定义代码执行日志结构。
 export interface CodeExecuteLog {
   level: string;
   message: string;
   at?: string;
 }
 
+// 描述:
+//
+//   - 定义代码执行产物结构。
 export interface CodeExecuteArtifact {
   type: string;
   path: string;
   summary: string;
 }
 
+// 描述:
+//
+//   - 定义代码执行结果结构。
 export interface CodeExecuteResult {
   executionId: string;
   status: number;
@@ -78,6 +105,9 @@ export interface CodeExecuteResult {
   artifacts: CodeExecuteArtifact[];
 }
 
+// 描述:
+//
+//   - 定义模型任务执行结果结构。
 export interface ModelTaskExecuteResult {
   taskId: string;
   status: number;
@@ -94,6 +124,9 @@ export interface ModelTaskExecuteResult {
   };
 }
 
+// 描述:
+//
+//   - 定义后端 API 错误对象，附带业务码与 HTTP 状态。
 export class BackendApiError extends Error {
   code: number;
   httpStatus: number;
@@ -106,24 +139,27 @@ export class BackendApiError extends Error {
   }
 }
 
-// 描述：按运行环境解析后端服务地址，开发态默认走 Vite 同源代理以避免跨域问题。
-function resolveServiceBaseUrl(envValue: string | undefined, devProxyPath: string, fallback: string): string {
+// 描述：按运行环境解析后端服务地址，优先使用环境变量，未配置时回退到本地直连地址。
+function resolveServiceBaseUrl(envValue: string | undefined, fallback: string): string {
   if (envValue && envValue.trim().length > 0) {
     return envValue.replace(/\/$/, "");
-  }
-  if (import.meta.env.DEV) {
-    return devProxyPath;
   }
   return fallback.replace(/\/$/, "");
 }
 
-const accountBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_ACCOUNT_BASE_URL, "/__api/account", "http://127.0.0.1:18080");
-const runtimeBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_RUNTIME_BASE_URL, "/__api/runtime", "http://127.0.0.1:18081");
-const agentCodeBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_AGENT_CODE_BASE_URL, "/__api/agent_code", "http://127.0.0.1:18082");
-const agent3dBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_AGENT_3D_BASE_URL, "/__api/agent_3d", "http://127.0.0.1:18083");
+const accountBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_ACCOUNT_BASE_URL, "http://127.0.0.1:18080");
+const runtimeBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_RUNTIME_BASE_URL, "http://127.0.0.1:18081");
+const agentCodeBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_AGENT_CODE_BASE_URL, "http://127.0.0.1:18082");
+const agent3dBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_AGENT_3D_BASE_URL, "http://127.0.0.1:18083");
 
+// 描述:
+//
+//   - 本地认证令牌存储键。
 const authTokenStorageKey = "zodileap.desktop.authToken";
 
+// 描述:
+//
+//   - 全局未授权回调处理器。
 let unauthorizedHandler: (() => void) | null = null;
 
 // 描述：设置全局未授权处理器。
