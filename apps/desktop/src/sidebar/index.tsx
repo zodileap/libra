@@ -16,6 +16,7 @@ import {
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   bindCodeSessionWorkspace,
+  CODE_WORKSPACE_GROUPS_UPDATED_EVENT,
   getCodeWorkspaceIdBySessionId,
   getLastUsedCodeWorkspaceId,
   getAgentSessionMetaSnapshot,
@@ -46,17 +47,14 @@ import {
 import {
   CODE_AGENT_ROOT_PATH,
   CODE_PROJECT_SETTINGS_PATH,
-  CODE_SIDEBAR_QUICK_ACTIONS,
   resolveCodeWorkflowPath,
 } from "../modules/code/routes";
 import {
   MODEL_AGENT_ROOT_PATH,
-  MODEL_SIDEBAR_QUICK_ACTIONS,
   resolveModelWorkflowPath,
 } from "../modules/model/routes";
 import type { RouteAccess } from "../router/types";
 import { SidebarBackHeader } from "./widgets/sidebar-back-header";
-import { SidebarQuickAction } from "./widgets/sidebar-quick-action";
 import { UserHoverMenu } from "./widgets/user-hover-menu";
 
 // 描述:
@@ -168,11 +166,53 @@ function HomeSidebar({
     () => resolveHomeSidebarAgentItems(availableAgents, routeAccess),
     [availableAgents, routeAccess],
   );
+  // 描述：解析首页工作流快捷入口，优先进入代码智能体工作流，未授权时回退模型智能体。
+  const homeWorkflowEntry = useMemo(() => {
+    const workflowEnabled = routeAccess.isModuleEnabled("workflow");
+    const workflowPath = routeAccess.isAgentEnabled("code")
+      ? resolveCodeWorkflowPath("")
+      : routeAccess.isAgentEnabled("model")
+        ? resolveModelWorkflowPath("")
+        : "";
+    return {
+      key: "workflow",
+      label: "工作流",
+      icon: "account_tree",
+      enabled: workflowEnabled && Boolean(workflowPath),
+      path: workflowPath,
+      deniedMessage: workflowEnabled
+        ? "当前账号暂无可用工作流入口。"
+        : "当前构建未启用工作流模块。",
+    };
+  }, [routeAccess]);
 
   return (
     <AriContainer className="desk-sidebar">
-      <AriContainer className="desk-agent-menu">
+      <AriContainer className="desk-sidebar-toolbar" padding={0}>
         <AriMenu
+          className="desk-sidebar-nav"
+          items={[
+            {
+              key: homeWorkflowEntry.key,
+              label: homeWorkflowEntry.label,
+              icon: homeWorkflowEntry.icon,
+            },
+          ]}
+          onSelect={() => {
+            if (!homeWorkflowEntry.enabled || !homeWorkflowEntry.path) {
+              AriMessage.warning({
+                content: homeWorkflowEntry.deniedMessage,
+                duration: 2500,
+              });
+              return;
+            }
+            navigate(homeWorkflowEntry.path);
+          }}
+        />
+      </AriContainer>
+      <AriContainer className="desk-agent-menu" padding={0}>
+        <AriMenu
+          className="desk-sidebar-nav"
           items={homeSidebarItems.map((item) => ({
             key: item.key,
             label: item.label,
@@ -225,13 +265,13 @@ function AgentSidebar({
   const [renamingSessionId, setRenamingSessionId] = useState("");
   const [renameValue, setRenameValue] = useState("");
   const [renameModalVisible, setRenameModalVisible] = useState(false);
-  const [createButtonHovered, setCreateButtonHovered] = useState(false);
+  const [sessionSortMode, setSessionSortMode] = useState<"default" | "name">("default");
   const [hoveredPinSessionId, setHoveredPinSessionId] = useState("");
   const [hoveredDeleteSessionId, setHoveredDeleteSessionId] = useState("");
   const [hoveredContextMenuActionKey, setHoveredContextMenuActionKey] = useState("");
   const [workspaceGroups, setWorkspaceGroups] = useState<CodeWorkspaceGroup[]>([]);
   const [codeWorkspaceExpandedKeys, setCodeWorkspaceExpandedKeys] = useState<string[]>([]);
-  const [workspaceActionMenuVersion, setWorkspaceActionMenuVersion] = useState(0);
+  const [openWorkspaceActionMenuId, setOpenWorkspaceActionMenuId] = useState("");
   const missingSessionSyncAttemptsRef = useRef<Record<string, number>>({});
 
   const isCodeAgent = agentKey === "code";
@@ -340,6 +380,19 @@ function AgentSidebar({
     }
     navigate(MODEL_AGENT_ROOT_PATH);
   };
+
+  // 描述：切换会话排序方式，支持“默认顺序”和“按名称排序”两种模式。
+  const handleToggleSessionSortMode = () => {
+    setSessionSortMode((current) => (current === "default" ? "name" : "default"));
+  };
+
+  // 描述：按当前排序模式生成会话展示顺序；默认保留后端顺序，按名称模式按标题升序排列。
+  const displayedSessions = useMemo(() => {
+    if (sessionSortMode === "default") {
+      return sessions;
+    }
+    return [...sessions].sort((a, b) => a.title.localeCompare(b.title, "zh-CN"));
+  }, [sessionSortMode, sessions]);
 
   // 描述：删除会话按钮采用二次确认，首次点击进入确认态，二次点击后执行删除。
   const handleDeleteSession = async (event: MouseEvent<HTMLButtonElement>, sessionId: string) => {
@@ -525,7 +578,7 @@ function AgentSidebar({
       byWorkspaceId.set(group.id, []);
     });
 
-    sessions.forEach((sessionItem) => {
+    displayedSessions.forEach((sessionItem) => {
       const workspaceId = getCodeWorkspaceIdBySessionId(sessionItem.id) || fallbackWorkspaceId;
       if (!workspaceId || !byWorkspaceId.has(workspaceId)) {
         return;
@@ -537,7 +590,7 @@ function AgentSidebar({
       workspace,
       sessions: byWorkspaceId.get(workspace.id) || [],
     }));
-  }, [isCodeAgent, sessions, workspaceGroups]);
+  }, [displayedSessions, isCodeAgent, workspaceGroups]);
 
   // 描述：构建会话菜单项定义，复用会话 hover 动作与右键菜单触发。
   const buildSessionMenuItems = (items: AgentSidebarSession[]) => items.map((item) => ({
@@ -604,8 +657,8 @@ function AgentSidebar({
       actions: (
         <AriFlex align="center" space={4}>
           <AriTooltip
-            key={`${group.workspace.id}-${workspaceActionMenuVersion}`}
-            trigger="click"
+            trigger="manual"
+            visible={openWorkspaceActionMenuId === group.workspace.id}
             position="bottom"
             content={(
               <AriMenu
@@ -614,8 +667,7 @@ function AgentSidebar({
                   { key: "delete", label: "删除", icon: "delete", fillIcon: "delete_fill" },
                 ]}
                 onSelect={(key: string) => {
-                  // 描述：菜单项执行后强制重建 tooltip，确保“更多”菜单立即关闭。
-                  setWorkspaceActionMenuVersion((current) => current + 1);
+                  setOpenWorkspaceActionMenuId("");
                   if (key === "edit") {
                     openWorkspaceSettingsPage(group.workspace.id);
                     return;
@@ -633,6 +685,12 @@ function AgentSidebar({
               ghost
               icon="more_horiz"
               aria-label="项目更多操作"
+              data-workspace-action-trigger="true"
+              onClick={(event: MouseEvent<HTMLButtonElement>) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setOpenWorkspaceActionMenuId((current) => (current === group.workspace.id ? "" : group.workspace.id));
+              }}
             />
           </AriTooltip>
         </AriFlex>
@@ -640,7 +698,7 @@ function AgentSidebar({
       showActionsOnHover: true,
       children: buildSessionMenuItems(group.sessions),
     }));
-  }, [codeWorkspaceSessionGroups, isCodeAgent, workspaceActionMenuVersion]);
+  }, [codeWorkspaceSessionGroups, isCodeAgent, openWorkspaceActionMenuId]);
 
   // 描述：处理代码目录树菜单点击，父节点用于切换目录，子节点用于进入会话。
   const handleSelectCodeWorkspaceMenuItem = (key: string) => {
@@ -752,11 +810,12 @@ function AgentSidebar({
   useEffect(() => {
     setPendingDeleteSessionId("");
     setContextSessionId("");
+    setOpenWorkspaceActionMenuId("");
     setHoveredPinSessionId("");
     setHoveredDeleteSessionId("");
     setHoveredContextMenuActionKey("");
     setCodeWorkspaceExpandedKeys([]);
-    setCreateButtonHovered(false);
+    setSessionSortMode("default");
   }, [location.pathname, agentKey]);
 
   useEffect(() => {
@@ -809,25 +868,93 @@ function AgentSidebar({
     });
   }, [defaultExpandedWorkspaceKeys, isCodeAgent]);
 
+  useEffect(() => {
+    if (!isCodeAgent || typeof window === "undefined") {
+      return;
+    }
+    // 描述：监听代码目录分组变更事件，保证新增目录后侧边栏目录树即时刷新。
+    const onCodeWorkspaceGroupsUpdated = () => {
+      setWorkspaceGroups(listCodeWorkspaceGroups());
+    };
+    window.addEventListener(CODE_WORKSPACE_GROUPS_UPDATED_EVENT, onCodeWorkspaceGroupsUpdated as EventListener);
+    return () => {
+      window.removeEventListener(CODE_WORKSPACE_GROUPS_UPDATED_EVENT, onCodeWorkspaceGroupsUpdated as EventListener);
+    };
+  }, [isCodeAgent]);
+
+  useEffect(() => {
+    if (!openWorkspaceActionMenuId || typeof window === "undefined") {
+      return;
+    }
+    // 描述：监听全局点击与 ESC，保证“更多”菜单在点击页面空白区域后即时关闭。
+    const handleCloseWorkspaceActionMenu = (event: globalThis.MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) {
+        setOpenWorkspaceActionMenuId("");
+        return;
+      }
+      if (target.closest("[data-workspace-action-trigger]")) {
+        return;
+      }
+      if (target.closest(".z-tooltip")) {
+        return;
+      }
+      setOpenWorkspaceActionMenuId("");
+    };
+    const handleWorkspaceActionMenuEsc = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+      setOpenWorkspaceActionMenuId("");
+    };
+    window.addEventListener("mousedown", handleCloseWorkspaceActionMenu, true);
+    window.addEventListener("keydown", handleWorkspaceActionMenuEsc);
+    return () => {
+      window.removeEventListener("mousedown", handleCloseWorkspaceActionMenu, true);
+      window.removeEventListener("keydown", handleWorkspaceActionMenuEsc);
+    };
+  }, [openWorkspaceActionMenuId]);
+
   return (
-    <AriContainer className="desk-sidebar desk-agent-sidebar">
-      <SidebarBackHeader
-        onBack={() => navigate("/home")}
-        label="Home"
-        rightAction={
+    <AriContainer className="desk-sidebar">
+      <SidebarBackHeader onBack={() => navigate("/home")} label="Home" />
+      <AriContainer className="desk-sidebar-toolbar" padding={0}>
+        <AriMenu
+          className="desk-sidebar-nav"
+          items={[
+            {
+              key: "create-project",
+              icon: "note_stack_add",
+              label: "新项目",
+            },
+          ]}
+          onSelect={() => {
+            handleCreateSession();
+          }}
+        />
+      </AriContainer>
+      <AriFlex className="desk-agent-session-header" align="center" justify="space-between">
+        <AriTypography variant="caption" value="项目" />
+        <AriFlex className="desk-agent-session-header-actions" align="center" space={4}>
           <AriButton
-            icon={createButtonHovered ? "note_stack_add_fill" : "note_stack_add"}
-            label="新增"
-            onMouseEnter={() => {
-              setCreateButtonHovered(true);
-            }}
-            onMouseLeave={() => {
-              setCreateButtonHovered(false);
-            }}
+            size="sm"
+            type="text"
+            ghost
+            icon="note_stack_add"
+            aria-label="新项目"
             onClick={handleCreateSession}
           />
-        }
-      />
+          <AriButton
+            size="sm"
+            type="text"
+            ghost
+            icon="sort"
+            color={sessionSortMode === "name" ? "primary" : "default"}
+            aria-label="排序"
+            onClick={handleToggleSessionSortMode}
+          />
+        </AriFlex>
+      </AriFlex>
 
       <AriContextMenu
         className="desk-history-context-menu"
@@ -880,7 +1007,7 @@ function AgentSidebar({
           ) : (
             <AriMenu
               className="desk-sidebar-nav"
-              items={buildSessionMenuItems(sessions)}
+              items={buildSessionMenuItems(displayedSessions)}
               selectedKey={selectedSessionKey}
               onSelect={handleSelectSession}
             />
@@ -889,20 +1016,6 @@ function AgentSidebar({
       </AriContextMenu>
 
       <AriContainer style={{ flex: 1 }} />
-      {routeAccess.isModuleEnabled("settings") || routeAccess.isModuleEnabled("workflow") ? (
-        <AriContainer className="desk-sidebar-quick-actions">
-          {(isCodeAgent ? CODE_SIDEBAR_QUICK_ACTIONS : MODEL_SIDEBAR_QUICK_ACTIONS)
-            .filter((item) => routeAccess.isModuleEnabled(item.key === "workflow" ? "workflow" : "settings"))
-            .map((item) => (
-              <SidebarQuickAction
-                key={item.key}
-                label={item.label}
-                icon={item.icon}
-                onClick={() => navigate(item.path)}
-              />
-            ))}
-        </AriContainer>
-      ) : null}
       <UserHoverMenu user={user} onLogout={onLogout} routeAccess={routeAccess} />
 
       <AriModal
@@ -1092,7 +1205,7 @@ function WorkflowsSidebar({
   );
 
   return (
-    <AriContainer className="desk-sidebar desk-agent-sidebar">
+    <AriContainer className="desk-sidebar">
       <SidebarBackHeader
         onBack={() => navigate(`/agents/${agentKey}/settings`)}
         label="返回"

@@ -34,7 +34,7 @@ var Config = zbootstrap.Config{
 	RouterConfig: []zspecs.RouterConfig{
 		{
 			Name: "zodileap_billing",
-			Port: ":18080",
+			Port: ":10006",
 		},
 	},
 	RPCEnable:     false,

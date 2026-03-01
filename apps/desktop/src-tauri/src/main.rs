@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::io::Write;
@@ -63,6 +63,75 @@ struct AgentRunResponse {
     events: Vec<ProtocolEventRecord>,
     assets: Vec<ProtocolAssetRecord>,
     ui_hint: Option<ProtocolUiHint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum DependencyEcosystem {
+    Node,
+    Go,
+    Java,
+}
+
+impl DependencyEcosystem {
+    /// 描述：返回依赖生态字符串标识，供前端展示与路由分流使用。
+    fn as_str(&self) -> &'static str {
+        match self {
+            DependencyEcosystem::Node => "node",
+            DependencyEcosystem::Go => "go",
+            DependencyEcosystem::Java => "java",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ParsedDependencyRule {
+    raw: String,
+    ecosystem: Option<DependencyEcosystem>,
+    package_name: String,
+    expected_version: String,
+}
+
+#[derive(Debug, Clone)]
+struct DependencyVersionSnapshot {
+    version: String,
+    source_file: String,
+}
+
+#[derive(Serialize, Clone)]
+struct DependencyRuleStatusItem {
+    rule: String,
+    ecosystem: String,
+    package_name: String,
+    expected_version: String,
+    current_version: Option<String>,
+    status: String,
+    source_file: Option<String>,
+    detail: Option<String>,
+    upgradable: bool,
+}
+
+#[derive(Serialize, Clone)]
+struct ProjectDependencyRuleCheckResponse {
+    project_path: String,
+    detected_ecosystems: Vec<String>,
+    items: Vec<DependencyRuleStatusItem>,
+    mismatches: Vec<DependencyRuleStatusItem>,
+}
+
+#[derive(Serialize, Clone)]
+struct DependencyRuleUpgradeResult {
+    ecosystem: String,
+    package_name: String,
+    expected_version: String,
+    status: String,
+    detail: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+struct ProjectDependencyRuleUpgradeResponse {
+    project_path: String,
+    updated: Vec<DependencyRuleUpgradeResult>,
+    skipped: Vec<DependencyRuleUpgradeResult>,
 }
 
 #[derive(Serialize, Clone)]
@@ -1211,6 +1280,854 @@ fn run_agent_command_inner(
         assets: result.assets,
         ui_hint: result.ui_hint,
     })
+}
+
+/// 描述：解析单条依赖规范，支持 `node:pkg@1.0.0`、`go:module@v1.0.0`、`java:group:artifact@1.0.0` 与无前缀写法。
+fn parse_dependency_rule(rule: &str) -> Result<ParsedDependencyRule, String> {
+    let trimmed = rule.trim();
+    if trimmed.is_empty() {
+        return Err("规则为空".to_string());
+    }
+
+    let (ecosystem, body) = if let Some((prefix, rest)) = trimmed.split_once(':') {
+        let normalized_prefix = prefix.trim().to_lowercase();
+        match normalized_prefix.as_str() {
+            "node" => (Some(DependencyEcosystem::Node), rest.trim()),
+            "go" => (Some(DependencyEcosystem::Go), rest.trim()),
+            "java" => (Some(DependencyEcosystem::Java), rest.trim()),
+            _ => (None, trimmed),
+        }
+    } else {
+        (None, trimmed)
+    };
+
+    let Some((package_name, expected_version)) = body.rsplit_once('@') else {
+        return Err("缺少 @版本，格式应为 包名@版本".to_string());
+    };
+    let package_name = package_name.trim().to_string();
+    let expected_version = expected_version.trim().to_string();
+    if package_name.is_empty() || expected_version.is_empty() {
+        return Err("包名或版本为空".to_string());
+    }
+
+    Ok(ParsedDependencyRule {
+        raw: trimmed.to_string(),
+        ecosystem,
+        package_name,
+        expected_version,
+    })
+}
+
+/// 描述：当规则未声明生态前缀时，按包名特征推断默认生态。
+fn infer_dependency_rule_ecosystem(package_name: &str) -> DependencyEcosystem {
+    if package_name.contains(':') {
+        return DependencyEcosystem::Java;
+    }
+    if package_name.starts_with("github.com/")
+        || package_name.starts_with("golang.org/")
+        || package_name.starts_with("gopkg.in/")
+    {
+        return DependencyEcosystem::Go;
+    }
+    DependencyEcosystem::Node
+}
+
+/// 描述：检测项目根目录启用的依赖生态，用于规则命中与提示。
+fn detect_project_dependency_ecosystems(project_root: &Path) -> Vec<DependencyEcosystem> {
+    let mut ecosystems = Vec::new();
+    if project_root.join("package.json").exists() {
+        ecosystems.push(DependencyEcosystem::Node);
+    }
+    if project_root.join("go.mod").exists() {
+        ecosystems.push(DependencyEcosystem::Go);
+    }
+    if project_root.join("pom.xml").exists()
+        || project_root.join("build.gradle").exists()
+        || project_root.join("build.gradle.kts").exists()
+    {
+        ecosystems.push(DependencyEcosystem::Java);
+    }
+    ecosystems
+}
+
+/// 描述：抽取 XML 标签文本，若标签不存在则返回 None。
+fn extract_xml_tag_text(block: &str, tag: &str) -> Option<String> {
+    let start_tag = format!("<{}>", tag);
+    let end_tag = format!("</{}>", tag);
+    let start = block.find(start_tag.as_str())?;
+    let value_start = start + start_tag.len();
+    let end_rel = block[value_start..].find(end_tag.as_str())?;
+    let end = value_start + end_rel;
+    Some(block[value_start..end].trim().to_string())
+}
+
+/// 描述：替换 XML 标签值，返回替换后的新文本；标签不存在时返回 None。
+fn replace_xml_tag_text(block: &str, tag: &str, value: &str) -> Option<String> {
+    let start_tag = format!("<{}>", tag);
+    let end_tag = format!("</{}>", tag);
+    let start = block.find(start_tag.as_str())?;
+    let value_start = start + start_tag.len();
+    let end_rel = block[value_start..].find(end_tag.as_str())?;
+    let value_end = value_start + end_rel;
+    let mut next = String::new();
+    next.push_str(&block[..value_start]);
+    next.push_str(value);
+    next.push_str(&block[value_end..]);
+    Some(next)
+}
+
+/// 描述：解析 Node 项目直接依赖版本快照（dependencies/devDependencies/peerDependencies/optionalDependencies）。
+fn read_node_dependency_snapshots(
+    project_root: &Path,
+) -> Result<HashMap<String, DependencyVersionSnapshot>, String> {
+    let package_json_path = project_root.join("package.json");
+    if !package_json_path.exists() {
+        return Ok(HashMap::new());
+    }
+    let text = fs::read_to_string(&package_json_path)
+        .map_err(|err| format!("读取 package.json 失败: {}", err))?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(&text).map_err(|err| format!("解析 package.json 失败: {}", err))?;
+
+    let mut snapshots: HashMap<String, DependencyVersionSnapshot> = HashMap::new();
+    let sections = [
+        "dependencies",
+        "devDependencies",
+        "peerDependencies",
+        "optionalDependencies",
+    ];
+    for section in sections {
+        let Some(section_value) = parsed.get(section) else {
+            continue;
+        };
+        let Some(dep_map) = section_value.as_object() else {
+            continue;
+        };
+        for (name, version_value) in dep_map {
+            let Some(version) = version_value.as_str() else {
+                continue;
+            };
+            let normalized_version = version.trim().to_string();
+            if normalized_version.is_empty() {
+                continue;
+            }
+            if snapshots.contains_key(name) {
+                continue;
+            }
+            snapshots.insert(
+                name.to_string(),
+                DependencyVersionSnapshot {
+                    version: normalized_version,
+                    source_file: "package.json".to_string(),
+                },
+            );
+        }
+    }
+    Ok(snapshots)
+}
+
+/// 描述：解析 go.mod 单行 require 语句。
+fn parse_go_require_line(line: &str) -> Option<(String, String)> {
+    let without_comment = line.split("//").next()?.trim();
+    if without_comment.is_empty() || without_comment.contains("=>") {
+        return None;
+    }
+    let parts: Vec<&str> = without_comment.split_whitespace().collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let module = parts[0].trim();
+    let version = parts[1].trim();
+    if module.is_empty() || version.is_empty() {
+        return None;
+    }
+    Some((module.to_string(), version.to_string()))
+}
+
+/// 描述：解析 Go 项目直接依赖版本快照（go.mod require）。
+fn read_go_dependency_snapshots(
+    project_root: &Path,
+) -> Result<HashMap<String, DependencyVersionSnapshot>, String> {
+    let go_mod_path = project_root.join("go.mod");
+    if !go_mod_path.exists() {
+        return Ok(HashMap::new());
+    }
+    let text =
+        fs::read_to_string(&go_mod_path).map_err(|err| format!("读取 go.mod 失败: {}", err))?;
+    let mut snapshots: HashMap<String, DependencyVersionSnapshot> = HashMap::new();
+    let mut in_require_block = false;
+    for raw_line in text.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with("//") {
+            continue;
+        }
+        if in_require_block {
+            if line.starts_with(')') {
+                in_require_block = false;
+                continue;
+            }
+            if let Some((module, version)) = parse_go_require_line(line) {
+                snapshots.insert(
+                    module,
+                    DependencyVersionSnapshot {
+                        version,
+                        source_file: "go.mod".to_string(),
+                    },
+                );
+            }
+            continue;
+        }
+        if line.starts_with("require (") {
+            in_require_block = true;
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("require ") {
+            if let Some((module, version)) = parse_go_require_line(rest) {
+                snapshots.insert(
+                    module,
+                    DependencyVersionSnapshot {
+                        version,
+                        source_file: "go.mod".to_string(),
+                    },
+                );
+            }
+        }
+    }
+    Ok(snapshots)
+}
+
+/// 描述：提取单行中被单双引号包裹的字符串（包含位置信息），用于 Gradle 坐标替换。
+fn collect_line_quoted_segments(line: &str) -> Vec<(usize, usize, String)> {
+    let mut segments: Vec<(usize, usize, String)> = Vec::new();
+    let mut quote_char: Option<char> = None;
+    let mut value_start = 0usize;
+    for (idx, ch) in line.char_indices() {
+        match quote_char {
+            None => {
+                if ch == '"' || ch == '\'' {
+                    quote_char = Some(ch);
+                    value_start = idx + ch.len_utf8();
+                }
+            }
+            Some(current_quote) => {
+                if ch == current_quote {
+                    if idx >= value_start {
+                        segments.push((value_start, idx, line[value_start..idx].to_string()));
+                    }
+                    quote_char = None;
+                }
+            }
+        }
+    }
+    segments
+}
+
+/// 描述：解析 Maven pom.xml 依赖快照，键格式为 groupId:artifactId。
+fn read_maven_dependency_snapshots(
+    project_root: &Path,
+) -> Result<HashMap<String, DependencyVersionSnapshot>, String> {
+    let pom_path = project_root.join("pom.xml");
+    if !pom_path.exists() {
+        return Ok(HashMap::new());
+    }
+    let text = fs::read_to_string(&pom_path).map_err(|err| format!("读取 pom.xml 失败: {}", err))?;
+    let mut snapshots: HashMap<String, DependencyVersionSnapshot> = HashMap::new();
+    let mut cursor = 0usize;
+    while let Some(start_rel) = text[cursor..].find("<dependency>") {
+        let start = cursor + start_rel;
+        let Some(end_rel) = text[start..].find("</dependency>") else {
+            break;
+        };
+        let end = start + end_rel + "</dependency>".len();
+        let block = &text[start..end];
+        let group_id = extract_xml_tag_text(block, "groupId").unwrap_or_default();
+        let artifact_id = extract_xml_tag_text(block, "artifactId").unwrap_or_default();
+        let version = extract_xml_tag_text(block, "version").unwrap_or_default();
+        if !group_id.is_empty() && !artifact_id.is_empty() && !version.is_empty() {
+            let package_name = format!("{}:{}", group_id, artifact_id);
+            snapshots.entry(package_name).or_insert(DependencyVersionSnapshot {
+                version,
+                source_file: "pom.xml".to_string(),
+            });
+        }
+        cursor = end;
+    }
+    Ok(snapshots)
+}
+
+/// 描述：解析 Gradle 文件依赖快照，支持 `group:artifact:version` 直接坐标声明。
+fn read_gradle_dependency_snapshots_from_file(
+    project_root: &Path,
+    file_name: &str,
+) -> Result<HashMap<String, DependencyVersionSnapshot>, String> {
+    let gradle_path = project_root.join(file_name);
+    if !gradle_path.exists() {
+        return Ok(HashMap::new());
+    }
+    let text = fs::read_to_string(&gradle_path)
+        .map_err(|err| format!("读取 {} 失败: {}", file_name, err))?;
+    let mut snapshots: HashMap<String, DependencyVersionSnapshot> = HashMap::new();
+    for raw_line in text.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with("//") {
+            continue;
+        }
+        let segments = collect_line_quoted_segments(line);
+        for (_, _, segment) in segments {
+            let normalized = segment.trim();
+            if normalized.is_empty() || normalized.contains("://") {
+                continue;
+            }
+            let parts: Vec<&str> = normalized.split(':').collect();
+            if parts.len() < 3 {
+                continue;
+            }
+            let group = parts[0].trim();
+            let artifact = parts[1].trim();
+            let version = parts[2].trim();
+            if group.is_empty() || artifact.is_empty() || version.is_empty() {
+                continue;
+            }
+            let package_name = format!("{}:{}", group, artifact);
+            snapshots.entry(package_name).or_insert(DependencyVersionSnapshot {
+                version: version.to_string(),
+                source_file: file_name.to_string(),
+            });
+        }
+    }
+    Ok(snapshots)
+}
+
+/// 描述：合并读取 Java 项目依赖快照（pom.xml + build.gradle + build.gradle.kts）。
+fn read_java_dependency_snapshots(
+    project_root: &Path,
+) -> Result<HashMap<String, DependencyVersionSnapshot>, String> {
+    let mut snapshots = read_maven_dependency_snapshots(project_root)?;
+    let gradle_groovy = read_gradle_dependency_snapshots_from_file(project_root, "build.gradle")?;
+    for (name, snapshot) in gradle_groovy {
+        snapshots.entry(name).or_insert(snapshot);
+    }
+    let gradle_kts = read_gradle_dependency_snapshots_from_file(project_root, "build.gradle.kts")?;
+    for (name, snapshot) in gradle_kts {
+        snapshots.entry(name).or_insert(snapshot);
+    }
+    Ok(snapshots)
+}
+
+/// 描述：按生态读取依赖快照映射，用于规则校验与升级计划构建。
+fn read_dependency_snapshots_by_ecosystem(
+    project_root: &Path,
+    ecosystem: &DependencyEcosystem,
+) -> Result<HashMap<String, DependencyVersionSnapshot>, String> {
+    match ecosystem {
+        DependencyEcosystem::Node => read_node_dependency_snapshots(project_root),
+        DependencyEcosystem::Go => read_go_dependency_snapshots(project_root),
+        DependencyEcosystem::Java => read_java_dependency_snapshots(project_root),
+    }
+}
+
+/// 描述：执行依赖规则检查，输出规则命中结果与可升级项。
+fn check_project_dependency_rules_inner(
+    project_path: String,
+    rules: Vec<String>,
+) -> Result<ProjectDependencyRuleCheckResponse, String> {
+    let project_root = PathBuf::from(project_path.trim());
+    if !project_root.exists() || !project_root.is_dir() {
+        return Err("项目路径不存在或不是目录".to_string());
+    }
+
+    let detected_ecosystems = detect_project_dependency_ecosystems(&project_root);
+    let detected_set: HashSet<DependencyEcosystem> = detected_ecosystems.iter().cloned().collect();
+    let mut snapshots_by_ecosystem: HashMap<DependencyEcosystem, HashMap<String, DependencyVersionSnapshot>> =
+        HashMap::new();
+    for ecosystem in &detected_ecosystems {
+        let snapshots = read_dependency_snapshots_by_ecosystem(&project_root, ecosystem)?;
+        snapshots_by_ecosystem.insert(ecosystem.clone(), snapshots);
+    }
+
+    let mut items: Vec<DependencyRuleStatusItem> = Vec::new();
+    for rule in rules {
+        let parsed = match parse_dependency_rule(&rule) {
+            Ok(value) => value,
+            Err(detail) => {
+                items.push(DependencyRuleStatusItem {
+                    rule: rule.clone(),
+                    ecosystem: "".to_string(),
+                    package_name: "".to_string(),
+                    expected_version: "".to_string(),
+                    current_version: None,
+                    status: "invalid".to_string(),
+                    source_file: None,
+                    detail: Some(detail),
+                    upgradable: false,
+                });
+                continue;
+            }
+        };
+
+        let target_ecosystem = parsed
+            .ecosystem
+            .clone()
+            .unwrap_or_else(|| infer_dependency_rule_ecosystem(parsed.package_name.as_str()));
+        if !detected_set.contains(&target_ecosystem) {
+            items.push(DependencyRuleStatusItem {
+                rule: parsed.raw.clone(),
+                ecosystem: target_ecosystem.as_str().to_string(),
+                package_name: parsed.package_name.clone(),
+                expected_version: parsed.expected_version.clone(),
+                current_version: None,
+                status: "ecosystem_unavailable".to_string(),
+                source_file: None,
+                detail: Some("项目未检测到该生态清单文件".to_string()),
+                upgradable: false,
+            });
+            continue;
+        }
+
+        let snapshots = snapshots_by_ecosystem
+            .get(&target_ecosystem)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(current) = snapshots.get(parsed.package_name.as_str()) {
+            if current.version.trim() == parsed.expected_version.trim() {
+                items.push(DependencyRuleStatusItem {
+                    rule: parsed.raw.clone(),
+                    ecosystem: target_ecosystem.as_str().to_string(),
+                    package_name: parsed.package_name.clone(),
+                    expected_version: parsed.expected_version.clone(),
+                    current_version: Some(current.version.clone()),
+                    status: "aligned".to_string(),
+                    source_file: Some(current.source_file.clone()),
+                    detail: None,
+                    upgradable: false,
+                });
+            } else {
+                items.push(DependencyRuleStatusItem {
+                    rule: parsed.raw.clone(),
+                    ecosystem: target_ecosystem.as_str().to_string(),
+                    package_name: parsed.package_name.clone(),
+                    expected_version: parsed.expected_version.clone(),
+                    current_version: Some(current.version.clone()),
+                    status: "mismatch".to_string(),
+                    source_file: Some(current.source_file.clone()),
+                    detail: Some("版本不一致，可按规则升级".to_string()),
+                    upgradable: true,
+                });
+            }
+        } else {
+            items.push(DependencyRuleStatusItem {
+                rule: parsed.raw.clone(),
+                ecosystem: target_ecosystem.as_str().to_string(),
+                package_name: parsed.package_name.clone(),
+                expected_version: parsed.expected_version.clone(),
+                current_version: None,
+                status: "missing".to_string(),
+                source_file: None,
+                detail: Some("项目中未使用该依赖".to_string()),
+                upgradable: false,
+            });
+        }
+    }
+
+    let mismatches = items
+        .iter()
+        .filter(|item| item.status == "mismatch" && item.upgradable)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    Ok(ProjectDependencyRuleCheckResponse {
+        project_path: project_root.to_string_lossy().to_string(),
+        detected_ecosystems: detected_ecosystems
+            .iter()
+            .map(|item| item.as_str().to_string())
+            .collect(),
+        items,
+        mismatches,
+    })
+}
+
+/// 描述：检测 Node 项目包管理器类型，优先读取 packageManager 字段，回退 lockfile 识别。
+fn detect_node_package_manager(project_root: &Path, package_json: &serde_json::Value) -> String {
+    if let Some(package_manager) = package_json.get("packageManager").and_then(|value| value.as_str()) {
+        let lower = package_manager.to_lowercase();
+        if lower.starts_with("pnpm") {
+            return "pnpm".to_string();
+        }
+        if lower.starts_with("yarn") {
+            return "yarn".to_string();
+        }
+        if lower.starts_with("npm") {
+            return "npm".to_string();
+        }
+    }
+    if project_root.join("pnpm-lock.yaml").exists() {
+        return "pnpm".to_string();
+    }
+    if project_root.join("yarn.lock").exists() {
+        return "yarn".to_string();
+    }
+    if project_root.join("package-lock.json").exists() {
+        return "npm".to_string();
+    }
+    "npm".to_string()
+}
+
+/// 描述：在指定目录执行命令并返回失败原因，统一用于依赖升级阶段的外部命令调用。
+fn run_command_in_dir(project_root: &Path, bin: &str, args: &[String]) -> Result<(), String> {
+    let output = Command::new(bin)
+        .current_dir(project_root)
+        .args(args)
+        .output()
+        .map_err(|err| format!("执行命令 `{}` 失败: {}", bin, err))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let detail = if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        format!("退出码 {:?}", output.status.code())
+    };
+    Err(format!("命令 `{}` 执行失败: {}", bin, detail))
+}
+
+/// 描述：应用 Node 依赖升级：更新 package.json 中已存在依赖版本，并执行 install 刷新锁文件。
+fn apply_node_dependency_rule_upgrades(
+    project_root: &Path,
+    rules: &[DependencyRuleStatusItem],
+) -> Result<(Vec<DependencyRuleUpgradeResult>, Vec<DependencyRuleUpgradeResult>), String> {
+    let package_json_path = project_root.join("package.json");
+    let text = fs::read_to_string(&package_json_path)
+        .map_err(|err| format!("读取 package.json 失败: {}", err))?;
+    let mut parsed: serde_json::Value =
+        serde_json::from_str(&text).map_err(|err| format!("解析 package.json 失败: {}", err))?;
+    let sections = [
+        "dependencies",
+        "devDependencies",
+        "peerDependencies",
+        "optionalDependencies",
+    ];
+    let mut updated: Vec<DependencyRuleUpgradeResult> = Vec::new();
+    let mut skipped: Vec<DependencyRuleUpgradeResult> = Vec::new();
+    let mut changed = false;
+
+    for rule in rules {
+        let mut hit = false;
+        for section in sections {
+            let Some(dep_map) = parsed.get_mut(section).and_then(|value| value.as_object_mut()) else {
+                continue;
+            };
+            if let Some(current) = dep_map.get_mut(rule.package_name.as_str()) {
+                hit = true;
+                let current_text = current.as_str().unwrap_or("").trim().to_string();
+                if current_text != rule.expected_version {
+                    *current = serde_json::Value::String(rule.expected_version.clone());
+                    changed = true;
+                }
+            }
+        }
+        if hit {
+            updated.push(DependencyRuleUpgradeResult {
+                ecosystem: "node".to_string(),
+                package_name: rule.package_name.clone(),
+                expected_version: rule.expected_version.clone(),
+                status: "updated".to_string(),
+                detail: None,
+            });
+        } else {
+            skipped.push(DependencyRuleUpgradeResult {
+                ecosystem: "node".to_string(),
+                package_name: rule.package_name.clone(),
+                expected_version: rule.expected_version.clone(),
+                status: "skipped".to_string(),
+                detail: Some("package.json 未找到该依赖".to_string()),
+            });
+        }
+    }
+
+    if changed {
+        let serialized = serde_json::to_string_pretty(&parsed)
+            .map_err(|err| format!("序列化 package.json 失败: {}", err))?;
+        fs::write(&package_json_path, format!("{}\n", serialized))
+            .map_err(|err| format!("写入 package.json 失败: {}", err))?;
+        let package_manager = detect_node_package_manager(project_root, &parsed);
+        let install_args = vec!["install".to_string()];
+        run_command_in_dir(project_root, package_manager.as_str(), &install_args)?;
+    }
+    Ok((updated, skipped))
+}
+
+/// 描述：应用 Go 依赖升级：逐条执行 `go get module@version`，并在成功后执行 `go mod tidy`。
+fn apply_go_dependency_rule_upgrades(
+    project_root: &Path,
+    rules: &[DependencyRuleStatusItem],
+) -> (Vec<DependencyRuleUpgradeResult>, Vec<DependencyRuleUpgradeResult>) {
+    let mut updated: Vec<DependencyRuleUpgradeResult> = Vec::new();
+    let mut skipped: Vec<DependencyRuleUpgradeResult> = Vec::new();
+
+    for rule in rules {
+        let target = format!("{}@{}", rule.package_name, rule.expected_version);
+        let args = vec!["get".to_string(), target];
+        match run_command_in_dir(project_root, "go", &args) {
+            Ok(_) => updated.push(DependencyRuleUpgradeResult {
+                ecosystem: "go".to_string(),
+                package_name: rule.package_name.clone(),
+                expected_version: rule.expected_version.clone(),
+                status: "updated".to_string(),
+                detail: None,
+            }),
+            Err(detail) => skipped.push(DependencyRuleUpgradeResult {
+                ecosystem: "go".to_string(),
+                package_name: rule.package_name.clone(),
+                expected_version: rule.expected_version.clone(),
+                status: "skipped".to_string(),
+                detail: Some(detail),
+            }),
+        }
+    }
+
+    if !updated.is_empty() {
+        let tidy_args = vec!["mod".to_string(), "tidy".to_string()];
+        if let Err(detail) = run_command_in_dir(project_root, "go", &tidy_args) {
+            skipped.push(DependencyRuleUpgradeResult {
+                ecosystem: "go".to_string(),
+                package_name: "go.mod".to_string(),
+                expected_version: "".to_string(),
+                status: "skipped".to_string(),
+                detail: Some(format!("go mod tidy 失败: {}", detail)),
+            });
+        }
+    }
+
+    (updated, skipped)
+}
+
+/// 描述：重写 pom.xml 依赖版本，仅更新 groupId/artifactId 命中的 dependency 块。
+fn rewrite_pom_dependency_versions(
+    content: &str,
+    expected_map: &HashMap<String, String>,
+) -> (String, HashSet<String>) {
+    let mut rewritten = String::new();
+    let mut cursor = 0usize;
+    let mut updated_packages: HashSet<String> = HashSet::new();
+
+    while let Some(start_rel) = content[cursor..].find("<dependency>") {
+        let start = cursor + start_rel;
+        let Some(end_rel) = content[start..].find("</dependency>") else {
+            break;
+        };
+        let end = start + end_rel + "</dependency>".len();
+        rewritten.push_str(&content[cursor..start]);
+        let block = &content[start..end];
+        let group_id = extract_xml_tag_text(block, "groupId").unwrap_or_default();
+        let artifact_id = extract_xml_tag_text(block, "artifactId").unwrap_or_default();
+        let package_name = if group_id.is_empty() || artifact_id.is_empty() {
+            "".to_string()
+        } else {
+            format!("{}:{}", group_id, artifact_id)
+        };
+        if let Some(expected_version) = expected_map.get(package_name.as_str()) {
+            let current_version = extract_xml_tag_text(block, "version").unwrap_or_default();
+            if !current_version.is_empty() && current_version != *expected_version {
+                if let Some(next_block) = replace_xml_tag_text(block, "version", expected_version) {
+                    rewritten.push_str(next_block.as_str());
+                    updated_packages.insert(package_name);
+                } else {
+                    rewritten.push_str(block);
+                }
+            } else {
+                rewritten.push_str(block);
+            }
+        } else {
+            rewritten.push_str(block);
+        }
+        cursor = end;
+    }
+    rewritten.push_str(&content[cursor..]);
+    (rewritten, updated_packages)
+}
+
+/// 描述：重写 Gradle 依赖版本，支持单双引号坐标 `group:artifact:version`。
+fn rewrite_gradle_dependency_versions(
+    content: &str,
+    expected_map: &HashMap<String, String>,
+) -> (String, HashSet<String>) {
+    let mut updated_packages: HashSet<String> = HashSet::new();
+    let mut next_lines: Vec<String> = Vec::new();
+
+    for raw_line in content.lines() {
+        let mut line = raw_line.to_string();
+        let mut segments = collect_line_quoted_segments(line.as_str());
+        segments.reverse();
+        for (start, end, segment) in segments {
+            let normalized = segment.trim();
+            if normalized.is_empty() || normalized.contains("://") {
+                continue;
+            }
+            let parts: Vec<&str> = normalized.split(':').collect();
+            if parts.len() < 3 {
+                continue;
+            }
+            let group = parts[0].trim();
+            let artifact = parts[1].trim();
+            if group.is_empty() || artifact.is_empty() {
+                continue;
+            }
+            let package_name = format!("{}:{}", group, artifact);
+            let Some(expected_version) = expected_map.get(package_name.as_str()) else {
+                continue;
+            };
+            let remain = if parts.len() > 3 {
+                format!(":{}", parts[3..].join(":"))
+            } else {
+                String::new()
+            };
+            let replacement = format!("{}:{}:{}{}", group, artifact, expected_version, remain);
+            if start <= end && end <= line.len() {
+                line.replace_range(start..end, replacement.as_str());
+                updated_packages.insert(package_name);
+            }
+        }
+        next_lines.push(line);
+    }
+
+    let mut next_content = next_lines.join("\n");
+    if content.ends_with('\n') {
+        next_content.push('\n');
+    }
+    (next_content, updated_packages)
+}
+
+/// 描述：应用 Java 依赖升级，覆盖 pom.xml 与 build.gradle/build.gradle.kts 可识别坐标版本。
+fn apply_java_dependency_rule_upgrades(
+    project_root: &Path,
+    rules: &[DependencyRuleStatusItem],
+) -> Result<(Vec<DependencyRuleUpgradeResult>, Vec<DependencyRuleUpgradeResult>), String> {
+    let mut expected_map: HashMap<String, String> = HashMap::new();
+    for rule in rules {
+        expected_map.insert(rule.package_name.clone(), rule.expected_version.clone());
+    }
+    let mut updated_packages: HashSet<String> = HashSet::new();
+
+    let pom_path = project_root.join("pom.xml");
+    if pom_path.exists() {
+        let content = fs::read_to_string(&pom_path).map_err(|err| format!("读取 pom.xml 失败: {}", err))?;
+        let (next_content, updated) = rewrite_pom_dependency_versions(content.as_str(), &expected_map);
+        if next_content != content {
+            fs::write(&pom_path, next_content).map_err(|err| format!("写入 pom.xml 失败: {}", err))?;
+        }
+        updated_packages.extend(updated);
+    }
+
+    for file_name in ["build.gradle", "build.gradle.kts"] {
+        let gradle_path = project_root.join(file_name);
+        if !gradle_path.exists() {
+            continue;
+        }
+        let content =
+            fs::read_to_string(&gradle_path).map_err(|err| format!("读取 {} 失败: {}", file_name, err))?;
+        let (next_content, updated) = rewrite_gradle_dependency_versions(content.as_str(), &expected_map);
+        if next_content != content {
+            fs::write(&gradle_path, next_content)
+                .map_err(|err| format!("写入 {} 失败: {}", file_name, err))?;
+        }
+        updated_packages.extend(updated);
+    }
+
+    let mut updated: Vec<DependencyRuleUpgradeResult> = Vec::new();
+    let mut skipped: Vec<DependencyRuleUpgradeResult> = Vec::new();
+    for rule in rules {
+        if updated_packages.contains(rule.package_name.as_str()) {
+            updated.push(DependencyRuleUpgradeResult {
+                ecosystem: "java".to_string(),
+                package_name: rule.package_name.clone(),
+                expected_version: rule.expected_version.clone(),
+                status: "updated".to_string(),
+                detail: None,
+            });
+        } else {
+            skipped.push(DependencyRuleUpgradeResult {
+                ecosystem: "java".to_string(),
+                package_name: rule.package_name.clone(),
+                expected_version: rule.expected_version.clone(),
+                status: "skipped".to_string(),
+                detail: Some("未在 pom.xml/build.gradle 中命中可升级坐标".to_string()),
+            });
+        }
+    }
+
+    Ok((updated, skipped))
+}
+
+/// 描述：执行规则命中依赖的一键升级，升级后返回更新与跳过明细。
+fn apply_project_dependency_rule_upgrades_inner(
+    project_path: String,
+    rules: Vec<String>,
+) -> Result<ProjectDependencyRuleUpgradeResponse, String> {
+    let check = check_project_dependency_rules_inner(project_path.clone(), rules.clone())?;
+    let project_root = PathBuf::from(check.project_path.clone());
+
+    let mut node_rules: Vec<DependencyRuleStatusItem> = Vec::new();
+    let mut go_rules: Vec<DependencyRuleStatusItem> = Vec::new();
+    let mut java_rules: Vec<DependencyRuleStatusItem> = Vec::new();
+    for item in &check.mismatches {
+        match item.ecosystem.as_str() {
+            "node" => node_rules.push(item.clone()),
+            "go" => go_rules.push(item.clone()),
+            "java" => java_rules.push(item.clone()),
+            _ => {}
+        }
+    }
+
+    let mut updated: Vec<DependencyRuleUpgradeResult> = Vec::new();
+    let mut skipped: Vec<DependencyRuleUpgradeResult> = Vec::new();
+
+    if !node_rules.is_empty() {
+        let (node_updated, node_skipped) = apply_node_dependency_rule_upgrades(&project_root, &node_rules)?;
+        updated.extend(node_updated);
+        skipped.extend(node_skipped);
+    }
+    if !go_rules.is_empty() {
+        let (go_updated, go_skipped) = apply_go_dependency_rule_upgrades(&project_root, &go_rules);
+        updated.extend(go_updated);
+        skipped.extend(go_skipped);
+    }
+    if !java_rules.is_empty() {
+        let (java_updated, java_skipped) = apply_java_dependency_rule_upgrades(&project_root, &java_rules)?;
+        updated.extend(java_updated);
+        skipped.extend(java_skipped);
+    }
+
+    Ok(ProjectDependencyRuleUpgradeResponse {
+        project_path: project_root.to_string_lossy().to_string(),
+        updated,
+        skipped,
+    })
+}
+
+#[tauri::command]
+async fn check_project_dependency_rules(
+    project_path: String,
+    rules: Vec<String>,
+) -> Result<ProjectDependencyRuleCheckResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || check_project_dependency_rules_inner(project_path, rules))
+        .await
+        .map_err(|err| format!("检查依赖规则任务异常: {}", err))?
+}
+
+#[tauri::command]
+async fn apply_project_dependency_rule_upgrades(
+    project_path: String,
+    rules: Vec<String>,
+) -> Result<ProjectDependencyRuleUpgradeResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        apply_project_dependency_rule_upgrades_inner(project_path, rules)
+    })
+    .await
+    .map_err(|err| format!("升级依赖规则任务异常: {}", err))?
 }
 
 #[tauri::command]
@@ -5982,6 +6899,8 @@ fn main() {
             pick_local_project_folder,
             open_external_url,
             clone_git_repository,
+            check_project_dependency_rules,
+            apply_project_dependency_rule_upgrades,
             run_model_session_command,
             retry_model_session_last_step,
             undo_model_session_step,

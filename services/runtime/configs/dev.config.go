@@ -34,7 +34,7 @@ var Config = zbootstrap.Config{
 	RouterConfig: []zspecs.RouterConfig{
 		{
 			Name: "zodileap_runtime",
-			Port: ":18081",
+			Port: ":10002",
 		},
 	},
 	RPCEnable:     false,

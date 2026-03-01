@@ -63,10 +63,10 @@
 
 ## 4. Desktop 环境变量
 
-- `VITE_ACCOUNT_BASE_URL`：account 服务地址，默认 `http://127.0.0.1:18080`。
-- `VITE_RUNTIME_BASE_URL`：runtime 服务地址，默认 `http://127.0.0.1:18081`。
-- `VITE_AGENT_CODE_BASE_URL`：agent_code 服务地址，默认 `http://127.0.0.1:18082`。
-- `VITE_AGENT_3D_BASE_URL`：agent_3d 服务地址，默认 `http://127.0.0.1:18083`。
+- `VITE_ACCOUNT_BASE_URL`：account 服务地址，默认 `http://127.0.0.1:10001`。
+- `VITE_RUNTIME_BASE_URL`：runtime 服务地址，默认 `http://127.0.0.1:10002`。
+- `VITE_AGENT_CODE_BASE_URL`：agent_code 服务地址，默认 `http://127.0.0.1:10003`。
+- `VITE_AGENT_3D_BASE_URL`：agent_3d 服务地址，默认 `http://127.0.0.1:10004`。
 - `VITE_APP_API_URL`：desktop app 配置基地址。
 - `VITE_APP_LOCAL_IMG_SRC`：desktop 本地图片根路径。
 

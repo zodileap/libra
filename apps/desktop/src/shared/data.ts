@@ -86,6 +86,11 @@ export const SESSION_TITLE_UPDATED_EVENT = "zodileap:session-title-updated";
 
 // 描述:
 //
+//   - 代码目录分组更新广播事件名。
+export const CODE_WORKSPACE_GROUPS_UPDATED_EVENT = "zodileap:code-workspace-groups-updated";
+
+// 描述:
+//
 //   - 定义本地模型项目存储结构。
 interface StoredModelProject {
   id: string;
@@ -264,6 +269,24 @@ function emitSessionTitleUpdated(sessionId: string, title: string) {
       detail: {
         sessionId,
         title,
+      },
+    }),
+  );
+}
+
+// 描述：向当前窗口广播代码目录分组变更事件，供侧边栏即时同步目录树数据。
+//
+// Params:
+//
+//   - reason: 触发更新的动作标识。
+function emitCodeWorkspaceGroupsUpdated(reason: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.dispatchEvent(
+    new CustomEvent(CODE_WORKSPACE_GROUPS_UPDATED_EVENT, {
+      detail: {
+        reason,
       },
     }),
   );
@@ -708,6 +731,7 @@ export function upsertCodeWorkspaceGroup(path: string): CodeWorkspaceGroup | nul
       ...groups.filter((item) => item.id !== hit.id),
     ]);
     writeLastCodeWorkspaceId(next.id);
+    emitCodeWorkspaceGroupsUpdated("upsert");
     return next;
   }
 
@@ -720,6 +744,7 @@ export function upsertCodeWorkspaceGroup(path: string): CodeWorkspaceGroup | nul
   };
   writeCodeWorkspaceGroups([created, ...groups]);
   writeLastCodeWorkspaceId(created.id);
+  emitCodeWorkspaceGroupsUpdated("upsert");
   return created;
 }
 
@@ -752,6 +777,7 @@ export function renameCodeWorkspaceGroup(workspaceId: string, name: string): boo
       }
       : item)),
   );
+  emitCodeWorkspaceGroupsUpdated("rename");
   return true;
 }
 
@@ -798,6 +824,7 @@ export function updateCodeWorkspaceGroupSettings(
       }
       : item)),
   );
+  emitCodeWorkspaceGroupsUpdated("settings");
   return true;
 }
 
@@ -811,13 +838,24 @@ export function removeCodeWorkspaceGroup(workspaceId: string) {
     return;
   }
   const groups = readCodeWorkspaceGroups();
-  writeCodeWorkspaceGroups(groups.filter((item) => item.id !== workspaceId));
   const mapItems = readCodeSessionWorkspaceMap();
-  writeCodeSessionWorkspaceMap(mapItems.filter((item) => item.workspaceId !== workspaceId));
+  const sessionIds = mapItems
+    .filter((item) => item.workspaceId === workspaceId)
+    .map((item) => item.sessionId);
+
+  // 描述：删除项目时同步移除该项目下所有会话，避免会话在后续刷新时被自动重新绑定到新项目。
+  sessionIds.forEach((sessionId) => {
+    removeAgentSession("code", sessionId);
+  });
+
+  writeCodeWorkspaceGroups(groups.filter((item) => item.id !== workspaceId));
+  const latestMapItems = readCodeSessionWorkspaceMap();
+  writeCodeSessionWorkspaceMap(latestMapItems.filter((item) => item.workspaceId !== workspaceId));
   if (readLastCodeWorkspaceId() === workspaceId) {
     const next = listCodeWorkspaceGroups()[0];
     writeLastCodeWorkspaceId(next?.id || "");
   }
+  emitCodeWorkspaceGroupsUpdated("remove");
 }
 
 // 描述：记录代码会话所属目录分组，并刷新该目录分组的最近使用时间。
@@ -850,6 +888,7 @@ export function bindCodeSessionWorkspace(sessionId: string, workspaceId: string)
     ]);
   }
   writeLastCodeWorkspaceId(workspaceId);
+  emitCodeWorkspaceGroupsUpdated("bind-session");
 }
 
 // 描述：读取代码会话绑定的目录分组 ID。

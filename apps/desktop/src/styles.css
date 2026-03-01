@@ -34,7 +34,7 @@
   --desk-window-min-width: calc(var(--z-inset) * 64);
   --desk-window-min-height: calc(var(--z-inset) * 42);
   --desk-titlebar-height: var(--z-element-size-lg);
-  --desk-app-header-height: 40px;
+  --desk-app-header-height: var(--z-inset);
   --desk-agent-surface-padding-top: calc(var(--desk-app-header-height));
   --desk-breakpoint-lg: calc(var(--z-inset) * 80);
   --desk-breakpoint-md: calc(var(--z-inset) * 64);
@@ -201,23 +201,31 @@ body {
   height: 100%;
   border-right: var(--desk-border-width) solid var(--z-color-border-glass);
   background: var(--desk-sidebar-bg);
-  padding: calc(var(--z-inset) + var(--desk-app-header-height)) var(--z-inset) var(--z-inset);
+  padding: calc(var(--z-inset) + var(--desk-app-header-height)) 0 var(--z-inset);
   display: flex;
   flex-direction: column;
   position: relative;
 }
 
-.desk-agent-sidebar {
-  /* 描述:
-   *
-   *   - 智能体侧边栏与主内容区共用顶部留白，确保二者在固定标题栏下垂直起点一致。
-   */
-  padding-top: var(--desk-agent-surface-padding-top);
-  padding-bottom: var(--z-inset-sm);
-}
-
 .desk-agent-menu {
   margin-top: 0;
+}
+
+.desk-sidebar-toolbar {
+  margin-top: 0;
+}
+
+.desk-sidebar-toolbar + .desk-agent-menu {
+  margin-top: var(--z-inset-sm);
+}
+
+.desk-agent-session-header {
+  margin-top: var(--z-inset-sm);
+  padding: 0 var(--z-inset-xs);
+}
+
+.desk-agent-session-header-actions {
+  flex-shrink: 0;
 }
 
 .desk-history-menu {

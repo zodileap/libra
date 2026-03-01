@@ -47,7 +47,7 @@ test("buildBackendErrorMessage should fallback to generic message", () => {
 
 // 描述：校验网络错误文案为用户友好提示，不暴露技术细节。
 test("buildNetworkFailureMessage should return user-friendly text", () => {
-  const message = buildNetworkFailureMessage("http://127.0.0.1:18080/auth/v1/login", "Load failed");
+  const message = buildNetworkFailureMessage("http://127.0.0.1:10001/auth/v1/login", "Load failed");
   assert.equal(message, "无法连接后端服务，请确认服务已启动后重试。");
 });
 

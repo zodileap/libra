@@ -114,7 +114,7 @@ export function CodeProjectSettingsPage() {
               <AriInput.TextList
                 value={dependencyRules}
                 onChange={setDependencyRules}
-                itemPlaceholder="包名@版本"
+                itemPlaceholder="node:react@19.1.0"
                 addText="新增规范"
                 allowDrag={false}
                 allowEmpty={false}

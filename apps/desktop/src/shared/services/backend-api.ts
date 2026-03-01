@@ -147,10 +147,10 @@ function resolveServiceBaseUrl(envValue: string | undefined, fallback: string): 
   return fallback.replace(/\/$/, "");
 }
 
-const accountBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_ACCOUNT_BASE_URL, "http://127.0.0.1:18080");
-const runtimeBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_RUNTIME_BASE_URL, "http://127.0.0.1:18081");
-const agentCodeBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_AGENT_CODE_BASE_URL, "http://127.0.0.1:18082");
-const agent3dBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_AGENT_3D_BASE_URL, "http://127.0.0.1:18083");
+const accountBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_ACCOUNT_BASE_URL, "http://127.0.0.1:10001");
+const runtimeBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_RUNTIME_BASE_URL, "http://127.0.0.1:10002");
+const agentCodeBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_AGENT_CODE_BASE_URL, "http://127.0.0.1:10003");
+const agent3dBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_AGENT_3D_BASE_URL, "http://127.0.0.1:10004");
 
 // 描述:
 //

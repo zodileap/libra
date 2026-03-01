@@ -89,6 +89,16 @@ interface SessionRouteState {
   workspaceId?: string;
 }
 
+// 描述：
+//
+//   - 定义会话发送可选参数，统一控制确认重试、危险动作与依赖检查跳过开关。
+interface ExecutePromptOptions {
+  allowDangerousAction?: boolean;
+  appendUserMessage?: boolean;
+  confirmationToken?: string;
+  skipDependencyRuleCheck?: boolean;
+}
+
 // 描述:
 //
 //   - 定义通用智能体执行响应结构，兼容动作、步骤、事件与资产返回。
@@ -101,6 +111,62 @@ interface AgentRunResponse {
   events: ModelEventRecord[];
   assets: ModelAssetRecord[];
   ui_hint?: ProtocolUiHint;
+}
+
+// 描述：
+//
+//   - 定义依赖规则命中项结构，供“升级并继续”确认弹窗展示。
+interface DependencyRuleStatusItem {
+  rule: string;
+  ecosystem: string;
+  package_name: string;
+  expected_version: string;
+  current_version?: string | null;
+  status: string;
+  source_file?: string | null;
+  detail?: string | null;
+  upgradable: boolean;
+}
+
+// 描述：
+//
+//   - 定义依赖规则检查返回结构，包含命中详情与可升级差异列表。
+interface DependencyRuleCheckResponse {
+  project_path: string;
+  detected_ecosystems: string[];
+  items: DependencyRuleStatusItem[];
+  mismatches: DependencyRuleStatusItem[];
+}
+
+// 描述：
+//
+//   - 定义依赖规则升级结果结构，表示单条规则升级状态。
+interface DependencyRuleUpgradeResult {
+  ecosystem: string;
+  package_name: string;
+  expected_version: string;
+  status: string;
+  detail?: string | null;
+}
+
+// 描述：
+//
+//   - 定义依赖规则升级接口返回结构。
+interface DependencyRuleUpgradeResponse {
+  project_path: string;
+  updated: DependencyRuleUpgradeResult[];
+  skipped: DependencyRuleUpgradeResult[];
+}
+
+// 描述：
+//
+//   - 定义依赖规则确认弹窗临时态，保存继续执行所需上下文。
+interface DependencyRuleConfirmState {
+  prompt: string;
+  options: ExecutePromptOptions;
+  projectPath: string;
+  rules: string[];
+  mismatches: DependencyRuleStatusItem[];
 }
 
 // 描述:
@@ -673,6 +739,8 @@ export function SessionPage({
   const [sessionMenuVersion, setSessionMenuVersion] = useState(0);
   const [messagesHydrated, setMessagesHydrated] = useState(false);
   const [hydratedSessionKey, setHydratedSessionKey] = useState("");
+  const [dependencyRuleConfirmState, setDependencyRuleConfirmState] = useState<DependencyRuleConfirmState | null>(null);
+  const [dependencyRuleUpgrading, setDependencyRuleUpgrading] = useState(false);
   const headerSlotElement = useDesktopHeaderSlot();
   // 描述：将底部状态文案压缩为适合 action slot 展示的短文案。
   const compactActionSlotStatus = useMemo(() => buildCompactActionSlotStatus(status), [status]);
@@ -694,17 +762,21 @@ export function SessionPage({
     () => (normalizedAgentKey === "code" ? getCodeWorkspaceIdBySessionId(sessionId) : ""),
     [normalizedAgentKey, sessionId],
   );
-  // 描述：解析当前 code 会话所属目录名称，用于标题后一级菜单提示。
-  const codeWorkspaceGroupName = useMemo(() => {
+  // 描述：解析当前 code 会话所属目录详情（路径、名称、依赖规则），用于会话提示与规则校验。
+  const activeCodeWorkspace = useMemo(() => {
     if (normalizedAgentKey !== "code") {
-      return "";
+      return null;
     }
     const workspaceId = workspaceIdFromRouteState || workspaceIdFromQuery || workspaceIdFromBinding;
     if (!workspaceId) {
-      return "";
+      return null;
     }
-    return getCodeWorkspaceGroupById(workspaceId)?.name?.trim() || "";
+    return getCodeWorkspaceGroupById(workspaceId);
   }, [normalizedAgentKey, workspaceIdFromBinding, workspaceIdFromQuery, workspaceIdFromRouteState]);
+  // 描述：提取当前 code 会话一级目录名称，展示在标题后方。
+  const codeWorkspaceGroupName = useMemo(() => {
+    return String(activeCodeWorkspace?.name || "").trim();
+  }, [activeCodeWorkspace?.name]);
   // 描述：当会话处于二级目录（如 code workspace）时，在标题后展示一级菜单名（纯名字）。
   const sessionHeadParentHint = codeWorkspaceGroupName;
   const isSessionPinned = useMemo(
@@ -1481,20 +1553,47 @@ export function SessionPage({
     return response.summary.trim();
   };
 
-  const executePrompt = async (
-    content: string,
-    options?: {
-      allowDangerousAction?: boolean;
-      appendUserMessage?: boolean;
-      confirmationToken?: string;
-    },
-  ) => {
+  const executePrompt = async (content: string, options?: ExecutePromptOptions) => {
     const normalizedContent = content.trim();
     if (!normalizedContent || sending) return;
 
     const allowDangerousAction = Boolean(options?.allowDangerousAction);
     const confirmationToken = options?.confirmationToken;
     const appendUserMessage = options?.appendUserMessage !== false;
+
+    // 描述：代码智能体在正式执行前先检查项目依赖规则；发现版本不一致时先弹确认，不直接中断。
+    if (!isWorkflowSession && normalizedAgentKey === "code" && !options?.skipDependencyRuleCheck) {
+      const projectPath = String(activeCodeWorkspace?.path || "").trim();
+      const dependencyRules = activeCodeWorkspace?.dependencyRules || [];
+      if (projectPath && dependencyRules.length > 0) {
+        try {
+          const checkResponse = await invoke<DependencyRuleCheckResponse>("check_project_dependency_rules", {
+            projectPath,
+            rules: dependencyRules,
+          });
+          const mismatches = (checkResponse.mismatches || []).filter((item) => item.status === "mismatch");
+          if (mismatches.length > 0) {
+            setDependencyRuleConfirmState({
+              prompt: normalizedContent,
+              options: {
+                ...options,
+                appendUserMessage,
+              },
+              projectPath,
+              rules: dependencyRules,
+              mismatches,
+            });
+            setStatus(`检测到 ${mismatches.length} 项依赖版本与规范不一致，请先确认。`);
+            return;
+          }
+        } catch (checkErr) {
+          // 描述：依赖规则检查异常时不阻断主执行链路，使用状态栏提示并允许继续。
+          const reason = normalizeInvokeError(checkErr);
+          setStatus(`依赖规则检查失败，已跳过：${reason}`);
+        }
+      }
+    }
+
     const provider = selectedAi?.provider || "codex";
     const activeWorkflowName = isWorkflowSession
       ? selectedModelWorkflow?.name || resolvedSessionUiConfig.workflowFallbackLabel
@@ -1712,7 +1811,7 @@ export function SessionPage({
           agentKey: agentKey || "code",
           sessionId,
           provider,
-          prompt: buildCodeWorkflowPrompt(selectedCodeWorkflow, content),
+          prompt: buildCodeWorkflowPrompt(selectedCodeWorkflow, normalizedContent),
           traceId: codeTraceId,
           projectName: title,
           modelExportEnabled: modelMcpCapabilities.export,
@@ -1848,6 +1947,59 @@ export function SessionPage({
 
     event.preventDefault();
     void sendMessage();
+  };
+
+  // 描述：关闭依赖规则确认弹窗并清理临时状态。
+  const handleCloseDependencyRuleConfirm = () => {
+    if (dependencyRuleUpgrading) {
+      return;
+    }
+    setDependencyRuleConfirmState(null);
+  };
+
+  // 描述：跳过本次依赖升级并继续执行，仅跳过当前轮依赖规则校验。
+  const handleSkipDependencyRuleAndContinue = async () => {
+    if (!dependencyRuleConfirmState || dependencyRuleUpgrading) {
+      return;
+    }
+    const pending = dependencyRuleConfirmState;
+    setDependencyRuleConfirmState(null);
+    await executePrompt(pending.prompt, {
+      ...pending.options,
+      skipDependencyRuleCheck: true,
+    });
+  };
+
+  // 描述：先执行依赖升级，再继续当前请求；若升级失败则保留弹窗供用户选择跳过或取消。
+  const handleUpgradeDependencyRuleAndContinue = async () => {
+    if (!dependencyRuleConfirmState || dependencyRuleUpgrading) {
+      return;
+    }
+    const pending = dependencyRuleConfirmState;
+    setDependencyRuleUpgrading(true);
+    try {
+      const upgradeResponse = await invoke<DependencyRuleUpgradeResponse>("apply_project_dependency_rule_upgrades", {
+        projectPath: pending.projectPath,
+        rules: pending.rules,
+      });
+      const updatedCount = upgradeResponse.updated?.length || 0;
+      const skippedCount = upgradeResponse.skipped?.length || 0;
+      setStatus(
+        skippedCount > 0
+          ? `依赖升级完成：已更新 ${updatedCount} 项，跳过 ${skippedCount} 项。`
+          : `依赖升级完成：已更新 ${updatedCount} 项。`,
+      );
+      setDependencyRuleConfirmState(null);
+      await executePrompt(pending.prompt, {
+        ...pending.options,
+        skipDependencyRuleCheck: true,
+      });
+    } catch (upgradeErr) {
+      const reason = normalizeInvokeError(upgradeErr);
+      setStatus(`依赖升级失败：${reason}`);
+    } finally {
+      setDependencyRuleUpgrading(false);
+    }
   };
 
   const handleUiHintAction = async (action: WorkflowUiHint["actions"][number]) => {
@@ -2100,6 +2252,54 @@ export function SessionPage({
   return (
     <AriContainer className="desk-content desk-session-content" height="100%" showBorderRadius={false}>
       {headerSlotElement ? createPortal(sessionHeaderNode, headerSlotElement) : null}
+      <AriModal
+        visible={Boolean(dependencyRuleConfirmState)}
+        title="依赖版本需确认"
+        onClose={handleCloseDependencyRuleConfirm}
+        footer={(
+          <AriFlex justify="flex-end" align="center" space={8}>
+            <AriButton
+              type="default"
+              label="取消"
+              disabled={dependencyRuleUpgrading}
+              onClick={handleCloseDependencyRuleConfirm}
+            />
+            <AriButton
+              type="default"
+              label="本次跳过继续"
+              disabled={dependencyRuleUpgrading}
+              onClick={() => {
+                void handleSkipDependencyRuleAndContinue();
+              }}
+            />
+            <AriButton
+              type="default"
+              color="brand"
+              label={dependencyRuleUpgrading ? "升级中..." : "升级并继续"}
+              disabled={dependencyRuleUpgrading}
+              onClick={() => {
+                void handleUpgradeDependencyRuleAndContinue();
+              }}
+            />
+          </AriFlex>
+        )}
+      >
+        <AriContainer padding={0}>
+          <AriTypography
+            variant="caption"
+            value={`检测到 ${dependencyRuleConfirmState?.mismatches?.length || 0} 项依赖与项目规范不一致。`}
+          />
+          <AriContainer padding={0}>
+            {(dependencyRuleConfirmState?.mismatches || []).slice(0, 8).map((item, index) => (
+              <AriTypography
+                key={`${item.ecosystem}-${item.package_name}-${index}`}
+                variant="caption"
+                value={`${item.ecosystem}: ${item.package_name} ${item.current_version || "(未读取)"} -> ${item.expected_version}`}
+              />
+            ))}
+          </AriContainer>
+        </AriContainer>
+      </AriModal>
       <AriModal
         visible={renameModalVisible}
         title="重命名会话"
