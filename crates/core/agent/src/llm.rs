@@ -189,7 +189,7 @@ fn call_model_with_policy_and_stream(
         LlmProvider::CodexCli => {
             providers::codex_cli::call_with_retry(prompt, workdir, policy, on_chunk)
         }
-        LlmProvider::Gemini => providers::gemini::call(provider),
+        LlmProvider::Gemini => providers::gemini::call_with_retry(prompt, workdir, policy, on_chunk),
         LlmProvider::Unknown => Err(LlmGatewayError::new(
             provider,
             "core.agent.llm.provider_unknown",

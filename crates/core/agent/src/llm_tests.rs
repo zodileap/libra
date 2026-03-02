@@ -31,9 +31,9 @@ fn should_reject_unknown_provider() {
     assert!(!err.retryable);
 }
 
-/// 描述：验证 Gemini provider 走未实现分支并携带建议文案。
+/// 描述：验证 Gemini provider 已接入网关，不再返回“未实现”错误码。
 #[test]
-fn should_reject_gemini_provider_as_not_implemented() {
+fn should_route_gemini_provider_without_not_implemented_error() {
     let result = call_model_with_policy(
         LlmProvider::Gemini,
         "hello",
@@ -46,15 +46,14 @@ fn should_reject_gemini_provider_as_not_implemented() {
             },
         },
     );
-    assert!(result.is_err());
-    let err = result.err().expect("must have error");
-    assert_eq!(err.code, "core.agent.llm.provider_not_implemented");
-    assert!(!err.retryable);
-    assert!(err
-        .suggestion
-        .as_deref()
-        .unwrap_or_default()
-        .contains("provider=codex"));
+    match result {
+        Ok(message) => {
+            assert!(!message.trim().is_empty());
+        }
+        Err(err) => {
+            assert_ne!(err.code, "core.agent.llm.provider_not_implemented");
+        }
+    }
 }
 
 /// 描述：验证网关错误转换协议错误时会带上 attempts 与 suggestion。
