@@ -10,9 +10,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tauri::Emitter;
 use tauri::Manager;
-use tauri::window::{Effect, EffectState, EffectsBuilder};
 use zodileap_agent_core::llm::{call_model, parse_provider};
 use zodileap_agent_core::{
     run_agent_with_protocol_error_stream, AgentRunRequest, AgentStreamEvent,
@@ -291,6 +291,14 @@ struct GitCliHealthResponse {
 }
 
 #[derive(Serialize)]
+struct PythonCliHealthResponse {
+    available: bool,
+    version: String,
+    bin_path: String,
+    message: String,
+}
+
+#[derive(Serialize)]
 struct GitCloneResponse {
     path: String,
     name: String,
@@ -425,6 +433,22 @@ fn resolve_git_bins() -> Vec<String> {
     bins
 }
 
+/// 描述：解析可用于执行 Python 命令的候选二进制路径列表。
+fn resolve_python_bins() -> Vec<String> {
+    let mut bins: Vec<String> = Vec::new();
+    if let Ok(path) = env::var("ZODILEAP_PYTHON_BIN") {
+        let path = path.trim().to_string();
+        if !path.is_empty() {
+            bins.push(path);
+        }
+    }
+    bins.push("python3".to_string());
+    bins.push("python".to_string());
+    bins.push("/usr/bin/python3".to_string());
+    bins.push("/opt/homebrew/bin/python3".to_string());
+    bins
+}
+
 /// 描述：读取 Git 版本号，命中失败时返回 None。
 fn read_git_version(bin: &str) -> Option<String> {
     let output = Command::new(bin).arg("--version").output().ok()?;
@@ -433,6 +457,30 @@ fn read_git_version(bin: &str) -> Option<String> {
     }
     let text = String::from_utf8_lossy(&output.stdout).to_string();
     extract_semver(&text)
+}
+
+/// 描述：读取 Python 版本号，命中失败时返回 None。
+fn read_python_version(bin: &str) -> Option<String> {
+    let output = Command::new(bin).arg("--version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    if let Some(version) = extract_semver(&stderr) {
+        return Some(version);
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    extract_semver(&stdout)
+}
+
+/// 描述：返回第一个可用 Python 二进制路径与版本号。
+fn detect_available_python() -> Option<(String, String)> {
+    for bin in resolve_python_bins() {
+        if let Some(version) = read_python_version(&bin) {
+            return Some((bin, version));
+        }
+    }
+    None
 }
 
 /// 描述：返回第一个可用 Git 二进制路径与版本号。
@@ -943,14 +991,18 @@ fn install_blender_bridge_legacy(blender_bin: &str) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn install_blender_bridge(blender_bin: Option<String>) -> Result<InstallBridgeResponse, String> {
+async fn install_blender_bridge(
+    blender_bin: Option<String>,
+) -> Result<InstallBridgeResponse, String> {
     tauri::async_runtime::spawn_blocking(move || install_blender_bridge_inner(blender_bin))
         .await
         .map_err(|err| format!("install blender bridge task join failed: {}", err))?
 }
 
 /// 描述：执行 Bridge 安装主流程，包含 extension 优先与 legacy 回退策略。
-fn install_blender_bridge_inner(blender_bin: Option<String>) -> Result<InstallBridgeResponse, String> {
+fn install_blender_bridge_inner(
+    blender_bin: Option<String>,
+) -> Result<InstallBridgeResponse, String> {
     let blender_bin = resolve_blender_bin(blender_bin);
     if blender_supports_extension_install(&blender_bin) {
         match install_blender_bridge_by_extension(&blender_bin) {
@@ -1082,6 +1134,7 @@ async fn run_agent_command(
     model_export_enabled: Option<bool>,
     blender_bridge_addr: Option<String>,
     output_dir: Option<String>,
+    workdir: Option<String>,
 ) -> Result<AgentRunResponse, DesktopProtocolError> {
     tauri::async_runtime::spawn_blocking(move || {
         run_agent_command_inner(
@@ -1095,6 +1148,7 @@ async fn run_agent_command(
             model_export_enabled,
             blender_bridge_addr,
             output_dir,
+            workdir,
         )
     })
     .await
@@ -1117,6 +1171,7 @@ fn run_agent_command_inner(
     model_export_enabled: Option<bool>,
     blender_bridge_addr: Option<String>,
     output_dir: Option<String>,
+    workdir: Option<String>,
 ) -> Result<AgentRunResponse, DesktopProtocolError> {
     let trace_id = trace_id
         .as_deref()
@@ -1141,6 +1196,28 @@ fn run_agent_command_inner(
         suggestion: None,
         retryable: false,
     })?;
+    // 描述：
+    //
+    //   - 优先使用会话传入的项目目录作为执行路径，确保代码智能体基于当前项目上下文工作。
+    let selected_workdir = workdir
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| current_dir.clone());
+    let selected_workdir = if selected_workdir.is_absolute() {
+        selected_workdir
+    } else {
+        current_dir.join(selected_workdir)
+    };
+    if !selected_workdir.exists() || !selected_workdir.is_dir() {
+        return Err(DesktopProtocolError {
+            code: "core.desktop.agent.workdir_invalid".to_string(),
+            message: format!("workdir is invalid: {}", selected_workdir.to_string_lossy()),
+            suggestion: Some("请确认会话绑定的项目目录存在且可访问".to_string()),
+            retryable: false,
+        });
+    }
     let default_output_dir = app
         .path()
         .app_data_dir()
@@ -1156,11 +1233,11 @@ fn run_agent_command_inner(
     let mut selected_output_dir = if selected_output_dir.is_absolute() {
         selected_output_dir
     } else {
-        current_dir.join(selected_output_dir)
+        selected_workdir.join(selected_output_dir)
     };
 
-    if cfg!(debug_assertions) && selected_output_dir.starts_with(&current_dir) {
-        let safe_output_dir = current_dir
+    if cfg!(debug_assertions) && selected_output_dir.starts_with(&selected_workdir) {
+        let safe_output_dir = selected_workdir
             .parent()
             .map(|path| path.join("exports"))
             .unwrap_or_else(|| env::temp_dir().join("zodileap-agen").join("exports"));
@@ -1168,7 +1245,7 @@ fn run_agent_command_inner(
             "warn",
             "request",
             format!(
-                "output_dir {} is under src-tauri and may trigger dev restart; redirecting to {}",
+                "output_dir {} is under workdir and may trigger dev restart; redirecting to {}",
                 selected_output_dir.to_string_lossy(),
                 safe_output_dir.to_string_lossy()
             ),
@@ -1195,7 +1272,7 @@ fn run_agent_command_inner(
     log(
         "debug",
         "request",
-        format!("workdir={}", current_dir.to_string_lossy()),
+        format!("workdir={}", selected_workdir.to_string_lossy()),
     );
     log(
         "debug",
@@ -1223,7 +1300,7 @@ fn run_agent_command_inner(
             model_export_enabled: model_export_enabled.unwrap_or(false),
             blender_bridge_addr,
             output_dir: Some(selected_output_dir.to_string_lossy().to_string()),
-            workdir: Some(current_dir.to_string_lossy().to_string()),
+            workdir: Some(selected_workdir.to_string_lossy().to_string()),
         },
         |stream_event| match stream_event {
             AgentStreamEvent::LlmStarted { provider } => {
@@ -1569,7 +1646,8 @@ fn read_maven_dependency_snapshots(
     if !pom_path.exists() {
         return Ok(HashMap::new());
     }
-    let text = fs::read_to_string(&pom_path).map_err(|err| format!("读取 pom.xml 失败: {}", err))?;
+    let text =
+        fs::read_to_string(&pom_path).map_err(|err| format!("读取 pom.xml 失败: {}", err))?;
     let mut snapshots: HashMap<String, DependencyVersionSnapshot> = HashMap::new();
     let mut cursor = 0usize;
     while let Some(start_rel) = text[cursor..].find("<dependency>") {
@@ -1584,10 +1662,12 @@ fn read_maven_dependency_snapshots(
         let version = extract_xml_tag_text(block, "version").unwrap_or_default();
         if !group_id.is_empty() && !artifact_id.is_empty() && !version.is_empty() {
             let package_name = format!("{}:{}", group_id, artifact_id);
-            snapshots.entry(package_name).or_insert(DependencyVersionSnapshot {
-                version,
-                source_file: "pom.xml".to_string(),
-            });
+            snapshots
+                .entry(package_name)
+                .or_insert(DependencyVersionSnapshot {
+                    version,
+                    source_file: "pom.xml".to_string(),
+                });
         }
         cursor = end;
     }
@@ -1628,10 +1708,12 @@ fn read_gradle_dependency_snapshots_from_file(
                 continue;
             }
             let package_name = format!("{}:{}", group, artifact);
-            snapshots.entry(package_name).or_insert(DependencyVersionSnapshot {
-                version: version.to_string(),
-                source_file: file_name.to_string(),
-            });
+            snapshots
+                .entry(package_name)
+                .or_insert(DependencyVersionSnapshot {
+                    version: version.to_string(),
+                    source_file: file_name.to_string(),
+                });
         }
     }
     Ok(snapshots)
@@ -1677,8 +1759,10 @@ fn check_project_dependency_rules_inner(
 
     let detected_ecosystems = detect_project_dependency_ecosystems(&project_root);
     let detected_set: HashSet<DependencyEcosystem> = detected_ecosystems.iter().cloned().collect();
-    let mut snapshots_by_ecosystem: HashMap<DependencyEcosystem, HashMap<String, DependencyVersionSnapshot>> =
-        HashMap::new();
+    let mut snapshots_by_ecosystem: HashMap<
+        DependencyEcosystem,
+        HashMap<String, DependencyVersionSnapshot>,
+    > = HashMap::new();
     for ecosystem in &detected_ecosystems {
         let snapshots = read_dependency_snapshots_by_ecosystem(&project_root, ecosystem)?;
         snapshots_by_ecosystem.insert(ecosystem.clone(), snapshots);
@@ -1787,7 +1871,10 @@ fn check_project_dependency_rules_inner(
 
 /// 描述：检测 Node 项目包管理器类型，优先读取 packageManager 字段，回退 lockfile 识别。
 fn detect_node_package_manager(project_root: &Path, package_json: &serde_json::Value) -> String {
-    if let Some(package_manager) = package_json.get("packageManager").and_then(|value| value.as_str()) {
+    if let Some(package_manager) = package_json
+        .get("packageManager")
+        .and_then(|value| value.as_str())
+    {
         let lower = package_manager.to_lowercase();
         if lower.starts_with("pnpm") {
             return "pnpm".to_string();
@@ -1837,7 +1924,13 @@ fn run_command_in_dir(project_root: &Path, bin: &str, args: &[String]) -> Result
 fn apply_node_dependency_rule_upgrades(
     project_root: &Path,
     rules: &[DependencyRuleStatusItem],
-) -> Result<(Vec<DependencyRuleUpgradeResult>, Vec<DependencyRuleUpgradeResult>), String> {
+) -> Result<
+    (
+        Vec<DependencyRuleUpgradeResult>,
+        Vec<DependencyRuleUpgradeResult>,
+    ),
+    String,
+> {
     let package_json_path = project_root.join("package.json");
     let text = fs::read_to_string(&package_json_path)
         .map_err(|err| format!("读取 package.json 失败: {}", err))?;
@@ -1856,7 +1949,10 @@ fn apply_node_dependency_rule_upgrades(
     for rule in rules {
         let mut hit = false;
         for section in sections {
-            let Some(dep_map) = parsed.get_mut(section).and_then(|value| value.as_object_mut()) else {
+            let Some(dep_map) = parsed
+                .get_mut(section)
+                .and_then(|value| value.as_object_mut())
+            else {
                 continue;
             };
             if let Some(current) = dep_map.get_mut(rule.package_name.as_str()) {
@@ -1903,7 +1999,10 @@ fn apply_node_dependency_rule_upgrades(
 fn apply_go_dependency_rule_upgrades(
     project_root: &Path,
     rules: &[DependencyRuleStatusItem],
-) -> (Vec<DependencyRuleUpgradeResult>, Vec<DependencyRuleUpgradeResult>) {
+) -> (
+    Vec<DependencyRuleUpgradeResult>,
+    Vec<DependencyRuleUpgradeResult>,
+) {
     let mut updated: Vec<DependencyRuleUpgradeResult> = Vec::new();
     let mut skipped: Vec<DependencyRuleUpgradeResult> = Vec::new();
 
@@ -2044,7 +2143,13 @@ fn rewrite_gradle_dependency_versions(
 fn apply_java_dependency_rule_upgrades(
     project_root: &Path,
     rules: &[DependencyRuleStatusItem],
-) -> Result<(Vec<DependencyRuleUpgradeResult>, Vec<DependencyRuleUpgradeResult>), String> {
+) -> Result<
+    (
+        Vec<DependencyRuleUpgradeResult>,
+        Vec<DependencyRuleUpgradeResult>,
+    ),
+    String,
+> {
     let mut expected_map: HashMap<String, String> = HashMap::new();
     for rule in rules {
         expected_map.insert(rule.package_name.clone(), rule.expected_version.clone());
@@ -2053,10 +2158,13 @@ fn apply_java_dependency_rule_upgrades(
 
     let pom_path = project_root.join("pom.xml");
     if pom_path.exists() {
-        let content = fs::read_to_string(&pom_path).map_err(|err| format!("读取 pom.xml 失败: {}", err))?;
-        let (next_content, updated) = rewrite_pom_dependency_versions(content.as_str(), &expected_map);
+        let content =
+            fs::read_to_string(&pom_path).map_err(|err| format!("读取 pom.xml 失败: {}", err))?;
+        let (next_content, updated) =
+            rewrite_pom_dependency_versions(content.as_str(), &expected_map);
         if next_content != content {
-            fs::write(&pom_path, next_content).map_err(|err| format!("写入 pom.xml 失败: {}", err))?;
+            fs::write(&pom_path, next_content)
+                .map_err(|err| format!("写入 pom.xml 失败: {}", err))?;
         }
         updated_packages.extend(updated);
     }
@@ -2066,9 +2174,10 @@ fn apply_java_dependency_rule_upgrades(
         if !gradle_path.exists() {
             continue;
         }
-        let content =
-            fs::read_to_string(&gradle_path).map_err(|err| format!("读取 {} 失败: {}", file_name, err))?;
-        let (next_content, updated) = rewrite_gradle_dependency_versions(content.as_str(), &expected_map);
+        let content = fs::read_to_string(&gradle_path)
+            .map_err(|err| format!("读取 {} 失败: {}", file_name, err))?;
+        let (next_content, updated) =
+            rewrite_gradle_dependency_versions(content.as_str(), &expected_map);
         if next_content != content {
             fs::write(&gradle_path, next_content)
                 .map_err(|err| format!("写入 {} 失败: {}", file_name, err))?;
@@ -2125,7 +2234,8 @@ fn apply_project_dependency_rule_upgrades_inner(
     let mut skipped: Vec<DependencyRuleUpgradeResult> = Vec::new();
 
     if !node_rules.is_empty() {
-        let (node_updated, node_skipped) = apply_node_dependency_rule_upgrades(&project_root, &node_rules)?;
+        let (node_updated, node_skipped) =
+            apply_node_dependency_rule_upgrades(&project_root, &node_rules)?;
         updated.extend(node_updated);
         skipped.extend(node_skipped);
     }
@@ -2135,7 +2245,8 @@ fn apply_project_dependency_rule_upgrades_inner(
         skipped.extend(go_skipped);
     }
     if !java_rules.is_empty() {
-        let (java_updated, java_skipped) = apply_java_dependency_rule_upgrades(&project_root, &java_rules)?;
+        let (java_updated, java_skipped) =
+            apply_java_dependency_rule_upgrades(&project_root, &java_rules)?;
         updated.extend(java_updated);
         skipped.extend(java_skipped);
     }
@@ -2152,9 +2263,11 @@ async fn check_project_dependency_rules(
     project_path: String,
     rules: Vec<String>,
 ) -> Result<ProjectDependencyRuleCheckResponse, String> {
-    tauri::async_runtime::spawn_blocking(move || check_project_dependency_rules_inner(project_path, rules))
-        .await
-        .map_err(|err| format!("检查依赖规则任务异常: {}", err))?
+    tauri::async_runtime::spawn_blocking(move || {
+        check_project_dependency_rules_inner(project_path, rules)
+    })
+    .await
+    .map_err(|err| format!("检查依赖规则任务异常: {}", err))?
 }
 
 #[tauri::command]
@@ -2285,6 +2398,18 @@ async fn check_git_cli_health() -> GitCliHealthResponse {
         })
 }
 
+#[tauri::command]
+async fn check_python_cli_health() -> PythonCliHealthResponse {
+    tauri::async_runtime::spawn_blocking(check_python_cli_health_inner)
+        .await
+        .unwrap_or_else(|err| PythonCliHealthResponse {
+            available: false,
+            version: "".to_string(),
+            bin_path: "".to_string(),
+            message: format!("check python health task join failed: {}", err),
+        })
+}
+
 /// 描述：执行 Git CLI 健康检查，返回可用性、版本与命中路径。
 fn check_git_cli_health_inner() -> GitCliHealthResponse {
     if let Some((bin, version)) = detect_available_git() {
@@ -2301,6 +2426,25 @@ fn check_git_cli_health_inner() -> GitCliHealthResponse {
         version: "".to_string(),
         bin_path: "".to_string(),
         message: "未检测到可用的 Git，请先安装 Git。".to_string(),
+    }
+}
+
+/// 描述：执行 Python CLI 健康检查，确保脚本沙盒可用。
+fn check_python_cli_health_inner() -> PythonCliHealthResponse {
+    if let Some((bin, version)) = detect_available_python() {
+        return PythonCliHealthResponse {
+            available: true,
+            version: version.clone(),
+            bin_path: bin.clone(),
+            message: format!("Python 可用：{} ({})", version, bin),
+        };
+    }
+
+    PythonCliHealthResponse {
+        available: false,
+        version: "".to_string(),
+        bin_path: "".to_string(),
+        message: "未检测到可用的 Python，请先安装 Python3 或设置 ZODILEAP_PYTHON_BIN。".to_string(),
     }
 }
 
@@ -2372,7 +2516,8 @@ fn clone_git_repository_inner(
         return Err("仓库地址格式不正确，请输入完整 URL".to_string());
     }
 
-    let (git_bin, _) = detect_available_git().ok_or_else(|| "未检测到可用的 Git，请先安装 Git".to_string())?;
+    let (git_bin, _) =
+        detect_available_git().ok_or_else(|| "未检测到可用的 Git，请先安装 Git".to_string())?;
     let app_data_dir = app
         .path()
         .app_data_dir()
@@ -3619,6 +3764,70 @@ fn plan_model_session_steps_with_llm(
     selection_snapshot: Option<&SelectionContextSnapshot>,
     mut on_debug: Option<&mut ModelPlanDebugObserver<'_>>,
 ) -> Result<Vec<ModelSessionPlannedStep>, DesktopProtocolError> {
+    // 描述：
+    //
+    //   - 先使用本地规则规划器生成可执行步骤，命中后直接返回，避免额外 JSON 规划往返与解析噪声。
+    //   - 若规则规划无法覆盖或校验失败，再回退到 LLM JSON 规划链路。
+    let rule_based_steps = convert_rule_plan_steps(plan_model_steps(prompt));
+    if !rule_based_steps.is_empty() {
+        let mut normalized_rule_steps = rule_based_steps;
+        enrich_transform_targets_for_steps(&mut normalized_rule_steps, prompt);
+        enrich_selection_scoped_params_for_reference_steps(&mut normalized_rule_steps, prompt);
+
+        if let Some(observer) = on_debug.as_deref_mut() {
+            let parsed_lines = normalized_rule_steps
+                .iter()
+                .enumerate()
+                .map(|(index, step)| {
+                    let payload = build_step_trace_payload(step);
+                    format!("{}. {}", index + 1, payload)
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            observer(
+                "rule_plan_parsed_steps",
+                "规则规划结果",
+                parsed_lines.as_str(),
+            );
+        }
+
+        let validation_result = validate_llm_model_plan_steps(&normalized_rule_steps, prompt);
+        let ambiguous_reason =
+            detect_ambiguous_target_plan(&normalized_rule_steps, prompt, selection_snapshot);
+        if validation_result.is_ok() && ambiguous_reason.is_none() {
+            if let Some(observer) = on_debug.as_deref_mut() {
+                observer("planner_source", "规划来源", "rule");
+            }
+            return Ok(normalized_rule_steps);
+        }
+
+        if let Some(observer) = on_debug.as_deref_mut() {
+            let fallback_reason = match (validation_result.as_ref().err(), ambiguous_reason) {
+                (Some(validation_error), Some(ambiguous_error)) => {
+                    format!(
+                        "规则规划未命中，转 LLM JSON。validation={}；ambiguous={}",
+                        validation_error, ambiguous_error
+                    )
+                }
+                (Some(validation_error), None) => {
+                    format!(
+                        "规则规划未命中，转 LLM JSON。validation={}",
+                        validation_error
+                    )
+                }
+                (None, Some(ambiguous_error)) => {
+                    format!("规则规划未命中，转 LLM JSON。ambiguous={}", ambiguous_error)
+                }
+                (None, None) => "规则规划未命中，转 LLM JSON。".to_string(),
+            };
+            observer(
+                "rule_plan_fallback",
+                "规则规划回退",
+                fallback_reason.as_str(),
+            );
+        }
+    }
+
     let parsed_provider = parse_provider(provider.unwrap_or("codex"));
     let mut last_error = String::new();
     let mut previous_raw_plan = String::new();
@@ -3740,6 +3949,9 @@ fn plan_model_session_steps_with_llm(
             ));
         }
 
+        if let Some(observer) = on_debug.as_deref_mut() {
+            observer("planner_source", "规划来源", "llm_json");
+        }
         return Ok(steps);
     }
 
@@ -4651,6 +4863,57 @@ enum PlannedModelStep {
         input: String,
         params: serde_json::Value,
     },
+}
+
+/// 描述：根据动作推断规则规划步骤的风险等级，供执行层的风险提示与审计复用。
+fn infer_rule_plan_risk_for_action(action: ModelToolAction) -> ModelPlanRiskLevel {
+    match action {
+        ModelToolAction::Boolean => ModelPlanRiskLevel::High,
+        ModelToolAction::NewFile
+        | ModelToolAction::OpenFile
+        | ModelToolAction::SaveFile
+        | ModelToolAction::Undo
+        | ModelToolAction::Redo
+        | ModelToolAction::Decimate => ModelPlanRiskLevel::Medium,
+        _ => ModelPlanRiskLevel::Low,
+    }
+}
+
+/// 描述：将本地规则规划结果转换为统一会话步骤结构，确保后续执行与校验链路一致。
+fn convert_rule_plan_steps(steps: Vec<PlannedModelStep>) -> Vec<ModelSessionPlannedStep> {
+    steps
+        .into_iter()
+        .map(|step| match step {
+            PlannedModelStep::Export {
+                input,
+                format,
+                params,
+            } => ModelSessionPlannedStep::Export {
+                format,
+                input,
+                params,
+                operation_kind: ModelPlanOperationKind::SceneFileOps,
+                branch: ModelPlanBranch::Primary,
+                recoverable: false,
+                risk: ModelPlanRiskLevel::Medium,
+                condition: None,
+            },
+            PlannedModelStep::Tool {
+                action,
+                input,
+                params,
+            } => ModelSessionPlannedStep::Tool {
+                action,
+                input,
+                params,
+                operation_kind: infer_operation_kind_for_action(action),
+                branch: ModelPlanBranch::Primary,
+                recoverable: true,
+                risk: infer_rule_plan_risk_for_action(action),
+                condition: None,
+            },
+        })
+        .collect()
 }
 
 /// 描述：解析本地规则规划的导出参数，支持“仅导出选中对象”和“不应用修改器”语义。
@@ -6857,8 +7120,10 @@ fn build_model_session_summary_prompt(
 {bridge_warning}\n",
         user_prompt = user_prompt,
         workflow_message = workflow_message,
-        step_json = serde_json::to_string_pretty(&step_payload).unwrap_or_else(|_| "[]".to_string()),
-        event_json = serde_json::to_string_pretty(&event_payload).unwrap_or_else(|_| "[]".to_string()),
+        step_json =
+            serde_json::to_string_pretty(&step_payload).unwrap_or_else(|_| "[]".to_string()),
+        event_json =
+            serde_json::to_string_pretty(&event_payload).unwrap_or_else(|_| "[]".to_string()),
         exported_file = exported_file,
         bridge_warning = bridge_warning,
     )
@@ -6988,6 +7253,7 @@ fn main() {
             check_codex_cli_health,
             check_gemini_cli_health,
             check_git_cli_health,
+            check_python_cli_health,
             pick_local_project_folder,
             open_external_url,
             clone_git_repository,
@@ -7010,12 +7276,12 @@ mod tests {
         blender_series_supports_extension, bridge_boot_script_content, bridge_enable_and_save_expr,
         build_file_recover_point_path, build_model_plan_prompt, build_model_plan_retry_prompt,
         build_operation_transaction_snapshot_path, build_ui_hint_from_protocol_error,
-        classify_model_error_category, detect_ambiguous_target_plan,
+        classify_model_error_category, convert_rule_plan_steps, detect_ambiguous_target_plan,
         estimate_complex_flow_duration_ms, is_bridge_unavailable_error,
         is_destructive_selection_intent, parse_llm_model_plan, parse_scene_object_metrics,
         parse_selection_context_snapshot, parse_target_names_in_prompt,
-        parse_topology_face_count_baseline, plan_model_steps, protocol_error_from_text,
-        required_selection_scope_for_step, selection_context_meets_scope,
+        parse_topology_face_count_baseline, plan_model_session_steps_with_llm, plan_model_steps,
+        protocol_error_from_text, required_selection_scope_for_step, selection_context_meets_scope,
         should_block_destructive_plan_for_empty_selection,
         should_create_file_recover_point_for_step, should_create_operation_transaction,
         should_run_topology_check_after_step, split_error_code_and_message,
@@ -7073,6 +7339,56 @@ mod tests {
             false
         });
         assert!(has_fbx_export);
+    }
+
+    #[test]
+    fn should_convert_rule_steps_to_session_steps() {
+        let steps = convert_rule_plan_steps(vec![
+            PlannedModelStep::Tool {
+                action: ModelToolAction::TranslateObjects,
+                input: "平移对象".to_string(),
+                params: json!({"delta":[0.5,0.0,0.0],"selection_scope":"active"}),
+            },
+            PlannedModelStep::Export {
+                input: "导出 FBX".to_string(),
+                format: ExportModelFormat::Fbx,
+                params: json!({"use_selection": true}),
+            },
+        ]);
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0].branch().as_str(), "primary");
+        assert_eq!(steps[0].operation_kind().as_str(), "batch_transform");
+        assert_eq!(steps[1].code(), "export_fbx");
+    }
+
+    #[test]
+    fn should_prefer_rule_planner_before_llm_json() {
+        let mut debug_events: Vec<(String, String)> = Vec::new();
+        let mut observer = |stage: &str, _title: &str, detail: &str| {
+            debug_events.push((stage.to_string(), detail.to_string()));
+        };
+        let planned = plan_model_session_steps_with_llm(
+            Some("codex"),
+            "在当前对话中，添加一个正方体",
+            &ModelMcpCapabilities::default(),
+            None,
+            None,
+            Some(&mut observer),
+        );
+        let planned = match planned {
+            Ok(steps) => steps,
+            Err(_) => panic!("rule planner should provide executable steps"),
+        };
+        assert!(
+            planned.iter().any(|step| step.code() == "add_cube"),
+            "规则规划应命中 add_cube"
+        );
+        assert!(
+            debug_events
+                .iter()
+                .any(|(stage, detail)| stage == "planner_source" && detail == "rule"),
+            "命中规则规划时应标记 planner_source=rule"
+        );
     }
 
     #[test]

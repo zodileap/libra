@@ -109,6 +109,8 @@ interface ExecutePromptOptions {
   appendUserMessage?: boolean;
   confirmationToken?: string;
   skipDependencyRuleCheck?: boolean;
+  replaceAssistantMessageId?: string;
+  contextMessages?: MessageItem[];
 }
 
 // 描述:
@@ -201,6 +203,14 @@ interface MessageItem {
   id?: string;
   role: "user" | "assistant";
   text: string;
+}
+
+// 描述：
+//
+//   - 定义“按助手消息重试”清理结果，包含裁剪后的消息列表与被移除的助手消息 ID。
+interface RetryTailPruneResult {
+  messages: MessageItem[];
+  removedAssistantMessageIds: string[];
 }
 
 // 描述:
@@ -599,6 +609,26 @@ function buildAssistantFailureSummary(rawSummary: string): { detail: string; hin
   };
 }
 
+// 描述：
+//
+//   - 判断失败文本是否属于“Gemini Provider 未实现”场景，用于重试时自动回退到 Codex。
+//
+// Params:
+//
+//   - raw: 助手失败文本。
+//
+// Returns:
+//
+//   - true 表示命中 Gemini 未实现错误。
+function isGeminiProviderNotImplementedError(raw: string): boolean {
+  const normalized = String(raw || "").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return normalized.includes("gemini provider is not implemented yet")
+    || normalized.includes("core.agent.llm.provider_not_implemented");
+}
+
 // 描述:
 //
 //   - 匹配引号包裹的导出目录表达。
@@ -783,15 +813,21 @@ function isRetryOnlyPrompt(prompt: string): boolean {
 //
 //   - historyMessages: 当前会话已存在的历史消息。
 //   - currentPrompt: 当前用户输入。
+//   - workspacePath: 当前会话绑定的项目目录路径。
 //
 // Returns:
 //
 //   - 拼接后的上下文提示词。
-function buildCodeSessionContextPrompt(historyMessages: MessageItem[], currentPrompt: string): string {
+function buildCodeSessionContextPrompt(
+  historyMessages: MessageItem[],
+  currentPrompt: string,
+  workspacePath?: string,
+): string {
   const normalizedCurrentPrompt = String(currentPrompt || "").trim();
   if (!normalizedCurrentPrompt) {
     return "";
   }
+  const normalizedWorkspacePath = String(workspacePath || "").trim();
   const historyLines = historyMessages
     .filter((item) => item.role === "user" || item.role === "assistant")
     .map((item) => ({
@@ -803,12 +839,31 @@ function buildCodeSessionContextPrompt(historyMessages: MessageItem[], currentPr
     .map((item, index) => `${index + 1}. ${item.role}：${item.text}`);
 
   if (historyLines.length === 0) {
+    if (normalizedWorkspacePath) {
+      return [
+        "【当前项目】",
+        `路径：${normalizedWorkspacePath}`,
+        "约束：仅基于该目录进行分析与修改，不要切换到其它工程。",
+        "",
+        "【当前请求】",
+        normalizedCurrentPrompt,
+      ].join("\n");
+    }
     return normalizedCurrentPrompt;
   }
   const normalizedRequest = isRetryOnlyPrompt(normalizedCurrentPrompt)
     ? "请基于以上会话上下文继续上一轮任务并直接给出可执行结果，不要要求我重复需求。"
     : normalizedCurrentPrompt;
+  const workspaceLines = normalizedWorkspacePath
+    ? [
+      "【当前项目】",
+      `路径：${normalizedWorkspacePath}`,
+      "约束：仅基于该目录进行分析与修改，不要切换到其它工程。",
+      "",
+    ]
+    : [];
   return [
+    ...workspaceLines,
     "【会话上下文】",
     ...historyLines,
     "",
@@ -1024,6 +1079,60 @@ function upsertAssistantMessageById(messages: MessageItem[], messageId: string, 
     text,
   };
   return next;
+}
+
+// 描述：按目标助手消息索引清理其后的“同轮助手尾部消息”，用于重试时覆盖旧结果。
+//
+// Params:
+//
+//   - messages: 当前会话消息列表。
+//   - assistantMessageIndex: 触发重试的助手消息索引。
+//
+// Returns:
+//
+//   - 清理后的消息列表与被移除消息 ID。
+function pruneAssistantRetryTail(
+  messages: MessageItem[],
+  assistantMessageIndex: number,
+): RetryTailPruneResult {
+  if (assistantMessageIndex < 0 || assistantMessageIndex >= messages.length) {
+    return {
+      messages: [...messages],
+      removedAssistantMessageIds: [],
+    };
+  }
+  let rangeEnd = messages.length;
+  for (let cursor = assistantMessageIndex + 1; cursor < messages.length; cursor += 1) {
+    if (messages[cursor]?.role === "user") {
+      rangeEnd = cursor;
+      break;
+    }
+  }
+  if (rangeEnd <= assistantMessageIndex + 1) {
+    return {
+      messages: [...messages],
+      removedAssistantMessageIds: [],
+    };
+  }
+
+  const removedAssistantMessageIds: string[] = [];
+  const nextMessages: MessageItem[] = [];
+  messages.forEach((item, index) => {
+    const inPruneRange = index > assistantMessageIndex && index < rangeEnd;
+    if (inPruneRange && item.role === "assistant") {
+      const messageId = String(item.id || "").trim();
+      if (messageId) {
+        removedAssistantMessageIds.push(messageId);
+      }
+      return;
+    }
+    nextMessages.push(item);
+  });
+
+  return {
+    messages: nextMessages,
+    removedAssistantMessageIds,
+  };
 }
 
 // 描述：把持久化运行态转换为页面运行态结构，过滤非法片段并补齐默认值。
@@ -2162,6 +2271,7 @@ export function SessionPage({
     const allowDangerousAction = Boolean(options?.allowDangerousAction);
     const confirmationToken = options?.confirmationToken;
     const appendUserMessage = options?.appendUserMessage !== false;
+    const contextMessages = options?.contextMessages || messages;
 
     // 描述：代码智能体在正式执行前先检查项目依赖规则；发现版本不一致时先弹确认，不直接中断。
     if (!isWorkflowSession && normalizedAgentKey === "code" && !options?.skipDependencyRuleCheck) {
@@ -2204,7 +2314,8 @@ export function SessionPage({
       ? selectedModelWorkflow?.id || ""
       : selectedCodeWorkflow?.id || "";
     const outputDir = isWorkflowSession ? extractOutputDirFromPrompt(normalizedContent) : undefined;
-    const streamMessageId = `assistant-stream-${Date.now()}`;
+    const streamMessageId = String(options?.replaceAssistantMessageId || "").trim()
+      || `assistant-stream-${Date.now()}`;
     const codeTraceId = isWorkflowSession ? "" : `trace-${Date.now()}`;
     setInput("");
     setSending(true);
@@ -2417,7 +2528,11 @@ export function SessionPage({
           throw new Error(`技能执行前检查未通过：${skillExecutionPlan.blockingIssues.join("；")}`);
         }
         const selectedSessionSkillPrompt = buildSessionSkillPrompt(selectedSessionSkills);
-        const codeRequestPrompt = buildCodeSessionContextPrompt(messages, normalizedContent);
+        const codeRequestPrompt = buildCodeSessionContextPrompt(
+          contextMessages,
+          normalizedContent,
+          String(activeCodeWorkspace?.path || "").trim() || undefined,
+        );
         const codeWorkflowPrompt = buildCodeWorkflowPrompt(selectedCodeWorkflow, codeRequestPrompt);
         const codePrompt = skillExecutionPlan.planPrompt
           ? `${codeWorkflowPrompt}\n\n${skillExecutionPlan.planPrompt}${selectedSessionSkillPrompt ? `\n\n${selectedSessionSkillPrompt}` : ""}`
@@ -2457,6 +2572,7 @@ export function SessionPage({
           modelExportEnabled: modelMcpCapabilities.export,
           blenderBridgeAddr: DEFAULT_BLENDER_BRIDGE_ADDR,
           outputDir,
+          workdir: String(activeCodeWorkspace?.path || "").trim() || undefined,
         });
         setStepRecords(response.steps || []);
         setEventRecords(response.events || []);
@@ -2528,6 +2644,93 @@ export function SessionPage({
       return;
     }
     await executePrompt(content, { allowDangerousAction: false, appendUserMessage: true });
+  };
+
+  // 描述：根据助手消息索引向上回溯最近一条用户消息，用于“重试本轮”功能。
+  //
+  // Params:
+  //
+  //   - assistantMessageIndex: 助手消息在当前列表中的索引。
+  //
+  // Returns:
+  //
+  //   - 命中时返回用户消息文本；未命中返回空字符串。
+  const resolveRetryPromptByAssistantMessageIndex = (assistantMessageIndex: number): string => {
+    for (let cursor = assistantMessageIndex - 1; cursor >= 0; cursor -= 1) {
+      const candidate = messages[cursor];
+      if (candidate?.role !== "user") {
+        continue;
+      }
+      const normalized = String(candidate.text || "").trim();
+      if (normalized) {
+        return normalized;
+      }
+    }
+    return "";
+  };
+
+  // 描述：触发助手消息“重试”动作，复用最近一条用户请求重新执行，不重复插入用户消息。
+  //
+  // Params:
+  //
+  //   - assistantMessageIndex: 当前助手消息索引。
+  const handleRetryAssistantMessage = async (assistantMessageIndex: number) => {
+    if (sending) {
+      setStatus("当前仍在执行中，请稍后再试");
+      return;
+    }
+    const assistantMessage = messages[assistantMessageIndex];
+    if (!assistantMessage || assistantMessage.role !== "assistant") {
+      setStatus("无法重试：目标消息不存在");
+      return;
+    }
+    const retryPrompt = resolveRetryPromptByAssistantMessageIndex(assistantMessageIndex);
+    if (!retryPrompt) {
+      setStatus("无法重试：未找到对应的用户输入");
+      return;
+    }
+    const prunedRetryTail = pruneAssistantRetryTail(messages, assistantMessageIndex);
+    if (prunedRetryTail.removedAssistantMessageIds.length > 0) {
+      setMessages(prunedRetryTail.messages);
+      setAssistantRunMetaMap((prev) => {
+        const next = { ...prev };
+        prunedRetryTail.removedAssistantMessageIds.forEach((messageId) => {
+          delete next[messageId];
+        });
+        return next;
+      });
+    }
+    // 描述：若当前失败为 Gemini 未实现，并且已启用 Codex，则自动切换到 Codex 再重试。
+    if (
+      isGeminiProviderNotImplementedError(assistantMessage.text)
+      && availableAiKeys.some((item) => item.provider === "codex" && item.enabled)
+    ) {
+      setSelectedProvider("codex");
+      setStatus("检测到 Gemini 暂不可用，已切换到 Codex 重试");
+    } else {
+      setStatus("正在重试本轮执行...");
+    }
+    await executePrompt(retryPrompt, {
+      allowDangerousAction: false,
+      appendUserMessage: false,
+      replaceAssistantMessageId: String(assistantMessage.id || "").trim() || undefined,
+      contextMessages: prunedRetryTail.messages,
+    });
+  };
+
+  // 描述：触发用户消息“编辑”动作，把原文本带回输入框，便于修改后重新发送。
+  //
+  // Params:
+  //
+  //   - content: 用户消息原始文本。
+  const handleEditUserMessage = (content: string) => {
+    const normalized = String(content || "").trim();
+    if (!normalized) {
+      setStatus("该条消息为空，无法编辑");
+      return;
+    }
+    setInput(normalized);
+    setStatus("已加载到输入框，修改后可重新发送");
   };
 
   // 描述：复制指定消息内容到系统剪贴板，供消息 hover 工具栏复用。
@@ -3364,17 +3567,47 @@ const handleConfirmWorkflowSkillModal = () => {
                   <AriFlex
                     className="desk-msg-hover-toolbar"
                     align="center"
-                    justify="flex-end"
+                    justify={isUserMessage ? "flex-end" : "flex-start"}
                     space={8}
                   >
-                    <AriButton
-                      type="ghost"
-                      icon="content_copy"
-                      label="复制"
-                      onClick={() => {
-                        void handleCopyMessageContent(message.text);
-                      }}
-                    />
+                    {isUserMessage ? (
+                      <AriTooltip content="编辑" position="top" minWidth={0} matchTriggerWidth={false}>
+                        <AriButton
+                          ghost
+                          size="sm"
+                          icon="edit"
+                          aria-label="编辑消息"
+                          disabled={sending}
+                          onClick={() => {
+                            handleEditUserMessage(message.text);
+                          }}
+                        />
+                      </AriTooltip>
+                    ) : (
+                      <AriTooltip content="重试" position="top" minWidth={0} matchTriggerWidth={false}>
+                        <AriButton
+                          ghost
+                          size="sm"
+                          icon="refresh"
+                          aria-label="重试消息"
+                          disabled={sending}
+                          onClick={() => {
+                            void handleRetryAssistantMessage(index);
+                          }}
+                        />
+                      </AriTooltip>
+                    )}
+                    <AriTooltip content="复制" position="top" minWidth={0} matchTriggerWidth={false}>
+                      <AriButton
+                        ghost
+                        size="sm"
+                        icon="content_copy"
+                        aria-label="复制消息"
+                        onClick={() => {
+                          void handleCopyMessageContent(message.text);
+                        }}
+                      />
+                    </AriTooltip>
                   </AriFlex>
                 </AriContainer>
               );

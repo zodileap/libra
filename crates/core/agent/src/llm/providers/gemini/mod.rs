@@ -40,7 +40,13 @@ pub fn call_with_retry(
     mut on_chunk: Option<&mut LlmTextStreamObserver>,
 ) -> Result<String, LlmGatewayError> {
     let bins = resolve_gemini_bins();
-    call_with_retry_and_bins(prompt, workdir, policy, on_chunk.as_deref_mut(), bins.as_slice())
+    call_with_retry_and_bins(
+        prompt,
+        workdir,
+        policy,
+        on_chunk.as_deref_mut(),
+        bins.as_slice(),
+    )
 }
 
 /// 描述：通过指定 Gemini 二进制列表执行调用，便于测试场景注入自定义 bin。
@@ -121,7 +127,8 @@ fn call_once(
     })?;
 
     let (tx, rx) = mpsc::channel::<GeminiOutputChunk>();
-    let stdout_reader = spawn_gemini_stream_reader(stdout, GeminiOutputStreamKind::Stdout, tx.clone());
+    let stdout_reader =
+        spawn_gemini_stream_reader(stdout, GeminiOutputStreamKind::Stdout, tx.clone());
     let stderr_reader = spawn_gemini_stream_reader(stderr, GeminiOutputStreamKind::Stderr, tx);
 
     let timeout = Duration::from_secs(timeout_secs.max(1));
@@ -204,8 +211,10 @@ fn call_once(
         } else {
             "unknown gemini cli error".to_string()
         };
-        return Err(build_gemini_failed_error(reason.as_str(), selected_bin.as_str())
-            .with_attempts(attempt));
+        return Err(
+            build_gemini_failed_error(reason.as_str(), selected_bin.as_str())
+                .with_attempts(attempt),
+        );
     }
 
     let final_message = stdout_text.trim().to_string();
@@ -281,11 +290,12 @@ fn spawn_gemini_process(
     Err(LlmGatewayError::new(
         provider,
         "core.agent.llm.gemini_spawn_failed",
-        format!("[{}] execute gemini cli failed: {}", LLM_RUNTIME_TAG, reason),
+        format!(
+            "[{}] execute gemini cli failed: {}",
+            LLM_RUNTIME_TAG, reason
+        ),
     )
-    .with_suggestion(
-        "确认 Gemini CLI 已安装并可执行，或通过 ZODILEAP_GEMINI_BIN 指定二进制路径",
-    )
+    .with_suggestion("确认 Gemini CLI 已安装并可执行，或通过 ZODILEAP_GEMINI_BIN 指定二进制路径")
     .with_retryable(false)
     .with_attempts(attempt))
 }

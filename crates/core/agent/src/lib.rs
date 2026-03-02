@@ -3,6 +3,7 @@
 pub mod activation;
 pub mod flow;
 pub mod llm;
+mod python_orchestrator;
 pub mod workflow;
 
 use flow::{compose_prompt, AgentKind};
@@ -95,6 +96,13 @@ where
     F: FnMut(AgentStreamEvent),
 {
     let agent_kind = parse_agent_kind(&request.agent_key);
+    if agent_kind == AgentKind::Code {
+        return python_orchestrator::run_code_agent_with_python_workflow(
+            request,
+            &mut on_stream_event,
+        );
+    }
+
     let mut tool_outcome = maybe_export_model(&request, agent_kind)?;
 
     let llm_started = now_millis();

@@ -5221,6 +5221,7 @@ dependencies = [
 name = "zodileap_agent_core"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "zodileap_mcp_common",
  "zodileap_mcp_model",
 ]
