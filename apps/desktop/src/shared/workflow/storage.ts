@@ -66,6 +66,7 @@ function normalizeNodeType(value: unknown): WorkflowGraphNodeType {
     raw === "node" ||
     raw === "start" ||
     raw === "action" ||
+    raw === "skill" ||
     raw === "branch" ||
     raw === "loop" ||
     raw === "end"
@@ -111,12 +112,17 @@ function normalizeGraphNode(node: WorkflowGraphNode): WorkflowGraphNode | null {
   }
   const x = Number.isFinite(node.x) ? Number(node.x) : GRAPH_CANVAS_BASE_X;
   const y = Number.isFinite(node.y) ? Number(node.y) : GRAPH_CANVAS_BASE_Y;
+  const normalizedType = normalizeNodeType(node.type);
+  const normalizedSkillId = String(node.skillId || "").trim();
+  const normalizedSkillVersion = String(node.skillVersion || "").trim();
   return {
     id: String(node.id),
     title: String(node.title || "").trim() || "未命名节点",
     description: String(node.description || "").trim(),
     instruction: String(node.instruction || "").trim(),
-    type: normalizeNodeType(node.type),
+    type: normalizedType,
+    skillId: normalizedType === "skill" ? normalizedSkillId || undefined : undefined,
+    skillVersion: normalizedType === "skill" ? normalizedSkillVersion || undefined : undefined,
     x,
     y,
   };
@@ -803,12 +809,50 @@ export function buildCodeWorkflowPrompt(
 ): string {
   const normalizedPrompt = String(userPrompt || "").trim();
   const prefix = String(workflow?.promptPrefix || "").trim();
+  // 描述：
+  //
+  //   - 从代码工作流图中提取技能节点链路，拼接到提示词中辅助代码智能体按技能顺序执行。
+  const skillChainLines = (workflow?.graph?.nodes || [])
+    .filter((node) => node.type === "skill")
+    .map((node) => {
+      const skillId = String(node.skillId || "").trim();
+      const skillVersion = String(node.skillVersion || "").trim();
+      const normalizedSkill = skillId
+        ? `${skillId}${skillVersion ? `@${skillVersion}` : ""}`
+        : "";
+      const normalizedInstruction = String(node.instruction || "").trim();
+      const label = String(node.title || "技能节点").trim() || "技能节点";
+      if (normalizedSkill && normalizedInstruction) {
+        return `- ${label}: ${normalizedSkill}（${normalizedInstruction}）`;
+      }
+      if (normalizedSkill) {
+        return `- ${label}: ${normalizedSkill}`;
+      }
+      if (normalizedInstruction) {
+        return `- ${label}: ${normalizedInstruction}`;
+      }
+      return "";
+    })
+    .filter((line) => line.length > 0);
   if (!prefix) {
-    return normalizedPrompt;
+    if (skillChainLines.length === 0) {
+      return normalizedPrompt;
+    }
+    return [
+      "【技能链路】",
+      ...skillChainLines,
+      "",
+      "【用户需求】",
+      normalizedPrompt,
+    ].join("\n");
   }
+  const skillChainBlock = skillChainLines.length > 0
+    ? ["", "【技能链路】", ...skillChainLines]
+    : [];
   return [
     `【工作流：${workflow?.name || "代码工作流"}】`,
     prefix,
+    ...skillChainBlock,
     "",
     "【用户需求】",
     normalizedPrompt,

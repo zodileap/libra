@@ -83,7 +83,7 @@ export interface ModelMcpCapabilities {
 // 描述:
 //
 //   - 定义 AI 服务提供商枚举。
-export type AiProvider = "codex" | "gemini";
+export type AiProvider = "codex" | "gemini" | "gemini-cli";
 
 // 描述:
 //

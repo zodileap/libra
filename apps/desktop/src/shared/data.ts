@@ -66,6 +66,11 @@ const SESSION_MESSAGES_STORAGE_KEY = "zodileap.desktop.session.messages";
 
 // 描述:
 //
+//   - 会话运行态本地存储键，用于恢复“执行中步骤流”与侧边栏运行标识。
+const SESSION_RUN_STATE_STORAGE_KEY = "zodileap.desktop.session.run.state";
+
+// 描述:
+//
 //   - 代码目录分组本地存储键。
 const CODE_WORKSPACE_GROUP_STORAGE_KEY = "zodileap.desktop.code.workspace.groups";
 
@@ -83,6 +88,11 @@ const CODE_LAST_WORKSPACE_ID_STORAGE_KEY = "zodileap.desktop.code.workspace.last
 //
 //   - 会话标题更新广播事件名。
 export const SESSION_TITLE_UPDATED_EVENT = "zodileap:session-title-updated";
+
+// 描述:
+//
+//   - 会话运行态更新广播事件名。
+export const SESSION_RUN_STATE_UPDATED_EVENT = "zodileap:session-run-state-updated";
 
 // 描述:
 //
@@ -121,6 +131,7 @@ export interface AgentSessionMetaSnapshot {
 //
 //   - 定义单条会话消息存储结构。
 interface StoredSessionMessage {
+  id?: string;
   role: "user" | "assistant";
   text: string;
 }
@@ -133,6 +144,45 @@ interface StoredSessionMessageGroup {
   agentKey: "code" | "model";
   messages: StoredSessionMessage[];
 }
+
+// 描述:
+//
+//   - 会话运行片段结构，供会话页恢复“步骤流”展示。
+export interface SessionRunSegment {
+  key: string;
+  intro: string;
+  step: string;
+  status: "running" | "finished" | "failed";
+}
+
+// 描述:
+//
+//   - 会话运行元数据结构，按消息维度记录执行状态。
+export interface SessionRunMeta {
+  status: "running" | "finished" | "failed";
+  startedAt: number;
+  finishedAt?: number;
+  collapsed: boolean;
+  summary: string;
+  segments: SessionRunSegment[];
+}
+
+// 描述:
+//
+//   - 会话运行态快照结构。
+export interface SessionRunStateSnapshot {
+  agentKey: "code" | "model";
+  sessionId: string;
+  activeMessageId: string;
+  sending: boolean;
+  runMetaMap: Record<string, SessionRunMeta>;
+  updatedAt: number;
+}
+
+// 描述:
+//
+//   - 会话运行态存储结构。
+interface StoredSessionRunState extends SessionRunStateSnapshot {}
 
 // 描述:
 //
@@ -335,6 +385,73 @@ function writeSessionMessages(groups: StoredSessionMessageGroup[]) {
     return;
   }
   window.localStorage.setItem(SESSION_MESSAGES_STORAGE_KEY, JSON.stringify(groups));
+}
+
+// 描述：向当前窗口广播会话运行态更新事件，供侧边栏与会话页协同刷新。
+//
+// Params:
+//
+//   - input: 运行态快照（可选）。
+function emitSessionRunStateUpdated(input?: {
+  agentKey?: "code" | "model";
+  sessionId?: string;
+}) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.dispatchEvent(
+    new CustomEvent(SESSION_RUN_STATE_UPDATED_EVENT, {
+      detail: {
+        agentKey: input?.agentKey || "",
+        sessionId: input?.sessionId || "",
+      },
+    }),
+  );
+}
+
+// 描述：读取会话运行态列表。
+//
+// Returns:
+//
+//   - 会话运行态数组。
+function readSessionRunStates(): StoredSessionRunState[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+  const raw = window.localStorage.getItem(SESSION_RUN_STATE_STORAGE_KEY);
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .filter((item) => item?.sessionId && (item?.agentKey === "code" || item?.agentKey === "model"))
+      .map((item) => ({
+        sessionId: String(item.sessionId),
+        agentKey: item.agentKey === "model" ? "model" : "code",
+        activeMessageId: String(item.activeMessageId || "").trim(),
+        sending: Boolean(item.sending),
+        runMetaMap: typeof item.runMetaMap === "object" && item.runMetaMap ? item.runMetaMap : {},
+        updatedAt: Number(item.updatedAt || Date.now()),
+      }));
+  } catch (_err) {
+    return [];
+  }
+}
+
+// 描述：写入会话运行态列表。
+//
+// Params:
+//
+//   - states: 会话运行态数组。
+function writeSessionRunStates(states: StoredSessionRunState[]) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(SESSION_RUN_STATE_STORAGE_KEY, JSON.stringify(states));
 }
 
 // 描述：提取路径最后一级目录名称，作为代码工作目录分组默认标题。
@@ -618,6 +735,7 @@ export function removeAgentSession(agentKey: "code" | "model", sessionId: string
   writeSessionMessages(
     groups.filter((item) => !(item.agentKey === agentKey && item.sessionId === sessionId)),
   );
+  removeSessionRunState(agentKey, sessionId);
 
   if (agentKey === "code") {
 // 描述：按会话维度读取本地消息列表。
@@ -630,7 +748,7 @@ export function removeAgentSession(agentKey: "code" | "model", sessionId: string
 export function getSessionMessages(
   agentKey: "code" | "model",
   sessionId: string,
-): Array<{ role: "user" | "assistant"; text: string }> {
+): Array<{ id?: string; role: "user" | "assistant"; text: string }> {
   const group = readSessionMessages().find(
     (item) => item.agentKey === agentKey && item.sessionId === sessionId,
   );
@@ -641,7 +759,7 @@ export function getSessionMessages(
 export function upsertSessionMessages(input: {
   agentKey: "code" | "model";
   sessionId: string;
-  messages: Array<{ role: "user" | "assistant"; text: string }>;
+  messages: Array<{ id?: string; role: "user" | "assistant"; text: string }>;
 }) {
   const groups = readSessionMessages();
   const nextGroup: StoredSessionMessageGroup = {
@@ -652,6 +770,83 @@ export function upsertSessionMessages(input: {
   const next = [nextGroup, ...groups.filter((item) => !(item.agentKey === input.agentKey && item.sessionId === input.sessionId))]
     .slice(0, 200);
   writeSessionMessages(next);
+}
+
+// 描述：写入会话运行态快照，供会话页恢复执行中步骤与侧边栏运行标识。
+//
+// Params:
+//
+//   - input: 会话运行态快照。
+export function upsertSessionRunState(input: SessionRunStateSnapshot) {
+  const states = readSessionRunStates();
+  const nextState: StoredSessionRunState = {
+    ...input,
+    activeMessageId: String(input.activeMessageId || "").trim(),
+    updatedAt: Number(input.updatedAt || Date.now()),
+  };
+  const next = [
+    nextState,
+    ...states.filter((item) => !(item.agentKey === input.agentKey && item.sessionId === input.sessionId)),
+  ].slice(0, 200);
+  writeSessionRunStates(next);
+  emitSessionRunStateUpdated({
+    agentKey: input.agentKey,
+    sessionId: input.sessionId,
+  });
+}
+
+// 描述：读取指定会话运行态快照。
+//
+// Params:
+//
+//   - agentKey: 智能体类型。
+//   - sessionId: 会话 ID。
+//
+// Returns:
+//
+//   - 会话运行态快照；未命中返回 null。
+export function getSessionRunState(
+  agentKey: "code" | "model",
+  sessionId: string,
+): SessionRunStateSnapshot | null {
+  const hit = readSessionRunStates().find(
+    (item) => item.agentKey === agentKey && item.sessionId === sessionId,
+  );
+  return hit || null;
+}
+
+// 描述：删除指定会话运行态快照。
+//
+// Params:
+//
+//   - agentKey: 智能体类型。
+//   - sessionId: 会话 ID。
+export function removeSessionRunState(agentKey: "code" | "model", sessionId: string) {
+  const states = readSessionRunStates();
+  const next = states.filter((item) => !(item.agentKey === agentKey && item.sessionId === sessionId));
+  writeSessionRunStates(next);
+  emitSessionRunStateUpdated({
+    agentKey,
+    sessionId,
+  });
+}
+
+// 描述：判断会话是否处于执行中，供侧边栏渲染运行态图标。
+//
+// Params:
+//
+//   - agentKey: 智能体类型。
+//   - sessionId: 会话 ID。
+//
+// Returns:
+//
+//   - 是否执行中。
+export function isSessionRunning(agentKey: "code" | "model", sessionId: string): boolean {
+  const snapshot = getSessionRunState(agentKey, sessionId);
+  if (!snapshot?.sending) {
+    return false;
+  }
+  return Object.values(snapshot.runMetaMap || {}).some((item) => item.status === "running");
 }
 
 // 描述：返回指定智能体可见会话列表，融合默认会话、动态会话与本地元数据。

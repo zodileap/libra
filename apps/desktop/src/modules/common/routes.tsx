@@ -7,6 +7,14 @@ import type { RouteAccess } from "../../router/types";
 //
 //   - 设置模块开关键。
 export const SETTINGS_MODULE_KEY = "settings" as const;
+// 描述:
+//
+//   - 技能模块开关键。
+export const SKILL_MODULE_KEY = "skill" as const;
+// 描述:
+//
+//   - 技能页路由路径。
+export const SKILL_PAGE_PATH = "/skills" as const;
 
 // 描述：通用模块中的登录页懒加载入口，属于所有构建和所有用户可见基础页面。
 export const CommonLoginPageLazy = lazy(async () => {
@@ -30,6 +38,12 @@ export const SettingsGeneralPageLazy = lazy(async () => {
 export const CommonAiKeyPageLazy = lazy(async () => {
   const module = await import("./pages/ai-key-page");
   return { default: module.AiKeyPage };
+});
+
+// 描述：通用模块中的技能页懒加载入口，承载技能安装与推荐列表。
+export const CommonSkillsPageLazy = lazy(async () => {
+  const module = await import("./pages/skills-page");
+  return { default: module.SkillsPage };
 });
 
 // 描述:

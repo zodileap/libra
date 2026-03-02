@@ -1,11 +1,12 @@
 use super::*;
 
-/// 描述：验证 provider 解析支持大小写与 codex-cli 别名。
+/// 描述：验证 provider 解析支持大小写与 codex-cli / gemini-cli 别名。
 #[test]
 fn should_parse_provider() {
     assert_eq!(parse_provider("codex"), LlmProvider::CodexCli);
     assert_eq!(parse_provider(" codex-cli "), LlmProvider::CodexCli);
     assert_eq!(parse_provider("gemini"), LlmProvider::Gemini);
+    assert_eq!(parse_provider(" gemini-cli "), LlmProvider::Gemini);
     assert_eq!(parse_provider("unknown"), LlmProvider::Unknown);
 }
 

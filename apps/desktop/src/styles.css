@@ -34,7 +34,11 @@
   --desk-window-min-width: calc(var(--z-inset) * 64);
   --desk-window-min-height: calc(var(--z-inset) * 42);
   --desk-titlebar-height: var(--z-element-size-lg);
-  --desk-app-header-height: var(--z-inset);
+  /* 描述:
+   *
+   *   - 全局标题栏高度与桌面标题栏基线保持一致，避免 slot 内容因高度过小被裁剪不可见。
+   */
+  --desk-app-header-height: 3rem;
   --desk-agent-surface-padding-top: calc(var(--desk-app-header-height));
   --desk-breakpoint-lg: calc(var(--z-inset) * 80);
   --desk-breakpoint-md: calc(var(--z-inset) * 64);
@@ -405,6 +409,43 @@ body {
   margin: 0 auto;
   display: grid;
   gap: var(--z-inset);
+}
+
+.desk-skills-shell {
+  width: min(100%, calc(var(--z-inset) * 72));
+}
+
+.desk-skill-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--z-inset);
+}
+
+.desk-skill-card {
+  border-radius: var(--z-border-radius-lg);
+  min-height: calc(var(--z-inset) * 5.5);
+}
+
+.desk-skill-card-main {
+  min-height: calc(var(--z-inset) * 5.5);
+  padding: var(--z-inset);
+}
+
+.desk-skill-card-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.desk-skill-card-icon-wrap {
+  width: calc(var(--z-inset) * 2);
+  height: calc(var(--z-inset) * 2);
+  border-radius: var(--z-border-radius);
+  border: var(--desk-border-width) solid var(--z-color-border-glass);
+  background: color-mix(in srgb, var(--z-color-primary) 14%, var(--z-color-use-bg));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
 .desk-page-header {
@@ -819,6 +860,10 @@ body {
   margin-top: var(--z-inset-sm);
 }
 
+.desk-workflow-node-type-switch {
+  flex-wrap: wrap;
+}
+
 .desk-workflow-head-wrap {
   min-height: 0;
   padding: 0;
@@ -1072,22 +1117,81 @@ body {
   z-index: 2;
 }
 
-.desk-prompt-status {
-  display: block;
-  min-height: calc(var(--z-font-size) * 1.2);
-  margin-top: var(--z-inset-sm);
-}
-
 .desk-prompt-toolbar {
   margin-top: var(--z-inset-sm);
 }
 
 .desk-prompt-toolbar-left {
   min-width: 0;
+  flex-wrap: wrap;
+}
+
+.desk-prompt-toolbar-select {
+  min-width: calc(var(--z-inset) * 9.5);
+  max-width: calc(var(--z-inset) * 14);
 }
 
 .desk-prompt-icon-btn {
   min-width: calc(var(--z-inset) * 1.8);
+}
+
+.desk-session-strategy-modal-body {
+  display: grid;
+  gap: var(--z-inset-sm);
+}
+
+.desk-session-strategy-list {
+  display: grid;
+  gap: var(--z-inset-xs);
+  max-height: calc(var(--z-inset) * 22);
+  overflow: auto;
+  padding-right: var(--z-inset-xs);
+}
+
+.desk-session-strategy-section-title {
+  margin-top: var(--z-inset-xs);
+  color: color-mix(in srgb, var(--z-color-text) 62%, var(--z-color-border-glass));
+}
+
+.desk-session-strategy-item {
+  margin-top: 0;
+  border: var(--desk-border-width) solid var(--z-color-border-glass);
+  background: var(--desk-container-bg);
+  cursor: pointer;
+  transition:
+    border-color var(--z-duration-fast-4),
+    box-shadow var(--z-duration-fast-4);
+}
+
+.desk-session-strategy-item:hover {
+  border-color: color-mix(in srgb, var(--z-color-border-brand) 56%, var(--z-color-border-glass));
+  box-shadow: var(--z-color-box-shadow);
+}
+
+.desk-session-strategy-item.is-active {
+  border-color: var(--z-color-border-active);
+  box-shadow: var(--z-color-box-shadow-popover);
+}
+
+.desk-session-strategy-item-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.desk-session-strategy-item-icon {
+  flex-shrink: 0;
+}
+
+.desk-session-strategy-item-text {
+  min-width: 0;
+  display: grid;
+  gap: var(--z-inset-xs);
+}
+
+.desk-session-strategy-item-extra {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .desk-two-cols {
@@ -1150,7 +1254,7 @@ body {
 .desk-thread {
   display: flex;
   flex-direction: column;
-  gap: var(--desk-block-gap-sm);
+  gap: var(--z-inset);
   margin-top: var(--z-inset);
   margin-bottom: var(--z-inset);
 }
@@ -1158,18 +1262,48 @@ body {
 .desk-msg {
   width: min(100%, var(--desk-chat-bubble-max-width));
   align-self: flex-start;
-  border-radius: var(--z-border-radius-xl) !important;
+  position: relative;
 }
 
 .desk-msg.assistant {
   align-self: flex-start;
-  background: var(--desk-container-bg) !important;
 }
 
 .desk-msg.user {
   align-self: flex-end;
-  border-color: color-mix(in srgb, var(--z-color-primary) 52%, var(--z-color-border-glass)) !important;
-  background: var(--desk-container-bg) !important;
+}
+
+.desk-msg-user-surface {
+  border: var(--desk-border-width) solid color-mix(in srgb, var(--z-color-primary) 52%, var(--z-color-border-glass));
+  background: color-mix(in srgb, var(--z-color-primary) 9%, var(--desk-container-bg));
+  border-radius: var(--z-border-radius-xl) !important;
+}
+
+.desk-msg-assistant-surface {
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.desk-msg-hover-toolbar {
+  margin-top: var(--z-inset-sm);
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transform: translateY(calc(var(--z-inset-xs) * -1));
+  pointer-events: none;
+  transition:
+    opacity var(--z-duration-fast-4),
+    transform var(--z-duration-fast-4),
+    max-height var(--z-duration-fast-4);
+}
+
+.desk-msg:hover .desk-msg-hover-toolbar,
+.desk-msg:focus-within .desk-msg-hover-toolbar {
+  max-height: calc(var(--z-inset) * 3);
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
 }
 
 .desk-run-flow {
@@ -1243,6 +1377,32 @@ body {
 .desk-run-summary {
   border-top: var(--desk-border-width) solid color-mix(in srgb, var(--z-color-border-glass) 72%, transparent);
   padding-top: var(--z-inset-sm);
+}
+
+.desk-run-summary-failed {
+  border-top: none;
+  padding-top: 0;
+}
+
+.desk-run-failure-card {
+  border: var(--desk-border-width) solid color-mix(in srgb, var(--z-color-danger) 40%, var(--z-color-border-glass));
+  border-radius: var(--z-border-radius);
+  background: color-mix(in srgb, var(--z-color-danger) 8%, var(--desk-container-bg));
+  padding: var(--z-inset-sm) var(--z-inset);
+  display: grid;
+  gap: var(--z-inset-xs);
+}
+
+.desk-run-failure-head {
+  color: color-mix(in srgb, var(--z-color-danger) 74%, var(--z-color-text));
+}
+
+.desk-run-failure-detail {
+  color: color-mix(in srgb, var(--z-color-text) 84%, var(--z-color-border-glass));
+}
+
+.desk-run-failure-hint {
+  color: color-mix(in srgb, var(--z-color-text) 62%, var(--z-color-border-glass));
 }
 
 .desk-session-empty-state {
@@ -1480,6 +1640,10 @@ body {
   .desk-page-header {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .desk-skill-grid {
+    grid-template-columns: 1fr;
   }
 
   .desk-session-shell {

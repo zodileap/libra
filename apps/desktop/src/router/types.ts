@@ -13,6 +13,7 @@ import type {
 // 描述：声明桌面端可按运行时与构建时控制的路由模块键。
 export type DesktopRouteModuleKey =
   | "settings"
+  | "skill"
   | "agent"
   | "session"
   | "workflow";

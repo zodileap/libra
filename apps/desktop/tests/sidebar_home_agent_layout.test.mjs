@@ -25,11 +25,13 @@ test("TestHomeAndAgentSidebarShouldUseProjectFirstLayout", () => {
 
   // 描述：
   //
-  //   - Home 侧边栏应新增图标列表入口，并承载“工作流”跳转能力。
-  assert.match(sidebarSource, /const homeWorkflowEntry = useMemo\(\(\) => \{/);
+  //   - Home 侧边栏应新增图标列表入口，并承载“工作流 + 技能”两个跳转能力。
+  assert.match(sidebarSource, /const homeToolbarEntries = useMemo\(\(\) => \{/);
   assert.match(sidebarSource, /label: "工作流"/);
+  assert.match(sidebarSource, /label: "技能"/);
   assert.match(sidebarSource, /icon: "account_tree"/);
-  assert.match(sidebarSource, /navigate\(homeWorkflowEntry\.path\);/);
+  assert.match(sidebarSource, /path: SKILL_PAGE_PATH/);
+  assert.match(sidebarSource, /navigate\(target\.path\);/);
   assert.match(sidebarSource, /className="desk-sidebar-toolbar" padding=\{0\}/);
 
   // 描述：

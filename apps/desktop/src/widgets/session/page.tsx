@@ -5,9 +5,14 @@ import {
   AriCard,
   AriContainer,
   AriFlex,
+  AriIcon,
   AriInput,
+  AriList,
+  AriListItem,
+  AriMessage,
   AriMenu,
   AriModal,
+  AriSelect,
   AriTooltip,
   AriTypography,
 } from "aries_react";
@@ -17,15 +22,19 @@ import { useLocation, useNavigate } from "react-router-dom";
 import {
   getCodeWorkspaceGroupById,
   getCodeWorkspaceIdBySessionId,
+  getSessionRunState,
   getSessionMessages,
   resolveAgentSessionTitle,
+  removeSessionRunState,
   SESSION_TITLE_UPDATED_EVENT,
   upsertModelProject,
+  upsertSessionRunState,
   upsertSessionMessages,
   getAgentSessionMetaSnapshot,
   removeAgentSession,
   renameAgentSession,
   togglePinnedAgentSession,
+  type SessionRunMeta as PersistedSessionRunMeta,
 } from "../../shared/data";
 import { updateRuntimeSessionStatus } from "../../shared/services/backend-api";
 import {
@@ -53,11 +62,14 @@ import type {
 } from "../../shared/types";
 import { ChatMarkdown } from "../chat-markdown";
 import {
+  buildCodeWorkflowSkillExecutionPlan,
   buildCodeWorkflowPrompt,
   listCodeWorkflows,
   listModelWorkflows,
   runModelWorkflow,
 } from "../../shared/workflow";
+import { listInstalledSkills } from "../../modules/common/services";
+import type { SkillCatalogItem } from "../../modules/common/services";
 import { useDesktopHeaderSlot } from "../app-header/header-slot-context";
 import type {
   CodeWorkflowDefinition,
@@ -360,6 +372,82 @@ function mapModelStreamToRunSegment(
   };
 }
 
+// 描述：把代码智能体文本流事件映射为“说明 + 步骤”结构，用于统一的进行中轨迹渲染。
+//
+// Params:
+//
+//   - payload: 代码智能体文本流事件。
+//   - segmentKey: 段唯一键。
+//
+// Returns:
+//
+//   - 轨迹段；无可展示内容时返回 null。
+function mapAgentTextStreamToRunSegment(
+  payload: AgentTextStreamEvent,
+  segmentKey: string,
+): AssistantRunSegment | null {
+  const eventMessage = String(payload.message || "").trim();
+  if (payload.kind === "delta") {
+    return null;
+  }
+
+  if (payload.kind === "started") {
+    return {
+      key: segmentKey,
+      intro: "已接收需求，开始规划执行",
+      step: eventMessage || "正在准备执行本次任务…",
+      status: "running",
+    };
+  }
+
+  if (payload.kind === "llm_started") {
+    return {
+      key: segmentKey,
+      intro: "正在处理当前步骤",
+      step: eventMessage || "模型会话已开始，正在生成执行计划…",
+      status: "running",
+    };
+  }
+
+  if (payload.kind === "llm_finished") {
+    return {
+      key: segmentKey,
+      intro: "当前步骤已完成",
+      step: eventMessage || "模型生成阶段已完成，正在整理执行结果…",
+      status: "finished",
+    };
+  }
+
+  if (payload.kind === "finished") {
+    return {
+      key: segmentKey,
+      intro: "当前步骤已完成",
+      step: eventMessage || "执行结束，正在输出最终结果…",
+      status: "finished",
+    };
+  }
+
+  if (payload.kind === "error") {
+    return {
+      key: segmentKey,
+      intro: "执行中断，正在处理",
+      step: eventMessage || "执行失败，请检查错误详情后重试。",
+      status: "failed",
+    };
+  }
+
+  if (!eventMessage) {
+    return null;
+  }
+
+  return {
+    key: segmentKey,
+    intro: "执行进度更新",
+    step: eventMessage,
+    status: "running",
+  };
+}
+
 // 描述：根据模型流式事件判断当前执行阶段，用于无事件时的“心跳提示”文案。
 //
 // Params:
@@ -386,6 +474,38 @@ function resolveAssistantRunStage(payload: ModelSessionStreamEvent): AssistantRu
   return "planning";
 }
 
+// 描述：根据代码智能体文本流事件判断当前执行阶段，用于无事件时的“心跳提示”文案。
+//
+// Params:
+//
+//   - payload: 代码智能体文本流事件。
+//
+// Returns:
+//
+//   - 归一化后的执行阶段。
+function resolveAssistantRunStageByAgentTextStream(payload: AgentTextStreamEvent): AssistantRunStage {
+  const kind = String(payload.kind || "").trim().toLowerCase();
+  const lowerMessage = String(payload.message || "").toLowerCase();
+  if (kind === "finished" || kind === "llm_finished") {
+    return "finalizing";
+  }
+  if (kind === "error") {
+    return "finalizing";
+  }
+  if (
+    kind.includes("tool")
+    || kind.includes("call")
+    || kind.includes("execute")
+    || kind === "llm_started"
+  ) {
+    return "executing";
+  }
+  if (lowerMessage.includes("bridge") || lowerMessage.includes("环境") || lowerMessage.includes("授权")) {
+    return "bridge";
+  }
+  return "planning";
+}
+
 // 描述：生成等待阶段的“说明 + 步骤”心跳段落，避免长时间无反馈。
 //
 // Params:
@@ -401,20 +521,39 @@ function buildAssistantHeartbeatSegment(
   stage: AssistantRunStage,
   heartbeatCount: number,
   segmentKey: string,
+  agentKind: "model" | "code",
 ): AssistantRunSegment {
   let step = "正在同步执行状态，请稍候…";
   if (stage === "planning") {
-    step = heartbeatCount <= 1
-      ? "正在解析需求并规划执行步骤…"
-      : "规划中：正在确认本次操作所需的 Blender 指令…";
+    if (agentKind === "model") {
+      step = heartbeatCount <= 1
+        ? "正在解析需求并规划执行步骤…"
+        : "规划中：正在确认本次操作所需的 Blender 指令…";
+    } else {
+      step = heartbeatCount <= 1
+        ? "正在解析需求并规划执行步骤…"
+        : "规划中：正在确认本次操作所需的工具链与任务顺序…";
+    }
   } else if (stage === "bridge") {
-    step = heartbeatCount <= 1
-      ? "正在检查 Blender Bridge 与当前会话连接状态…"
-      : "已发出环境检查请求，等待 Blender 返回状态…";
+    if (agentKind === "model") {
+      step = heartbeatCount <= 1
+        ? "正在检查 Blender Bridge 与当前会话连接状态…"
+        : "已发出环境检查请求，等待 Blender 返回状态…";
+    } else {
+      step = heartbeatCount <= 1
+        ? "正在检查当前执行环境与权限状态…"
+        : "已发出环境检查请求，等待工具返回状态…";
+    }
   } else if (stage === "executing") {
-    step = heartbeatCount <= 1
-      ? "步骤正在执行中，等待 Blender 返回本步结果…"
-      : "仍在执行当前步骤，正在持续收集事件回传…";
+    if (agentKind === "model") {
+      step = heartbeatCount <= 1
+        ? "步骤正在执行中，等待 Blender 返回本步结果…"
+        : "仍在执行当前步骤，正在持续收集事件回传…";
+    } else {
+      step = heartbeatCount <= 1
+        ? "步骤正在执行中，等待工具返回本步结果…"
+        : "仍在执行当前步骤，正在持续收集事件回传…";
+    }
   } else if (stage === "finalizing") {
     step = "正在整理执行结果并生成最终总结…";
   }
@@ -427,30 +566,37 @@ function buildAssistantHeartbeatSegment(
   };
 }
 
-// 描述：将底部状态文案压缩为短文本，避免在操作槽中展示过长错误原文。
+// 描述：
+//
+//   - 规范化失败总结展示信息，输出“失败详情 + 建议”结构，避免纯文本提示可读性差。
 //
 // Params:
 //
-//   - rawStatus: 原始状态文案。
+//   - rawSummary: 原始失败总结文本。
 //
 // Returns:
 //
-//   - 适合在 `desk-action-slot` 展示的简短状态文案。
-function buildCompactActionSlotStatus(rawStatus: string): string {
-  const normalizedStatus = rawStatus.trim();
-  if (!normalizedStatus) {
-    return "";
+//   - 失败展示模型。
+function buildAssistantFailureSummary(rawSummary: string): { detail: string; hint: string } {
+  const raw = String(rawSummary || "").trim();
+  const detail = raw.replace(/^执行失败[:：]\s*/u, "").trim() || "执行过程中出现异常，请稍后重试。";
+  const lower = detail.toLowerCase();
+  if (lower.includes("provider") && lower.includes("not implemented")) {
+    return {
+      detail,
+      hint: "当前 Provider 暂未实现该能力，请切换为 Codex CLI 后重试。",
+    };
   }
-
-  if (normalizedStatus.startsWith("执行失败")) {
-    return "执行失败，请查看对话详情后重试。";
+  if (lower.includes("timed out") || detail.includes("超时")) {
+    return {
+      detail,
+      hint: "执行超时，建议稍后重试，或切换执行策略后再试。",
+    };
   }
-
-  if (normalizedStatus.length > 72) {
-    return `${normalizedStatus.slice(0, 72)}…`;
-  }
-
-  return normalizedStatus;
+  return {
+    detail,
+    hint: "请重试，或切换执行策略后再试。",
+  };
 }
 
 // 描述:
@@ -480,6 +626,21 @@ const MODEL_WORKFLOW_SELECTED_KEY = "zodileap.desktop.model.selectedWorkflowId";
 //   - 代码工作流当前选择项本地存储键。
 const CODE_WORKFLOW_SELECTED_KEY = "zodileap.desktop.code.selectedWorkflowId";
 
+// 描述:
+//
+//   - 模型会话快捷技能选择本地存储键。
+const MODEL_SKILL_SELECTED_KEY = "zodileap.desktop.model.selectedSkillIds";
+
+// 描述:
+//
+//   - 代码会话快捷技能选择本地存储键。
+const CODE_SKILL_SELECTED_KEY = "zodileap.desktop.code.selectedSkillIds";
+
+// 描述:
+//
+//   - 连续心跳无新增事件的最大次数，超过后自动终止本轮执行，避免“永远进行中”。
+const ASSISTANT_RUN_HEARTBEAT_STALE_LIMIT = 240;
+
 // 描述：
 //
 //   - 从本地存储读取当前智能体最近一次选择的工作流 ID，未命中时返回空字符串。
@@ -497,6 +658,163 @@ function readSelectedWorkflowId(storageKey: string): string {
   }
   const value = window.localStorage.getItem(storageKey);
   return String(value || "").trim();
+}
+
+// 描述：
+//
+//   - 从本地存储读取当前智能体最近一次选择的技能 ID 列表，未命中时返回空列表。
+//   - 当前执行策略约束为“技能仅允许单选”，因此读取时会自动裁剪为 1 项。
+//
+// Params:
+//
+//   - storageKey: 本地存储键。
+//
+// Returns:
+//
+//   - 技能 ID 列表。
+function readSelectedSkillIds(storageKey: string): string[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+  const rawValue = window.localStorage.getItem(storageKey);
+  if (!rawValue) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(rawValue) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    const normalized = parsed
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+    return Array.from(new Set(normalized)).slice(0, 1);
+  } catch (_err) {
+    return [];
+  }
+}
+
+// 描述：
+//
+//   - 构建“会话已选择技能”提示词片段，向代码智能体明确当前会话需优先遵循的技能上下文。
+//
+// Params:
+//
+//   - selectedSkills: 当前会话选择的技能列表。
+//
+// Returns:
+//
+//   - 可拼接到主提示词的技能片段；未选择技能时返回空字符串。
+function buildSessionSkillPrompt(selectedSkills: SkillCatalogItem[]): string {
+  if (selectedSkills.length === 0) {
+    return "";
+  }
+  const lines = selectedSkills.map((item) => {
+    const version = String(item.versions?.[0] || "").trim();
+    const versionLabel = version ? `@${version}` : "";
+    const description = String(item.description || "").trim();
+    if (description) {
+      return `- ${item.name}（${item.id}${versionLabel}）：${description}`;
+    }
+    return `- ${item.name}（${item.id}${versionLabel}）`;
+  });
+  return ["【会话技能】", ...lines].join("\n");
+}
+
+// 描述：
+//
+//   - 会话上下文拼接时保留的历史消息条数上限，避免提示词无限膨胀。
+const CODE_CONTEXT_HISTORY_LIMIT = 8;
+
+// 描述：
+//
+//   - 会话上下文中单条消息的最大字符数，超长时进行截断。
+const CODE_CONTEXT_MESSAGE_CHAR_LIMIT = 600;
+
+// 描述：
+//
+//   - “重试/继续”类短指令关键词；命中后会改写为可执行请求，避免模型误判“缺少需求”。
+const CODE_RETRY_HINT_KEYWORDS = ["重试", "再试", "retry", "继续", "继续执行", "继续处理"];
+
+// 描述：
+//
+//   - 压缩并裁剪单条会话消息文本，减少上下文噪声并控制 token 体积。
+//
+// Params:
+//
+//   - text: 原始消息文本。
+//
+// Returns:
+//
+//   - 规范化后的消息文本。
+function normalizeCodeContextMessageText(text: string): string {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.length <= CODE_CONTEXT_MESSAGE_CHAR_LIMIT) {
+    return normalized;
+  }
+  return `${normalized.slice(0, CODE_CONTEXT_MESSAGE_CHAR_LIMIT)}...(已截断)`;
+}
+
+// 描述：
+//
+//   - 判断当前输入是否为“仅重试提示”类短句。
+//
+// Params:
+//
+//   - prompt: 当前输入文本。
+//
+// Returns:
+//
+//   - true 表示当前输入不含明确任务细节，仅表达“重试/继续”意图。
+function isRetryOnlyPrompt(prompt: string): boolean {
+  const normalized = String(prompt || "").trim().toLowerCase();
+  return CODE_RETRY_HINT_KEYWORDS.includes(normalized);
+}
+
+// 描述：
+//
+//   - 为代码智能体构建“历史上下文 + 当前请求”的提示词，确保“重试”场景不会丢失前文语义。
+//
+// Params:
+//
+//   - historyMessages: 当前会话已存在的历史消息。
+//   - currentPrompt: 当前用户输入。
+//
+// Returns:
+//
+//   - 拼接后的上下文提示词。
+function buildCodeSessionContextPrompt(historyMessages: MessageItem[], currentPrompt: string): string {
+  const normalizedCurrentPrompt = String(currentPrompt || "").trim();
+  if (!normalizedCurrentPrompt) {
+    return "";
+  }
+  const historyLines = historyMessages
+    .filter((item) => item.role === "user" || item.role === "assistant")
+    .map((item) => ({
+      role: item.role === "user" ? "用户" : "助手",
+      text: normalizeCodeContextMessageText(item.text),
+    }))
+    .filter((item) => item.text.length > 0)
+    .slice(-CODE_CONTEXT_HISTORY_LIMIT)
+    .map((item, index) => `${index + 1}. ${item.role}：${item.text}`);
+
+  if (historyLines.length === 0) {
+    return normalizedCurrentPrompt;
+  }
+  const normalizedRequest = isRetryOnlyPrompt(normalizedCurrentPrompt)
+    ? "请基于以上会话上下文继续上一轮任务并直接给出可执行结果，不要要求我重复需求。"
+    : normalizedCurrentPrompt;
+  return [
+    "【会话上下文】",
+    ...historyLines,
+    "",
+    "【当前请求】",
+    normalizedRequest,
+  ].join("\n");
 }
 
 // 描述:
@@ -708,6 +1026,38 @@ function upsertAssistantMessageById(messages: MessageItem[], messageId: string, 
   return next;
 }
 
+// 描述：把持久化运行态转换为页面运行态结构，过滤非法片段并补齐默认值。
+//
+// Params:
+//
+//   - input: 持久化运行态。
+//
+// Returns:
+//
+//   - 页面可用的运行态。
+function normalizePersistedRunMeta(input: PersistedSessionRunMeta): AssistantRunMeta {
+  const segments = Array.isArray(input.segments)
+    ? input.segments
+      .filter((item) => item && typeof item.key === "string")
+      .map((item) => ({
+        key: String(item.key),
+        intro: String(item.intro || "").trim(),
+        step: String(item.step || "").trim(),
+        status: item.status === "failed" ? "failed" : item.status === "finished" ? "finished" : "running",
+      }))
+      .filter((item) => item.intro || item.step)
+      .slice(-160)
+    : [];
+  return {
+    status: input.status === "failed" ? "failed" : input.status === "finished" ? "finished" : "running",
+    startedAt: Number(input.startedAt || Date.now()),
+    finishedAt: input.finishedAt ? Number(input.finishedAt) : undefined,
+    collapsed: Boolean(input.collapsed),
+    summary: String(input.summary || ""),
+    segments,
+  };
+}
+
 export function SessionPage({
   agentKey,
   sessionId,
@@ -742,8 +1092,6 @@ export function SessionPage({
   const [dependencyRuleConfirmState, setDependencyRuleConfirmState] = useState<DependencyRuleConfirmState | null>(null);
   const [dependencyRuleUpgrading, setDependencyRuleUpgrading] = useState(false);
   const headerSlotElement = useDesktopHeaderSlot();
-  // 描述：将底部状态文案压缩为适合 action slot 展示的短文案。
-  const compactActionSlotStatus = useMemo(() => buildCompactActionSlotStatus(status), [status]);
   // 描述：解析当前会话 UI 配置，未传入时按智能体类型回退默认配置。
   const resolvedSessionUiConfig = sessionUiConfig || resolveSessionUiConfig(agentKey);
   const isWorkflowSession = resolvedSessionUiConfig.sessionKind === "workflow";
@@ -810,9 +1158,15 @@ export function SessionPage({
   const availableAiKeys = useMemo(
     () =>
       aiKeys.filter(
-        (item) =>
-          item.enabled
-          || item.keyValue.trim().length > 0,
+        (item) => {
+          const provider = String(item.provider || "").trim();
+          const keyValue = String(item.keyValue || "").trim();
+          // 描述：本地 CLI Provider 必须由“启用开关”控制，避免关闭后仍在下拉可选。
+          if (provider === "codex" || provider === "gemini-cli") {
+            return item.enabled;
+          }
+          return item.enabled || keyValue.length > 0;
+        },
       ),
     [aiKeys],
   );
@@ -828,37 +1182,87 @@ export function SessionPage({
   const [selectedCodeWorkflowId, setSelectedCodeWorkflowId] = useState<string>(
     () => readSelectedWorkflowId(CODE_WORKFLOW_SELECTED_KEY),
   );
+  const [selectedModelSkillIds, setSelectedModelSkillIds] = useState<string[]>(
+    () => readSelectedSkillIds(MODEL_SKILL_SELECTED_KEY),
+  );
+  const [selectedCodeSkillIds, setSelectedCodeSkillIds] = useState<string[]>(
+    () => readSelectedSkillIds(CODE_SKILL_SELECTED_KEY),
+  );
+  const [workflowSkillModalVisible, setWorkflowSkillModalVisible] = useState(false);
+  const [draftWorkflowId, setDraftWorkflowId] = useState("");
+  const [draftSkillIds, setDraftSkillIds] = useState<string[]>([]);
+  const [installedSkills, setInstalledSkills] = useState<SkillCatalogItem[]>([]);
   const modelWorkflows = useMemo<WorkflowDefinition[]>(() => listModelWorkflows(), []);
   const codeWorkflows = useMemo<CodeWorkflowDefinition[]>(
     () => listCodeWorkflows(),
     [],
   );
-  const selectedModelWorkflow = useMemo<WorkflowDefinition | null>(
-    () =>
-      modelWorkflows.find((item) => item.id === selectedModelWorkflowId) ||
-      modelWorkflows[0] ||
-      null,
-    [modelWorkflows, selectedModelWorkflowId],
-  );
-  const selectedCodeWorkflow = useMemo<CodeWorkflowDefinition | null>(
-    () =>
-      codeWorkflows.find((item) => item.id === selectedCodeWorkflowId) ||
-      codeWorkflows[0] ||
-      null,
-    [codeWorkflows, selectedCodeWorkflowId],
-  );
+  const selectedModelWorkflow = useMemo<WorkflowDefinition | null>(() => {
+    if (selectedModelSkillIds.length > 0) {
+      return null;
+    }
+    return modelWorkflows.find((item) => item.id === selectedModelWorkflowId) || modelWorkflows[0] || null;
+  }, [modelWorkflows, selectedModelSkillIds.length, selectedModelWorkflowId]);
+  const selectedCodeWorkflow = useMemo<CodeWorkflowDefinition | null>(() => {
+    if (selectedCodeSkillIds.length > 0) {
+      return null;
+    }
+    return codeWorkflows.find((item) => item.id === selectedCodeWorkflowId) || codeWorkflows[0] || null;
+  }, [codeWorkflows, selectedCodeSkillIds.length, selectedCodeWorkflowId]);
   const workflowMenuItems = useMemo(() => {
     if (isWorkflowSession) {
       return modelWorkflows.map((workflow) => ({
         key: workflow.id,
         label: workflow.name,
+        description: String(workflow.description || "").trim(),
       }));
     }
     return codeWorkflows.map((workflow) => ({
       key: workflow.id,
       label: workflow.name,
+      description: String(workflow.description || "").trim(),
     }));
   }, [codeWorkflows, isWorkflowSession, modelWorkflows]);
+  const activeSelectedSkillIds = isWorkflowSession ? selectedModelSkillIds : selectedCodeSkillIds;
+  const selectedSessionSkills = useMemo(
+    () => installedSkills.filter((item) => activeSelectedSkillIds.includes(item.id)),
+    [activeSelectedSkillIds, installedSkills],
+  );
+  const aiSelectOptions = useMemo(
+    () =>
+      availableAiKeys.map((item) => ({
+        value: item.provider,
+        label: item.providerLabel,
+      })),
+    [availableAiKeys],
+  );
+  const workflowSkillSelectorLabel = useMemo(() => {
+    if (selectedSessionSkills.length > 0) {
+      return selectedSessionSkills[0]?.name || "技能";
+    }
+    const workflowLabel = isWorkflowSession
+      ? selectedModelWorkflow?.name || resolvedSessionUiConfig.workflowFallbackLabel
+      : selectedCodeWorkflow?.name || resolvedSessionUiConfig.workflowFallbackLabel;
+    return workflowLabel;
+  }, [
+    isWorkflowSession,
+    resolvedSessionUiConfig.workflowFallbackLabel,
+    selectedCodeWorkflow?.name,
+    selectedModelWorkflow?.name,
+    selectedSessionSkills,
+  ]);
+  const workflowSkillSelectOptions = useMemo(
+    () => [
+      {
+        value: "workflow_skill",
+        label: workflowSkillSelectorLabel,
+      },
+    ],
+    [workflowSkillSelectorLabel],
+  );
+  const activeSelectedWorkflowId = isWorkflowSession
+    ? selectedModelWorkflow?.id || ""
+    : selectedCodeWorkflow?.id || "";
 
   // 描述：以下 refs 用于维护流式渲染、去重、心跳与定时器状态，避免高频更新触发重复渲染。
   const streamMessageIdRef = useRef("");
@@ -873,11 +1277,13 @@ export function SessionPage({
   const modelStreamRecordFlushTimerRef = useRef<number | null>(null);
   const activeAgentStreamTraceRef = useRef("");
   const agentStreamTextBufferRef = useRef("");
+  const agentStreamSeenKeysRef = useRef<Set<string>>(new Set());
   const modelStreamSeenKeysRef = useRef<Set<string>>(new Set());
   const modelStreamDebugSeenKeysRef = useRef<Set<string>>(new Set());
   const assistantRunHeartbeatTimerRef = useRef<number | null>(null);
   const assistantRunLastActivityAtRef = useRef(0);
   const assistantRunHeartbeatCountRef = useRef(0);
+  const assistantRunAgentKindRef = useRef<"model" | "code">("code");
   const assistantRunStageRef = useRef<AssistantRunStage>("planning");
   const assistantRunStatusRef = useRef<AssistantRunMeta["status"] | "idle">("idle");
   const autoPromptDispatchedRef = useRef(false);
@@ -923,7 +1329,57 @@ export function SessionPage({
     }
   };
 
-  // 描述：设置当前流式消息文本并按帧批量更新，避免高频 setState 导致页面卡顿。
+  // 描述：根据目标文本与当前已展示文本计算下一帧可见内容，形成“逐步出现”效果。
+  //
+  // Params:
+  //
+  //   - currentText: 当前已展示内容。
+  //   - targetText: 目标完整内容。
+  //
+  // Returns:
+  //
+  //   - 下一帧应展示的文本内容。
+  const buildNextStreamingText = (currentText: string, targetText: string) => {
+    if (currentText === targetText) {
+      return targetText;
+    }
+    if (targetText.length < currentText.length) {
+      return targetText;
+    }
+    if (!targetText.startsWith(currentText)) {
+      const bootstrapChunkSize = Math.max(1, Math.min(8, targetText.length));
+      return targetText.slice(0, bootstrapChunkSize);
+    }
+    const remainingLength = targetText.length - currentText.length;
+    const adaptiveChunkSize = Math.max(1, Math.min(24, Math.ceil(Math.max(targetText.length, 1) / 80)));
+    const chunkSize = Math.max(1, Math.min(remainingLength, adaptiveChunkSize));
+    return targetText.slice(0, currentText.length + chunkSize);
+  };
+
+  // 描述：按帧执行流式文本渲染，支持在无后端 delta 时也能平滑展示最终结果。
+  const renderStreamingAssistantFrame = () => {
+    const messageId = streamMessageIdRef.current;
+    if (!messageId) {
+      streamRenderPendingRef.current = false;
+      streamRenderFrameRef.current = null;
+      return;
+    }
+    const targetText = streamLatestTextRef.current;
+    const currentText = streamDisplayedTextRef.current;
+    const nextText = buildNextStreamingText(currentText, targetText);
+    if (nextText !== currentText) {
+      streamDisplayedTextRef.current = nextText;
+      setMessages((prev) => upsertAssistantMessageById(prev, messageId, nextText));
+    }
+    if (nextText === targetText) {
+      streamRenderPendingRef.current = false;
+      streamRenderFrameRef.current = null;
+      return;
+    }
+    streamRenderFrameRef.current = window.requestAnimationFrame(renderStreamingAssistantFrame);
+  };
+
+  // 描述：设置当前流式消息目标文本，并触发逐帧渲染。
   const setStreamingAssistantTarget = (targetText: string) => {
     const messageId = streamMessageIdRef.current;
     if (!messageId) {
@@ -934,20 +1390,7 @@ export function SessionPage({
       return;
     }
     streamRenderPendingRef.current = true;
-    streamRenderFrameRef.current = window.requestAnimationFrame(() => {
-      streamRenderPendingRef.current = false;
-      streamRenderFrameRef.current = null;
-      const currentMessageId = streamMessageIdRef.current;
-      const nextText = streamLatestTextRef.current;
-      if (!currentMessageId) {
-        return;
-      }
-      if (streamDisplayedTextRef.current === nextText) {
-        return;
-      }
-      streamDisplayedTextRef.current = nextText;
-      setMessages((prev) => upsertAssistantMessageById(prev, currentMessageId, nextText));
-    });
+    streamRenderFrameRef.current = window.requestAnimationFrame(renderStreamingAssistantFrame);
   };
 
   // 描述：把模型会话流式事件映射进运行轨迹，并按唯一键去重防止重复刷屏。
@@ -965,6 +1408,8 @@ export function SessionPage({
       return;
     }
     modelStreamSeenKeysRef.current.add(eventKey);
+    // 描述：收到真实流式事件后重置心跳计数，代表执行链路仍在持续推进。
+    assistantRunHeartbeatCountRef.current = 0;
     assistantRunLastActivityAtRef.current = Date.now();
     assistantRunStageRef.current = resolveAssistantRunStage(payload);
     const runSegment = mapModelStreamToRunSegment(payload, eventKey);
@@ -1024,7 +1469,7 @@ export function SessionPage({
     });
   };
 
-  // 描述：启动模型执行心跳，在长时间无流式事件时持续补充用户可见进度。
+  // 描述：启动智能体执行心跳，在长时间无流式事件时持续补充用户可见进度。
   //
   // Params:
   //
@@ -1042,12 +1487,27 @@ export function SessionPage({
       const idleMs = Date.now() - assistantRunLastActivityAtRef.current;
       if (idleMs >= 1400) {
         assistantRunHeartbeatCountRef.current += 1;
+        if (assistantRunHeartbeatCountRef.current >= ASSISTANT_RUN_HEARTBEAT_STALE_LIMIT) {
+          const timeoutSummary = assistantRunAgentKindRef.current === "model"
+            ? "执行超时：长时间未收到模型执行结果，请重试。"
+            : "执行超时：长时间未收到工具执行结果，请重试。";
+          setStreamingAssistantTarget(timeoutSummary);
+          finishAssistantRunMessage(messageId, "failed", timeoutSummary);
+          setStatus(timeoutSummary);
+          setSending(false);
+          if (!isWorkflowSession) {
+            activeAgentStreamTraceRef.current = "";
+          }
+          clearAssistantRunHeartbeatTimer();
+          return;
+        }
         appendAssistantRunSegment(
           messageId,
           buildAssistantHeartbeatSegment(
             assistantRunStageRef.current,
             assistantRunHeartbeatCountRef.current,
             `heartbeat-${Date.now()}`,
+            assistantRunAgentKindRef.current,
           ),
         );
         assistantRunLastActivityAtRef.current = Date.now();
@@ -1182,10 +1642,12 @@ export function SessionPage({
     streamLatestTextRef.current = "";
     activeAgentStreamTraceRef.current = "";
     agentStreamTextBufferRef.current = "";
+    agentStreamSeenKeysRef.current.clear();
     modelStreamSeenKeysRef.current.clear();
     modelStreamDebugSeenKeysRef.current.clear();
     assistantRunHeartbeatCountRef.current = 0;
     assistantRunLastActivityAtRef.current = 0;
+    assistantRunAgentKindRef.current = "code";
     assistantRunStageRef.current = "planning";
     assistantRunStatusRef.current = "idle";
     autoPromptDispatchedRef.current = false;
@@ -1193,6 +1655,7 @@ export function SessionPage({
     setTraceRecords([]);
     setDebugFlowRecords([]);
     setAssistantRunMetaMap({});
+    setSending(false);
     setPendingDangerousPrompt("");
     setPendingDangerousToken("");
     if (!sessionId) {
@@ -1203,7 +1666,39 @@ export function SessionPage({
       return;
     }
     const stored = getSessionMessages(normalizedAgentKey, sessionId);
-    setMessages(stored.length > 0 ? stored : []);
+    const runSnapshot = getSessionRunState(normalizedAgentKey, sessionId);
+    let nextMessages: MessageItem[] = stored.length > 0 ? stored : [];
+    if (runSnapshot && runSnapshot.runMetaMap && Object.keys(runSnapshot.runMetaMap).length > 0) {
+      const normalizedRunMetaMap = Object.fromEntries(
+        Object.entries(runSnapshot.runMetaMap).map(([messageId, meta]) => [messageId, normalizePersistedRunMeta(meta)]),
+      );
+      setAssistantRunMetaMap(normalizedRunMetaMap);
+      const recoveredMessageId = String(runSnapshot.activeMessageId || "").trim()
+        || Object.keys(normalizedRunMetaMap).slice(-1)[0]
+        || "";
+      if (recoveredMessageId) {
+        const recoveredMeta = normalizedRunMetaMap[recoveredMessageId];
+        const recoveredText = String(
+          recoveredMeta?.summary
+          || recoveredMeta?.segments.slice(-1)[0]?.step
+          || "正在处理当前步骤…",
+        ).trim();
+        nextMessages = upsertAssistantMessageById(nextMessages, recoveredMessageId, recoveredText);
+        streamMessageIdRef.current = recoveredMessageId;
+        streamDisplayedTextRef.current = recoveredText;
+        streamLatestTextRef.current = recoveredText;
+        if (recoveredMeta?.status === "running") {
+          assistantRunStatusRef.current = "running";
+          assistantRunLastActivityAtRef.current = Date.now();
+          assistantRunAgentKindRef.current = normalizedAgentKey === "model" ? "model" : "code";
+          setSending(true);
+          startAssistantRunHeartbeat(recoveredMessageId);
+        }
+      }
+    } else {
+      setAssistantRunMetaMap({});
+    }
+    setMessages(nextMessages);
     setMessagesHydrated(true);
     setHydratedSessionKey(sessionStorageKey);
   }, [isWorkflowSession, normalizedAgentKey, sessionId, sessionStorageKey]);
@@ -1236,6 +1731,32 @@ export function SessionPage({
       clearSessionMessagePersistTimer();
     };
   }, [messages, messagesHydrated, hydratedSessionKey, normalizedAgentKey, sending, sessionId, sessionStorageKey]);
+
+  useEffect(() => {
+    if (!sessionId || !messagesHydrated || hydratedSessionKey !== sessionStorageKey) {
+      return;
+    }
+    if (Object.keys(assistantRunMetaMap).length === 0) {
+      removeSessionRunState(normalizedAgentKey, sessionId);
+      return;
+    }
+    upsertSessionRunState({
+      agentKey: normalizedAgentKey,
+      sessionId,
+      activeMessageId: String(streamMessageIdRef.current || "").trim(),
+      sending,
+      runMetaMap: assistantRunMetaMap,
+      updatedAt: Date.now(),
+    });
+  }, [
+    assistantRunMetaMap,
+    hydratedSessionKey,
+    messagesHydrated,
+    normalizedAgentKey,
+    sending,
+    sessionId,
+    sessionStorageKey,
+  ]);
 
   useEffect(() => {
     if (!import.meta.env.DEV) {
@@ -1292,6 +1813,29 @@ export function SessionPage({
     }
   }, [availableAiKeys, selectedProvider]);
 
+  // 描述：加载“已安装技能”列表，供会话中的“工作流/技能”弹窗选择器使用。
+  useEffect(() => {
+    let disposed = false;
+    const loadSkills = async () => {
+      try {
+        const skills = await listInstalledSkills();
+        if (disposed) {
+          return;
+        }
+        setInstalledSkills(skills);
+      } catch (_err) {
+        if (disposed) {
+          return;
+        }
+        setInstalledSkills([]);
+      }
+    };
+    void loadSkills();
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
   useEffect(() => {
     if (!selectedModelWorkflow) {
       return;
@@ -1317,6 +1861,22 @@ export function SessionPage({
       window.localStorage.setItem(CODE_WORKFLOW_SELECTED_KEY, selectedCodeWorkflow.id);
     }
   }, [selectedCodeWorkflow, selectedCodeWorkflowId]);
+
+  // 描述：持久化模型会话选择的技能列表，保持跨会话复用。
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(MODEL_SKILL_SELECTED_KEY, JSON.stringify(selectedModelSkillIds));
+  }, [selectedModelSkillIds]);
+
+  // 描述：持久化代码会话选择的技能列表，保持跨会话复用。
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(CODE_SKILL_SELECTED_KEY, JSON.stringify(selectedCodeSkillIds));
+  }, [selectedCodeSkillIds]);
 
   useEffect(() => {
     if (!isWorkflowSession || !sessionId) {
@@ -1483,6 +2043,43 @@ export function SessionPage({
       if (!streamMessageIdRef.current) {
         return;
       }
+      assistantRunLastActivityAtRef.current = Date.now();
+      assistantRunStageRef.current = resolveAssistantRunStageByAgentTextStream(payload);
+      const segmentKey = `agent:${payload.kind}:${payload.message}:${payload.delta || ""}`;
+      if (!agentStreamSeenKeysRef.current.has(segmentKey)) {
+        agentStreamSeenKeysRef.current.add(segmentKey);
+        // 描述：收到真实文本流事件后重置心跳计数，避免误判为“无进展超时”。
+        assistantRunHeartbeatCountRef.current = 0;
+        const runSegment = mapAgentTextStreamToRunSegment(payload, segmentKey);
+        if (runSegment) {
+          appendAssistantRunSegment(streamMessageIdRef.current, runSegment);
+        }
+      }
+      if (payload.kind === "started") {
+        setStreamingAssistantTarget("正在准备执行...");
+        return;
+      }
+      if (payload.kind === "llm_started") {
+        setStreamingAssistantTarget("模型会话已开始，正在执行策略…");
+        return;
+      }
+      if (payload.kind === "llm_finished") {
+        if (!agentStreamTextBufferRef.current.trim()) {
+          setStreamingAssistantTarget("正在整理输出...");
+        }
+        return;
+      }
+      if (payload.kind === "finished") {
+        const finalSummary = String(agentStreamTextBufferRef.current || "").trim()
+          || String(payload.message || "").trim()
+          || "执行完成";
+        setStreamingAssistantTarget(finalSummary);
+        finishAssistantRunMessage(streamMessageIdRef.current, "finished", finalSummary);
+        setStatus("执行完成");
+        setSending(false);
+        activeAgentStreamTraceRef.current = "";
+        return;
+      }
       if (payload.kind === "delta") {
         const delta = payload.delta || "";
         if (!delta) {
@@ -1493,7 +2090,12 @@ export function SessionPage({
         return;
       }
       if (payload.kind === "error") {
-        setStreamingAssistantTarget(`执行失败：${payload.message}`);
+        const errorSummary = `执行失败：${String(payload.message || "").trim() || "未知错误"}`;
+        setStreamingAssistantTarget(errorSummary);
+        finishAssistantRunMessage(streamMessageIdRef.current, "failed", errorSummary);
+        setStatus(errorSummary);
+        setSending(false);
+        activeAgentStreamTraceRef.current = "";
       }
     })
       .then((fn) => {
@@ -1641,38 +2243,41 @@ export function SessionPage({
     if (!isWorkflowSession) {
       activeAgentStreamTraceRef.current = codeTraceId;
       agentStreamTextBufferRef.current = "";
+      agentStreamSeenKeysRef.current.clear();
     }
+    const initialStreamText = "";
     setMessages((prev) =>
       upsertAssistantMessageById(
         prev,
         streamMessageId,
-        "",
+        initialStreamText,
       ));
-    if (isWorkflowSession) {
-      assistantRunStatusRef.current = "running";
-      assistantRunStageRef.current = "planning";
-      assistantRunHeartbeatCountRef.current = 0;
-      assistantRunLastActivityAtRef.current = Date.now();
-      setAssistantRunMetaMap((prev) => ({
-        ...prev,
-        [streamMessageId]: {
-          status: "running",
-          startedAt: Date.now(),
-          collapsed: false,
-          summary: "",
-          segments: [
-            {
-              key: `intro-${Date.now()}`,
-              intro: "已接收需求，开始规划执行",
-              step: normalizedContent,
-              status: "running",
-            },
-          ],
-        },
-      }));
-      setStreamingAssistantTarget("正在规划本次模型操作…");
-      startAssistantRunHeartbeat(streamMessageId);
-    }
+    streamDisplayedTextRef.current = initialStreamText;
+    streamLatestTextRef.current = initialStreamText;
+    assistantRunStatusRef.current = "running";
+    assistantRunAgentKindRef.current = normalizedAgentKey === "model" ? "model" : "code";
+    assistantRunStageRef.current = "planning";
+    assistantRunHeartbeatCountRef.current = 0;
+    assistantRunLastActivityAtRef.current = Date.now();
+    setAssistantRunMetaMap((prev) => ({
+      ...prev,
+      [streamMessageId]: {
+        status: "running",
+        startedAt: Date.now(),
+        collapsed: false,
+        summary: "",
+        segments: [
+          {
+            key: `intro-${Date.now()}`,
+            intro: "已接收需求，开始规划执行",
+            step: normalizedContent,
+            status: "running",
+          },
+        ],
+      },
+    }));
+    setStreamingAssistantTarget(isWorkflowSession ? "正在规划本次模型操作…" : "正在准备执行...");
+    startAssistantRunHeartbeat(streamMessageId);
 
     try {
       if (isWorkflowSession) {
@@ -1807,11 +2412,46 @@ export function SessionPage({
             : `已完成 ${response.steps?.length || 0} 个步骤`
         );
       } else {
+        const skillExecutionPlan = buildCodeWorkflowSkillExecutionPlan(selectedCodeWorkflow);
+        if (skillExecutionPlan.blockingIssues.length > 0) {
+          throw new Error(`技能执行前检查未通过：${skillExecutionPlan.blockingIssues.join("；")}`);
+        }
+        const selectedSessionSkillPrompt = buildSessionSkillPrompt(selectedSessionSkills);
+        const codeRequestPrompt = buildCodeSessionContextPrompt(messages, normalizedContent);
+        const codeWorkflowPrompt = buildCodeWorkflowPrompt(selectedCodeWorkflow, codeRequestPrompt);
+        const codePrompt = skillExecutionPlan.planPrompt
+          ? `${codeWorkflowPrompt}\n\n${skillExecutionPlan.planPrompt}${selectedSessionSkillPrompt ? `\n\n${selectedSessionSkillPrompt}` : ""}`
+          : `${codeWorkflowPrompt}${selectedSessionSkillPrompt ? `\n\n${selectedSessionSkillPrompt}` : ""}`;
+        appendDebugFlowRecord(
+          "ui",
+          "skill_plan",
+          "技能执行计划",
+          JSON.stringify(
+            {
+              ready_count: skillExecutionPlan.readyItems.length,
+              ready_items: skillExecutionPlan.readyItems.map((item) => ({
+                node_id: item.nodeId,
+                node_title: item.nodeTitle,
+                skill_id: item.skillId,
+                skill_version: item.skillVersion,
+              })),
+            },
+            null,
+            2,
+          ),
+        );
+        if (skillExecutionPlan.readyItems.length > 0) {
+          appendTraceRecord({
+            traceId: codeTraceId,
+            source: "workflow:skill_plan",
+            message: `已加载 ${skillExecutionPlan.readyItems.length} 个技能节点`,
+          });
+        }
         const response = await invoke<AgentRunResponse>("run_agent_command", {
           agentKey: agentKey || "code",
           sessionId,
           provider,
-          prompt: buildCodeWorkflowPrompt(selectedCodeWorkflow, normalizedContent),
+          prompt: codePrompt,
           traceId: codeTraceId,
           projectName: title,
           modelExportEnabled: modelMcpCapabilities.export,
@@ -1829,6 +2469,7 @@ export function SessionPage({
         setUiHint(response.ui_hint ? mapProtocolUiHint(response.ui_hint) : null);
         setPendingDangerousToken("");
         setStreamingAssistantTarget(response.message);
+        finishAssistantRunMessage(streamMessageId, "finished", response.message);
         const actionText =
           response.actions?.length > 0 ? `动作：${response.actions.join(", ")}` : "动作：无";
         setStatus(
@@ -1864,9 +2505,7 @@ export function SessionPage({
       });
       if (streamMessageIdRef.current) {
         setStreamingAssistantTarget(`执行失败：${reason}`);
-        if (isWorkflowSession) {
-          finishAssistantRunMessage(streamMessageIdRef.current, "failed", `执行失败：${reason}`);
-        }
+        finishAssistantRunMessage(streamMessageIdRef.current, "failed", `执行失败：${reason}`);
       } else {
         setMessages((prev) => [
           ...prev,
@@ -1889,6 +2528,129 @@ export function SessionPage({
       return;
     }
     await executePrompt(content, { allowDangerousAction: false, appendUserMessage: true });
+  };
+
+  // 描述：复制指定消息内容到系统剪贴板，供消息 hover 工具栏复用。
+  //
+  // Params:
+  //
+  //   - content: 目标消息内容。
+  const handleCopyMessageContent = async (content: string) => {
+    const normalizedContent = String(content || "").trim();
+    // 描述：空消息不触发复制，避免误导用户复制成功。
+    if (!normalizedContent) {
+      setStatus("暂无可复制内容");
+      return;
+    }
+    try {
+      if (!navigator?.clipboard?.writeText) {
+        setStatus("复制失败，请检查系统剪贴板权限");
+        return;
+      }
+      await navigator.clipboard.writeText(normalizedContent);
+      setStatus("消息内容已复制");
+    } catch {
+      setStatus("复制失败，请检查系统剪贴板权限");
+    }
+  };
+
+  // 描述：
+  //
+  //   - 处理 AI 下拉选择，统一把选择值收敛为 provider 字符串。
+  //
+  // Params:
+  //
+  //   - value: AriSelect 回传值。
+  const handleChangeProvider = (value: string | number | (string | number)[] | undefined) => {
+    if (Array.isArray(value)) {
+      return;
+    }
+    const nextProvider = String(value || "").trim();
+    if (!nextProvider) {
+      return;
+    }
+    setSelectedProvider(nextProvider);
+  };
+
+  // 描述：
+  //
+  //   - 打开“工作流/技能”选择弹窗，并用当前生效配置初始化草稿状态。
+  const handleOpenWorkflowSkillModal = () => {
+    const normalizedSkillIds = activeSelectedSkillIds.slice(0, 1);
+    if (normalizedSkillIds.length > 0) {
+      setDraftWorkflowId("");
+      setDraftSkillIds(normalizedSkillIds);
+      setWorkflowSkillModalVisible(true);
+      return;
+    }
+    setDraftWorkflowId(activeSelectedWorkflowId);
+    setDraftSkillIds([]);
+    setWorkflowSkillModalVisible(true);
+  };
+
+  // 描述：
+  //
+  //   - 关闭“工作流/技能”选择弹窗，不提交草稿变更。
+  const handleCloseWorkflowSkillModal = () => {
+    setWorkflowSkillModalVisible(false);
+    setDraftWorkflowId("");
+    setDraftSkillIds([]);
+  };
+
+  // 描述：
+  //
+//   - 切换弹窗草稿中的技能选中状态，技能仅允许单选。
+//
+// Params:
+//
+//   - skillId: 技能 ID。
+const handleToggleDraftSkill = (skillId: string) => {
+  if (!skillId) {
+    return;
+  }
+  setDraftSkillIds((current) => {
+    if (current.includes(skillId)) {
+      return [];
+    }
+    return [skillId];
+  });
+  setDraftWorkflowId("");
+};
+
+  // 描述：
+  //
+//   - 提交弹窗中的工作流与技能草稿配置，并按智能体类型写回当前会话状态。
+//   - 当前执行策略约束为“技能单选”，提交前统一裁剪草稿技能列表。
+const handleConfirmWorkflowSkillModal = () => {
+  const nextWorkflowId = String(draftWorkflowId || "").trim();
+  const nextSkillIds = draftSkillIds.slice(0, 1);
+  if (!nextWorkflowId && nextSkillIds.length === 0) {
+    AriMessage.warning({
+      content: "请选择一个执行策略。",
+      duration: 2500,
+    });
+    return;
+  }
+  if (isWorkflowSession) {
+    if (nextSkillIds.length > 0) {
+      setSelectedModelSkillIds(nextSkillIds);
+      setSelectedModelWorkflowId("");
+    } else {
+      setSelectedModelSkillIds([]);
+      setSelectedModelWorkflowId(nextWorkflowId || modelWorkflows[0]?.id || "");
+    }
+  } else {
+    if (nextSkillIds.length > 0) {
+      setSelectedCodeSkillIds(nextSkillIds);
+      setSelectedCodeWorkflowId("");
+    } else {
+      setSelectedCodeSkillIds([]);
+      setSelectedCodeWorkflowId(nextWorkflowId || codeWorkflows[0]?.id || "");
+    }
+  }
+  setWorkflowSkillModalVisible(false);
+  setDraftWorkflowId("");
+  setDraftSkillIds([]);
   };
 
   useEffect(() => {
@@ -2333,6 +3095,116 @@ export function SessionPage({
           maxLength={60}
         />
       </AriModal>
+      <AriModal
+        visible={workflowSkillModalVisible}
+        title="选择执行策略"
+        onClose={handleCloseWorkflowSkillModal}
+        footer={(
+          <AriFlex justify="flex-end" align="center" space={8}>
+            <AriButton
+              type="default"
+              label="取消"
+              onClick={handleCloseWorkflowSkillModal}
+            />
+            <AriButton
+              type="default"
+              color="brand"
+              label="确定"
+              onClick={handleConfirmWorkflowSkillModal}
+            />
+          </AriFlex>
+        )}
+      >
+        <AriContainer className="desk-session-strategy-modal-body" padding={0}>
+          <AriTypography
+            className="desk-session-strategy-section-title"
+            variant="caption"
+            value="工作流"
+          />
+          <AriList
+            bordered
+            className="desk-session-strategy-list"
+            emptyMessage="暂无可选工作流"
+          >
+            {workflowMenuItems.map((item) => (
+              <AriListItem
+                key={`workflow-${item.key}`}
+                split={false}
+                className={`desk-session-strategy-item${draftWorkflowId === item.key ? " is-active" : ""}`}
+                onClick={() => {
+                  setDraftWorkflowId(item.key);
+                  setDraftSkillIds([]);
+                }}
+                actions={[
+                  <AriTypography key={`${item.key}-type`} variant="caption" value="工作流" />,
+                ]}
+                extra={
+                  draftWorkflowId === item.key ? (
+                    <AriContainer className="desk-session-strategy-item-extra" padding={0}>
+                      <AriIcon name="done" />
+                    </AriContainer>
+                  ) : null
+                }
+              >
+                <AriFlex className="desk-session-strategy-item-main" align="center" space={8}>
+                  <AriContainer className="desk-session-strategy-item-icon" padding={0}>
+                    <AriIcon name="account_tree" />
+                  </AriContainer>
+                  <AriContainer className="desk-session-strategy-item-text" padding={0}>
+                    <AriTypography variant="h4" value={item.label} />
+                    <AriTypography
+                      variant="caption"
+                      value={item.description || "按该工作流执行。"}
+                    />
+                  </AriContainer>
+                </AriFlex>
+              </AriListItem>
+            ))}
+          </AriList>
+
+          <AriTypography
+            className="desk-session-strategy-section-title"
+            variant="caption"
+            value="技能"
+          />
+          <AriList
+            bordered
+            className="desk-session-strategy-list"
+            emptyMessage="暂无已安装技能"
+          >
+            {installedSkills.map((item) => (
+              <AriListItem
+                key={`skill-${item.id}`}
+                split={false}
+                className={`desk-session-strategy-item${draftSkillIds.includes(item.id) ? " is-active" : ""}`}
+                onClick={() => {
+                  handleToggleDraftSkill(item.id);
+                }}
+                actions={[
+                  <AriTypography key={`${item.id}-origin`} variant="caption" value="系统" />,
+                ]}
+                extra={
+                  draftSkillIds.includes(item.id) ? (
+                    <AriContainer className="desk-session-strategy-item-extra" padding={0}>
+                      <AriIcon name="done" />
+                    </AriContainer>
+                  ) : null
+                }
+              >
+                <AriFlex className="desk-session-strategy-item-main" align="center" space={8}>
+                  <AriContainer className="desk-session-strategy-item-icon" padding={0}>
+                    <AriIcon name={item.icon} />
+                  </AriContainer>
+                  <AriContainer className="desk-session-strategy-item-text" padding={0}>
+                    <AriTypography variant="h4" value={item.name} />
+                    <AriTypography variant="caption" value={item.description} />
+                  </AriContainer>
+                </AriFlex>
+              </AriListItem>
+            ))}
+          </AriList>
+        </AriContainer>
+      </AriModal>
       <AriContainer className="desk-session-shell">
         <AriContainer className="desk-session-thread-wrap">
           <AriContainer className="desk-thread">
@@ -2359,6 +3231,7 @@ export function SessionPage({
               const runMeta = message.id
                 ? assistantRunMetaMap[message.id]
                 : undefined;
+              const isUserMessage = message.role === "user";
               const useRunLayout =
                 message.role === "assistant" && Boolean(runMeta);
               const dividerTitle = runMeta
@@ -2366,18 +3239,59 @@ export function SessionPage({
                   ? `执行中断，用时 ${formatElapsedDuration(runMeta.startedAt, runMeta.finishedAt)}`
                   : `已完成，用时 ${formatElapsedDuration(runMeta.startedAt, runMeta.finishedAt)}`
                 : "";
-              return (
-                <AriCard
-                  key={message.id || `message-${index}`}
-                  className={`desk-msg ${roleClass}`}
-                >
-                  {useRunLayout && runMeta ? (
-                    <AriContainer className="desk-run-flow" padding={0}>
-                      {runMeta.status === "running" ? (
-                        <AriContainer className="desk-run-segments" padding={0}>
+              const failureSummary = runMeta?.status === "failed"
+                ? buildAssistantFailureSummary(runMeta.summary || message.text)
+                : null;
+              const messageContent = useRunLayout && runMeta ? (
+                <AriContainer className="desk-run-flow" padding={0}>
+                  {runMeta.status === "running" ? (
+                    <AriContainer className="desk-run-segments" padding={0}>
+                      {runMeta.segments.map((segment) => (
+                        <AriContainer
+                          key={segment.key}
+                          className="desk-run-segment"
+                          padding={0}
+                        >
+                          <AriTypography
+                            className="desk-run-intro"
+                            variant="caption"
+                            value={segment.intro}
+                          />
+                          <AriTypography
+                            className={`desk-run-step ${segment.status === "running" ? "desk-run-step-running" : ""}`}
+                            variant="caption"
+                            value={segment.step}
+                          />
+                        </AriContainer>
+                      ))}
+                    </AriContainer>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        className="desk-run-divider"
+                        onClick={() => {
+                          if (message.id) {
+                            toggleAssistantRunMetaCollapsed(message.id);
+                          }
+                        }}
+                      >
+                        <span className="desk-run-divider-line" />
+                        <span className="desk-run-divider-text">
+                          {dividerTitle}
+                        </span>
+                        <span
+                          className={`desk-run-divider-arrow ${runMeta.collapsed ? "" : "open"}`}
+                        >
+                          ▾
+                        </span>
+                        <span className="desk-run-divider-line" />
+                      </button>
+                      {!runMeta.collapsed ? (
+                        <AriContainer className="desk-run-segments desk-run-segments-collapsed" padding={0}>
                           {runMeta.segments.map((segment) => (
                             <AriContainer
-                              key={segment.key}
+                              key={`collapsed-${segment.key}`}
                               className="desk-run-segment"
                               padding={0}
                             >
@@ -2387,83 +3301,89 @@ export function SessionPage({
                                 value={segment.intro}
                               />
                               <AriTypography
-                                className={`desk-run-step ${segment.status === "running" ? "desk-run-step-running" : ""}`}
+                                className="desk-run-step"
                                 variant="caption"
                                 value={segment.step}
                               />
                             </AriContainer>
                           ))}
                         </AriContainer>
-                      ) : (
-                        <>
-                          <button
-                            type="button"
-                            className="desk-run-divider"
-                            onClick={() => {
-                              if (message.id) {
-                                toggleAssistantRunMetaCollapsed(message.id);
-                              }
-                            }}
-                          >
-                            <span className="desk-run-divider-line" />
-                            <span className="desk-run-divider-text">
-                              {dividerTitle}
-                            </span>
-                            <span
-                              className={`desk-run-divider-arrow ${runMeta.collapsed ? "" : "open"}`}
-                            >
-                              ▾
-                            </span>
-                            <span className="desk-run-divider-line" />
-                          </button>
-                          {!runMeta.collapsed ? (
-                            <AriContainer className="desk-run-segments desk-run-segments-collapsed" padding={0}>
-                              {runMeta.segments.map((segment) => (
-                                <AriContainer
-                                  key={`collapsed-${segment.key}`}
-                                  className="desk-run-segment"
-                                  padding={0}
-                                >
-                                  <AriTypography
-                                    className="desk-run-intro"
-                                    variant="caption"
-                                    value={segment.intro}
-                                  />
-                                  <AriTypography
-                                    className="desk-run-step"
-                                    variant="caption"
-                                    value={segment.step}
-                                  />
-                                </AriContainer>
-                              ))}
-                            </AriContainer>
-                          ) : null}
-                          <AriContainer className="desk-run-summary" padding={0}>
-                            <ChatMarkdown
-                              content={runMeta.summary || message.text}
+                      ) : null}
+                      <AriContainer className={`desk-run-summary ${runMeta.status === "failed" ? "desk-run-summary-failed" : ""}`} padding={0}>
+                        {runMeta.status === "failed" && failureSummary ? (
+                          <AriContainer className="desk-run-failure-card">
+                            <AriFlex className="desk-run-failure-head" align="center" space={8}>
+                              <AriIcon name="error" />
+                              <AriTypography variant="h4" value="执行失败" />
+                            </AriFlex>
+                            <AriTypography
+                              className="desk-run-failure-detail"
+                              variant="caption"
+                              value={failureSummary.detail}
+                            />
+                            <AriTypography
+                              className="desk-run-failure-hint"
+                              variant="caption"
+                              value={failureSummary.hint}
                             />
                           </AriContainer>
-                        </>
-                      )}
-                    </AriContainer>
-                  ) : (
-                    <ChatMarkdown
-                      content={message.text}
-                      plainText={
-                        sending &&
-                        Boolean(message.id) &&
-                        message.id === streamMessageIdRef.current
-                      }
-                    />
+                        ) : (
+                          <ChatMarkdown
+                            content={runMeta.summary || message.text}
+                          />
+                        )}
+                      </AriContainer>
+                    </>
                   )}
-                </AriCard>
+                </AriContainer>
+              ) : (
+                <ChatMarkdown
+                  content={message.text}
+                  plainText={
+                    sending &&
+                    Boolean(message.id) &&
+                    message.id === streamMessageIdRef.current
+                  }
+                />
+              );
+              return (
+                <AriContainer
+                  key={message.id || `message-${index}`}
+                  className={`desk-msg ${roleClass}`}
+                  padding={0}
+                >
+                  {isUserMessage ? (
+                    <AriCard className="desk-msg-user-surface">
+                      {messageContent}
+                    </AriCard>
+                  ) : (
+                    <AriContainer className="desk-msg-assistant-surface" padding={0}>
+                      {messageContent}
+                    </AriContainer>
+                  )}
+                  <AriFlex
+                    className="desk-msg-hover-toolbar"
+                    align="center"
+                    justify="flex-end"
+                    space={8}
+                  >
+                    <AriButton
+                      type="ghost"
+                      icon="content_copy"
+                      label="复制"
+                      onClick={() => {
+                        void handleCopyMessageContent(message.text);
+                      }}
+                    />
+                  </AriFlex>
+                </AriContainer>
               );
             })}
           </AriContainer>
         </AriContainer>
 
         <AriContainer className="desk-prompt-dock">
-          {uiHint || compactActionSlotStatus ? (
+          {uiHint ? (
             <AriCard
               className={`desk-action-slot ${uiHint ? `desk-action-slot-${uiHint.level}` : ""}`}
             >
@@ -2490,13 +3410,6 @@ export function SessionPage({
                     ))}
                   </AriFlex>
                 </>
-              ) : null}
-              {compactActionSlotStatus ? (
-                <AriTypography
-                  className="desk-prompt-status"
-                  variant="caption"
-                  value={compactActionSlotStatus}
-                />
               ) : null}
             </AriCard>
           ) : null}
@@ -2528,57 +3441,26 @@ export function SessionPage({
                   className="desk-prompt-icon-btn"
                   disabled={sending}
                 />
-                <AriTooltip
-                  content={
-                    <AriMenu
-                      items={availableAiKeys.map((item) => ({
-                        key: item.provider,
-                        label: item.providerLabel,
-                      }))}
-                      selectedKey={selectedAi?.provider || ""}
-                      onSelect={(key: string) => setSelectedProvider(key)}
-                    />
-                  }
-                >
-                  <AriButton
-                    type="text"
-                    label={selectedAi?.providerLabel || "选择 AI"}
-                    icon="arrow_drop_down"
-                    disabled={availableAiKeys.length === 0}
-                  />
-                </AriTooltip>
-                <AriTooltip
-                  content={
-                    <AriMenu
-                      items={workflowMenuItems}
-                      selectedKey={
-                        isWorkflowSession
-                          ? selectedModelWorkflow?.id || ""
-                          : selectedCodeWorkflow?.id || ""
-                      }
-                      onSelect={(key: string) => {
-                        if (isWorkflowSession) {
-                          setSelectedModelWorkflowId(key);
-                          return;
-                        }
-                        setSelectedCodeWorkflowId(key);
-                      }}
-                    />
-                  }
-                >
-                  <AriButton
-                    type="text"
-                    label={
-                      isWorkflowSession
-                        ? selectedModelWorkflow?.name ||
-                          resolvedSessionUiConfig.workflowFallbackLabel
-                        : selectedCodeWorkflow?.name ||
-                          resolvedSessionUiConfig.workflowFallbackLabel
-                    }
-                    icon="arrow_drop_down"
-                    disabled={workflowMenuItems.length === 0}
-                  />
-                </AriTooltip>
+                <AriSelect
+                  className="desk-prompt-toolbar-select"
+                  value={selectedAi?.provider || undefined}
+                  options={aiSelectOptions}
+                  placeholder="选择 AI"
+                  bordered={false}
+                  onChange={handleChangeProvider}
+                  disabled={availableAiKeys.length === 0}
+                />
+                <AriSelect
+                  className="desk-prompt-toolbar-select"
+                  value="workflow_skill"
+                  options={workflowSkillSelectOptions}
+                  bordered={false}
+                  openOnTriggerClick={false}
+                  onTriggerClick={() => {
+                    handleOpenWorkflowSkillModal();
+                  }}
+                  disabled={workflowMenuItems.length === 0 && installedSkills.length === 0}
+                />
               </AriFlex>
               <AriButton
                 type="default"

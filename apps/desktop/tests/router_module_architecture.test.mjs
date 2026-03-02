@@ -55,8 +55,9 @@ test("TestDesktopSidebarShouldRespectRouteAccessVisibility", () => {
   //   - 侧边栏应接收 routeAccess，并按模块开关与智能体授权控制菜单展示。
   assert.match(layoutSource, /routeAccess: RouteAccess;/);
   assert.match(layoutSource, /<ClientSidebar[\s\S]*routeAccess=\{routeAccess\}/);
-  assert.match(sidebarSource, /routeAccess\.isModuleEnabled\("settings"\)/);
+  assert.match(sidebarSource, /resolveSettingsSidebarItems\(routeAccess\)/);
   assert.match(userMenuSource, /key: "ai-key"/);
   assert.match(commonRoutesSource, /routeAccess\.isAgentEnabled\(agent\.key\)/);
   assert.match(sidebarSource, /routeAccess\.isModuleEnabled\("workflow"\)/);
+  assert.match(sidebarSource, /routeAccess\.isModuleEnabled\("skill"\)/);
 });

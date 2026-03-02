@@ -32,6 +32,21 @@ function maskKey(raw: string): string {
   return `${value.slice(0, 4)}...${value.slice(-4)}`;
 }
 
+// 描述：
+//
+//   - 判断当前 Provider 是否属于本地 CLI 类型（无需 API Key 输入）。
+//
+// Params:
+//
+//   - provider: Provider 标识。
+//
+// Returns:
+//
+//   - true: 本地 CLI Provider。
+function isLocalCliProvider(provider: AiKeyItem["provider"]): boolean {
+  return provider === "codex" || provider === "gemini-cli";
+}
+
 // 描述:
 //
 //   - 渲染 AI Key 设置页面，支持启停、设为默认与密钥更新。
@@ -102,8 +117,8 @@ export function AiKeyPage({ aiKeys, onAiKeysChange }: AiKeyPageProps) {
               <DeskSettingsRow
                 key={item.id}
                 title={index === 0 ? `${item.providerLabel}（默认）` : item.providerLabel}
-                description={`Key: ${item.provider === "codex" ? "local-cli（无需 API Key）" : maskKey(item.keyValue)} · 更新于 ${item.updatedAt}`}
-                metaSlot={item.provider !== "codex" ? (
+                description={`Key: ${isLocalCliProvider(item.provider) ? "local-cli（无需 API Key）" : maskKey(item.keyValue)} · 更新于 ${item.updatedAt}`}
+                metaSlot={!isLocalCliProvider(item.provider) ? (
                   <AriInput
                     value={item.keyValue}
                     onChange={(next) => patchItem(item.id, { keyValue: next })}

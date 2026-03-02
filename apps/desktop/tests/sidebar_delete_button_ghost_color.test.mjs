@@ -25,6 +25,36 @@ test("TestSidebarDeleteButtonsShouldUseGhostAndColor", () => {
     source,
     /size="sm"[\s\S]*?type="text"[\s\S]*?ghost[\s\S]*?color=\{pendingDeleteSessionId === item\.id \|\| deletingSessionId === item\.id \? "danger" : "default"\}/,
   );
+  assert.match(
+    source,
+    /showActionsOnHover: pendingDeleteSessionId !== item\.id && deletingSessionId !== item\.id/,
+  );
+  assert.match(
+    source,
+    /const \[sessionMenuRenderVersion, setSessionMenuRenderVersion\] = useState\(0\);/,
+  );
+  assert.match(
+    source,
+    /const reloadSessionSidebarMenu = \(\) => \{/,
+  );
+  assert.match(
+    source,
+    /key=\{`code-workspace-menu-\$\{sessionMenuRenderVersion\}`\}/,
+  );
+  assert.match(
+    source,
+    /setSessions\(\(prev\) => prev\.filter\(\(item\) => item\.id !== sessionId\)\);\s*reloadSessionSidebarMenu\(\);/s,
+  );
+  assert.match(
+    source,
+    /const markSuppressNextSessionSelect = \(sessionId: string\) => \{/,
+  );
+  assert.match(source, /isSessionRunning/);
+  assert.match(source, /SESSION_RUN_STATE_UPDATED_EVENT/);
+  assert.match(source, /icon: item\.running \? "loading" : undefined/);
+  assert.match(source, /fillIcon: item\.running \? "loading" : undefined/);
+  assert.match(source, /iconAnimation: item\.running \? "spinning" : undefined/);
+  assert.match(source, /iconState: item\.running \? "loading" : undefined/);
 
   // 描述:
   //
@@ -56,10 +86,13 @@ test("TestSidebarDeleteButtonsShouldUseGhostAndColor", () => {
 
   // 描述:
   //
-  //   - 目录级操作应收敛为“更多”按钮，并在菜单里提供“编辑/删除”。
+  //   - 目录级操作应包含“更多”与“项目内新增话题”按钮，并在菜单里提供“编辑/删除”。
   assert.match(source, /trigger="manual"/);
   assert.match(source, /visible=\{openWorkspaceActionMenuId === group\.workspace\.id\}/);
   assert.match(source, /icon="more_horiz"/);
+  assert.match(source, /aria-label="在项目内新增话题"/);
+  assert.match(source, /icon="edit"/);
   assert.match(source, /\{ key: "edit", label: "编辑", icon: "edit" \}/);
   assert.match(source, /\{ key: "delete", label: "删除", icon: "delete", fillIcon: "delete_fill" \}/);
+  assert.match(source, /expandIconPosition="none"/);
 });

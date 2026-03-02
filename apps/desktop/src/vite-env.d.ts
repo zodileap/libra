@@ -8,6 +8,7 @@ interface ImportMetaEnv {
   readonly VITE_RUNTIME_BASE_URL?: string;
   readonly VITE_AGENT_CODE_BASE_URL?: string;
   readonly VITE_AGENT_3D_BASE_URL?: string;
+  readonly VITE_SKILL_CATALOG_URL?: string;
 }
 
 // 描述：声明 import.meta 的最小类型结构。

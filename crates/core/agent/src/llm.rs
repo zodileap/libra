@@ -6,7 +6,7 @@ use zodileap_mcp_common::ProtocolError;
 mod providers;
 
 pub(crate) const LLM_RUNTIME_TAG: &str = "llm-v3-gateway";
-const DEFAULT_TIMEOUT_SECS: u64 = 120;
+const DEFAULT_TIMEOUT_SECS: u64 = 300;
 const DEFAULT_RETRY_MAX: u8 = 1;
 const DEFAULT_RETRY_BACKOFF_MS: u64 = 400;
 
@@ -137,7 +137,7 @@ impl RetryClassifiedError for LlmGatewayError {
 pub fn parse_provider(raw: &str) -> LlmProvider {
     match raw.trim().to_lowercase().as_str() {
         "codex" | "codex-cli" => LlmProvider::CodexCli,
-        "gemini" => LlmProvider::Gemini,
+        "gemini" | "gemini-cli" => LlmProvider::Gemini,
         _ => LlmProvider::Unknown,
     }
 }
@@ -195,7 +195,7 @@ fn call_model_with_policy_and_stream(
             "core.agent.llm.provider_unknown",
             "unknown llm provider",
         )
-        .with_suggestion("请将 provider 设置为 codex 或 gemini")),
+        .with_suggestion("请将 provider 设置为 codex / codex-cli 或 gemini / gemini-cli")),
     }
 }
 

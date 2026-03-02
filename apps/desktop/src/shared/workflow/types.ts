@@ -71,6 +71,7 @@ export type WorkflowGraphNodeType =
   | "node"
   | "start"
   | "action"
+  | "skill"
   | "branch"
   | "loop"
   | "end";
@@ -89,6 +90,8 @@ export interface WorkflowGraphNode {
   description: string;
   instruction?: string;
   type: WorkflowGraphNodeType;
+  skillId?: string;
+  skillVersion?: string;
   x: number;
   y: number;
 }

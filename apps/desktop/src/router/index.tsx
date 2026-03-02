@@ -5,6 +5,9 @@ import {
   CommonAiKeyPageLazy,
   CommonHomePageLazy,
   CommonLoginPageLazy,
+  CommonSkillsPageLazy,
+  SKILL_MODULE_KEY,
+  SKILL_PAGE_PATH,
   SETTINGS_MODULE_KEY,
   SettingsGeneralPageLazy,
 } from "../modules/common/routes";
@@ -90,6 +93,10 @@ function canAccessPath(pathname: string, auth: AuthState, routeAccess: RouteAcce
 
   if (pathname.startsWith("/settings")) {
     return routeAccess.isModuleEnabled(SETTINGS_MODULE_KEY);
+  }
+
+  if (pathname.startsWith("/skills")) {
+    return routeAccess.isModuleEnabled(SKILL_MODULE_KEY);
   }
 
   if (pathname.startsWith("/ai-keys")) {
@@ -201,6 +208,13 @@ export function DesktopRouter({ auth }: { auth: AuthState }) {
         <Route index element={<Navigate to={fallbackPath} replace />} />
 
         <Route path="home" element={withRouteLoading(<CommonHomePageLazy availableAgents={auth.availableAgents} />)} />
+
+          {routeAccess.isModuleEnabled(SKILL_MODULE_KEY) ? (
+            <Route
+              path={SKILL_PAGE_PATH.slice(1)}
+              element={withRouteLoading(<CommonSkillsPageLazy />)}
+            />
+          ) : null}
 
           {routeAccess.isModuleEnabled(SETTINGS_MODULE_KEY) ? (
             <>

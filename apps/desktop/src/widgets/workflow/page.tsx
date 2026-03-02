@@ -27,10 +27,13 @@ import {
   AriInput,
   AriMessage,
   AriModal,
+  AriSelect,
   AriTag,
   AriTypography,
 } from "aries_react";
 import { useSearchParams } from "react-router-dom";
+import { listInstalledSkills } from "../../modules/common/services";
+import type { SkillCatalogItem } from "../../modules/common/services";
 import {
   deleteCodeWorkflow,
   deleteModelWorkflow,
@@ -44,6 +47,7 @@ import type {
   WorkflowDefinition,
   WorkflowGraph,
   WorkflowGraphNode,
+  WorkflowGraphNodeType,
 } from "../../shared/workflow";
 import type { AgentKey } from "../../shared/types";
 import { useDesktopHeaderSlot } from "../app-header/header-slot-context";
@@ -56,6 +60,9 @@ interface CanvasNodeData {
   title: string;
   description: string;
   instruction: string;
+  nodeType: WorkflowGraphNodeType;
+  skillId: string;
+  skillVersion: string;
 }
 
 // 描述:
@@ -114,14 +121,29 @@ function resolveThemeInset(): number {
 //   - 标题、说明与指令字段。
 function parseCanvasNodeData(
   data: unknown,
-): Pick<WorkflowGraphNode, "title" | "description" | "instruction"> {
+): Pick<WorkflowGraphNode, "title" | "description" | "instruction" | "type" | "skillId" | "skillVersion"> {
   const source = (data || {}) as Partial<CanvasNodeData>;
+  const rawType = String(source.nodeType || "").trim();
+  const nodeType: WorkflowGraphNodeType = (
+    rawType === "node"
+    || rawType === "start"
+    || rawType === "action"
+    || rawType === "skill"
+    || rawType === "branch"
+    || rawType === "loop"
+    || rawType === "end"
+  ) ? rawType : "action";
+  const normalizedSkillId = String(source.skillId || "").trim();
+  const normalizedSkillVersion = String(source.skillVersion || "").trim();
   return {
     title:
       String(source.title || source.label || "未命名节点").trim() ||
       "未命名节点",
     description: String(source.description || "").trim(),
     instruction: String(source.instruction || "").trim(),
+    type: nodeType,
+    skillId: nodeType === "skill" ? normalizedSkillId || undefined : undefined,
+    skillVersion: nodeType === "skill" ? normalizedSkillVersion || undefined : undefined,
   };
 }
 
@@ -155,7 +177,13 @@ function parseNodeKind(description: string): string {
 // Returns:
 //
 //   - 节点角色标签文本。
-function resolveNodeRoleLabel(kind: string): string {
+function resolveNodeRoleLabel(
+  nodeType: WorkflowGraphNodeType,
+  kind: string,
+): string {
+  if (nodeType === "skill") {
+    return "Skill";
+  }
   return kind === "input" ? "Trigger" : "Action";
 }
 
@@ -171,6 +199,9 @@ function resolveNodeRoleLabel(kind: string): string {
 //
 //   - AriIcon 可用图标名称。
 function resolveNodeRoleIcon(roleLabel: string): string {
+  if (roleLabel === "Skill") {
+    return "new_releases";
+  }
   return roleLabel === "Trigger" ? "edit" : "folder";
 }
 
@@ -223,9 +254,14 @@ function WorkflowCanvasFlowNode({
 }: NodeProps<WorkflowCanvasNode>) {
   const parsed = parseCanvasNodeData(data);
   const nodeKind = parseNodeKind(parsed.description);
-  const roleLabel = resolveNodeRoleLabel(nodeKind);
+  const roleLabel = resolveNodeRoleLabel(parsed.type, nodeKind);
   const roleIcon = resolveNodeRoleIcon(roleLabel);
-  const contentValue = parsed.description;
+  const skillDescriptor = parsed.skillId
+    ? `${parsed.skillId}${parsed.skillVersion ? `@${parsed.skillVersion}` : ""}`
+    : "";
+  const contentValue = parsed.type === "skill"
+    ? (skillDescriptor || parsed.description)
+    : parsed.description;
   const inset = resolveThemeInset();
 
   return (
@@ -324,6 +360,9 @@ function toFlowNodes(graph: WorkflowGraph): WorkflowCanvasNode[] {
       title: node.title,
       description: node.description,
       instruction: String(node.instruction || "").trim(),
+      nodeType: node.type,
+      skillId: String(node.skillId || "").trim(),
+      skillVersion: String(node.skillVersion || "").trim(),
     },
     className: "desk-workflow-flow-node",
   }));
@@ -374,7 +413,9 @@ function toWorkflowGraph(
         title: parsed.title,
         description: parsed.description,
         instruction: parsed.instruction,
-        type: "node",
+        type: parsed.type,
+        skillId: parsed.skillId,
+        skillVersion: parsed.skillVersion,
         x: Number(node.position?.x) || 0,
         y: Number(node.position?.y) || 0,
       };
@@ -411,6 +452,78 @@ function resolveNewNodePosition(count: number): { x: number; y: number } {
 
 // 描述：
 //
+//   - 将技能目录映射为 AriSelect 选项，确保节点编辑器中展示“名称（编码）”格式，便于识别。
+//
+// Params:
+//
+//   - installedSkills: 已安装技能列表。
+//   - selectedSkillId: 当前节点已绑定技能编码。
+//
+// Returns:
+//
+//   - 技能下拉选项数组。
+function buildSkillSelectOptions(installedSkills: SkillCatalogItem[], selectedSkillId: string) {
+  const options = installedSkills.map((item) => ({
+    value: item.id,
+    label: `${item.name}（${item.id}）`,
+  }));
+  const normalizedSkillId = String(selectedSkillId || "").trim();
+  if (!normalizedSkillId) {
+    return options;
+  }
+  const exists = installedSkills.some((item) => item.id === normalizedSkillId);
+  if (exists) {
+    return options;
+  }
+  return [
+    {
+      value: normalizedSkillId,
+      label: normalizedSkillId,
+    },
+    ...options,
+  ];
+}
+
+// 描述：
+//
+//   - 将技能版本列表映射为 AriSelect 选项；当当前值不在候选中时补充为临时选项，避免编辑态值丢失。
+//
+// Params:
+//
+//   - versions: 技能可选版本。
+//   - selectedVersion: 当前节点已绑定版本。
+//
+// Returns:
+//
+//   - 版本下拉选项数组。
+function buildSkillVersionOptions(versions: string[], selectedVersion: string) {
+  const normalizedVersions = versions
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+  const uniqueVersions = Array.from(new Set(normalizedVersions));
+  const options = uniqueVersions.map((item) => ({
+    value: item,
+    label: item,
+  }));
+  const normalizedSelectedVersion = String(selectedVersion || "").trim();
+  if (!normalizedSelectedVersion) {
+    return options;
+  }
+  const exists = uniqueVersions.includes(normalizedSelectedVersion);
+  if (exists) {
+    return options;
+  }
+  return [
+    {
+      value: normalizedSelectedVersion,
+      label: normalizedSelectedVersion,
+    },
+    ...options,
+  ];
+}
+
+// 描述：
+//
 //   - 渲染工作流编辑器页面，按智能体类型加载并保存对应工作流数据。
 //
 // Params:
@@ -435,6 +548,7 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
   const [contextTarget, setContextTarget] =
     useState<WorkflowContextTarget | null>(null);
   const [contextMenuOpen, setContextMenuOpen] = useState(false);
+  const [installedSkills, setInstalledSkills] = useState<SkillCatalogItem[]>([]);
   const reconnectRadius = useMemo(() => resolveThemeInset() * 0.375, []);
   // 描述：
   //
@@ -511,6 +625,26 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
       })),
     [edges, selectedEdgeId],
   );
+
+  // 描述：
+  //
+  //   - 加载已安装技能目录，供 Skill 节点属性面板下拉选择使用；读取失败时提示用户稍后重试。
+  useEffect(() => {
+    const loadInstalledSkills = async () => {
+      try {
+        const skills = await listInstalledSkills();
+        setInstalledSkills(skills);
+      } catch (_err) {
+        setInstalledSkills([]);
+        AriMessage.warning({
+          content: "加载技能目录失败，稍后重试。",
+          duration: 2200,
+          showClose: true,
+        });
+      }
+    };
+    void loadInstalledSkills();
+  }, []);
 
   const refreshWorkflows = () => setWorkflowVersion((value) => value + 1);
 
@@ -624,6 +758,39 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
           title: `节点 ${nextIndex}`,
           description: "",
           instruction: "",
+          nodeType: "action",
+          skillId: "",
+          skillVersion: "",
+        },
+      },
+    ]);
+    setSelectedNodeId(nodeId);
+    setSelectedEdgeId("");
+  };
+
+  // 描述：
+  //
+  //   - 新增技能节点，默认保留空技能位，便于后续从已安装目录中选择 skill@version。
+  const addSkillNode = () => {
+    const nextIndex = nodes.length + 1;
+    const position = resolveNewNodePosition(nodes.length);
+    const nodeId = `skill-node-${Date.now()}`;
+
+    setNodes((currentNodes) => [
+      ...currentNodes,
+      {
+        id: nodeId,
+        type: WORKFLOW_NODE_TYPE,
+        position,
+        className: "desk-workflow-flow-node",
+        data: {
+          label: `技能节点 ${nextIndex}`,
+          title: `技能节点 ${nextIndex}`,
+          description: "绑定并执行指定技能。",
+          instruction: "",
+          nodeType: "skill",
+          skillId: "",
+          skillVersion: "",
         },
       },
     ]);
@@ -633,7 +800,7 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
 
   const patchSelectedNode = (
     patch: Partial<
-      Pick<CanvasNodeData, "title" | "description" | "instruction">
+      Pick<CanvasNodeData, "title" | "description" | "instruction" | "nodeType" | "skillId" | "skillVersion">
     >,
   ) => {
     if (!selectedNodeId) {
@@ -650,6 +817,9 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
         const title = patch.title ?? parsed.title;
         const description = patch.description ?? parsed.description;
         const instruction = patch.instruction ?? parsed.instruction;
+        const nodeType = patch.nodeType ?? parsed.type;
+        const skillId = patch.skillId ?? (parsed.skillId || "");
+        const skillVersion = patch.skillVersion ?? (parsed.skillVersion || "");
 
         return {
           ...node,
@@ -658,6 +828,9 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
             title,
             description,
             instruction,
+            nodeType,
+            skillId: nodeType === "skill" ? skillId : "",
+            skillVersion: nodeType === "skill" ? skillVersion : "",
           },
         };
       }),
@@ -779,6 +952,20 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
   const selectedNodeData = selectedNode
     ? parseCanvasNodeData(selectedNode.data)
     : null;
+  const selectedNodeType = selectedNodeData?.type === "skill" ? "skill" : "action";
+  const selectedSkillItem = useMemo(
+    () => installedSkills.find((item) => item.id === (selectedNodeData?.skillId || "")) || null,
+    [installedSkills, selectedNodeData?.skillId],
+  );
+  const skillSelectOptions = useMemo(
+    () => buildSkillSelectOptions(installedSkills, selectedNodeData?.skillId || ""),
+    [installedSkills, selectedNodeData?.skillId],
+  );
+  const selectedSkillVersion = String(selectedNodeData?.skillVersion || "").trim();
+  const skillVersionSelectOptions = useMemo(
+    () => buildSkillVersionOptions(selectedSkillItem?.versions || [], selectedSkillVersion),
+    [selectedSkillItem?.versions, selectedSkillVersion],
+  );
   const workflowInfoName =
     workflowName.trim() || selectedWorkflow?.name || "未命名工作流";
   const workflowInfoDescription =
@@ -1155,6 +1342,7 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
                 className="desk-workflow-editor-canvas-toolbar-divider"
               />
               <AriButton ghost icon="add" onClick={addNode} />
+              <AriButton ghost icon="new_releases" onClick={addSkillNode} />
             </AriFlex>
           </AriContainer>
 
@@ -1221,6 +1409,78 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
                     placeholder="请输入节点说明"
                   />
                 </AriFormItem>
+                <AriFormItem label="节点类型" name="selectedNode.type">
+                  <AriFlex className="desk-workflow-node-type-switch" align="center" space={8}>
+                    <AriButton
+                      size="sm"
+                      icon="folder"
+                      label="动作"
+                      color={selectedNodeType === "action" ? "brand" : "default"}
+                      ghost={selectedNodeType !== "action"}
+                      onClick={() => {
+                        patchSelectedNode({
+                          nodeType: "action",
+                        });
+                      }}
+                    />
+                    <AriButton
+                      size="sm"
+                      icon="new_releases"
+                      label="技能"
+                      color={selectedNodeType === "skill" ? "brand" : "default"}
+                      ghost={selectedNodeType !== "skill"}
+                      onClick={() => {
+                        patchSelectedNode({
+                          nodeType: "skill",
+                        });
+                      }}
+                    />
+                  </AriFlex>
+                </AriFormItem>
+                {selectedNodeType === "skill" ? (
+                  <>
+                    <AriFormItem label="技能编码" name="selectedNode.skillId">
+                      <AriSelect
+                        value={selectedNodeData.skillId || undefined}
+                        options={skillSelectOptions}
+                        searchable
+                        allowClear
+                        placeholder="请选择技能"
+                        onChange={(value) => {
+                          const selectedSkillId = typeof value === "string"
+                            ? value
+                            : String(value || "").trim();
+                          if (!selectedSkillId) {
+                            patchSelectedNode({ skillId: "", skillVersion: "" });
+                            return;
+                          }
+                          const selectedSkill = installedSkills.find((item) => item.id === selectedSkillId);
+                          const defaultVersion = selectedSkill?.versions?.[0] || "";
+                          patchSelectedNode({
+                            skillId: selectedSkillId,
+                            skillVersion: defaultVersion,
+                          });
+                        }}
+                      />
+                    </AriFormItem>
+                    <AriFormItem label="技能版本" name="selectedNode.skillVersion">
+                      <AriSelect
+                        value={selectedNodeData.skillVersion || undefined}
+                        options={skillVersionSelectOptions}
+                        searchable
+                        allowClear
+                        placeholder="请选择版本"
+                        disabled={!selectedNodeData.skillId || skillVersionSelectOptions.length === 0}
+                        onChange={(value) => {
+                          const nextVersion = typeof value === "string"
+                            ? value
+                            : String(value || "").trim();
+                          patchSelectedNode({ skillVersion: nextVersion });
+                        }}
+                      />
+                    </AriFormItem>
+                  </>
+                ) : null}
                 <AriFormItem label="指令" name="selectedNode.instruction">
                   <AriInput.TextArea
                     value={selectedNodeData.instruction || ""}

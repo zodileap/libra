@@ -38,6 +38,154 @@ interface CodexCliHealthResponse {
 	message: string;
 }
 
+// 描述：
+//
+//   - 定义 Gemini CLI 健康检查结果结构。
+interface GeminiCliHealthResponse {
+	available: boolean;
+	outdated: boolean;
+	version: string;
+	minimum_version: string;
+	bin_path: string;
+	message: string;
+}
+
+// 描述：
+//
+//   - 返回 Provider 的默认展示名称。
+//
+// Params:
+//
+//   - provider: Provider 标识。
+//
+// Returns:
+//
+//   - 展示名称。
+function resolveAiProviderLabel(provider: AiKeyItem["provider"]): string {
+	if (provider === "codex") {
+		return "Codex CLI";
+	}
+	if (provider === "gemini-cli") {
+		return "Gemini CLI";
+	}
+	return "Google Gemini";
+}
+
+// 描述：
+//
+//   - 判断 Provider 是否为本地 CLI 类型（无需 API Key）。
+//
+// Params:
+//
+//   - provider: Provider 标识。
+//
+// Returns:
+//
+//   - true: 本地 CLI Provider。
+function isLocalCliProvider(provider: AiKeyItem["provider"]): boolean {
+	return provider === "codex" || provider === "gemini-cli";
+}
+
+// 描述：
+//
+//   - 构建默认 AI Key 列表，确保 Codex CLI、Gemini CLI 与 Gemini API 都有入口。
+//
+// Params:
+//
+//   - now: 更新时间文本。
+//
+// Returns:
+//
+//   - 默认 AI Key 配置列表。
+function buildDefaultAiKeys(now: string): AiKeyItem[] {
+	return [
+		{
+			id: "codex-default",
+			provider: "codex",
+			providerLabel: resolveAiProviderLabel("codex"),
+			keyValue: "local-cli",
+			enabled: true,
+			updatedAt: now,
+		},
+		{
+			id: "gemini-cli-default",
+			provider: "gemini-cli",
+			providerLabel: resolveAiProviderLabel("gemini-cli"),
+			keyValue: "local-cli",
+			enabled: false,
+			updatedAt: now,
+		},
+		{
+			id: "gemini-default",
+			provider: "gemini",
+			providerLabel: resolveAiProviderLabel("gemini"),
+			keyValue: "",
+			enabled: false,
+			updatedAt: now,
+		},
+	];
+}
+
+// 描述：
+//
+//   - 规范化本地缓存中的 AI Key 列表，并自动补齐新增 Provider。
+//
+// Params:
+//
+//   - raw: 缓存原始值。
+//   - now: 更新时间文本。
+//
+// Returns:
+//
+//   - 规范化后的 AI Key 列表。
+function normalizeAiKeys(raw: unknown, now: string): AiKeyItem[] {
+	const defaults = buildDefaultAiKeys(now);
+	if (!Array.isArray(raw)) {
+		return defaults;
+	}
+
+	const normalized: AiKeyItem[] = raw
+		.map((item) => {
+			const provider = String((item as { provider?: string })?.provider || "").trim() as AiKeyItem["provider"];
+			if (provider !== "codex" && provider !== "gemini" && provider !== "gemini-cli") {
+				return null;
+			}
+			const keyValueRaw = String((item as { keyValue?: string })?.keyValue || "");
+			const keyValue = isLocalCliProvider(provider)
+				? (keyValueRaw.trim() || "local-cli")
+				: keyValueRaw;
+			return {
+				id: String((item as { id?: string })?.id || `${provider}-default`),
+				provider,
+				providerLabel: String((item as { providerLabel?: string })?.providerLabel || "").trim() || resolveAiProviderLabel(provider),
+				keyValue,
+				enabled: Boolean((item as { enabled?: boolean })?.enabled),
+				updatedAt: String((item as { updatedAt?: string })?.updatedAt || now),
+			} as AiKeyItem;
+		})
+		.filter((item): item is AiKeyItem => Boolean(item));
+
+	// 描述：按 provider 去重，保留用户首个配置项顺序。
+	const uniqueByProvider: AiKeyItem[] = [];
+	const providerSet = new Set<AiKeyItem["provider"]>();
+	normalized.forEach((item) => {
+		if (providerSet.has(item.provider)) {
+			return;
+		}
+		providerSet.add(item.provider);
+		uniqueByProvider.push(item);
+	});
+
+	defaults.forEach((fallback) => {
+		if (!providerSet.has(fallback.provider)) {
+			providerSet.add(fallback.provider);
+			uniqueByProvider.push(fallback);
+		}
+	});
+
+	return uniqueByProvider;
+}
+
 // 描述:
 //
 //   - 初始化全局应用配置。
@@ -98,41 +246,22 @@ export default function App() {
 	});
 	// 描述：AI Provider 配置与启用状态列表。
 	const [aiKeys, setAiKeys] = useState<AiKeyItem[]>(() => {
-		const saved = localStorage.getItem("zodileap.desktop.aiKeys");
-		if (saved) {
-			try {
-				const parsed = JSON.parse(saved);
-				if (Array.isArray(parsed) && parsed.length > 0) {
-					return parsed;
-				}
-			} catch (_err) {
-				// Ignore invalid cached value.
-			}
-		}
 		const now = new Date().toLocaleString("zh-CN", {
 			month: "2-digit",
 			day: "2-digit",
 			hour: "2-digit",
 			minute: "2-digit",
 		});
-		return [
-			{
-				id: "codex-default",
-				provider: "codex",
-				providerLabel: "Codex CLI",
-				keyValue: "local-cli",
-				enabled: true,
-				updatedAt: now,
-			},
-			{
-				id: "gemini-default",
-				provider: "gemini",
-				providerLabel: "Google Gemini",
-				keyValue: "",
-				enabled: false,
-				updatedAt: now,
-			},
-		];
+		const saved = localStorage.getItem("zodileap.desktop.aiKeys");
+		if (saved) {
+			try {
+				const parsed = JSON.parse(saved);
+				return normalizeAiKeys(parsed, now);
+			} catch (_err) {
+				// Ignore invalid cached value.
+			}
+		}
+		return buildDefaultAiKeys(now);
 	});
 	// 描述：Blender Bridge 运行态（检测中/可用性/提示文案）。
 	const [blenderBridgeRuntime, setBlenderBridgeRuntime] = useState<BlenderBridgeRuntime>({
@@ -144,6 +273,8 @@ export default function App() {
 	const bridgeTaskRef = useRef<Promise<BlenderBridgeEnsureResult> | null>(null);
 	// 描述：记录已展示过的 Codex 提示弹窗，防止同一提示重复弹出。
 	const codexPopupShownRef = useRef<Set<string>>(new Set());
+	// 描述：记录已展示过的 Gemini CLI 提示弹窗，防止同一提示重复弹出。
+	const geminiCliPopupShownRef = useRef<Set<string>>(new Set());
 
 	useEffect(() => {
 		localStorage.setItem("zodileap.desktop.colorThemeMode", colorThemeMode);
@@ -218,48 +349,79 @@ export default function App() {
 	}, [refreshAuthState]);
 
 	useEffect(() => {
-		// 描述：仅当启用 Codex Provider 时执行本地 CLI 可用性探测。
+		// 描述：仅当启用对应 CLI Provider 时执行本地可用性探测。
 		const codexEnabled = aiKeys.some((item) => item.provider === "codex" && item.enabled);
-		if (!codexEnabled) {
+		const geminiCliEnabled = aiKeys.some((item) => item.provider === "gemini-cli" && item.enabled);
+		if (!codexEnabled && !geminiCliEnabled) {
 			return;
 		}
 
 		let disposed = false;
-		// 描述：执行 Codex CLI 检查并在异常场景展示一次性提示。
-		const check = async () => {
-			try {
-				const health = await invoke<CodexCliHealthResponse>("check_codex_cli_health", {});
-				if (disposed) {
-					return;
+		// 描述：执行 Codex / Gemini CLI 检查并在异常场景展示一次性提示。
+		const check = async (): Promise<void> => {
+			if (codexEnabled) {
+				try {
+					const health = await invoke<CodexCliHealthResponse>("check_codex_cli_health", {});
+					if (disposed) {
+						return;
+					}
+					const popupKey = `${health.available}-${health.outdated}-${health.version}-${health.minimum_version}-${health.bin_path}`;
+					if (!codexPopupShownRef.current.has(popupKey) && (!health.available || health.outdated)) {
+						codexPopupShownRef.current.add(popupKey);
+						const updateHint = "建议执行：pnpm add -g @openai/codex@latest";
+						const detail = health.bin_path ? `\n当前路径：${health.bin_path}` : "";
+						AriMessage.warning({
+							content: `${health.message}${detail}\n${updateHint}`,
+							duration: 5000,
+							showClose: true,
+						});
+					}
+				} catch (err) {
+					if (disposed) {
+						return;
+					}
+					const popupKey = `codex-check-error:${String(err)}`;
+					if (!codexPopupShownRef.current.has(popupKey)) {
+						codexPopupShownRef.current.add(popupKey);
+						AriMessage.error({
+							content: `Codex CLI 检测失败：${String(err)}`,
+							duration: 5000,
+							showClose: true,
+						});
+					}
 				}
-				const popupKey = `${health.available}-${health.outdated}-${health.version}-${health.minimum_version}-${health.bin_path}`;
-				if (codexPopupShownRef.current.has(popupKey)) {
-					return;
+			}
+
+			if (geminiCliEnabled) {
+				try {
+					const health = await invoke<GeminiCliHealthResponse>("check_gemini_cli_health", {});
+					if (disposed) {
+						return;
+					}
+					const popupKey = `${health.available}-${health.outdated}-${health.version}-${health.minimum_version}-${health.bin_path}`;
+					if (!geminiCliPopupShownRef.current.has(popupKey) && (!health.available || health.outdated)) {
+						geminiCliPopupShownRef.current.add(popupKey);
+						const detail = health.bin_path ? `\n当前路径：${health.bin_path}` : "";
+						AriMessage.warning({
+							content: `Gemini CLI 检测异常：${health.message}${detail}`,
+							duration: 5000,
+							showClose: true,
+						});
+					}
+				} catch (err) {
+					if (disposed) {
+						return;
+					}
+					const popupKey = `gemini-cli-check-error:${String(err)}`;
+					if (!geminiCliPopupShownRef.current.has(popupKey)) {
+						geminiCliPopupShownRef.current.add(popupKey);
+						AriMessage.error({
+							content: `Gemini CLI 检测失败：${String(err)}`,
+							duration: 5000,
+							showClose: true,
+						});
+					}
 				}
-				if (!health.available || health.outdated) {
-					codexPopupShownRef.current.add(popupKey);
-					const updateHint = "建议执行：pnpm add -g @openai/codex@latest";
-					const detail = health.bin_path ? `\n当前路径：${health.bin_path}` : "";
-					AriMessage.warning({
-						content: `${health.message}${detail}\n${updateHint}`,
-						duration: 5000,
-						showClose: true,
-					});
-				}
-			} catch (err) {
-				if (disposed) {
-					return;
-				}
-				const popupKey = `codex-check-error:${String(err)}`;
-				if (codexPopupShownRef.current.has(popupKey)) {
-					return;
-				}
-				codexPopupShownRef.current.add(popupKey);
-				AriMessage.error({
-					content: `Codex CLI 检测失败：${String(err)}`,
-					duration: 5000,
-					showClose: true,
-				});
 			}
 		};
 

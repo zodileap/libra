@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent } from "react";
+import { listen } from "@tauri-apps/api/event";
 import {
   AriButton,
   AriContainer,
@@ -20,16 +21,25 @@ import {
   getCodeWorkspaceIdBySessionId,
   getLastUsedCodeWorkspaceId,
   getAgentSessionMetaSnapshot,
+  getSessionRunState,
+  isSessionRunning,
   listCodeWorkspaceGroups,
   removeAgentSession,
   removeCodeWorkspaceGroup,
   renameAgentSession,
   resolveAgentSessionTitle,
+  SESSION_RUN_STATE_UPDATED_EVENT,
+  upsertSessionRunState,
   setLastUsedCodeWorkspaceId,
   togglePinnedAgentSession,
   type CodeWorkspaceGroup,
+  type SessionRunMeta,
 } from "@/shell/data";
-import { listRuntimeSessions, updateRuntimeSessionStatus } from "@/shell/services/backend-api";
+import {
+  createRuntimeSession,
+  listRuntimeSessions,
+  updateRuntimeSessionStatus,
+} from "@/shell/services/backend-api";
 import type { AgentKey, AgentSession, AuthAvailableAgentItem, LoginUser } from "@/shell/types";
 import {
   createCodeWorkflowFromTemplate,
@@ -43,6 +53,7 @@ import {
   AI_KEY_SIDEBAR_CONTENT,
   resolveHomeSidebarAgentItems,
   resolveSettingsSidebarItems,
+  SKILL_PAGE_PATH,
 } from "../modules/common/routes";
 import {
   CODE_AGENT_ROOT_PATH,
@@ -72,6 +83,7 @@ interface ClientSidebarProps {
 //   - 定义侧边栏会话项结构，扩展固定状态字段。
 interface AgentSidebarSession extends AgentSession {
   pinned: boolean;
+  running: boolean;
 }
 
 // 描述:
@@ -80,6 +92,17 @@ interface AgentSidebarSession extends AgentSession {
 interface CodeWorkspaceSessionGroup {
   workspace: CodeWorkspaceGroup;
   sessions: AgentSidebarSession[];
+}
+
+// 描述:
+//
+//   - 定义代码智能体文本流事件结构，用于侧边栏跨页面同步会话运行态。
+interface AgentTextStreamEvent {
+  trace_id: string;
+  session_id?: string;
+  kind: string;
+  message: string;
+  delta?: string;
 }
 
 // 描述:
@@ -166,47 +189,71 @@ function HomeSidebar({
     () => resolveHomeSidebarAgentItems(availableAgents, routeAccess),
     [availableAgents, routeAccess],
   );
-  // 描述：解析首页工作流快捷入口，优先进入代码智能体工作流，未授权时回退模型智能体。
-  const homeWorkflowEntry = useMemo(() => {
+  // 描述：解析首页顶部工具栏入口（工作流、技能）。
+  const homeToolbarEntries = useMemo(() => {
     const workflowEnabled = routeAccess.isModuleEnabled("workflow");
     const workflowPath = routeAccess.isAgentEnabled("code")
       ? resolveCodeWorkflowPath("")
       : routeAccess.isAgentEnabled("model")
         ? resolveModelWorkflowPath("")
         : "";
-    return {
-      key: "workflow",
-      label: "工作流",
-      icon: "account_tree",
-      enabled: workflowEnabled && Boolean(workflowPath),
-      path: workflowPath,
-      deniedMessage: workflowEnabled
-        ? "当前账号暂无可用工作流入口。"
-        : "当前构建未启用工作流模块。",
-    };
+    return [
+      {
+        key: "workflow",
+        label: "工作流",
+        icon: "account_tree",
+        enabled: workflowEnabled && Boolean(workflowPath),
+        path: workflowPath,
+        deniedMessage: workflowEnabled
+          ? "当前账号暂无可用工作流入口。"
+          : "当前构建未启用工作流模块。",
+      },
+      {
+        key: "skills",
+        label: "技能",
+        icon: "new_releases",
+        enabled: routeAccess.isModuleEnabled("skill"),
+        path: SKILL_PAGE_PATH,
+        deniedMessage: "当前构建未启用技能模块。",
+      },
+    ];
   }, [routeAccess]);
+
+  // 描述：根据当前路径同步首页工具栏选中态。
+  const selectedToolbarKey = useMemo(() => {
+    if (location.pathname.startsWith(SKILL_PAGE_PATH)) {
+      return "skills";
+    }
+    if (location.pathname.includes("/workflows")) {
+      return "workflow";
+    }
+    return "";
+  }, [location.pathname]);
 
   return (
     <AriContainer className="desk-sidebar">
       <AriContainer className="desk-sidebar-toolbar" padding={0}>
         <AriMenu
           className="desk-sidebar-nav"
-          items={[
-            {
-              key: homeWorkflowEntry.key,
-              label: homeWorkflowEntry.label,
-              icon: homeWorkflowEntry.icon,
-            },
-          ]}
-          onSelect={() => {
-            if (!homeWorkflowEntry.enabled || !homeWorkflowEntry.path) {
+          items={homeToolbarEntries.map((item) => ({
+            key: item.key,
+            label: item.label,
+            icon: item.icon,
+          }))}
+          selectedKey={selectedToolbarKey}
+          onSelect={(key: string) => {
+            const target = homeToolbarEntries.find((item) => item.key === key);
+            if (!target) {
+              return;
+            }
+            if (!target.enabled || !target.path) {
               AriMessage.warning({
-                content: homeWorkflowEntry.deniedMessage,
+                content: target.deniedMessage,
                 duration: 2500,
               });
               return;
             }
-            navigate(homeWorkflowEntry.path);
+            navigate(target.path);
           }}
         />
       </AriContainer>
@@ -272,7 +319,10 @@ function AgentSidebar({
   const [workspaceGroups, setWorkspaceGroups] = useState<CodeWorkspaceGroup[]>([]);
   const [codeWorkspaceExpandedKeys, setCodeWorkspaceExpandedKeys] = useState<string[]>([]);
   const [openWorkspaceActionMenuId, setOpenWorkspaceActionMenuId] = useState("");
+  const [creatingWorkspaceSessionId, setCreatingWorkspaceSessionId] = useState("");
+  const [sessionMenuRenderVersion, setSessionMenuRenderVersion] = useState(0);
   const missingSessionSyncAttemptsRef = useRef<Record<string, number>>({});
+  const suppressNextSessionSelectIdRef = useRef("");
 
   const isCodeAgent = agentKey === "code";
   const selectedSessionKey = location.pathname.includes("/session/")
@@ -325,6 +375,7 @@ function AgentSidebar({
           ...session,
           title: resolveAgentSessionTitle(agentKey, item.id),
           pinned: pinnedIndexMap.has(item.id),
+          running: isSessionRunning(agentKey, item.id),
           _originIndex: index,
           _pinnedIndex: pinnedIndexMap.get(item.id) ?? Number.MAX_SAFE_INTEGER,
         };
@@ -394,6 +445,72 @@ function AgentSidebar({
     return [...sessions].sort((a, b) => a.title.localeCompare(b.title, "zh-CN"));
   }, [sessionSortMode, sessions]);
 
+  // 描述：强制重建会话菜单组件实例，解决删除后子菜单高度缓存未更新的问题。
+  const reloadSessionSidebarMenu = () => {
+    setSessionMenuRenderVersion((current) => current + 1);
+  };
+
+  // 描述：将代码文本流事件映射为运行片段，供跨页面恢复步骤流。
+  //
+  // Params:
+  //
+  //   - payload: 文本流事件。
+  //   - key: 片段唯一标识。
+  //
+  // Returns:
+  //
+  //   - 运行片段；若当前事件不需要渲染则返回 null。
+  const mapCodeStreamToRunSegment = (payload: AgentTextStreamEvent, key: string) => {
+    const text = String(payload.message || "").trim();
+    if (payload.kind === "delta") {
+      return null;
+    }
+    if (payload.kind === "started") {
+      return { key, intro: "已接收需求，开始规划执行", step: text || "正在准备执行...", status: "running" as const };
+    }
+    if (payload.kind === "llm_started") {
+      return { key, intro: "正在处理当前步骤", step: text || "模型会话已开始，正在执行策略…", status: "running" as const };
+    }
+    if (payload.kind === "llm_finished") {
+      return { key, intro: "当前步骤已完成", step: text || "当前生成步骤已完成，正在整理输出…", status: "finished" as const };
+    }
+    if (payload.kind === "finished") {
+      return { key, intro: "当前步骤已完成", step: text || "执行结束，正在整理最终输出…", status: "finished" as const };
+    }
+    if (payload.kind === "error") {
+      return { key, intro: "执行中断，正在处理", step: text || "执行失败，请查看详情后重试。", status: "failed" as const };
+    }
+    if (!text) {
+      return null;
+    }
+    return { key, intro: "执行进度更新", step: text, status: "running" as const };
+  };
+
+  // 描述：将片段追加到运行元数据，并保证同一时刻仅有一个 running 片段。
+  //
+  // Params:
+  //
+  //   - current: 当前运行元数据。
+  //   - segment: 新片段。
+  //
+  // Returns:
+  //
+  //   - 追加后的运行元数据。
+  const appendRunSegmentToMeta = (current: SessionRunMeta, segment: {
+    key: string;
+    intro: string;
+    step: string;
+    status: "running" | "finished" | "failed";
+  }): SessionRunMeta => {
+    const normalizedSegments = (current.segments || []).map((item) =>
+      item.status === "running" ? { ...item, status: "finished" as const } : item,
+    );
+    return {
+      ...current,
+      segments: [...normalizedSegments, segment].slice(-160),
+    };
+  };
+
   // 描述：删除会话按钮采用二次确认，首次点击进入确认态，二次点击后执行删除。
   const handleDeleteSession = async (event: MouseEvent<HTMLButtonElement>, sessionId: string) => {
     event.preventDefault();
@@ -415,6 +532,7 @@ function AgentSidebar({
     // 描述：执行删除时先本地移除会话，避免后端状态更新延迟导致“已确认仍可见”。
     removeAgentSession(agentKey, sessionId);
     setSessions((prev) => prev.filter((item) => item.id !== sessionId));
+    reloadSessionSidebarMenu();
     setPendingDeleteSessionId("");
     if (selectedSessionKey === sessionId) {
       if (isCodeAgent && deletingWorkspaceId) {
@@ -472,6 +590,7 @@ function AgentSidebar({
       return;
     }
     removeCodeWorkspaceGroup(workspaceId);
+    reloadSessionSidebarMenu();
     const fallbackWorkspaceId = getLastUsedCodeWorkspaceId();
     refreshWorkspaceGroups();
     if (!location.pathname.includes("/session/")) {
@@ -507,6 +626,39 @@ function AgentSidebar({
     navigate(`${CODE_PROJECT_SETTINGS_PATH}?workspaceId=${encodeURIComponent(workspaceId)}`);
   };
 
+  // 描述：在指定项目下创建新话题并跳转到会话页，保持项目上下文绑定。
+  //
+  // Params:
+  //
+  //   - workspaceId: 目标项目 ID。
+  const handleCreateSessionInWorkspace = async (workspaceId: string) => {
+    if (!workspaceId || !isCodeAgent || creatingWorkspaceSessionId) {
+      return;
+    }
+    setCreatingWorkspaceSessionId(workspaceId);
+    try {
+      const created = await createRuntimeSession(user.id, "code");
+      if (!created.id) {
+        AriMessage.warning({
+          content: "创建话题失败，请稍后重试。",
+          duration: 2500,
+        });
+        return;
+      }
+      bindCodeSessionWorkspace(created.id, workspaceId);
+      setLastUsedCodeWorkspaceId(workspaceId);
+      navigate(`/agents/code/session/${created.id}?workspaceId=${encodeURIComponent(workspaceId)}`);
+    } catch (_err) {
+      AriMessage.warning({
+        content: "创建话题失败，请稍后重试。",
+        duration: 2500,
+      });
+    } finally {
+      setCreatingWorkspaceSessionId("");
+      void refreshSessions();
+    }
+  };
+
   // 描述：在菜单项右键事件中直接绑定会话 ID，保持触发逻辑与组件 preview 示例一致。
   const handleOpenSessionContextMenu = (event: MouseEvent<HTMLElement>, sessionId: string) => {
     event.preventDefault();
@@ -526,6 +678,7 @@ function AgentSidebar({
     // 描述：右键删除同样采用本地优先移除，确保交互结果即时可见。
     removeAgentSession(agentKey, sessionId);
     setSessions((prev) => prev.filter((item) => item.id !== sessionId));
+    reloadSessionSidebarMenu();
     if (selectedSessionKey === sessionId) {
       if (isCodeAgent && deletingWorkspaceId) {
         navigate(`/agents/code?workspaceId=${encodeURIComponent(deletingWorkspaceId)}`);
@@ -551,6 +704,11 @@ function AgentSidebar({
     if (!sessionKey) {
       return;
     }
+    if (suppressNextSessionSelectIdRef.current && suppressNextSessionSelectIdRef.current === sessionKey) {
+      // 描述：点击会话 action 按钮时，忽略组件内部可能冒泡触发的 onSelect，避免误导航与确认态被清空。
+      suppressNextSessionSelectIdRef.current = "";
+      return;
+    }
     if (!isCodeAgent) {
       navigate(`${MODEL_AGENT_ROOT_PATH}/session/${sessionKey}`);
       return;
@@ -565,6 +723,23 @@ function AgentSidebar({
     }
     const search = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : "";
     navigate(`${CODE_AGENT_ROOT_PATH}/session/${sessionKey}${search}`);
+  };
+
+  // 描述：标记并短暂抑制下一次同会话 onSelect，用于规避 action 点击触发的误选中副作用。
+  //
+  // Params:
+  //
+  //   - sessionId: 需要抑制的目标会话 ID。
+  const markSuppressNextSessionSelect = (sessionId: string) => {
+    if (!sessionId) {
+      return;
+    }
+    suppressNextSessionSelectIdRef.current = sessionId;
+    window.setTimeout(() => {
+      if (suppressNextSessionSelectIdRef.current === sessionId) {
+        suppressNextSessionSelectIdRef.current = "";
+      }
+    }, 0);
   };
 
   // 描述：将当前会话列表按目录分组映射成二级结构。
@@ -596,6 +771,10 @@ function AgentSidebar({
   const buildSessionMenuItems = (items: AgentSidebarSession[]) => items.map((item) => ({
     key: item.id,
     label: item.title,
+    icon: item.running ? "loading" : undefined,
+    fillIcon: item.running ? "loading" : undefined,
+    iconAnimation: item.running ? "spinning" : undefined,
+    iconState: item.running ? "loading" : undefined,
     actions: (
       <AriFlex align="center" space={4}>
         <AriButton
@@ -610,6 +789,7 @@ function AgentSidebar({
             setHoveredPinSessionId((current) => (current === item.id ? "" : current));
           }}
           onClick={(event: MouseEvent<HTMLButtonElement>) => {
+            markSuppressNextSessionSelect(item.id);
             handleTogglePinnedSession(event, item.id);
           }}
         />
@@ -634,12 +814,14 @@ function AgentSidebar({
             setHoveredDeleteSessionId((current) => (current === item.id ? "" : current));
           }}
           onClick={(event: MouseEvent<HTMLButtonElement>) => {
+            markSuppressNextSessionSelect(item.id);
             void handleDeleteSession(event, item.id);
           }}
         />
       </AriFlex>
     ),
-    showActionsOnHover: true,
+    // 描述：进入删除确认/删除中状态后固定显示动作区，避免 code 二级菜单在失焦时把“确定”按钮收起。
+    showActionsOnHover: pendingDeleteSessionId !== item.id && deletingSessionId !== item.id,
     onContextMenu: (event: MouseEvent<HTMLElement>) => {
       handleOpenSessionContextMenu(event, item.id);
     },
@@ -693,12 +875,35 @@ function AgentSidebar({
               }}
             />
           </AriTooltip>
+          <AriButton
+            size="sm"
+            type="text"
+            ghost
+            icon="edit"
+            aria-label="在项目内新增话题"
+            disabled={creatingWorkspaceSessionId === group.workspace.id}
+            onClick={(event: MouseEvent<HTMLButtonElement>) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setOpenWorkspaceActionMenuId("");
+              void handleCreateSessionInWorkspace(group.workspace.id);
+            }}
+          />
         </AriFlex>
       ),
       showActionsOnHover: true,
       children: buildSessionMenuItems(group.sessions),
     }));
-  }, [codeWorkspaceSessionGroups, isCodeAgent, openWorkspaceActionMenuId]);
+  }, [
+    codeWorkspaceSessionGroups,
+    creatingWorkspaceSessionId,
+    deletingSessionId,
+    hoveredDeleteSessionId,
+    hoveredPinSessionId,
+    isCodeAgent,
+    openWorkspaceActionMenuId,
+    pendingDeleteSessionId,
+  ]);
 
   // 描述：处理代码目录树菜单点击，父节点用于切换目录，子节点用于进入会话。
   const handleSelectCodeWorkspaceMenuItem = (key: string) => {
@@ -710,7 +915,7 @@ function AgentSidebar({
     handleSelectSession(key);
   };
 
-  // 描述：根据当前路由计算代码目录树选中项，优先选中会话，其次选中目录。
+  // 描述：根据当前路由计算代码目录树选中项，仅在具体会话页高亮会话，避免项目页出现整组激活态。
   const selectedCodeWorkspaceMenuKey = useMemo(() => {
     if (!isCodeAgent) {
       return "";
@@ -721,11 +926,8 @@ function AgentSidebar({
     if (selectedSessionKey) {
       return selectedSessionKey;
     }
-    if (selectedWorkspaceFromQuery) {
-      return buildWorkspaceMenuKey(selectedWorkspaceFromQuery);
-    }
     return "";
-  }, [isCodeAgent, isCodeProjectSettingsPath, selectedSessionKey, selectedWorkspaceFromQuery]);
+  }, [isCodeAgent, isCodeProjectSettingsPath, selectedSessionKey]);
 
   // 描述：计算代码目录树默认展开项，确保当前目录对应父节点默认展开。
   const defaultExpandedWorkspaceKeys = useMemo(() => {
@@ -816,6 +1018,7 @@ function AgentSidebar({
     setHoveredContextMenuActionKey("");
     setCodeWorkspaceExpandedKeys([]);
     setSessionSortMode("default");
+    suppressNextSessionSelectIdRef.current = "";
   }, [location.pathname, agentKey]);
 
   useEffect(() => {
@@ -879,6 +1082,116 @@ function AgentSidebar({
     window.addEventListener(CODE_WORKSPACE_GROUPS_UPDATED_EVENT, onCodeWorkspaceGroupsUpdated as EventListener);
     return () => {
       window.removeEventListener(CODE_WORKSPACE_GROUPS_UPDATED_EVENT, onCodeWorkspaceGroupsUpdated as EventListener);
+    };
+  }, [isCodeAgent]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    // 描述：监听会话运行态更新事件，实时同步侧边栏话题左侧运行图标。
+    const syncSessionRunningState = () => {
+      setSessions((prev) => prev.map((item) => ({
+        ...item,
+        running: isSessionRunning(agentKey, item.id),
+      })));
+    };
+    window.addEventListener(SESSION_RUN_STATE_UPDATED_EVENT, syncSessionRunningState as EventListener);
+    return () => {
+      window.removeEventListener(SESSION_RUN_STATE_UPDATED_EVENT, syncSessionRunningState as EventListener);
+    };
+  }, [agentKey]);
+
+  useEffect(() => {
+    if (!isCodeAgent) {
+      return;
+    }
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    // 描述：侧边栏常驻监听代码文本流事件，保证离开会话页后运行态仍能持续更新并恢复步骤流。
+    void listen<AgentTextStreamEvent>("agent:text_stream", (event) => {
+      if (disposed) {
+        return;
+      }
+      const payload = event.payload;
+      if (!payload) {
+        return;
+      }
+      const sessionId = String(payload.session_id || "").trim();
+      if (!sessionId) {
+        return;
+      }
+      const now = Date.now();
+      const snapshot = getSessionRunState("code", sessionId);
+      const activeMessageId = String(snapshot?.activeMessageId || "").trim() || `assistant-stream-${now}`;
+      const runMetaMap = { ...(snapshot?.runMetaMap || {}) };
+      const baseMeta = runMetaMap[activeMessageId] || {
+        status: "running" as const,
+        startedAt: now,
+        collapsed: false,
+        summary: "",
+        segments: [],
+      };
+      let nextMeta: SessionRunMeta = {
+        status: baseMeta.status === "failed" ? "failed" : baseMeta.status === "finished" ? "finished" : "running",
+        startedAt: Number(baseMeta.startedAt || now),
+        finishedAt: baseMeta.finishedAt ? Number(baseMeta.finishedAt) : undefined,
+        collapsed: Boolean(baseMeta.collapsed),
+        summary: String(baseMeta.summary || ""),
+        segments: Array.isArray(baseMeta.segments) ? baseMeta.segments : [],
+      };
+      let nextSending = snapshot?.sending ?? true;
+      const segment = mapCodeStreamToRunSegment(payload, `stream:${payload.kind}:${payload.message}:${now}`);
+      if (segment) {
+        nextMeta = appendRunSegmentToMeta(nextMeta, segment);
+      }
+      if (payload.kind === "delta") {
+        const delta = String(payload.delta || "");
+        if (delta) {
+          nextMeta.summary = `${nextMeta.summary}${delta}`;
+        }
+      }
+      if (payload.kind === "finished") {
+        nextMeta.status = "finished";
+        nextMeta.finishedAt = now;
+        if (!nextMeta.summary.trim()) {
+          nextMeta.summary = String(payload.message || "").trim();
+        }
+        nextSending = false;
+      } else if (payload.kind === "error") {
+        nextMeta.status = "failed";
+        nextMeta.finishedAt = now;
+        nextMeta.summary = String(payload.message || "").trim() || nextMeta.summary;
+        nextSending = false;
+      } else {
+        nextMeta.status = "running";
+        nextSending = true;
+      }
+      runMetaMap[activeMessageId] = nextMeta;
+      upsertSessionRunState({
+        agentKey: "code",
+        sessionId,
+        activeMessageId,
+        sending: nextSending,
+        runMetaMap,
+        updatedAt: now,
+      });
+    })
+      .then((fn) => {
+        if (disposed) {
+          fn();
+          return;
+        }
+        unlisten = fn;
+      })
+      .catch(() => {
+        // 描述：侧边栏流式监听失败不阻断主流程，保留会话页内监听作为兜底。
+      });
+    return () => {
+      disposed = true;
+      if (unlisten) {
+        unlisten();
+      }
     };
   }, [isCodeAgent]);
 
@@ -988,8 +1301,10 @@ function AgentSidebar({
           {isCodeAgent ? (
             codeWorkspaceMenuItems.length > 0 ? (
               <AriMenu
+                key={`code-workspace-menu-${sessionMenuRenderVersion}`}
                 className="desk-sidebar-nav desk-code-workspace-tree"
                 mode="vertical"
+                expandIconPosition="none"
                 items={codeWorkspaceMenuItems}
                 selectedKey={selectedCodeWorkspaceMenuKey}
                 defaultExpandedKeys={defaultExpandedWorkspaceKeys}

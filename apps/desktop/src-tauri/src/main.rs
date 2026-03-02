@@ -273,6 +273,16 @@ struct CodexCliHealthResponse {
 }
 
 #[derive(Serialize)]
+struct GeminiCliHealthResponse {
+    available: bool,
+    outdated: bool,
+    version: String,
+    minimum_version: String,
+    bin_path: String,
+    message: String,
+}
+
+#[derive(Serialize)]
 struct GitCliHealthResponse {
     available: bool,
     version: String,
@@ -376,6 +386,30 @@ fn resolve_codex_bins() -> Vec<String> {
     bins
 }
 
+/// 描述：解析可用于执行 Gemini CLI 命令的候选二进制路径列表。
+fn resolve_gemini_bins() -> Vec<String> {
+    let mut bins: Vec<String> = Vec::new();
+    if let Ok(path) = env::var("ZODILEAP_GEMINI_BIN") {
+        let path = path.trim().to_string();
+        if !path.is_empty() {
+            bins.push(path);
+        }
+    }
+    bins.push("gemini".to_string());
+    bins.push("/opt/homebrew/bin/gemini".to_string());
+    if let Ok(home) = env::var("HOME") {
+        bins.push(
+            Path::new(&home)
+                .join("Library")
+                .join("pnpm")
+                .join("gemini")
+                .to_string_lossy()
+                .to_string(),
+        );
+    }
+    bins
+}
+
 /// 描述：解析可用于执行 Git 命令的候选二进制路径列表。
 fn resolve_git_bins() -> Vec<String> {
     let mut bins: Vec<String> = Vec::new();
@@ -449,6 +483,11 @@ fn read_codex_version(bin: &str) -> Option<String> {
         stdout
     };
     extract_semver(&raw)
+}
+
+/// 描述：读取 Gemini CLI 版本号，命中失败时返回 None。
+fn read_gemini_version(bin: &str) -> Option<String> {
+    read_codex_version(bin)
 }
 
 fn extract_semver(raw: &str) -> Option<String> {
@@ -2144,6 +2183,20 @@ async fn check_codex_cli_health(minimum_version: Option<String>) -> CodexCliHeal
         })
 }
 
+#[tauri::command]
+async fn check_gemini_cli_health(minimum_version: Option<String>) -> GeminiCliHealthResponse {
+    tauri::async_runtime::spawn_blocking(move || check_gemini_cli_health_inner(minimum_version))
+        .await
+        .unwrap_or_else(|err| GeminiCliHealthResponse {
+            available: false,
+            outdated: true,
+            version: "".to_string(),
+            minimum_version: "0.0.0".to_string(),
+            bin_path: "".to_string(),
+            message: format!("check gemini health task join failed: {}", err),
+        })
+}
+
 /// 描述：执行 Codex CLI 健康检查，包含命令行探测与版本比较逻辑。
 fn check_codex_cli_health_inner(minimum_version: Option<String>) -> CodexCliHealthResponse {
     let minimum_version = minimum_version
@@ -2179,6 +2232,44 @@ fn check_codex_cli_health_inner(minimum_version: Option<String>) -> CodexCliHeal
         minimum_version,
         bin_path: "".to_string(),
         message: "未检测到可用的 Codex CLI，请先安装或配置 ZODILEAP_CODEX_BIN".to_string(),
+    }
+}
+
+/// 描述：执行 Gemini CLI 健康检查，包含命令行探测与版本比较逻辑。
+fn check_gemini_cli_health_inner(minimum_version: Option<String>) -> GeminiCliHealthResponse {
+    let minimum_version = minimum_version
+        .or_else(|| env::var("ZODILEAP_GEMINI_MIN_VERSION").ok())
+        .unwrap_or_else(|| "0.0.0".to_string());
+
+    for bin in resolve_gemini_bins() {
+        if let Some(version) = read_gemini_version(&bin) {
+            let outdated = is_lower_semver(&version, &minimum_version).unwrap_or(false);
+            let message = if outdated {
+                format!(
+                    "Gemini CLI 版本过低：{}，最低要求 {}。请更新后再使用。",
+                    version, minimum_version
+                )
+            } else {
+                format!("Gemini CLI 可用：{} ({})", version, bin)
+            };
+            return GeminiCliHealthResponse {
+                available: true,
+                outdated,
+                version,
+                minimum_version,
+                bin_path: bin,
+                message,
+            };
+        }
+    }
+
+    GeminiCliHealthResponse {
+        available: false,
+        outdated: true,
+        version: "".to_string(),
+        minimum_version,
+        bin_path: "".to_string(),
+        message: "未检测到可用的 Gemini CLI，请先安装或配置 ZODILEAP_GEMINI_BIN".to_string(),
     }
 }
 
@@ -6895,6 +6986,7 @@ fn main() {
             check_blender_bridge,
             run_agent_command,
             check_codex_cli_health,
+            check_gemini_cli_health,
             check_git_cli_health,
             pick_local_project_folder,
             open_external_url,

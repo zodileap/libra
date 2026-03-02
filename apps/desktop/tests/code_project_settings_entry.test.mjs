@@ -34,10 +34,15 @@ test("TestCodeProjectSettingsShouldExposeRouteAndSidebarEntry", () => {
 
   // 描述:
   //
-  //   - 代码目录一级菜单 hover 操作应仅保留“更多”，并通过菜单承载“编辑/删除”。
+  //   - 代码目录一级菜单 hover 操作应包含“更多”与“新话题”入口，并通过菜单承载“编辑/删除”。
   assert.match(sidebarSource, /icon="more_horiz"/);
+  assert.match(sidebarSource, /icon="edit"/);
   assert.match(sidebarSource, /\{ key: "edit", label: "编辑", icon: "edit" \}/);
   assert.match(sidebarSource, /\{ key: "delete", label: "删除", icon: "delete", fillIcon: "delete_fill" \}/);
+  assert.match(sidebarSource, /aria-label="在项目内新增话题"/);
+  assert.match(sidebarSource, /void handleCreateSessionInWorkspace\(group\.workspace\.id\);/);
+  assert.match(sidebarSource, /setOpenWorkspaceActionMenuId\(""\);/);
+  assert.match(sidebarSource, /expandIconPosition="none"/);
   assert.match(sidebarSource, /const \[openWorkspaceActionMenuId, setOpenWorkspaceActionMenuId\] = useState\(""\);/);
   assert.match(sidebarSource, /trigger="manual"/);
   assert.match(sidebarSource, /visible=\{openWorkspaceActionMenuId === group\.workspace\.id\}/);
@@ -45,11 +50,16 @@ test("TestCodeProjectSettingsShouldExposeRouteAndSidebarEntry", () => {
   assert.match(sidebarSource, /data-workspace-action-trigger="true"/);
   assert.match(sidebarSource, /window\.addEventListener\("mousedown", handleCloseWorkspaceActionMenu, true\);/);
   assert.match(sidebarSource, /if \(target\.closest\("\.z-tooltip"\)\) \{/);
+  assert.match(sidebarSource, /pendingDeleteSessionId,/);
+  assert.match(sidebarSource, /deletingSessionId,/);
+  assert.match(sidebarSource, /hoveredPinSessionId,/);
+  assert.match(sidebarSource, /hoveredDeleteSessionId,/);
   assert.match(sidebarSource, /setOpenWorkspaceActionMenuId\(""\);/);
   assert.doesNotMatch(sidebarSource, /workspaceActionMenuVersion/);
   assert.match(sidebarSource, /navigate\(`\$\{CODE_PROJECT_SETTINGS_PATH\}\?workspaceId=\$\{encodeURIComponent\(workspaceId\)\}`\)/);
   assert.match(sidebarSource, /const isCodeProjectSettingsPath = isCodeAgent && location\.pathname\.startsWith\(CODE_PROJECT_SETTINGS_PATH\);/);
   assert.match(sidebarSource, /if \(isCodeProjectSettingsPath\) \{\s*return "";\s*\}/);
+  assert.doesNotMatch(sidebarSource, /return buildWorkspaceMenuKey\(selectedWorkspaceFromQuery\);/);
   assert.match(sidebarSource, /setCodeWorkspaceExpandedKeys\(\(current\) => \{\s*const next = new Set\(\[\.\.\.current, workspaceMenuKey\]\);/s);
   assert.match(sidebarSource, /label: item\.title,/);
   assert.doesNotMatch(sidebarSource, /label: <AriTypography className="desk-session-item-title"/);
