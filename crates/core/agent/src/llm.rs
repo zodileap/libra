@@ -1,3 +1,4 @@
+use serde::Serialize;
 use crate::workflow::{RetryClassifiedError, WorkflowRetryPolicy};
 use std::env;
 use zodileap_mcp_common::ProtocolError;
@@ -9,6 +10,34 @@ pub(crate) const LLM_RUNTIME_TAG: &str = "llm-v3-gateway";
 const DEFAULT_TIMEOUT_SECS: u64 = 300;
 const DEFAULT_RETRY_MAX: u8 = 1;
 const DEFAULT_RETRY_BACKOFF_MS: u64 = 400;
+
+/// 描述：LLM 调用产生的 Token 使用量统计。
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct LlmUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+}
+
+/// 描述：LLM 网关调用结果，包含生成的文本内容与消耗统计。
+#[derive(Debug, Clone)]
+pub struct LlmRunResult {
+    pub content: String,
+    pub usage: LlmUsage,
+}
+
+impl LlmUsage {
+    /// 描述：基于文本长度执行启发式 Token 估算（1 token 约等于 4 字符）。
+    pub fn estimate(prompt: &str, completion: &str) -> Self {
+        let prompt_tokens = (prompt.chars().count() as f32 / 4.0).ceil() as u32;
+        let completion_tokens = (completion.chars().count() as f32 / 4.0).ceil() as u32;
+        Self {
+            prompt_tokens,
+            completion_tokens,
+            total_tokens: prompt_tokens + completion_tokens,
+        }
+    }
+}
 
 /// 描述：LLM 文本增量回调签名，输出为原始文本分片。
 pub type LlmTextStreamObserver<'a> = dyn FnMut(&str) + 'a;
@@ -147,7 +176,7 @@ pub fn call_model(
     provider: LlmProvider,
     prompt: &str,
     workdir: Option<&str>,
-) -> Result<String, LlmGatewayError> {
+) -> Result<LlmRunResult, LlmGatewayError> {
     call_model_with_policy(provider, prompt, workdir, LlmGatewayPolicy::from_env())
 }
 
@@ -157,7 +186,7 @@ pub fn call_model_with_stream(
     prompt: &str,
     workdir: Option<&str>,
     on_chunk: &mut LlmTextStreamObserver,
-) -> Result<String, LlmGatewayError> {
+) -> Result<LlmRunResult, LlmGatewayError> {
     call_model_with_policy_and_stream(
         provider,
         prompt,
@@ -173,18 +202,18 @@ pub fn call_model_with_policy(
     prompt: &str,
     workdir: Option<&str>,
     policy: LlmGatewayPolicy,
-) -> Result<String, LlmGatewayError> {
+) -> Result<LlmRunResult, LlmGatewayError> {
     call_model_with_policy_and_stream(provider, prompt, workdir, policy, None)
 }
 
 /// 描述：按指定策略调用模型网关，并可选输出增量文本事件。
-fn call_model_with_policy_and_stream(
+pub(crate) fn call_model_with_policy_and_stream(
     provider: LlmProvider,
     prompt: &str,
     workdir: Option<&str>,
     policy: LlmGatewayPolicy,
     on_chunk: Option<&mut LlmTextStreamObserver>,
-) -> Result<String, LlmGatewayError> {
+) -> Result<LlmRunResult, LlmGatewayError> {
     match provider {
         LlmProvider::CodexCli => {
             providers::codex_cli::call_with_retry(prompt, workdir, policy, on_chunk)

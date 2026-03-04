@@ -3,11 +3,77 @@
 pub mod activation;
 pub mod flow;
 pub mod llm;
+pub mod policy;
+pub mod profile;
+pub mod sandbox;
+pub mod tools;
 mod python_orchestrator;
 pub mod workflow;
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use once_cell::sync::Lazy;
+
+/// 描述：授权结果。
+#[derive(Debug, Clone, Copy)]
+pub enum ApprovalOutcome {
+    Approved,
+    Rejected,
+}
+
+/// 描述：全局授权管理器，管理所有挂起中的人工授权请求。
+pub struct ApprovalRegistry {
+    pending: Mutex<HashMap<String, Arc<Mutex<Option<ApprovalOutcome>>>>>,
+}
+
+impl ApprovalRegistry {
+    /// 描述：创建一个新的授权请求并返回用于等待的信号量。
+    pub fn create_request(&self, id: &str) -> Arc<Mutex<Option<ApprovalOutcome>>> {
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let outcome = Arc::new(Mutex::new(None));
+        pending.insert(id.to_string(), outcome.clone());
+        outcome
+    }
+
+    /// 描述：提交授权决策（批准或拒绝），唤醒阻塞的执行流。
+    pub fn submit_decision(&self, id: &str, outcome: ApprovalOutcome) -> bool {
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(signal) = pending.remove(id) {
+            let mut guard = signal
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            *guard = Some(outcome);
+            return true;
+        }
+        false
+    }
+
+    /// 描述：移除挂起授权请求（用于超时/中断清理），避免 pending 表长期积压。
+    pub fn remove_request(&self, id: &str) -> bool {
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        pending.remove(id).is_some()
+    }
+}
+
+pub static APPROVAL_REGISTRY: Lazy<ApprovalRegistry> = Lazy::new(|| ApprovalRegistry {
+    pending: Mutex::new(HashMap::new()),
+});
 use flow::{compose_prompt, AgentKind};
-use llm::{call_model_with_stream, parse_provider};
+use llm::{parse_provider, LlmUsage};
+use serde_json::json;
+use policy::AgentPolicy;
+use profile::AgentProfile;
+use tracing::{info, info_span};
 use zodileap_mcp_common::{
     now_millis, ProtocolAssetRecord, ProtocolError, ProtocolEventRecord, ProtocolStepRecord,
     ProtocolStepStatus, ProtocolUiHint,
@@ -19,8 +85,21 @@ pub use zodileap_mcp_model as mcp_model;
 #[cfg(feature = "with-mcp-code")]
 pub use zodileap_mcp_code as mcp_code;
 
+/// 描述：智能体核心执行器接口，统一了不同智能体（Code/Model）的执行协议。
+pub trait AgentExecutor {
+    fn run(
+        &self,
+        request: AgentRunRequest,
+        policy: AgentPolicy,
+        profile: AgentProfile,
+        on_stream_event: &mut dyn FnMut(AgentStreamEvent),
+    ) -> Result<AgentRunResult, ProtocolError>;
+}
+
 #[derive(Debug, Clone)]
 pub struct AgentRunRequest {
+    pub trace_id: String,
+    pub session_id: String,
     pub agent_key: String,
     pub provider: String,
     pub prompt: String,
@@ -33,7 +112,9 @@ pub struct AgentRunRequest {
 
 #[derive(Debug, Clone)]
 pub struct AgentRunResult {
+    pub trace_id: String,
     pub message: String,
+    pub usage: Option<LlmUsage>,
     pub actions: Vec<String>,
     pub exported_file: Option<String>,
     pub steps: Vec<ProtocolStepRecord>,
@@ -44,9 +125,73 @@ pub struct AgentRunResult {
 
 #[derive(Debug, Clone)]
 pub enum AgentStreamEvent {
-    LlmStarted { provider: String },
-    LlmDelta { content: String },
-    LlmFinished { provider: String },
+    LlmStarted {
+        provider: String,
+    },
+    LlmDelta {
+        content: String,
+    },
+    LlmFinished {
+        provider: String,
+    },
+    /// 描述：智能体开始规划下一步任务。
+    Planning {
+        message: String,
+    },
+    /// 描述：发起工具调用。
+    ToolCallStarted {
+        name: String,
+        args: String,
+    },
+    /// 描述：工具调用完成（成功或失败）。
+    ToolCallFinished {
+        name: String,
+        ok: bool,
+        result: String,
+    },
+    /// 描述：长任务期间的周期性心跳。
+    Heartbeat {
+        message: String,
+    },
+    /// 描述：高危操作需要人工授权。
+    RequireApproval {
+        approval_id: String,
+        tool_name: String,
+        tool_args: String,
+    },
+    /// 描述：执行产生最终答案（通常是 LLM 总结后的文本）。
+    Final {
+        message: String,
+    },
+    /// 描述：执行被取消并进入终态（如超时中断或主动取消）。
+    Cancelled {
+        message: String,
+    },
+    /// 描述：执行过程中发生不可恢复错误。
+    Error {
+        code: String,
+        message: String,
+    },
+}
+
+impl AgentStreamEvent {
+    /// 描述：返回事件 kind 字符串标识，与前端 `STREAM_KINDS` 常量一一映射，
+    /// 避免 Tauri 侧在转发时手工硬编码 kind 字符串。
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::LlmStarted { .. } => "llm_started",
+            Self::LlmDelta { .. } => "delta",
+            Self::LlmFinished { .. } => "llm_finished",
+            Self::Planning { .. } => "planning",
+            Self::ToolCallStarted { .. } => "tool_call_started",
+            Self::ToolCallFinished { .. } => "tool_call_finished",
+            Self::Heartbeat { .. } => "heartbeat",
+            Self::RequireApproval { .. } => "require_approval",
+            Self::Final { .. } => "final",
+            Self::Cancelled { .. } => "cancelled",
+            Self::Error { .. } => "error",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,79 +240,136 @@ pub fn run_agent_with_protocol_error_stream<F>(
 where
     F: FnMut(AgentStreamEvent),
 {
+    let policy = AgentPolicy::from_env();
+
+    // 触发闲置沙盒清理
+    sandbox::SANDBOX_REGISTRY.cleanup_idle(Duration::from_secs(policy.sandbox_idle_timeout_mins * 60));
+
     let agent_kind = parse_agent_kind(&request.agent_key);
-    if agent_kind == AgentKind::Code {
-        return python_orchestrator::run_code_agent_with_python_workflow(
-            request,
-            &mut on_stream_event,
-        );
+
+    let (executor, profile): (Box<dyn AgentExecutor>, AgentProfile) = match agent_kind {
+        AgentKind::Code => (Box::new(CodeAgentExecutor), AgentProfile::code_default()),
+        AgentKind::Model => (Box::new(ModelAgentExecutor), AgentProfile::model_default()),
+    };
+
+    executor.run(request, policy, profile, &mut on_stream_event)
+}
+
+struct CodeAgentExecutor;
+
+impl AgentExecutor for CodeAgentExecutor {
+    fn run(
+        &self,
+        request: AgentRunRequest,
+        policy: AgentPolicy,
+        profile: AgentProfile,
+        on_stream_event: &mut dyn FnMut(AgentStreamEvent),
+    ) -> Result<AgentRunResult, ProtocolError> {
+        python_orchestrator::run_code_agent_with_python_workflow(request, policy, profile, on_stream_event)
     }
+}
 
-    let mut tool_outcome = maybe_export_model(&request, agent_kind)?;
+struct ModelAgentExecutor;
 
-    let llm_started = now_millis();
-    tool_outcome.events.push(ProtocolEventRecord {
-        event: "llm_started".to_string(),
-        step_index: Some(tool_outcome.steps.len()),
-        timestamp_ms: llm_started,
-        message: format!("provider={} started", request.provider),
-    });
+impl AgentExecutor for ModelAgentExecutor {
+    fn run(
+        &self,
+        request: AgentRunRequest,
+        policy: AgentPolicy,
+        _profile: AgentProfile,
+        on_stream_event: &mut dyn FnMut(AgentStreamEvent),
+    ) -> Result<AgentRunResult, ProtocolError> {
+        let trace_id = request.trace_id.clone();
+        let span = info_span!("model_agent_run", trace_id = %trace_id, agent = %request.agent_key);
+        let _enter = span.enter();
 
-    let final_prompt = compose_prompt(
-        agent_kind,
-        &request.prompt,
-        tool_outcome.tool_context.as_deref(),
-    );
-    let provider = parse_provider(&request.provider);
-    on_stream_event(AgentStreamEvent::LlmStarted {
-        provider: request.provider.clone(),
-    });
-    let reply = call_model_with_stream(
-        provider,
-        &final_prompt,
-        request.workdir.as_deref(),
-        &mut |chunk| {
+        info!("starting model agent workflow");
+        let agent_kind = AgentKind::Model;
+        on_stream_event(AgentStreamEvent::Planning {
+            message: "正在检查工具调用需求".to_string(),
+        });
+        let mut tool_outcome =
+            maybe_export_model(&request, agent_kind, trace_id.clone(), on_stream_event)?;
+
+        let llm_started = now_millis();
+        on_stream_event(AgentStreamEvent::LlmStarted {
+            provider: request.provider.clone(),
+        });
+
+        let final_prompt = compose_prompt(
+            agent_kind,
+            &request.prompt,
+            tool_outcome.tool_context.as_deref(),
+        );
+        let provider = parse_provider(&request.provider);
+
+        let llm_policy = llm::LlmGatewayPolicy {
+            timeout_secs: policy.llm_timeout_secs,
+            retry_policy: policy.llm_retry_policy,
+        };
+
+        let mut observer = |chunk: &str| {
             on_stream_event(AgentStreamEvent::LlmDelta {
                 content: chunk.to_string(),
             });
-        },
-    )
-    .map_err(|err| err.to_protocol_error())?;
-    on_stream_event(AgentStreamEvent::LlmFinished {
-        provider: request.provider.clone(),
-    });
+        };
 
-    let llm_finished = now_millis();
-    tool_outcome.steps.push(ProtocolStepRecord {
-        index: tool_outcome.steps.len(),
-        code: "llm_call".to_string(),
-        status: ProtocolStepStatus::Success,
-        elapsed_ms: llm_finished.saturating_sub(llm_started),
-        summary: format!("provider={} 执行完成", request.provider),
-        error: None,
-        data: None,
-    });
-    tool_outcome.events.push(ProtocolEventRecord {
-        event: "llm_finished".to_string(),
-        step_index: Some(tool_outcome.steps.len().saturating_sub(1)),
-        timestamp_ms: llm_finished,
-        message: format!("provider={} finished", request.provider),
-    });
+        let run_result = llm::call_model_with_policy_and_stream(
+            provider,
+            &final_prompt,
+            request.workdir.as_deref(),
+            llm_policy,
+            Some(&mut observer),
+        )
+        .map_err(|err| err.to_protocol_error())?;
 
-    let message = match tool_outcome.tool_context {
-        Some(context) => format!("{}\n\n{}", context, reply),
-        None => reply,
-    };
+        let reply = run_result.content;
+        let llm_usage = run_result.usage;
 
-    Ok(AgentRunResult {
-        message,
-        actions: tool_outcome.actions,
-        exported_file: tool_outcome.exported_file,
-        steps: tool_outcome.steps,
-        events: tool_outcome.events,
-        assets: tool_outcome.assets,
-        ui_hint: tool_outcome.ui_hint,
-    })
+        on_stream_event(AgentStreamEvent::LlmFinished {
+            provider: request.provider.clone(),
+        });
+
+        on_stream_event(AgentStreamEvent::Final {
+            message: reply.clone(),
+        });
+
+        let llm_finished = now_millis();
+        tool_outcome.steps.push(ProtocolStepRecord {
+            index: tool_outcome.steps.len(),
+            code: "llm_call".to_string(),
+            status: ProtocolStepStatus::Success,
+            elapsed_ms: llm_finished.saturating_sub(llm_started),
+            summary: format!("provider={} 执行完成", request.provider),
+            error: None,
+            data: Some(json!({
+                "usage": llm_usage,
+            })),
+        });
+        tool_outcome.events.push(ProtocolEventRecord {
+            event: "llm_finished".to_string(),
+            step_index: Some(tool_outcome.steps.len().saturating_sub(1)),
+            timestamp_ms: llm_finished,
+            message: format!("provider={} finished", request.provider),
+        });
+
+        let message = match tool_outcome.tool_context {
+            Some(context) => format!("{}\n\n{}", context, reply),
+            None => reply,
+        };
+
+        Ok(AgentRunResult {
+            trace_id,
+            message,
+            usage: Some(llm_usage),
+            actions: tool_outcome.actions,
+            exported_file: tool_outcome.exported_file,
+            steps: tool_outcome.steps,
+            events: tool_outcome.events,
+            assets: tool_outcome.assets,
+            ui_hint: tool_outcome.ui_hint,
+        })
+    }
 }
 
 #[derive(Debug, Default)]
@@ -209,10 +411,15 @@ fn should_trigger_export(prompt: &str) -> bool {
 
 #[cfg(feature = "with-mcp-model")]
 /// 描述：在模型能力启用时按需执行导出，并将 MCP 返回结构映射为统一结果。
-fn maybe_export_model(
+fn maybe_export_model<F>(
     request: &AgentRunRequest,
     agent_kind: AgentKind,
-) -> Result<ToolExecutionOutcome, ProtocolError> {
+    _trace_id: String,
+    on_stream_event: &mut F,
+) -> Result<ToolExecutionOutcome, ProtocolError>
+where
+    F: FnMut(AgentStreamEvent) + ?Sized,
+{
     if agent_kind == AgentKind::Model
         && request.model_export_enabled
         && should_trigger_export(&request.prompt)
@@ -224,6 +431,13 @@ fn maybe_export_model(
             .filter(|value| !value.is_empty())
             .unwrap_or("model-project")
             .to_string();
+
+        let tool_name = "model.export.blender".to_string();
+        on_stream_event(AgentStreamEvent::ToolCallStarted {
+            name: tool_name.clone(),
+            args: format!("project_name={}", project_name),
+        });
+
         let export_result = mcp_model::export_model(mcp_model::ExportModelRequest {
             project_name,
             prompt: request.prompt.clone(),
@@ -236,7 +450,20 @@ fn maybe_export_model(
             blender_bridge_addr: request.blender_bridge_addr.clone(),
             target: mcp_model::ModelToolTarget::Blender,
         })
-        .map_err(|err| err.to_protocol_error())?;
+        .map_err(|err| {
+            let protocol_err = err.to_protocol_error();
+            on_stream_event(AgentStreamEvent::Error {
+                code: protocol_err.code.clone(),
+                message: protocol_err.message.clone(),
+            });
+            protocol_err
+        })?;
+
+        on_stream_event(AgentStreamEvent::ToolCallFinished {
+            name: tool_name,
+            ok: true,
+            result: format!("exported_file={}", export_result.exported_file),
+        });
 
         return Ok(ToolExecutionOutcome {
             tool_context: Some(format!(
@@ -257,19 +484,31 @@ fn maybe_export_model(
 
 #[cfg(not(feature = "with-mcp-model"))]
 /// 描述：在模型能力未启用时返回明确错误，避免前端误判为运行时故障。
-fn maybe_export_model(
+fn maybe_export_model<F>(
     request: &AgentRunRequest,
     agent_kind: AgentKind,
-) -> Result<ToolExecutionOutcome, ProtocolError> {
+    _trace_id: String,
+    on_stream_event: &mut F,
+) -> Result<ToolExecutionOutcome, ProtocolError>
+where
+    F: FnMut(AgentStreamEvent) + ?Sized,
+{
     if agent_kind == AgentKind::Model
         && request.model_export_enabled
         && should_trigger_export(&request.prompt)
     {
-        return Err(ProtocolError::new(
+        let protocol_err = ProtocolError::new(
             "core.agent.feature_disabled",
             "model export feature is not enabled",
         )
-        .with_suggestion("重新构建并启用 feature: with-mcp-model"));
+        .with_suggestion("重新构建并启用 feature: with-mcp-model");
+
+        on_stream_event(AgentStreamEvent::Error {
+            code: protocol_err.code.clone(),
+            message: protocol_err.message.clone(),
+        });
+
+        return Err(protocol_err);
     }
     Ok(ToolExecutionOutcome::default())
 }

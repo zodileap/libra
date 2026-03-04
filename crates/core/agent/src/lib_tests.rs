@@ -3,6 +3,8 @@ use super::*;
 /// 描述：构造测试用基础请求，默认不触发模型导出路径。
 fn build_base_request() -> AgentRunRequest {
     AgentRunRequest {
+        trace_id: "test-trace".to_string(),
+        session_id: "test-session".to_string(),
         agent_key: "code".to_string(),
         provider: "unknown".to_string(),
         prompt: "hello".to_string(),
@@ -65,10 +67,23 @@ fn should_emit_started_stream_event_before_provider_failure() {
     })
     .expect_err("must fail");
     assert_eq!(err.code, "core.agent.llm.provider_unknown");
-    assert!(matches!(
-        events.first(),
-        Some(AgentStreamEvent::LlmStarted { .. })
-    ));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AgentStreamEvent::LlmStarted { .. })),
+        "unknown provider 失败前应发出 LlmStarted 事件"
+    );
+}
+
+/// 描述：验证授权请求可被显式清理，避免超时/中断场景遗留挂起记录。
+#[test]
+fn should_remove_pending_approval_request() {
+    let registry = ApprovalRegistry {
+        pending: std::sync::Mutex::new(std::collections::HashMap::new()),
+    };
+    let _signal = registry.create_request("approval-test-1");
+    assert!(registry.remove_request("approval-test-1"));
+    assert!(!registry.remove_request("approval-test-1"));
 }
 
 /// 描述：验证在未启用 model feature 时导出请求返回能力未启用错误。

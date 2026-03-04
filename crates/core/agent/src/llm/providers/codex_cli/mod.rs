@@ -1,5 +1,5 @@
 use crate::llm::{
-    LlmGatewayError, LlmGatewayPolicy, LlmProvider, LlmTextStreamObserver, LLM_RUNTIME_TAG,
+    LlmGatewayError, LlmGatewayPolicy, LlmProvider, LlmRunResult, LlmUsage, LlmTextStreamObserver, LLM_RUNTIME_TAG,
 };
 use crate::workflow::{run_step_with_retry, DefaultWorkflowRecoveryHook};
 use std::env;
@@ -24,23 +24,12 @@ struct CodexOutputChunk {
 }
 
 /// 描述：通过工作流重试引擎执行 Codex CLI 调用。
-///
-/// Params:
-///
-///   - prompt: 最终传递给 Codex 的提示词。
-///   - workdir: 命令执行目录。
-///   - policy: LLM 网关策略（超时与重试）。
-///   - on_chunk: 可选的文本增量回调。
-///
-/// Returns:
-///
-///   - 成功时返回模型文本；失败时返回统一网关错误。
 pub fn call_with_retry(
     prompt: &str,
     workdir: Option<&str>,
     policy: LlmGatewayPolicy,
     mut on_chunk: Option<&mut LlmTextStreamObserver>,
-) -> Result<String, LlmGatewayError> {
+) -> Result<LlmRunResult, LlmGatewayError> {
     let hook = DefaultWorkflowRecoveryHook;
     let run = run_step_with_retry("llm.codex_cli", policy.retry_policy, &hook, |attempt| {
         call_once(
@@ -54,26 +43,13 @@ pub fn call_with_retry(
     run.outcome.map_err(|err| err.with_attempts(run.attempts))
 }
 
-/// 描述：执行单次 Codex CLI 调用，负责超时控制与结果读取。
-///
-/// Params:
-///
-///   - prompt: 最终传递给 Codex 的提示词。
-///   - workdir: 命令执行目录。
-///   - timeout_secs: 超时秒数。
-///   - attempt: 当前尝试序号。
-///   - on_chunk: 可选的文本增量回调。
-///
-/// Returns:
-///
-///   - 成功时返回模型文本；失败时返回统一网关错误。
 fn call_once(
     prompt: &str,
     workdir: Option<&str>,
     timeout_secs: u64,
     attempt: u8,
     mut on_chunk: Option<&mut LlmTextStreamObserver>,
-) -> Result<String, LlmGatewayError> {
+) -> Result<LlmRunResult, LlmGatewayError> {
     let provider = LlmProvider::CodexCli;
     let output_file = build_output_file();
     let output_path = output_file.to_string_lossy().to_string();
@@ -231,18 +207,15 @@ fn call_once(
         .with_retryable(false)
         .with_attempts(attempt));
     }
-    Ok(final_message)
+
+    let usage = LlmUsage::estimate(prompt, final_message.as_str());
+
+    Ok(LlmRunResult {
+        content: final_message,
+        usage,
+    })
 }
 
-/// 描述：将 Codex CLI 失败原因转换为用户友好的网关错误。
-///
-/// Params:
-///
-///   - raw_reason: Codex 原始 stderr/stdout 文本。
-///
-/// Returns:
-///
-///   - 归一化后的网关错误；对于额度超限返回专用错误码与提示文案。
 fn build_codex_failed_error(raw_reason: &str) -> LlmGatewayError {
     let provider = LlmProvider::CodexCli;
     if is_usage_limit_error(raw_reason) {
@@ -270,15 +243,6 @@ fn build_codex_failed_error(raw_reason: &str) -> LlmGatewayError {
     .with_retryable(true)
 }
 
-/// 描述：识别 Codex CLI 输出是否属于额度超限类错误。
-///
-/// Params:
-///
-///   - raw_reason: Codex 原始 stderr/stdout 文本。
-///
-/// Returns:
-///
-///   - true 表示命中额度超限关键字。
 fn is_usage_limit_error(raw_reason: &str) -> bool {
     let normalized = raw_reason.to_lowercase();
     normalized.contains("hit your usage limit")
@@ -286,15 +250,6 @@ fn is_usage_limit_error(raw_reason: &str) -> bool {
         || normalized.contains("/codex/settings/usage")
 }
 
-/// 描述：从 Codex 错误文本中提取“可重试时间点”。
-///
-/// Params:
-///
-///   - raw_reason: Codex 原始 stderr/stdout 文本。
-///
-/// Returns:
-///
-///   - 命中时返回时间文案；否则返回 None。
 fn extract_retry_at(raw_reason: &str) -> Option<String> {
     let normalized = raw_reason.to_lowercase();
     let marker = "try again at ";
@@ -311,15 +266,6 @@ fn extract_retry_at(raw_reason: &str) -> Option<String> {
     Some(candidate.to_string())
 }
 
-/// 描述：从 Codex 失败输出中提取首个可读错误行，避免把完整运行日志透传给用户。
-///
-/// Params:
-///
-///   - raw_reason: Codex 原始 stderr/stdout 文本。
-///
-/// Returns:
-///
-///   - 优先返回 ERROR 行；若不存在则返回第一条非诊断行。
 fn extract_primary_error_line(raw_reason: &str) -> Option<String> {
     for line in raw_reason.lines() {
         let trimmed = line.trim();
@@ -339,15 +285,6 @@ fn extract_primary_error_line(raw_reason: &str) -> Option<String> {
     None
 }
 
-/// 描述：判断当前行是否属于 CLI 元信息行，避免作为用户错误文案返回。
-///
-/// Params:
-///
-///   - line: 待判断的单行文本。
-///
-/// Returns:
-///
-///   - true 表示该行属于诊断元信息（如会话 ID、workdir、分隔线等）。
 fn is_diagnostic_line(line: &str) -> bool {
     let normalized = line.trim().to_lowercase();
     normalized == "--------"
@@ -365,17 +302,6 @@ fn is_diagnostic_line(line: &str) -> bool {
         || normalized.starts_with("warning: no last agent message")
 }
 
-/// 描述：启动 Codex 输出流读取线程，并把文本分片发送给主线程聚合处理。
-///
-/// Params:
-///
-///   - reader: 标准输出或标准错误读取器。
-///   - stream: 输出流类型。
-///   - tx: 分片发送通道。
-///
-/// Returns:
-///
-///   - 读取线程句柄。
 fn spawn_codex_stream_reader<R>(
     mut reader: R,
     stream: CodexOutputStreamKind,
@@ -401,11 +327,6 @@ where
     })
 }
 
-/// 描述：构建一次调用的临时输出文件路径。
-///
-/// Returns:
-///
-///   - 临时目录下的消息输出文件全路径。
 fn build_output_file() -> PathBuf {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -418,7 +339,6 @@ fn build_output_file() -> PathBuf {
 mod tests {
     use super::*;
 
-    /// 描述：验证额度超限错误会映射为友好文案与专用错误码。
     #[test]
     fn should_map_usage_limit_error_to_friendly_message() {
         let raw = r#"ERROR: You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Feb 27th, 2026 11:03 AM.
@@ -434,7 +354,6 @@ Warning: no last agent message; wrote empty content to /tmp/zodileap-agent-codex
             .contains("Feb 27th, 2026 11:03 AM"));
     }
 
-    /// 描述：验证普通失败场景会提取简洁错误行，避免透传完整 CLI 上下文。
     #[test]
     fn should_use_primary_error_line_for_generic_failure() {
         let raw = r#"OpenAI Codex v0.104.0

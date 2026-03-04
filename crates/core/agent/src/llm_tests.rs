@@ -47,8 +47,8 @@ fn should_route_gemini_provider_without_not_implemented_error() {
         },
     );
     match result {
-        Ok(message) => {
-            assert!(!message.trim().is_empty());
+        Ok(res) => {
+            assert!(!res.content.trim().is_empty());
         }
         Err(err) => {
             assert_ne!(err.code, "core.agent.llm.provider_not_implemented");
