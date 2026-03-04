@@ -90,6 +90,13 @@ test("TestCodeProjectSettingsPageShouldSupportNameAndDependencyRules", () => {
   assert.match(pageSource, /<DeskSettingsRow title="项目名称">/);
   assert.match(pageSource, /<DeskSectionTitle title="依赖规范" \/>/);
   assert.match(pageSource, /<DeskSectionTitle title="结构化项目信息" \/>/);
+  assert.match(pageSource, /const \[projectProfileEditMode, setProjectProfileEditMode\] = useState<"form" \| "json">\("form"\);/);
+  assert.match(pageSource, /label="分区表单"/);
+  assert.match(pageSource, /label="JSON 高级"/);
+  assert.match(pageSource, /title="JSON（高级）"/);
+  assert.match(pageSource, /handleApplyProjectProfileJson/);
+  assert.match(pageSource, /parseProjectProfileDraftFromJson\(/);
+  assert.match(pageSource, /setProjectProfileJsonStatus\("JSON 已应用，结构化信息将自动保存。"\);/);
   assert.match(pageSource, /<AriInput\.TextList/);
   assert.match(pageSource, /<AriInput\.TextArea/);
   assert.match(pageSource, /updateCodeWorkspaceGroupSettings\(/);

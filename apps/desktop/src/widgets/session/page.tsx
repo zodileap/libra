@@ -905,6 +905,42 @@ const CODE_PROFILE_CONTEXT_ITEM_LIMIT = 4;
 
 // 描述：
 //
+//   - 识别“框架替换/迁移”需求的关键词，命中后会注入结构不变约束。
+const CODE_FRAMEWORK_REPLACEMENT_KEYWORDS = [
+  "框架替换",
+  "替换框架",
+  "切换框架",
+  "框架迁移",
+  "迁移框架",
+  "ui框架替换",
+  "switch framework",
+  "replace framework",
+  "migrate framework",
+];
+
+// 描述：
+//
+//   - 常见 UI/前端框架词表，用于降低框架替换意图识别误判。
+const CODE_FRAMEWORK_HINT_KEYWORDS = [
+  "react",
+  "vue",
+  "angular",
+  "svelte",
+  "next",
+  "nuxt",
+  "solid",
+  "aries_react",
+  "antd",
+  "ant design",
+  "mui",
+  "element-plus",
+  "chakra",
+  "bootstrap",
+  "tailwind",
+];
+
+// 描述：
+//
 //   - 将结构化项目信息转换为会话提示词上下文片段。
 //
 // Params:
@@ -948,6 +984,86 @@ function buildCodeProjectProfileContextLines(
   pushList("接口契约", profile.apiSpec.contracts || []);
   pushList("业务规则", profile.domainRules || []);
   pushList("编码约定", profile.codingConventions || []);
+  lines.push("");
+  return lines;
+}
+
+// 描述：
+//
+//   - 判断当前请求是否为“框架替换但保留页面结构”的迁移类任务。
+//
+// Params:
+//
+//   - prompt: 当前用户输入。
+//
+// Returns:
+//
+//   - true 表示命中框架替换语义。
+function isFrameworkReplacementPrompt(prompt: string): boolean {
+  const normalized = String(prompt || "").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (CODE_FRAMEWORK_REPLACEMENT_KEYWORDS.some((keyword) => normalized.includes(keyword))) {
+    return true;
+  }
+  const hasFrameworkWord = normalized.includes("框架");
+  const hasReplacementVerb = /(替换|切换|迁移|改用|重写|升级)/.test(normalized);
+  if (hasFrameworkWord && hasReplacementVerb) {
+    return true;
+  }
+  const hasFrameworkHint = CODE_FRAMEWORK_HINT_KEYWORDS.some((keyword) => normalized.includes(keyword));
+  const hasSwitchIntent = /(replace|switch|migrate|rewrite|refactor|迁移|替换|切换)/.test(normalized);
+  return hasFrameworkHint && hasSwitchIntent;
+}
+
+// 描述：
+//
+//   - 为“框架替换”场景构建结构保持约束，优先要求沿用 uiSpec 与 architecture 语义。
+//
+// Params:
+//
+//   - prompt: 当前用户输入。
+//   - profile: 当前项目结构化信息。
+//
+// Returns:
+//
+//   - 可拼接到提示词的附加约束行数组。
+function buildFrameworkReplacementContextLines(
+  prompt: string,
+  profile?: CodeWorkspaceProjectProfile | null,
+): string[] {
+  if (!profile || !isFrameworkReplacementPrompt(prompt)) {
+    return [];
+  }
+  const pageBaseline = (profile.uiSpec.pages || [])
+    .map((item) => String(item || "").trim())
+    .filter((item) => item.length > 0)
+    .slice(0, CODE_PROFILE_CONTEXT_ITEM_LIMIT);
+  const moduleBaseline = [...(profile.architecture.modules || []), ...(profile.architecture.boundaries || [])]
+    .map((item) => String(item || "").trim())
+    .filter((item) => item.length > 0)
+    .slice(0, CODE_PROFILE_CONTEXT_ITEM_LIMIT);
+  const hasUiBaseline = pageBaseline.length > 0
+    || (profile.uiSpec.layoutPrinciples || []).length > 0
+    || (profile.uiSpec.interactionPrinciples || []).length > 0;
+  const hasArchitectureBaseline = moduleBaseline.length > 0
+    || (profile.architecture.constraints || []).length > 0;
+  if (!hasUiBaseline && !hasArchitectureBaseline) {
+    return [];
+  }
+  const lines: string[] = [
+    "【框架替换执行约束】",
+    "保持页面结构语义、信息架构和交互目标不变，仅替换框架相关实现。",
+  ];
+  if (pageBaseline.length > 0) {
+    lines.push(`页面结构基线：${pageBaseline.join("；")}`);
+  }
+  if (moduleBaseline.length > 0) {
+    lines.push(`模块边界基线：${moduleBaseline.join("；")}`);
+  }
+  lines.push("优先复用既有接口契约与业务规则，避免引入无关重构。");
+  lines.push("若新框架能力存在差异，先说明差异，再给出兼容实现。");
   lines.push("");
   return lines;
 }
@@ -1015,6 +1131,10 @@ function buildCodeSessionContextPrompt(
   }
   const normalizedWorkspacePath = String(workspacePath || "").trim();
   const profileContextLines = buildCodeProjectProfileContextLines(projectProfile);
+  const frameworkReplacementContextLines = buildFrameworkReplacementContextLines(
+    normalizedCurrentPrompt,
+    projectProfile,
+  );
   const historyLines = historyMessages
     .filter((item) => item.role === "user" || item.role === "assistant")
     .map((item) => ({
@@ -1033,6 +1153,7 @@ function buildCodeSessionContextPrompt(
         "约束：仅基于该目录进行分析与修改，不要切换到其它工程。",
         "",
         ...profileContextLines,
+        ...frameworkReplacementContextLines,
         "【当前请求】",
         normalizedCurrentPrompt,
       ].join("\n");
@@ -1040,6 +1161,7 @@ function buildCodeSessionContextPrompt(
     if (profileContextLines.length > 0) {
       return [
         ...profileContextLines,
+        ...frameworkReplacementContextLines,
         "【当前请求】",
         normalizedCurrentPrompt,
       ].join("\n");
@@ -1060,6 +1182,7 @@ function buildCodeSessionContextPrompt(
   return [
     ...workspaceLines,
     ...profileContextLines,
+    ...frameworkReplacementContextLines,
     "【会话上下文】",
     ...historyLines,
     "",

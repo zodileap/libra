@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useSearchParams } from "react-router-dom";
-import { AriButton, AriContainer, AriInput, AriTypography } from "aries_react";
+import { AriButton, AriContainer, AriFlex, AriInput, AriTypography } from "aries_react";
 import {
   bootstrapCodeWorkspaceProjectProfile,
   CODE_WORKSPACE_GROUPS_UPDATED_EVENT,
@@ -113,6 +113,152 @@ function toProjectProfileDraft(profile: CodeWorkspaceProjectProfile | null): Pro
 
 // 描述：
 //
+//   - 规范化 JSON 输入中的字符串数组字段，统一去空、去重并保留顺序。
+//
+// Params:
+//
+//   - value: 任意输入值。
+//
+// Returns:
+//
+//   - 规范化后的字符串数组。
+function normalizeProfileDraftTextList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const normalized = value
+    .map((item) => String(item || "").trim())
+    .filter((item) => item.length > 0);
+  return normalized.filter((item, index) => normalized.indexOf(item) === index);
+}
+
+// 描述：
+//
+//   - 将结构化信息草稿序列化为格式化 JSON 文本，便于高级模式编辑与回放。
+//
+// Params:
+//
+//   - draft: 当前草稿。
+//
+// Returns:
+//
+//   - 双空格缩进的 JSON 字符串。
+function toProjectProfileDraftJson(draft: ProjectProfileDraft): string {
+  return JSON.stringify(draft, null, 2);
+}
+
+// 描述：
+//
+//   - 解析 JSON 高级模式输入并转成结构化信息草稿，支持基于当前草稿做增量覆盖。
+//
+// Params:
+//
+//   - rawJson: 用户输入的 JSON 文本。
+//   - baseDraft: 当前草稿（用于缺失字段回填）。
+//
+// Returns:
+//
+//   - 解析结果（包含成功状态、草稿与提示信息）。
+function parseProjectProfileDraftFromJson(
+  rawJson: string,
+  baseDraft: ProjectProfileDraft,
+): {
+  ok: boolean;
+  draft: ProjectProfileDraft;
+  message: string;
+} {
+  const normalizedRawJson = String(rawJson || "").trim();
+  if (!normalizedRawJson) {
+    return {
+      ok: false,
+      draft: baseDraft,
+      message: "JSON 内容为空，请输入有效的结构化信息。",
+    };
+  }
+  try {
+    const parsed = JSON.parse(normalizedRawJson) as Partial<ProjectProfileDraft> | null;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {
+        ok: false,
+        draft: baseDraft,
+        message: "JSON 顶层必须是对象结构。",
+      };
+    }
+    const nextDraft: ProjectProfileDraft = {
+      summary: parsed.summary === undefined
+        ? String(baseDraft.summary || "").trim()
+        : String(parsed.summary || "").trim(),
+      techStacks: {
+        frontend: parsed.techStacks?.frontend === undefined
+          ? normalizeProfileDraftTextList(baseDraft.techStacks.frontend)
+          : normalizeProfileDraftTextList(parsed.techStacks.frontend),
+        backend: parsed.techStacks?.backend === undefined
+          ? normalizeProfileDraftTextList(baseDraft.techStacks.backend)
+          : normalizeProfileDraftTextList(parsed.techStacks.backend),
+        database: parsed.techStacks?.database === undefined
+          ? normalizeProfileDraftTextList(baseDraft.techStacks.database)
+          : normalizeProfileDraftTextList(parsed.techStacks.database),
+        infrastructure: parsed.techStacks?.infrastructure === undefined
+          ? normalizeProfileDraftTextList(baseDraft.techStacks.infrastructure)
+          : normalizeProfileDraftTextList(parsed.techStacks.infrastructure),
+      },
+      architecture: {
+        modules: parsed.architecture?.modules === undefined
+          ? normalizeProfileDraftTextList(baseDraft.architecture.modules)
+          : normalizeProfileDraftTextList(parsed.architecture.modules),
+        boundaries: parsed.architecture?.boundaries === undefined
+          ? normalizeProfileDraftTextList(baseDraft.architecture.boundaries)
+          : normalizeProfileDraftTextList(parsed.architecture.boundaries),
+        constraints: parsed.architecture?.constraints === undefined
+          ? normalizeProfileDraftTextList(baseDraft.architecture.constraints)
+          : normalizeProfileDraftTextList(parsed.architecture.constraints),
+      },
+      uiSpec: {
+        pages: parsed.uiSpec?.pages === undefined
+          ? normalizeProfileDraftTextList(baseDraft.uiSpec.pages)
+          : normalizeProfileDraftTextList(parsed.uiSpec.pages),
+        layoutPrinciples: parsed.uiSpec?.layoutPrinciples === undefined
+          ? normalizeProfileDraftTextList(baseDraft.uiSpec.layoutPrinciples)
+          : normalizeProfileDraftTextList(parsed.uiSpec.layoutPrinciples),
+        interactionPrinciples: parsed.uiSpec?.interactionPrinciples === undefined
+          ? normalizeProfileDraftTextList(baseDraft.uiSpec.interactionPrinciples)
+          : normalizeProfileDraftTextList(parsed.uiSpec.interactionPrinciples),
+      },
+      apiSpec: {
+        services: parsed.apiSpec?.services === undefined
+          ? normalizeProfileDraftTextList(baseDraft.apiSpec.services)
+          : normalizeProfileDraftTextList(parsed.apiSpec.services),
+        contracts: parsed.apiSpec?.contracts === undefined
+          ? normalizeProfileDraftTextList(baseDraft.apiSpec.contracts)
+          : normalizeProfileDraftTextList(parsed.apiSpec.contracts),
+        errorConventions: parsed.apiSpec?.errorConventions === undefined
+          ? normalizeProfileDraftTextList(baseDraft.apiSpec.errorConventions)
+          : normalizeProfileDraftTextList(parsed.apiSpec.errorConventions),
+      },
+      domainRules: parsed.domainRules === undefined
+        ? normalizeProfileDraftTextList(baseDraft.domainRules)
+        : normalizeProfileDraftTextList(parsed.domainRules),
+      codingConventions: parsed.codingConventions === undefined
+        ? normalizeProfileDraftTextList(baseDraft.codingConventions)
+        : normalizeProfileDraftTextList(parsed.codingConventions),
+    };
+    return {
+      ok: true,
+      draft: nextDraft,
+      message: "",
+    };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : "JSON 解析失败";
+    return {
+      ok: false,
+      draft: baseDraft,
+      message: `JSON 解析失败：${reason}`,
+    };
+  }
+}
+
+// 描述：
+//
 //   - 渲染代码项目设置页面，承载项目名称、依赖规范与结构化项目信息维护。
 export function CodeProjectSettingsPage() {
   const [searchParams] = useSearchParams();
@@ -121,6 +267,10 @@ export function CodeProjectSettingsPage() {
   const [dependencyRules, setDependencyRules] = useState<string[]>([]);
   const [workspaceReloadVersion, setWorkspaceReloadVersion] = useState(0);
   const [projectProfileDraft, setProjectProfileDraft] = useState<ProjectProfileDraft>(createEmptyProjectProfileDraft);
+  const [projectProfileEditMode, setProjectProfileEditMode] = useState<"form" | "json">("form");
+  const [projectProfileJsonDraft, setProjectProfileJsonDraft] = useState("");
+  const [projectProfileJsonDirty, setProjectProfileJsonDirty] = useState(false);
+  const [projectProfileJsonStatus, setProjectProfileJsonStatus] = useState("");
   const [profileSyncStatus, setProfileSyncStatus] = useState("");
   const [regeneratingProfile, setRegeneratingProfile] = useState(false);
   const skipAutoSaveRef = useRef(true);
@@ -175,6 +325,10 @@ export function CodeProjectSettingsPage() {
     if (!workspaceId || !workspace) {
       profileRevisionRef.current = 0;
       setProjectProfileDraft(createEmptyProjectProfileDraft());
+      setProjectProfileEditMode("form");
+      setProjectProfileJsonDraft("");
+      setProjectProfileJsonDirty(false);
+      setProjectProfileJsonStatus("");
       setProfileSyncStatus("");
       return;
     }
@@ -183,11 +337,25 @@ export function CodeProjectSettingsPage() {
         force: false,
         updatedBy: "project_settings_init",
         reason: "project_settings_init",
-      });
+    });
     profileRevisionRef.current = Number(profile?.revision || 0);
-    setProjectProfileDraft(toProjectProfileDraft(profile));
+    const nextDraft = toProjectProfileDraft(profile);
+    setProjectProfileDraft(nextDraft);
+    setProjectProfileJsonDraft(toProjectProfileDraftJson(nextDraft));
+    setProjectProfileJsonDirty(false);
+    setProjectProfileJsonStatus("");
     setProfileSyncStatus(profile ? `结构化信息已加载（v${profile.revision}）` : "结构化信息初始化失败");
   }, [workspaceId, workspace]);
+
+  // 描述：
+  //
+  //   - 当草稿更新且 JSON 高级模式未处于脏编辑状态时，同步回放 JSON 文本，保证两种编辑模式一致。
+  useEffect(() => {
+    if (projectProfileJsonDirty) {
+      return;
+    }
+    setProjectProfileJsonDraft(toProjectProfileDraftJson(projectProfileDraft));
+  }, [projectProfileDraft, projectProfileJsonDirty]);
 
   // 描述：
   //
@@ -244,6 +412,8 @@ export function CodeProjectSettingsPage() {
         skipProfileAutoSaveRef.current = true;
         profileRevisionRef.current = saveResult.profile.revision;
         setProjectProfileDraft(toProjectProfileDraft(saveResult.profile));
+        setProjectProfileJsonDirty(false);
+        setProjectProfileJsonStatus("检测到其他会话更新，JSON 已刷新为最新版本。");
       }
       setProfileSyncStatus(saveResult.message);
     }, 320);
@@ -273,6 +443,8 @@ export function CodeProjectSettingsPage() {
       skipProfileAutoSaveRef.current = true;
       profileRevisionRef.current = latest.revision;
       setProjectProfileDraft(toProjectProfileDraft(latest));
+      setProjectProfileJsonDirty(false);
+      setProjectProfileJsonStatus("");
       setProfileSyncStatus(`结构化信息已同步（v${latest.revision}）`);
     };
 
@@ -367,8 +539,53 @@ export function CodeProjectSettingsPage() {
     skipProfileAutoSaveRef.current = true;
     profileRevisionRef.current = nextProfile.revision;
     setProjectProfileDraft(toProjectProfileDraft(nextProfile));
+    setProjectProfileJsonDirty(false);
+    setProjectProfileJsonStatus("");
     setProfileSyncStatus(`结构化信息已重建（v${nextProfile.revision}）`);
     setRegeneratingProfile(false);
+  };
+
+  // 描述：
+  //
+  //   - 切换结构化信息编辑模式；进入 JSON 模式时重置为当前草稿快照，避免携带历史脏数据。
+  //
+  // Params:
+  //
+  //   - mode: 目标编辑模式。
+  const handleSwitchProjectProfileEditMode = (mode: "form" | "json") => {
+    if (mode === projectProfileEditMode) {
+      return;
+    }
+    if (mode === "json") {
+      setProjectProfileJsonDraft(toProjectProfileDraftJson(projectProfileDraft));
+      setProjectProfileJsonDirty(false);
+      setProjectProfileJsonStatus("");
+    }
+    setProjectProfileEditMode(mode);
+  };
+
+  // 描述：
+  //
+  //   - 应用 JSON 高级模式输入；解析成功后写回分区草稿并触发既有自动保存链路。
+  const handleApplyProjectProfileJson = () => {
+    const parseResult = parseProjectProfileDraftFromJson(projectProfileJsonDraft, projectProfileDraft);
+    if (!parseResult.ok) {
+      setProjectProfileJsonStatus(parseResult.message);
+      return;
+    }
+    setProjectProfileDraft(parseResult.draft);
+    setProjectProfileJsonDraft(toProjectProfileDraftJson(parseResult.draft));
+    setProjectProfileJsonDirty(false);
+    setProjectProfileJsonStatus("JSON 已应用，结构化信息将自动保存。");
+  };
+
+  // 描述：
+  //
+  //   - 放弃 JSON 模式中的临时编辑，恢复到当前内存草稿对应的格式化文本。
+  const handleResetProjectProfileJson = () => {
+    setProjectProfileJsonDraft(toProjectProfileDraftJson(projectProfileDraft));
+    setProjectProfileJsonDirty(false);
+    setProjectProfileJsonStatus("已恢复为当前结构化草稿。");
   };
 
   const projectTitle = String(name || workspace?.name || "").trim() || "未命名项目";
@@ -435,158 +652,221 @@ export function CodeProjectSettingsPage() {
         <DeskSectionTitle title="结构化项目信息" />
         <AriContainer className="desk-settings-panel">
           <AriContainer className="desk-project-settings-form" padding={0}>
-            <DeskSettingsRow title="项目摘要">
-              <AriInput.TextArea
-                value={projectProfileDraft.summary}
-                onChange={(value: string) => {
-                  setProjectProfileDraft((current) => ({
-                    ...current,
-                    summary: value,
-                  }));
-                }}
-                variant="borderless"
-                rows={3}
-                autoSize={{ minRows: 3, maxRows: 8 }}
-                placeholder="描述项目目标、核心能力与边界。"
-                minWidth={360}
-              />
+            <DeskSettingsRow title="编辑模式">
+              <AriFlex align="center" justify="flex-start" space={8}>
+                <AriButton
+                  type={projectProfileEditMode === "form" ? "primary" : "default"}
+                  icon="list"
+                  label="分区表单"
+                  onClick={() => {
+                    handleSwitchProjectProfileEditMode("form");
+                  }}
+                />
+                <AriButton
+                  type={projectProfileEditMode === "json" ? "primary" : "default"}
+                  icon="code"
+                  label="JSON 高级"
+                  onClick={() => {
+                    handleSwitchProjectProfileEditMode("json");
+                  }}
+                />
+              </AriFlex>
             </DeskSettingsRow>
 
-            <DeskSettingsRow title="前端技术栈">
-              <AriInput.TextList
-                value={projectProfileDraft.techStacks.frontend}
-                onChange={(value: string[]) => {
-                  handleUpdateTechStack("frontend", value);
-                }}
-                itemPlaceholder="react"
-                addText="新增"
-                allowDrag={false}
-                minWidth={360}
-              />
-            </DeskSettingsRow>
+            {projectProfileEditMode === "form" ? (
+              <>
+                <DeskSettingsRow title="项目摘要">
+                  <AriInput.TextArea
+                    value={projectProfileDraft.summary}
+                    onChange={(value: string) => {
+                      setProjectProfileDraft((current) => ({
+                        ...current,
+                        summary: value,
+                      }));
+                    }}
+                    variant="borderless"
+                    rows={3}
+                    autoSize={{ minRows: 3, maxRows: 8 }}
+                    placeholder="描述项目目标、核心能力与边界。"
+                    minWidth={360}
+                  />
+                </DeskSettingsRow>
 
-            <DeskSettingsRow title="后端技术栈">
-              <AriInput.TextList
-                value={projectProfileDraft.techStacks.backend}
-                onChange={(value: string[]) => {
-                  handleUpdateTechStack("backend", value);
-                }}
-                itemPlaceholder="go"
-                addText="新增"
-                allowDrag={false}
-                minWidth={360}
-              />
-            </DeskSettingsRow>
+                <DeskSettingsRow title="前端技术栈">
+                  <AriInput.TextList
+                    value={projectProfileDraft.techStacks.frontend}
+                    onChange={(value: string[]) => {
+                      handleUpdateTechStack("frontend", value);
+                    }}
+                    itemPlaceholder="react"
+                    addText="新增"
+                    allowDrag={false}
+                    minWidth={360}
+                  />
+                </DeskSettingsRow>
 
-            <DeskSettingsRow title="数据库技术栈">
-              <AriInput.TextList
-                value={projectProfileDraft.techStacks.database}
-                onChange={(value: string[]) => {
-                  handleUpdateTechStack("database", value);
-                }}
-                itemPlaceholder="postgres"
-                addText="新增"
-                allowDrag={false}
-                minWidth={360}
-              />
-            </DeskSettingsRow>
+                <DeskSettingsRow title="后端技术栈">
+                  <AriInput.TextList
+                    value={projectProfileDraft.techStacks.backend}
+                    onChange={(value: string[]) => {
+                      handleUpdateTechStack("backend", value);
+                    }}
+                    itemPlaceholder="go"
+                    addText="新增"
+                    allowDrag={false}
+                    minWidth={360}
+                  />
+                </DeskSettingsRow>
 
-            <DeskSettingsRow title="基础设施技术栈">
-              <AriInput.TextList
-                value={projectProfileDraft.techStacks.infrastructure}
-                onChange={(value: string[]) => {
-                  handleUpdateTechStack("infrastructure", value);
-                }}
-                itemPlaceholder="docker"
-                addText="新增"
-                allowDrag={false}
-                minWidth={360}
-              />
-            </DeskSettingsRow>
+                <DeskSettingsRow title="数据库技术栈">
+                  <AriInput.TextList
+                    value={projectProfileDraft.techStacks.database}
+                    onChange={(value: string[]) => {
+                      handleUpdateTechStack("database", value);
+                    }}
+                    itemPlaceholder="postgres"
+                    addText="新增"
+                    allowDrag={false}
+                    minWidth={360}
+                  />
+                </DeskSettingsRow>
 
-            <DeskSettingsRow title="模块边界">
-              <AriInput.TextList
-                value={projectProfileDraft.architecture.modules}
-                onChange={(value: string[]) => {
-                  handleUpdateArchitecture("modules", value);
-                }}
-                itemPlaceholder="用户模块"
-                addText="新增"
-                allowDrag={false}
-                minWidth={360}
-              />
-            </DeskSettingsRow>
+                <DeskSettingsRow title="基础设施技术栈">
+                  <AriInput.TextList
+                    value={projectProfileDraft.techStacks.infrastructure}
+                    onChange={(value: string[]) => {
+                      handleUpdateTechStack("infrastructure", value);
+                    }}
+                    itemPlaceholder="docker"
+                    addText="新增"
+                    allowDrag={false}
+                    minWidth={360}
+                  />
+                </DeskSettingsRow>
 
-            <DeskSettingsRow title="架构约束">
-              <AriInput.TextList
-                value={projectProfileDraft.architecture.constraints}
-                onChange={(value: string[]) => {
-                  handleUpdateArchitecture("constraints", value);
-                }}
-                itemPlaceholder="UI 与业务逻辑分层"
-                addText="新增"
-                allowDrag={false}
-                minWidth={360}
-              />
-            </DeskSettingsRow>
+                <DeskSettingsRow title="模块边界">
+                  <AriInput.TextList
+                    value={projectProfileDraft.architecture.modules}
+                    onChange={(value: string[]) => {
+                      handleUpdateArchitecture("modules", value);
+                    }}
+                    itemPlaceholder="用户模块"
+                    addText="新增"
+                    allowDrag={false}
+                    minWidth={360}
+                  />
+                </DeskSettingsRow>
 
-            <DeskSettingsRow title="页面结构语义">
-              <AriInput.TextList
-                value={projectProfileDraft.uiSpec.pages}
-                onChange={(value: string[]) => {
-                  handleUpdateUiSpec("pages", value);
-                }}
-                itemPlaceholder="首页 / 列表页 / 详情页"
-                addText="新增"
-                allowDrag={false}
-                minWidth={360}
-              />
-            </DeskSettingsRow>
+                <DeskSettingsRow title="架构约束">
+                  <AriInput.TextList
+                    value={projectProfileDraft.architecture.constraints}
+                    onChange={(value: string[]) => {
+                      handleUpdateArchitecture("constraints", value);
+                    }}
+                    itemPlaceholder="UI 与业务逻辑分层"
+                    addText="新增"
+                    allowDrag={false}
+                    minWidth={360}
+                  />
+                </DeskSettingsRow>
 
-            <DeskSettingsRow title="接口与契约">
-              <AriInput.TextList
-                value={projectProfileDraft.apiSpec.contracts}
-                onChange={(value: string[]) => {
-                  handleUpdateApiSpec("contracts", value);
-                }}
-                itemPlaceholder="UserDTO 字段保持兼容"
-                addText="新增"
-                allowDrag={false}
-                minWidth={360}
-              />
-            </DeskSettingsRow>
+                <DeskSettingsRow title="页面结构语义">
+                  <AriInput.TextList
+                    value={projectProfileDraft.uiSpec.pages}
+                    onChange={(value: string[]) => {
+                      handleUpdateUiSpec("pages", value);
+                    }}
+                    itemPlaceholder="首页 / 列表页 / 详情页"
+                    addText="新增"
+                    allowDrag={false}
+                    minWidth={360}
+                  />
+                </DeskSettingsRow>
 
-            <DeskSettingsRow title="业务规则">
-              <AriInput.TextList
-                value={projectProfileDraft.domainRules}
-                onChange={(value: string[]) => {
-                  setProjectProfileDraft((current) => ({
-                    ...current,
-                    domainRules: value,
-                  }));
-                }}
-                itemPlaceholder="登录失败超过 5 次触发风控"
-                addText="新增"
-                allowDrag={false}
-                minWidth={360}
-              />
-            </DeskSettingsRow>
+                <DeskSettingsRow title="接口与契约">
+                  <AriInput.TextList
+                    value={projectProfileDraft.apiSpec.contracts}
+                    onChange={(value: string[]) => {
+                      handleUpdateApiSpec("contracts", value);
+                    }}
+                    itemPlaceholder="UserDTO 字段保持兼容"
+                    addText="新增"
+                    allowDrag={false}
+                    minWidth={360}
+                  />
+                </DeskSettingsRow>
 
-            <DeskSettingsRow title="编码约定">
-              <AriInput.TextList
-                value={projectProfileDraft.codingConventions}
-                onChange={(value: string[]) => {
-                  setProjectProfileDraft((current) => ({
-                    ...current,
-                    codingConventions: value,
-                  }));
-                }}
-                itemPlaceholder="新增功能必须补充单测"
-                addText="新增"
-                allowDrag={false}
-                minWidth={360}
-              />
-            </DeskSettingsRow>
+                <DeskSettingsRow title="业务规则">
+                  <AriInput.TextList
+                    value={projectProfileDraft.domainRules}
+                    onChange={(value: string[]) => {
+                      setProjectProfileDraft((current) => ({
+                        ...current,
+                        domainRules: value,
+                      }));
+                    }}
+                    itemPlaceholder="登录失败超过 5 次触发风控"
+                    addText="新增"
+                    allowDrag={false}
+                    minWidth={360}
+                  />
+                </DeskSettingsRow>
+
+                <DeskSettingsRow title="编码约定">
+                  <AriInput.TextList
+                    value={projectProfileDraft.codingConventions}
+                    onChange={(value: string[]) => {
+                      setProjectProfileDraft((current) => ({
+                        ...current,
+                        codingConventions: value,
+                      }));
+                    }}
+                    itemPlaceholder="新增功能必须补充单测"
+                    addText="新增"
+                    allowDrag={false}
+                    minWidth={360}
+                  />
+                </DeskSettingsRow>
+              </>
+            ) : (
+              <>
+                <DeskSettingsRow title="JSON（高级）">
+                  <AriInput.TextArea
+                    value={projectProfileJsonDraft}
+                    onChange={(value: string) => {
+                      setProjectProfileJsonDraft(value);
+                      setProjectProfileJsonDirty(true);
+                      setProjectProfileJsonStatus("");
+                    }}
+                    variant="borderless"
+                    rows={14}
+                    autoSize={{ minRows: 12, maxRows: 24 }}
+                    placeholder="输入 ProjectProfile JSON，支持局部字段覆盖。"
+                    minWidth={360}
+                  />
+                </DeskSettingsRow>
+                <DeskSettingsRow title="JSON 操作">
+                  <AriFlex align="center" justify="flex-start" space={8}>
+                    <AriButton
+                      color="info"
+                      icon="check"
+                      label="应用 JSON"
+                      onClick={handleApplyProjectProfileJson}
+                    />
+                    <AriButton
+                      type="default"
+                      icon="undo"
+                      label="恢复草稿"
+                      onClick={handleResetProjectProfileJson}
+                    />
+                  </AriFlex>
+                </DeskSettingsRow>
+                <AriTypography
+                  variant="caption"
+                  value={projectProfileJsonStatus || "提示：JSON 模式会写回同一份项目结构化信息，并自动保存。"}
+                />
+              </>
+            )}
 
             <DeskSettingsRow title="维护操作">
               <AriButton
