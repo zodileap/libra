@@ -50,6 +50,27 @@ const SKILL_CATALOG: SkillCatalogItem[] = [
     versions: ["1.0.0"],
   },
   {
+    id: "apifox_model_designer",
+    name: "Apifox 数据模型",
+    description: "根据需求构建前后端交互数据模型并同步 Apifox。",
+    icon: "dataset",
+    versions: ["1.0.0"],
+  },
+  {
+    id: "frontend_architect",
+    name: "前端架构设计",
+    description: "输出前端目录结构、模块边界与实现约束。",
+    icon: "account_tree",
+    versions: ["1.0.0"],
+  },
+  {
+    id: "frontend_page_builder",
+    name: "前端页面构建",
+    description: "依据页面布局与元素结构实现前端页面与交互。",
+    icon: "dashboard_customize",
+    versions: ["1.0.0"],
+  },
+  {
     id: "db_designer",
     name: "数据库设计",
     description: "根据需求输出数据库设计与迁移草案。",

@@ -76,6 +76,9 @@ test("TestSkillsPageShouldRenderInstalledAndMarketplaceSections", () => {
   //   - 技能服务层应提供目录与安装状态管理能力，并支持远端目录回退本地目录。
   assert.match(skillServiceSource, /const SKILL_CATALOG: SkillCatalogItem\[]/);
   assert.match(skillServiceSource, /versions: \["1\.0\.0"\]/);
+  assert.match(skillServiceSource, /id: "apifox_model_designer"/);
+  assert.match(skillServiceSource, /id: "frontend_architect"/);
+  assert.match(skillServiceSource, /id: "frontend_page_builder"/);
   assert.match(skillServiceSource, /VITE_SKILL_CATALOG_URL/);
   assert.match(skillServiceSource, /loadRemoteSkillCatalog/);
   assert.match(skillServiceSource, /listSkillOverview\(\): Promise<SkillOverview>/);
