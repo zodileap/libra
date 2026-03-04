@@ -6,8 +6,11 @@
   --z-border-radius: 1.125rem;
   --z-border-radius-container: 1.125rem;
   --z-color-bg-app-layout: transparent !important;
-
-  --z-base-font-size: 0.75rem;
+ 
+  /* 描述
+   * 不允许修改！
+   */
+  --z-base-font-size: 12px;
 
   /* 描述:
    *
