@@ -1,11 +1,12 @@
 import type { LoginUser } from "../types";
+import { defaultServiceUrl, IS_BROWSER } from "../constants";
 import {
   buildAuthHeaders,
   buildBackendErrorMessage,
   buildNetworkFailureMessage,
   isUnauthorizedResponse,
   toQueryString,
-} from "./backend-api-core.mjs";
+} from "./backend-api-core";
 
 // 描述:
 //
@@ -147,10 +148,10 @@ function resolveServiceBaseUrl(envValue: string | undefined, fallback: string): 
   return fallback.replace(/\/$/, "");
 }
 
-const accountBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_ACCOUNT_BASE_URL, "http://127.0.0.1:10001");
-const runtimeBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_RUNTIME_BASE_URL, "http://127.0.0.1:10002");
-const agentCodeBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_AGENT_CODE_BASE_URL, "http://127.0.0.1:10003");
-const agent3dBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_AGENT_3D_BASE_URL, "http://127.0.0.1:10004");
+const accountBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_ACCOUNT_BASE_URL, defaultServiceUrl("account"));
+const runtimeBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_RUNTIME_BASE_URL, defaultServiceUrl("runtime"));
+const agentCodeBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_AGENT_CODE_BASE_URL, defaultServiceUrl("agentCode"));
+const agent3dBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_AGENT_3D_BASE_URL, defaultServiceUrl("agent3d"));
 
 // 描述:
 //
@@ -169,7 +170,7 @@ export function setUnauthorizedHandler(handler: (() => void) | null) {
 
 // 描述：读取当前身份令牌。
 export function getAuthToken(): string {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return "";
   }
   return window.localStorage.getItem(authTokenStorageKey) || "";
@@ -177,7 +178,7 @@ export function getAuthToken(): string {
 
 // 描述：写入当前身份令牌。
 export function setAuthToken(token: string) {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return;
   }
   window.localStorage.setItem(authTokenStorageKey, token);
@@ -185,7 +186,7 @@ export function setAuthToken(token: string) {
 
 // 描述：清理当前身份令牌。
 export function clearAuthToken() {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return;
   }
   window.localStorage.removeItem(authTokenStorageKey);

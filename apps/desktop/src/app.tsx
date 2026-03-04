@@ -25,6 +25,7 @@ import type {
 	LoginUser,
 	ModelMcpCapabilities,
 } from "./shared/types";
+import { defaultServiceUrl, STORAGE_KEYS } from "./shared/constants";
 
 // 描述:
 //
@@ -190,7 +191,7 @@ function normalizeAiKeys(raw: unknown, now: string): AiKeyItem[] {
 //
 //   - 初始化全局应用配置。
 const appConfig = setAppConfig({
-	baseUrl: import.meta.env.VITE_APP_API_URL || "http://localhost:11001",
+	baseUrl: import.meta.env.VITE_APP_API_URL || defaultServiceUrl("app"),
 	localImgSrc: import.meta.env.VITE_APP_LOCAL_IMG_SRC || "",
 	theme: "brand"
 });
@@ -207,7 +208,7 @@ export default function App() {
 	const [restoringAuth, setRestoringAuth] = useState(true);
 	// 描述：主题模式（亮色/暗色/跟随系统）。
 	const [colorThemeMode, setColorThemeMode] = useState<ColorThemeMode>(() => {
-		const saved = localStorage.getItem("zodileap.desktop.colorThemeMode");
+		const saved = localStorage.getItem(STORAGE_KEYS.COLOR_THEME_MODE);
 		if (saved === "light" || saved === "dark" || saved === "system") {
 			return saved;
 		}
@@ -215,7 +216,7 @@ export default function App() {
 	});
 	// 描述：模型智能体 MCP 能力开关集合。
 	const [modelMcpCapabilities, setModelMcpCapabilities] = useState<ModelMcpCapabilities>(() => {
-		const saved = localStorage.getItem("zodileap.desktop.modelMcpCapabilities");
+		const saved = localStorage.getItem(STORAGE_KEYS.MODEL_MCP_CAPABILITIES);
 		if (saved) {
 			try {
 				const parsed = JSON.parse(saved);
@@ -252,7 +253,7 @@ export default function App() {
 			hour: "2-digit",
 			minute: "2-digit",
 		});
-		const saved = localStorage.getItem("zodileap.desktop.aiKeys");
+		const saved = localStorage.getItem(STORAGE_KEYS.AI_KEYS);
 		if (saved) {
 			try {
 				const parsed = JSON.parse(saved);
@@ -277,7 +278,7 @@ export default function App() {
 	const geminiCliPopupShownRef = useRef<Set<string>>(new Set());
 
 	useEffect(() => {
-		localStorage.setItem("zodileap.desktop.colorThemeMode", colorThemeMode);
+		localStorage.setItem(STORAGE_KEYS.COLOR_THEME_MODE, colorThemeMode);
 
 		// 描述：根据当前主题模式应用实际色彩主题。
 		const applyMode = () => {
@@ -303,13 +304,13 @@ export default function App() {
 
 	useEffect(() => {
 		localStorage.setItem(
-			"zodileap.desktop.modelMcpCapabilities",
+			STORAGE_KEYS.MODEL_MCP_CAPABILITIES,
 			JSON.stringify(modelMcpCapabilities)
 		);
 	}, [modelMcpCapabilities]);
 
 	useEffect(() => {
-		localStorage.setItem("zodileap.desktop.aiKeys", JSON.stringify(aiKeys));
+		localStorage.setItem(STORAGE_KEYS.AI_KEYS, JSON.stringify(aiKeys));
 	}, [aiKeys]);
 
 	// 描述：读取当前登录态并同步用户信息与可用智能体。

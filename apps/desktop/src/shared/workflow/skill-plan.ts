@@ -1,14 +1,5 @@
 import type { CodeWorkflowDefinition } from "./types";
-
-// 描述：
-//
-//   - 技能安装状态本地存储键，与技能管理页保持一致。
-const SKILL_INSTALL_STATE_STORAGE_KEY = "zodileap.desktop.skills.installed";
-
-// 描述：
-//
-//   - 默认预装技能 ID 列表，用于首次启动时兜底安装态。
-const DEFAULT_INSTALLED_SKILL_IDS = ["skill_creator", "skill_installer"];
+import { readInstalledSkillIdsFromStorage } from "../../modules/common/services/skills";
 
 // 描述：
 //
@@ -39,35 +30,13 @@ export interface CodeWorkflowSkillExecutionPlan {
 
 // 描述：
 //
-//   - 读取当前已安装技能集合；读取失败时使用默认预装集合兜底。
+//   - 读取当前已安装技能集合，复用 skills 服务的统一读取逻辑。
 //
 // Returns:
 //
 //   - 已安装技能 ID 集合。
 function readInstalledSkillIdSet(): Set<string> {
-  if (typeof window === "undefined") {
-    return new Set(DEFAULT_INSTALLED_SKILL_IDS);
-  }
-  const rawValue = window.localStorage.getItem(SKILL_INSTALL_STATE_STORAGE_KEY);
-  if (!rawValue) {
-    return new Set(DEFAULT_INSTALLED_SKILL_IDS);
-  }
-  try {
-    const parsed = JSON.parse(rawValue) as unknown;
-    if (!Array.isArray(parsed)) {
-      return new Set(DEFAULT_INSTALLED_SKILL_IDS);
-    }
-    const normalized = parsed
-      .filter((item): item is string => typeof item === "string")
-      .map((item) => item.trim())
-      .filter((item) => item.length > 0);
-    if (normalized.length === 0) {
-      return new Set(DEFAULT_INSTALLED_SKILL_IDS);
-    }
-    return new Set(normalized);
-  } catch (_err) {
-    return new Set(DEFAULT_INSTALLED_SKILL_IDS);
-  }
+  return new Set(readInstalledSkillIdsFromStorage());
 }
 
 // 描述：

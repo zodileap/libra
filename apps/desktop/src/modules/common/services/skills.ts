@@ -1,3 +1,5 @@
+import { IS_BROWSER, STORAGE_KEYS } from "../../../shared/constants";
+
 // 描述：
 //
 //   - 定义技能目录项结构，供技能页渲染“已安装/推荐”列表。
@@ -18,10 +20,7 @@ export interface SkillOverview {
   marketplace: SkillCatalogItem[];
 }
 
-// 描述：
-//
-//   - 本地持久化技能安装状态的存储键。
-const SKILL_INSTALL_STATE_STORAGE_KEY = "zodileap.desktop.skills.installed";
+
 
 // 描述：
 //
@@ -197,12 +196,12 @@ function resolveDefaultInstalledSkillIds(): string[] {
 // Returns:
 //
 //   - 已安装技能 ID 列表。
-function readInstalledSkillIdsFromStorage(): string[] {
+export function readInstalledSkillIdsFromStorage(): string[] {
   const defaults = resolveDefaultInstalledSkillIds();
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return defaults;
   }
-  const rawValue = window.localStorage.getItem(SKILL_INSTALL_STATE_STORAGE_KEY);
+  const rawValue = window.localStorage.getItem(STORAGE_KEYS.SKILL_INSTALLED_IDS);
   if (!rawValue) {
     return defaults;
   }
@@ -229,10 +228,10 @@ function readInstalledSkillIdsFromStorage(): string[] {
 //
 //   - installedIds: 已安装技能 ID 列表。
 function writeInstalledSkillIdsToStorage(installedIds: string[]) {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return;
   }
-  window.localStorage.setItem(SKILL_INSTALL_STATE_STORAGE_KEY, JSON.stringify(installedIds));
+  window.localStorage.setItem(STORAGE_KEYS.SKILL_INSTALLED_IDS, JSON.stringify(installedIds));
 }
 
 // 描述：

@@ -1,4 +1,5 @@
 import { DEFAULT_CODE_WORKFLOWS, DEFAULT_MODEL_WORKFLOWS } from "./templates";
+import { IS_BROWSER, STORAGE_KEYS } from "../constants";
 import type {
   CodeWorkflowDefinition,
   WorkflowGraph,
@@ -10,15 +11,7 @@ import type {
   WorkflowNodeDefinition,
 } from "./types";
 
-// 描述:
-//
-//   - 模型工作流本地存储键。
-const MODEL_WORKFLOW_STORAGE_KEY = "zodileap.desktop.model.workflows";
 
-// 描述:
-//
-//   - 代码工作流本地存储键。
-const CODE_WORKFLOW_STORAGE_KEY = "zodileap.desktop.code.workflows";
 
 // 描述：
 //
@@ -173,10 +166,9 @@ function normalizeWorkflowGraph(graph?: WorkflowGraph): WorkflowGraph | undefine
   const nodeIdSet = new Set(nodes.map((node) => node.id));
   const edges = (graph.edges || [])
     .map((edge) => normalizeGraphEdge(edge))
-    .filter(Boolean)
+    .filter((edge): edge is WorkflowGraphEdge => Boolean(edge))
     .filter(
       (edge): edge is WorkflowGraphEdge =>
-        Boolean(edge) &&
         nodeIdSet.has(edge.sourceId) &&
         nodeIdSet.has(edge.targetId),
     );
@@ -335,10 +327,10 @@ function normalizeCodeWorkflow(
 //
 //   - 读取本地保存的模型工作流列表。
 function readSavedWorkflows(): WorkflowDefinition[] {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return [];
   }
-  const raw = window.localStorage.getItem(MODEL_WORKFLOW_STORAGE_KEY);
+  const raw = window.localStorage.getItem(STORAGE_KEYS.MODEL_WORKFLOWS);
   if (!raw) {
     return [];
   }
@@ -359,10 +351,10 @@ function readSavedWorkflows(): WorkflowDefinition[] {
 //
 //   - 读取本地保存的代码工作流列表。
 function readSavedCodeWorkflows(): CodeWorkflowDefinition[] {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return [];
   }
-  const raw = window.localStorage.getItem(CODE_WORKFLOW_STORAGE_KEY);
+  const raw = window.localStorage.getItem(STORAGE_KEYS.CODE_WORKFLOWS);
   if (!raw) {
     return [];
   }
@@ -380,17 +372,17 @@ function readSavedCodeWorkflows(): CodeWorkflowDefinition[] {
 }
 
 function writeSavedWorkflows(workflows: WorkflowDefinition[]) {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return;
   }
-  window.localStorage.setItem(MODEL_WORKFLOW_STORAGE_KEY, JSON.stringify(workflows));
+  window.localStorage.setItem(STORAGE_KEYS.MODEL_WORKFLOWS, JSON.stringify(workflows));
 }
 
 function writeSavedCodeWorkflows(workflows: CodeWorkflowDefinition[]) {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return;
   }
-  window.localStorage.setItem(CODE_WORKFLOW_STORAGE_KEY, JSON.stringify(workflows));
+  window.localStorage.setItem(STORAGE_KEYS.CODE_WORKFLOWS, JSON.stringify(workflows));
 }
 
 function cloneNodes(nodes: WorkflowNodeDefinition[]): WorkflowNodeDefinition[] {

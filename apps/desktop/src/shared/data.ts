@@ -1,4 +1,5 @@
 import type { AgentSession, AgentSummary, ShortcutItem } from "./types";
+import { IS_BROWSER } from "./constants";
 
 // 描述:
 //
@@ -211,7 +212,7 @@ interface StoredCodeSessionWorkspace {
 //
 //   - 模型项目数组。
 function readModelProjects(): StoredModelProject[] {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return [];
   }
   const raw = window.localStorage.getItem(MODEL_PROJECT_STORAGE_KEY);
@@ -238,7 +239,7 @@ function readModelProjects(): StoredModelProject[] {
 //
 //   - list: 模型项目数组。
 function writeModelProjects(list: StoredModelProject[]) {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return;
   }
   window.localStorage.setItem(MODEL_PROJECT_STORAGE_KEY, JSON.stringify(list));
@@ -252,7 +253,7 @@ function writeModelProjects(list: StoredModelProject[]) {
 //
 //   - 会话元信息对象。
 function readSessionMeta(): SessionMeta {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return {
       renamedTitles: {},
       pinnedIds: [],
@@ -293,7 +294,7 @@ function readSessionMeta(): SessionMeta {
 //
 //   - meta: 会话元信息。
 function writeSessionMeta(meta: SessionMeta) {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return;
   }
   window.localStorage.setItem(SESSION_META_STORAGE_KEY, JSON.stringify(meta));
@@ -311,7 +312,7 @@ export function getAgentSessionMetaSnapshot(): AgentSessionMetaSnapshot {
 //   - sessionId: 会话 ID。
 //   - title: 最新标题文本。
 function emitSessionTitleUpdated(sessionId: string, title: string) {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return;
   }
   window.dispatchEvent(
@@ -330,7 +331,7 @@ function emitSessionTitleUpdated(sessionId: string, title: string) {
 //
 //   - reason: 触发更新的动作标识。
 function emitCodeWorkspaceGroupsUpdated(reason: string) {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return;
   }
   window.dispatchEvent(
@@ -350,7 +351,7 @@ function emitCodeWorkspaceGroupsUpdated(reason: string) {
 //
 //   - 会话消息分组数组。
 function readSessionMessages(): StoredSessionMessageGroup[] {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return [];
   }
   const raw = window.localStorage.getItem(SESSION_MESSAGES_STORAGE_KEY);
@@ -381,7 +382,7 @@ function readSessionMessages(): StoredSessionMessageGroup[] {
 //
 //   - groups: 会话消息分组数组。
 function writeSessionMessages(groups: StoredSessionMessageGroup[]) {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return;
   }
   window.localStorage.setItem(SESSION_MESSAGES_STORAGE_KEY, JSON.stringify(groups));
@@ -396,7 +397,7 @@ function emitSessionRunStateUpdated(input?: {
   agentKey?: "code" | "model";
   sessionId?: string;
 }) {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return;
   }
   window.dispatchEvent(
@@ -415,7 +416,7 @@ function emitSessionRunStateUpdated(input?: {
 //
 //   - 会话运行态数组。
 function readSessionRunStates(): StoredSessionRunState[] {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return [];
   }
   const raw = window.localStorage.getItem(SESSION_RUN_STATE_STORAGE_KEY);
@@ -448,7 +449,7 @@ function readSessionRunStates(): StoredSessionRunState[] {
 //
 //   - states: 会话运行态数组。
 function writeSessionRunStates(states: StoredSessionRunState[]) {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return;
   }
   window.localStorage.setItem(SESSION_RUN_STATE_STORAGE_KEY, JSON.stringify(states));
@@ -511,7 +512,7 @@ function normalizeWorkspaceDependencyRules(rules: unknown): string[] {
 //
 //   - 代码目录分组数组。
 function readCodeWorkspaceGroups(): CodeWorkspaceGroup[] {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return [];
   }
   const raw = window.localStorage.getItem(CODE_WORKSPACE_GROUP_STORAGE_KEY);
@@ -544,7 +545,7 @@ function readCodeWorkspaceGroups(): CodeWorkspaceGroup[] {
 //
 //   - groups: 目录分组数组。
 function writeCodeWorkspaceGroups(groups: CodeWorkspaceGroup[]) {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return;
   }
   window.localStorage.setItem(CODE_WORKSPACE_GROUP_STORAGE_KEY, JSON.stringify(groups));
@@ -556,7 +557,7 @@ function writeCodeWorkspaceGroups(groups: CodeWorkspaceGroup[]) {
 //
 //   - 映射数组。
 function readCodeSessionWorkspaceMap(): StoredCodeSessionWorkspace[] {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return [];
   }
   const raw = window.localStorage.getItem(CODE_SESSION_WORKSPACE_MAP_STORAGE_KEY);
@@ -585,7 +586,7 @@ function readCodeSessionWorkspaceMap(): StoredCodeSessionWorkspace[] {
 //
 //   - mapItems: 映射数组。
 function writeCodeSessionWorkspaceMap(mapItems: StoredCodeSessionWorkspace[]) {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return;
   }
   window.localStorage.setItem(CODE_SESSION_WORKSPACE_MAP_STORAGE_KEY, JSON.stringify(mapItems));
@@ -597,7 +598,7 @@ function writeCodeSessionWorkspaceMap(mapItems: StoredCodeSessionWorkspace[]) {
 //
 //   - 分组 ID；未命中时返回空字符串。
 function readLastCodeWorkspaceId(): string {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return "";
   }
   return String(window.localStorage.getItem(CODE_LAST_WORKSPACE_ID_STORAGE_KEY) || "").trim();
@@ -609,7 +610,7 @@ function readLastCodeWorkspaceId(): string {
 //
 //   - workspaceId: 分组 ID。
 function writeLastCodeWorkspaceId(workspaceId: string) {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return;
   }
   window.localStorage.setItem(CODE_LAST_WORKSPACE_ID_STORAGE_KEY, workspaceId);

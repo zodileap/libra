@@ -100,7 +100,7 @@ test("TestWorkflowCanvasShouldSupportModeSwitchAndContextDelete", () => {
   assert.match(source, /const \[contextMenuOpen,\s*setContextMenuOpen\] = useState\(false\);/);
   assert.match(source, /targetRef={canvasRef}/);
   assert.match(source, /open={contextMenuOpen}/);
-  assert.match(source, /onOpenChange=\{\(nextOpen\) => \{[\s\S]*if \(!nextOpen\) \{[\s\S]*setContextMenuOpen\(false\);[\s\S]*\}[\s\S]*\}\}/);
+  assert.match(source, /onOpenChange=\{\(nextOpen(?:: boolean)?\) => \{[\s\S]*if \(!nextOpen\) \{[\s\S]*setContextMenuOpen\(false\);[\s\S]*\}[\s\S]*\}\}/);
   assert.match(source, /<div\s+ref={canvasRef}\s+className="desk-workflow-reactflow-wrap desk-workflow-editor-reactflow-wrap"/);
   assert.match(source, /contextTarget\?\.id[\s\S]*\?[\s\S]*key: "delete"[\s\S]*:\s*\[\]/s);
   assert.match(source, /key: "delete"/);

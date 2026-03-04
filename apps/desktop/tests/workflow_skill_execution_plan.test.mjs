@@ -26,8 +26,8 @@ test("TestWorkflowSkillExecutionPlanShouldValidateInstallStateAndBuildPrompt", (
 
   // 描述：
   //
-  //   - Skill 计划构建器应读取安装态、识别阻塞项，并生成 Skill 执行计划提示词。
-  assert.match(skillPlanSource, /const SKILL_INSTALL_STATE_STORAGE_KEY = "zodileap\.desktop\.skills\.installed";/);
+  //   - Skill 计划构建器应通过统一服务读取安装态、识别阻塞项，并生成 Skill 执行计划提示词。
+  assert.match(skillPlanSource, /readInstalledSkillIdsFromStorage/);
   assert.match(skillPlanSource, /status: "missing_skill_id"/);
   assert.match(skillPlanSource, /status: "not_installed"/);
   assert.match(skillPlanSource, /blockingIssues/);

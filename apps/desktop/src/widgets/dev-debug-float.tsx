@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { AriButton, AriCard, AriContainer, AriTypography } from "aries_react";
 import { listen } from "@tauri-apps/api/event";
-import type { AgentLogEvent } from "../shared/types";
+import type { AgentLogEvent, ModelDebugTraceEvent } from "../shared/types";
+import { EVENT_AGENT_LOG, EVENT_MODEL_DEBUG_TRACE } from "../shared/constants";
 
 // 描述:
 //
@@ -35,17 +36,7 @@ interface SessionDebugSnapshot {
   timestamp?: number;
 }
 
-// 描述:
-//
-//   - 定义模型调试链路事件结构。
-interface ModelDebugTraceEvent {
-  session_id?: string;
-  trace_id?: string;
-  stage?: string;
-  title?: string;
-  detail?: string;
-  timestamp_ms?: number;
-}
+// ModelDebugTraceEvent 已提取至 shared/types.ts 统一定义。
 
 // 描述:
 //
@@ -66,13 +57,13 @@ export function DevDebugFloat({ visible = true }: DevDebugFloatProps) {
 
     // 描述：绑定 Tauri 事件监听并在卸载时释放句柄。
     const setup = async () => {
-      const handler = await listen<AgentLogEvent>("agent:log", (event) => {
+      const handler = await listen<AgentLogEvent>(EVENT_AGENT_LOG, (event) => {
         if (disposed) return;
         const payload = event.payload;
         const line = `[${payload.trace_id}] [${payload.level}] [${payload.stage}] ${payload.message}`;
         setLogs((prev) => [line, ...prev].slice(0, 300));
       });
-      const modelDebugHandler = await listen<ModelDebugTraceEvent>("model:debug_trace", (event) => {
+      const modelDebugHandler = await listen<ModelDebugTraceEvent>(EVENT_MODEL_DEBUG_TRACE, (event) => {
         if (disposed) return;
         const payload = event.payload;
         setModelDebugTraces((prev) => [payload, ...prev].slice(0, 180));

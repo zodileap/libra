@@ -209,3 +209,27 @@ export interface ModelAssetRecord {
   version: number;
   meta?: Record<string, unknown>;
 }
+
+// 描述:
+//
+//   - 定义通用文本流事件结构，Tauri 侧 emit、前端 listen 共用。
+export interface AgentTextStreamEvent {
+  trace_id: string;
+  session_id?: string;
+  kind: string;
+  message: string;
+  delta?: string;
+  data?: Record<string, unknown>;
+}
+
+// 描述:
+//
+//   - 定义模型调试轨迹事件结构，供调试面板展示。
+export interface ModelDebugTraceEvent {
+  session_id: string;
+  trace_id: string;
+  stage: string;
+  title: string;
+  detail: string;
+  timestamp_ms: number;
+}

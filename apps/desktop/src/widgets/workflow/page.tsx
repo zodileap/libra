@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { IS_BROWSER } from "../../shared/constants";
 import {
   addEdge,
   Background,
+  BackgroundVariant,
   Handle,
   MarkerType,
   NodeResizer,
@@ -63,6 +65,16 @@ interface CanvasNodeData {
   nodeType: WorkflowGraphNodeType;
   skillId: string;
   skillVersion: string;
+  [key: string]: unknown;
+}
+
+interface ParsedCanvasNodeData {
+  title: string;
+  description: string;
+  instruction: string;
+  type: WorkflowGraphNodeType;
+  skillId?: string;
+  skillVersion?: string;
 }
 
 // 描述:
@@ -97,7 +109,7 @@ type WorkflowCanvasNode = Node<CanvasNodeData, typeof WORKFLOW_NODE_TYPE>;
 //
 //   - 当前主题下的基础间距值。
 function resolveThemeInset(): number {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return 16;
   }
   const raw = window
@@ -121,7 +133,7 @@ function resolveThemeInset(): number {
 //   - 标题、说明与指令字段。
 function parseCanvasNodeData(
   data: unknown,
-): Pick<WorkflowGraphNode, "title" | "description" | "instruction" | "type" | "skillId" | "skillVersion"> {
+): ParsedCanvasNodeData {
   const source = (data || {}) as Partial<CanvasNodeData>;
   const rawType = String(source.nodeType || "").trim();
   const nodeType: WorkflowGraphNodeType = (
@@ -725,14 +737,14 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
         return;
       }
       setEdges((currentEdges) =>
-        reconnectEdge(
-          oldEdge,
-          {
-            ...connection,
-            markerEnd: buildWorkflowEdgeMarkerEnd(false),
-            className: "desk-workflow-flow-edge",
-          },
-          currentEdges,
+        reconnectEdge(oldEdge, connection, currentEdges).map((edge) =>
+          edge.id === oldEdge.id
+            ? {
+              ...edge,
+              markerEnd: buildWorkflowEdgeMarkerEnd(false),
+              className: "desk-workflow-flow-edge",
+            }
+            : edge,
         ),
       );
       setSelectedEdgeId(oldEdge.id);
@@ -1202,7 +1214,7 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
           <AriContextMenu
             targetRef={canvasRef}
             open={contextMenuOpen}
-            onOpenChange={(nextOpen) => {
+            onOpenChange={(nextOpen: boolean) => {
               if (!nextOpen) {
                 setContextMenuOpen(false);
               }
@@ -1300,7 +1312,7 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
               }}
             >
               <Background
-                variant="dots"
+                variant={BackgroundVariant.Dots}
                 className="desk-workflow-reactflow-bg"
               />
             </ReactFlow>
@@ -1396,14 +1408,14 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
                 <AriFormItem label="节点名称" name="selectedNode.title">
                   <AriInput
                     value={selectedNodeData.title}
-                    onChange={(value) => patchSelectedNode({ title: value })}
+                    onChange={(value: string) => patchSelectedNode({ title: value })}
                     placeholder="请输入节点名称"
                   />
                 </AriFormItem>
                 <AriFormItem label="节点说明" name="selectedNode.description">
                   <AriInput
                     value={selectedNodeData.description}
-                    onChange={(value) =>
+                    onChange={(value: string) =>
                       patchSelectedNode({ description: value })
                     }
                     placeholder="请输入节点说明"
@@ -1446,7 +1458,7 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
                         searchable
                         allowClear
                         placeholder="请选择技能"
-                        onChange={(value) => {
+                        onChange={(value: unknown) => {
                           const selectedSkillId = typeof value === "string"
                             ? value
                             : String(value || "").trim();
@@ -1471,7 +1483,7 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
                         allowClear
                         placeholder="请选择版本"
                         disabled={!selectedNodeData.skillId || skillVersionSelectOptions.length === 0}
-                        onChange={(value) => {
+                        onChange={(value: unknown) => {
                           const nextVersion = typeof value === "string"
                             ? value
                             : String(value || "").trim();
@@ -1484,7 +1496,7 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
                 <AriFormItem label="指令" name="selectedNode.instruction">
                   <AriInput.TextArea
                     value={selectedNodeData.instruction || ""}
-                    onChange={(value) =>
+                    onChange={(value: string) =>
                       patchSelectedNode({ instruction: value })
                     }
                     placeholder="请输入该节点命中后的 AI 提示词"

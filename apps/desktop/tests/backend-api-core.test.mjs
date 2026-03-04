@@ -6,7 +6,7 @@ import {
   buildNetworkFailureMessage,
   isUnauthorizedResponse,
   toQueryString,
-} from "../src/modules/client/services/backend-api-core.mjs";
+} from "../src/shared/services/backend-api-core.mjs";
 
 // 描述：校验鉴权开启且存在 token 时会附带 Authorization 头。
 test("buildAuthHeaders should include auth header when enabled", () => {
