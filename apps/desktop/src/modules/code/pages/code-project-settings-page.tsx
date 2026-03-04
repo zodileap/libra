@@ -10,11 +10,10 @@ import {
   getCodeWorkspaceProjectProfile,
   saveCodeWorkspaceProjectProfile,
   updateCodeWorkspaceGroupSettings,
-  type CodeWorkspaceProjectApiSpec,
-  type CodeWorkspaceProjectArchitecture,
+  type CodeWorkspaceProjectApiDataModel,
+  type CodeWorkspaceProjectFrontendCodeStructure,
+  type CodeWorkspaceProjectFrontendPageLayout,
   type CodeWorkspaceProjectProfile,
-  type CodeWorkspaceProjectTechStacks,
-  type CodeWorkspaceProjectUiSpec,
 } from "../../../shared/data";
 import { useDesktopHeaderSlot } from "../../../widgets/app-header/header-slot-context";
 import { DeskEmptyState, DeskSectionTitle, DeskSettingsRow } from "../../../widgets/settings-primitives";
@@ -24,11 +23,9 @@ import { DeskEmptyState, DeskSectionTitle, DeskSettingsRow } from "../../../widg
 //   - 定义项目结构化信息编辑草稿，保证设置页可在不丢字段的前提下自动保存。
 interface ProjectProfileDraft {
   summary: string;
-  techStacks: CodeWorkspaceProjectTechStacks;
-  architecture: CodeWorkspaceProjectArchitecture;
-  uiSpec: CodeWorkspaceProjectUiSpec;
-  apiSpec: CodeWorkspaceProjectApiSpec;
-  domainRules: string[];
+  apiDataModel: CodeWorkspaceProjectApiDataModel;
+  frontendPageLayout: CodeWorkspaceProjectFrontendPageLayout;
+  frontendCodeStructure: CodeWorkspaceProjectFrontendCodeStructure;
   codingConventions: string[];
 }
 
@@ -42,28 +39,22 @@ interface ProjectProfileDraft {
 function createEmptyProjectProfileDraft(): ProjectProfileDraft {
   return {
     summary: "",
-    techStacks: {
-      frontend: [],
-      backend: [],
-      database: [],
-      infrastructure: [],
+    apiDataModel: {
+      entities: [],
+      requestModels: [],
+      responseModels: [],
+      mockCases: [],
     },
-    architecture: {
-      modules: [],
-      boundaries: [],
-      constraints: [],
-    },
-    uiSpec: {
+    frontendPageLayout: {
       pages: [],
-      layoutPrinciples: [],
-      interactionPrinciples: [],
+      navigation: [],
+      pageElements: [],
     },
-    apiSpec: {
-      services: [],
-      contracts: [],
-      errorConventions: [],
+    frontendCodeStructure: {
+      directories: [],
+      moduleBoundaries: [],
+      implementationConstraints: [],
     },
-    domainRules: [],
     codingConventions: [],
   };
 }
@@ -85,28 +76,22 @@ function toProjectProfileDraft(profile: CodeWorkspaceProjectProfile | null): Pro
   }
   return {
     summary: String(profile.summary || "").trim(),
-    techStacks: {
-      frontend: [...(profile.techStacks.frontend || [])],
-      backend: [...(profile.techStacks.backend || [])],
-      database: [...(profile.techStacks.database || [])],
-      infrastructure: [...(profile.techStacks.infrastructure || [])],
+    apiDataModel: {
+      entities: [...(profile.apiDataModel.entities || [])],
+      requestModels: [...(profile.apiDataModel.requestModels || [])],
+      responseModels: [...(profile.apiDataModel.responseModels || [])],
+      mockCases: [...(profile.apiDataModel.mockCases || [])],
     },
-    architecture: {
-      modules: [...(profile.architecture.modules || [])],
-      boundaries: [...(profile.architecture.boundaries || [])],
-      constraints: [...(profile.architecture.constraints || [])],
+    frontendPageLayout: {
+      pages: [...(profile.frontendPageLayout.pages || [])],
+      navigation: [...(profile.frontendPageLayout.navigation || [])],
+      pageElements: [...(profile.frontendPageLayout.pageElements || [])],
     },
-    uiSpec: {
-      pages: [...(profile.uiSpec.pages || [])],
-      layoutPrinciples: [...(profile.uiSpec.layoutPrinciples || [])],
-      interactionPrinciples: [...(profile.uiSpec.interactionPrinciples || [])],
+    frontendCodeStructure: {
+      directories: [...(profile.frontendCodeStructure.directories || [])],
+      moduleBoundaries: [...(profile.frontendCodeStructure.moduleBoundaries || [])],
+      implementationConstraints: [...(profile.frontendCodeStructure.implementationConstraints || [])],
     },
-    apiSpec: {
-      services: [...(profile.apiSpec.services || [])],
-      contracts: [...(profile.apiSpec.contracts || [])],
-      errorConventions: [...(profile.apiSpec.errorConventions || [])],
-    },
-    domainRules: [...(profile.domainRules || [])],
     codingConventions: [...(profile.codingConventions || [])],
   };
 }
@@ -188,56 +173,42 @@ function parseProjectProfileDraftFromJson(
       summary: parsed.summary === undefined
         ? String(baseDraft.summary || "").trim()
         : String(parsed.summary || "").trim(),
-      techStacks: {
-        frontend: parsed.techStacks?.frontend === undefined
-          ? normalizeProfileDraftTextList(baseDraft.techStacks.frontend)
-          : normalizeProfileDraftTextList(parsed.techStacks.frontend),
-        backend: parsed.techStacks?.backend === undefined
-          ? normalizeProfileDraftTextList(baseDraft.techStacks.backend)
-          : normalizeProfileDraftTextList(parsed.techStacks.backend),
-        database: parsed.techStacks?.database === undefined
-          ? normalizeProfileDraftTextList(baseDraft.techStacks.database)
-          : normalizeProfileDraftTextList(parsed.techStacks.database),
-        infrastructure: parsed.techStacks?.infrastructure === undefined
-          ? normalizeProfileDraftTextList(baseDraft.techStacks.infrastructure)
-          : normalizeProfileDraftTextList(parsed.techStacks.infrastructure),
+      apiDataModel: {
+        entities: parsed.apiDataModel?.entities === undefined
+          ? normalizeProfileDraftTextList(baseDraft.apiDataModel.entities)
+          : normalizeProfileDraftTextList(parsed.apiDataModel.entities),
+        requestModels: parsed.apiDataModel?.requestModels === undefined
+          ? normalizeProfileDraftTextList(baseDraft.apiDataModel.requestModels)
+          : normalizeProfileDraftTextList(parsed.apiDataModel.requestModels),
+        responseModels: parsed.apiDataModel?.responseModels === undefined
+          ? normalizeProfileDraftTextList(baseDraft.apiDataModel.responseModels)
+          : normalizeProfileDraftTextList(parsed.apiDataModel.responseModels),
+        mockCases: parsed.apiDataModel?.mockCases === undefined
+          ? normalizeProfileDraftTextList(baseDraft.apiDataModel.mockCases)
+          : normalizeProfileDraftTextList(parsed.apiDataModel.mockCases),
       },
-      architecture: {
-        modules: parsed.architecture?.modules === undefined
-          ? normalizeProfileDraftTextList(baseDraft.architecture.modules)
-          : normalizeProfileDraftTextList(parsed.architecture.modules),
-        boundaries: parsed.architecture?.boundaries === undefined
-          ? normalizeProfileDraftTextList(baseDraft.architecture.boundaries)
-          : normalizeProfileDraftTextList(parsed.architecture.boundaries),
-        constraints: parsed.architecture?.constraints === undefined
-          ? normalizeProfileDraftTextList(baseDraft.architecture.constraints)
-          : normalizeProfileDraftTextList(parsed.architecture.constraints),
+      frontendPageLayout: {
+        pages: parsed.frontendPageLayout?.pages === undefined
+          ? normalizeProfileDraftTextList(baseDraft.frontendPageLayout.pages)
+          : normalizeProfileDraftTextList(parsed.frontendPageLayout.pages),
+        navigation: parsed.frontendPageLayout?.navigation === undefined
+          ? normalizeProfileDraftTextList(baseDraft.frontendPageLayout.navigation)
+          : normalizeProfileDraftTextList(parsed.frontendPageLayout.navigation),
+        pageElements: parsed.frontendPageLayout?.pageElements === undefined
+          ? normalizeProfileDraftTextList(baseDraft.frontendPageLayout.pageElements)
+          : normalizeProfileDraftTextList(parsed.frontendPageLayout.pageElements),
       },
-      uiSpec: {
-        pages: parsed.uiSpec?.pages === undefined
-          ? normalizeProfileDraftTextList(baseDraft.uiSpec.pages)
-          : normalizeProfileDraftTextList(parsed.uiSpec.pages),
-        layoutPrinciples: parsed.uiSpec?.layoutPrinciples === undefined
-          ? normalizeProfileDraftTextList(baseDraft.uiSpec.layoutPrinciples)
-          : normalizeProfileDraftTextList(parsed.uiSpec.layoutPrinciples),
-        interactionPrinciples: parsed.uiSpec?.interactionPrinciples === undefined
-          ? normalizeProfileDraftTextList(baseDraft.uiSpec.interactionPrinciples)
-          : normalizeProfileDraftTextList(parsed.uiSpec.interactionPrinciples),
+      frontendCodeStructure: {
+        directories: parsed.frontendCodeStructure?.directories === undefined
+          ? normalizeProfileDraftTextList(baseDraft.frontendCodeStructure.directories)
+          : normalizeProfileDraftTextList(parsed.frontendCodeStructure.directories),
+        moduleBoundaries: parsed.frontendCodeStructure?.moduleBoundaries === undefined
+          ? normalizeProfileDraftTextList(baseDraft.frontendCodeStructure.moduleBoundaries)
+          : normalizeProfileDraftTextList(parsed.frontendCodeStructure.moduleBoundaries),
+        implementationConstraints: parsed.frontendCodeStructure?.implementationConstraints === undefined
+          ? normalizeProfileDraftTextList(baseDraft.frontendCodeStructure.implementationConstraints)
+          : normalizeProfileDraftTextList(parsed.frontendCodeStructure.implementationConstraints),
       },
-      apiSpec: {
-        services: parsed.apiSpec?.services === undefined
-          ? normalizeProfileDraftTextList(baseDraft.apiSpec.services)
-          : normalizeProfileDraftTextList(parsed.apiSpec.services),
-        contracts: parsed.apiSpec?.contracts === undefined
-          ? normalizeProfileDraftTextList(baseDraft.apiSpec.contracts)
-          : normalizeProfileDraftTextList(parsed.apiSpec.contracts),
-        errorConventions: parsed.apiSpec?.errorConventions === undefined
-          ? normalizeProfileDraftTextList(baseDraft.apiSpec.errorConventions)
-          : normalizeProfileDraftTextList(parsed.apiSpec.errorConventions),
-      },
-      domainRules: parsed.domainRules === undefined
-        ? normalizeProfileDraftTextList(baseDraft.domainRules)
-        : normalizeProfileDraftTextList(parsed.domainRules),
       codingConventions: parsed.codingConventions === undefined
         ? normalizeProfileDraftTextList(baseDraft.codingConventions)
         : normalizeProfileDraftTextList(parsed.codingConventions),
@@ -456,15 +427,15 @@ export function CodeProjectSettingsPage() {
 
   // 描述：
   //
-  //   - 更新结构化信息中的技术栈列表字段。
-  const handleUpdateTechStack = (
-    key: keyof CodeWorkspaceProjectTechStacks,
+  //   - 更新结构化信息中的 API 数据模型字段。
+  const handleUpdateApiDataModel = (
+    key: keyof CodeWorkspaceProjectApiDataModel,
     value: string[],
   ) => {
     setProjectProfileDraft((current) => ({
       ...current,
-      techStacks: {
-        ...current.techStacks,
+      apiDataModel: {
+        ...current.apiDataModel,
         [key]: value,
       },
     }));
@@ -472,15 +443,15 @@ export function CodeProjectSettingsPage() {
 
   // 描述：
   //
-  //   - 更新结构化信息中的架构字段。
-  const handleUpdateArchitecture = (
-    key: keyof CodeWorkspaceProjectArchitecture,
+  //   - 更新结构化信息中的前端页面布局字段。
+  const handleUpdateFrontendPageLayout = (
+    key: keyof CodeWorkspaceProjectFrontendPageLayout,
     value: string[],
   ) => {
     setProjectProfileDraft((current) => ({
       ...current,
-      architecture: {
-        ...current.architecture,
+      frontendPageLayout: {
+        ...current.frontendPageLayout,
         [key]: value,
       },
     }));
@@ -488,31 +459,15 @@ export function CodeProjectSettingsPage() {
 
   // 描述：
   //
-  //   - 更新结构化信息中的 UI 语义字段。
-  const handleUpdateUiSpec = (
-    key: keyof CodeWorkspaceProjectUiSpec,
+  //   - 更新结构化信息中的前端代码结构字段。
+  const handleUpdateFrontendCodeStructure = (
+    key: keyof CodeWorkspaceProjectFrontendCodeStructure,
     value: string[],
   ) => {
     setProjectProfileDraft((current) => ({
       ...current,
-      uiSpec: {
-        ...current.uiSpec,
-        [key]: value,
-      },
-    }));
-  };
-
-  // 描述：
-  //
-  //   - 更新结构化信息中的 API 语义字段。
-  const handleUpdateApiSpec = (
-    key: keyof CodeWorkspaceProjectApiSpec,
-    value: string[],
-  ) => {
-    setProjectProfileDraft((current) => ({
-      ...current,
-      apiSpec: {
-        ...current.apiSpec,
+      frontendCodeStructure: {
+        ...current.frontendCodeStructure,
         [key]: value,
       },
     }));
@@ -692,120 +647,130 @@ export function CodeProjectSettingsPage() {
                   />
                 </DeskSettingsRow>
 
-                <DeskSettingsRow title="前端技术栈">
+                <DeskSettingsRow title="API 数据实体">
                   <AriInput.TextList
-                    value={projectProfileDraft.techStacks.frontend}
+                    value={projectProfileDraft.apiDataModel.entities}
                     onChange={(value: string[]) => {
-                      handleUpdateTechStack("frontend", value);
+                      handleUpdateApiDataModel("entities", value);
                     }}
-                    itemPlaceholder="react"
+                    itemPlaceholder="User: id, name, role"
                     addText="新增"
                     allowDrag={false}
                     minWidth={360}
                   />
                 </DeskSettingsRow>
 
-                <DeskSettingsRow title="后端技术栈">
+                <DeskSettingsRow title="API 请求模型">
                   <AriInput.TextList
-                    value={projectProfileDraft.techStacks.backend}
+                    value={projectProfileDraft.apiDataModel.requestModels}
                     onChange={(value: string[]) => {
-                      handleUpdateTechStack("backend", value);
+                      handleUpdateApiDataModel("requestModels", value);
                     }}
-                    itemPlaceholder="go"
+                    itemPlaceholder="CreateUserRequest: name, role"
                     addText="新增"
                     allowDrag={false}
                     minWidth={360}
                   />
                 </DeskSettingsRow>
 
-                <DeskSettingsRow title="数据库技术栈">
+                <DeskSettingsRow title="API 响应模型">
                   <AriInput.TextList
-                    value={projectProfileDraft.techStacks.database}
+                    value={projectProfileDraft.apiDataModel.responseModels}
                     onChange={(value: string[]) => {
-                      handleUpdateTechStack("database", value);
+                      handleUpdateApiDataModel("responseModels", value);
                     }}
-                    itemPlaceholder="postgres"
+                    itemPlaceholder="UserResponse: id, name, role"
                     addText="新增"
                     allowDrag={false}
                     minWidth={360}
                   />
                 </DeskSettingsRow>
 
-                <DeskSettingsRow title="基础设施技术栈">
+                <DeskSettingsRow title="API Mock 场景">
                   <AriInput.TextList
-                    value={projectProfileDraft.techStacks.infrastructure}
+                    value={projectProfileDraft.apiDataModel.mockCases}
                     onChange={(value: string[]) => {
-                      handleUpdateTechStack("infrastructure", value);
+                      handleUpdateApiDataModel("mockCases", value);
                     }}
-                    itemPlaceholder="docker"
+                    itemPlaceholder="/users/list 成功/空数据/鉴权失败"
                     addText="新增"
                     allowDrag={false}
                     minWidth={360}
                   />
                 </DeskSettingsRow>
 
-                <DeskSettingsRow title="模块边界">
+                <DeskSettingsRow title="前端页面清单">
                   <AriInput.TextList
-                    value={projectProfileDraft.architecture.modules}
+                    value={projectProfileDraft.frontendPageLayout.pages}
                     onChange={(value: string[]) => {
-                      handleUpdateArchitecture("modules", value);
+                      handleUpdateFrontendPageLayout("pages", value);
                     }}
-                    itemPlaceholder="用户模块"
+                    itemPlaceholder="用户管理页 / 用户详情页"
                     addText="新增"
                     allowDrag={false}
                     minWidth={360}
                   />
                 </DeskSettingsRow>
 
-                <DeskSettingsRow title="架构约束">
+                <DeskSettingsRow title="导航与菜单项">
                   <AriInput.TextList
-                    value={projectProfileDraft.architecture.constraints}
+                    value={projectProfileDraft.frontendPageLayout.navigation}
                     onChange={(value: string[]) => {
-                      handleUpdateArchitecture("constraints", value);
+                      handleUpdateFrontendPageLayout("navigation", value);
                     }}
-                    itemPlaceholder="UI 与业务逻辑分层"
+                    itemPlaceholder="侧边栏：仪表盘 / 用户管理 / 系统设置"
                     addText="新增"
                     allowDrag={false}
                     minWidth={360}
                   />
                 </DeskSettingsRow>
 
-                <DeskSettingsRow title="页面结构语义">
+                <DeskSettingsRow title="页面元素结构">
                   <AriInput.TextList
-                    value={projectProfileDraft.uiSpec.pages}
+                    value={projectProfileDraft.frontendPageLayout.pageElements}
                     onChange={(value: string[]) => {
-                      handleUpdateUiSpec("pages", value);
+                      handleUpdateFrontendPageLayout("pageElements", value);
                     }}
-                    itemPlaceholder="首页 / 列表页 / 详情页"
+                    itemPlaceholder="用户管理页：筛选栏 / 数据表格 / 分页器"
                     addText="新增"
                     allowDrag={false}
                     minWidth={360}
                   />
                 </DeskSettingsRow>
 
-                <DeskSettingsRow title="接口与契约">
+                <DeskSettingsRow title="前端目录结构">
                   <AriInput.TextList
-                    value={projectProfileDraft.apiSpec.contracts}
+                    value={projectProfileDraft.frontendCodeStructure.directories}
                     onChange={(value: string[]) => {
-                      handleUpdateApiSpec("contracts", value);
+                      handleUpdateFrontendCodeStructure("directories", value);
                     }}
-                    itemPlaceholder="UserDTO 字段保持兼容"
+                    itemPlaceholder="src/modules/user / src/components/common"
                     addText="新增"
                     allowDrag={false}
                     minWidth={360}
                   />
                 </DeskSettingsRow>
 
-                <DeskSettingsRow title="业务规则">
+                <DeskSettingsRow title="前端模块边界">
                   <AriInput.TextList
-                    value={projectProfileDraft.domainRules}
+                    value={projectProfileDraft.frontendCodeStructure.moduleBoundaries}
                     onChange={(value: string[]) => {
-                      setProjectProfileDraft((current) => ({
-                        ...current,
-                        domainRules: value,
-                      }));
+                      handleUpdateFrontendCodeStructure("moduleBoundaries", value);
                     }}
-                    itemPlaceholder="登录失败超过 5 次触发风控"
+                    itemPlaceholder="页面层只编排，不直接写请求细节"
+                    addText="新增"
+                    allowDrag={false}
+                    minWidth={360}
+                  />
+                </DeskSettingsRow>
+
+                <DeskSettingsRow title="前端实现约束">
+                  <AriInput.TextList
+                    value={projectProfileDraft.frontendCodeStructure.implementationConstraints}
+                    onChange={(value: string[]) => {
+                      handleUpdateFrontendCodeStructure("implementationConstraints", value);
+                    }}
+                    itemPlaceholder="路由定义统一维护在 src/routes.ts"
                     addText="新增"
                     allowDrag={false}
                     minWidth={360}

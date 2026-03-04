@@ -198,13 +198,16 @@ struct ProjectDependencyRuleUpgradeResponse {
 #[derive(Serialize, Clone)]
 struct CodeWorkspaceProfileSeedResponse {
     project_path: String,
-    languages: Vec<String>,
-    frontend_stacks: Vec<String>,
-    backend_stacks: Vec<String>,
-    database_stacks: Vec<String>,
-    infrastructure_stacks: Vec<String>,
-    package_managers: Vec<String>,
-    build_tools: Vec<String>,
+    api_data_models: Vec<String>,
+    api_request_models: Vec<String>,
+    api_response_models: Vec<String>,
+    api_mock_cases: Vec<String>,
+    frontend_pages: Vec<String>,
+    frontend_navigation: Vec<String>,
+    frontend_page_elements: Vec<String>,
+    frontend_code_directories: Vec<String>,
+    frontend_module_boundaries: Vec<String>,
+    frontend_code_constraints: Vec<String>,
     directory_summary: Vec<String>,
     module_candidates: Vec<String>,
 }
@@ -1934,7 +1937,167 @@ fn collect_workspace_module_candidates(project_root: &Path) -> Vec<String> {
     modules
 }
 
-/// 描述：执行代码项目初始化分析，输出结构化项目信息可用的语言/技术栈/目录摘要草稿。
+/// 描述：收集目录下一层文件 stem（去扩展名），用于抽取结构化语义候选。
+fn collect_file_stems_in_dir(target_dir: &Path, limit: usize) -> Vec<String> {
+    if !target_dir.exists() || !target_dir.is_dir() {
+        return Vec::new();
+    }
+    let mut names: Vec<String> = Vec::new();
+    for entry in read_dir_entries_sorted(target_dir) {
+        if names.len() >= limit {
+            break;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_file() {
+            continue;
+        }
+        let stem = entry
+            .path()
+            .file_stem()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if stem.is_empty() || stem.starts_with('.') {
+            continue;
+        }
+        names.push(stem);
+    }
+    names
+}
+
+/// 描述：收集前端页面候选，优先读取 pages/views 目录并兼容路由文件路径片段。
+fn collect_workspace_frontend_pages(project_root: &Path) -> Vec<String> {
+    let mut pages: Vec<String> = Vec::new();
+    for dir in [
+        "src/pages",
+        "pages",
+        "src/views",
+        "views",
+        "src/app",
+        "app",
+    ] {
+        for child in collect_child_directory_names(&project_root.join(dir), 12) {
+            push_unique_string(&mut pages, child.as_str());
+        }
+        for stem in collect_file_stems_in_dir(&project_root.join(dir), 12) {
+            push_unique_string(&mut pages, stem.as_str());
+        }
+    }
+    pages
+}
+
+/// 描述：从文本中提取菜单标签候选（label/title 字段）。
+fn extract_navigation_candidates_from_text(text: &str, limit: usize) -> Vec<String> {
+    let mut values: Vec<String> = Vec::new();
+    for raw_line in text.lines() {
+        if values.len() >= limit {
+            break;
+        }
+        let line = raw_line.trim();
+        if !(line.contains("label:") || line.contains("title:")) {
+            continue;
+        }
+        let quote = if line.contains('"') {
+            '"'
+        } else if line.contains('\'') {
+            '\''
+        } else {
+            continue;
+        };
+        let Some(start) = line.find(quote) else {
+            continue;
+        };
+        let tail = &line[start + 1..];
+        let Some(end) = tail.find(quote) else {
+            continue;
+        };
+        let value = tail[..end].trim();
+        if value.is_empty() {
+            continue;
+        }
+        push_unique_string(&mut values, value);
+    }
+    values
+}
+
+/// 描述：收集前端导航与菜单项候选，优先扫描 routes/sidebar/menu 关键文件。
+fn collect_workspace_frontend_navigation(project_root: &Path) -> Vec<String> {
+    let mut items: Vec<String> = Vec::new();
+    let candidate_files = [
+        "src/routes.ts",
+        "src/routes.tsx",
+        "src/router.ts",
+        "src/router.tsx",
+        "src/sidebar/index.tsx",
+        "src/menu.ts",
+        "src/menu.tsx",
+        "src/modules/code/routes.tsx",
+    ];
+    for file in candidate_files {
+        let path = project_root.join(file);
+        if !path.exists() || !path.is_file() {
+            continue;
+        }
+        if let Ok(text) = fs::read_to_string(path) {
+            for item in extract_navigation_candidates_from_text(text.as_str(), 16) {
+                push_unique_string(&mut items, item.as_str());
+            }
+        }
+    }
+    items
+}
+
+/// 描述：收集前端页面元素候选，优先读取 components/widgets 目录。
+fn collect_workspace_frontend_page_elements(project_root: &Path) -> Vec<String> {
+    let mut items: Vec<String> = Vec::new();
+    for dir in [
+        "src/components",
+        "components",
+        "src/widgets",
+        "widgets",
+        "src/layouts",
+        "layouts",
+    ] {
+        for child in collect_child_directory_names(&project_root.join(dir), 12) {
+            push_unique_string(&mut items, child.as_str());
+        }
+        for stem in collect_file_stems_in_dir(&project_root.join(dir), 12) {
+            push_unique_string(&mut items, stem.as_str());
+        }
+    }
+    items
+}
+
+/// 描述：收集 API 数据模型候选，优先扫描 models/types/schema/dto 目录与常见规范文件。
+fn collect_workspace_api_data_models(project_root: &Path) -> Vec<String> {
+    let mut models: Vec<String> = Vec::new();
+    for dir in [
+        "src/models",
+        "models",
+        "src/model",
+        "model",
+        "src/types",
+        "types",
+        "src/schema",
+        "schema",
+        "src/dto",
+        "dto",
+        "services/entity",
+    ] {
+        for stem in collect_file_stems_in_dir(&project_root.join(dir), 16) {
+            push_unique_string(&mut models, stem.as_str());
+        }
+    }
+    for file in ["openapi.yaml", "openapi.yml", "openapi.json", "apifox.json"] {
+        if project_root.join(file).exists() {
+            push_unique_string(&mut models, file);
+        }
+    }
+    models
+}
+
+/// 描述：执行代码项目初始化分析，输出结构化项目信息可用的 API 数据模型/页面布局/前端代码结构草稿。
 fn inspect_code_workspace_profile_seed_inner(
     project_path: String,
 ) -> Result<CodeWorkspaceProfileSeedResponse, String> {
@@ -1947,7 +2110,6 @@ fn inspect_code_workspace_profile_seed_inner(
     let mut frontend_stacks: Vec<String> = Vec::new();
     let mut backend_stacks: Vec<String> = Vec::new();
     let mut database_stacks: Vec<String> = Vec::new();
-    let mut infrastructure_stacks: Vec<String> = Vec::new();
     let mut package_managers: Vec<String> = Vec::new();
     let mut build_tools: Vec<String> = Vec::new();
 
@@ -1990,16 +2152,6 @@ fn inspect_code_workspace_profile_seed_inner(
             push_unique_string(&mut package_managers, "gradle");
             push_unique_string(&mut build_tools, "gradle");
         }
-    }
-
-    if project_root.join("Dockerfile").exists()
-        || project_root.join("docker-compose.yml").exists()
-        || project_root.join("docker-compose.yaml").exists()
-    {
-        push_unique_string(&mut infrastructure_stacks, "docker");
-    }
-    if project_root.join(".github/workflows").exists() {
-        push_unique_string(&mut infrastructure_stacks, "github actions");
     }
 
     if let Some(package_json) = read_project_root_package_json(&project_root) {
@@ -2149,15 +2301,77 @@ fn inspect_code_workspace_profile_seed_inner(
         ));
     }
 
+    let api_data_models = collect_workspace_api_data_models(&project_root);
+    let mut api_request_models: Vec<String> = Vec::new();
+    let mut api_response_models: Vec<String> = Vec::new();
+    for model in &api_data_models {
+        let normalized = model.to_lowercase();
+        if normalized.contains("request")
+            || normalized.contains("req")
+            || normalized.contains("input")
+            || normalized.contains("dto")
+        {
+            push_unique_string(&mut api_request_models, model.as_str());
+        }
+        if normalized.contains("response")
+            || normalized.contains("resp")
+            || normalized.contains("output")
+            || normalized.contains("vo")
+            || normalized.contains("view")
+        {
+            push_unique_string(&mut api_response_models, model.as_str());
+        }
+    }
+    if api_response_models.is_empty() && !api_data_models.is_empty() {
+        api_response_models.extend(api_data_models.iter().take(4).cloned());
+    }
+    let api_mock_cases = vec![
+        "成功返回场景".to_string(),
+        "空数据场景".to_string(),
+        "参数校验失败场景".to_string(),
+        "权限不足场景".to_string(),
+    ];
+
+    let mut frontend_pages = collect_workspace_frontend_pages(&project_root);
+    if frontend_pages.is_empty() {
+        for module in module_candidates.iter().take(6) {
+            push_unique_string(&mut frontend_pages, module.as_str());
+        }
+    }
+    let mut frontend_navigation = collect_workspace_frontend_navigation(&project_root);
+    if frontend_navigation.is_empty() {
+        push_unique_string(&mut frontend_navigation, "顶部导航");
+        push_unique_string(&mut frontend_navigation, "侧边菜单");
+    }
+    let frontend_page_elements = collect_workspace_frontend_page_elements(&project_root);
+    let frontend_code_directories = module_candidates.clone();
+    let mut frontend_module_boundaries: Vec<String> = Vec::new();
+    for module in module_candidates.iter().take(6) {
+        push_unique_string(
+            &mut frontend_module_boundaries,
+            format!("{} 负责独立业务域 UI 与交互实现", module).as_str(),
+        );
+    }
+    let mut frontend_code_constraints: Vec<String> = Vec::new();
+    for item in directory_summary.iter().take(4) {
+        push_unique_string(
+            &mut frontend_code_constraints,
+            format!("目录摘要：{}", item).as_str(),
+        );
+    }
+
     Ok(CodeWorkspaceProfileSeedResponse {
         project_path: project_root.to_string_lossy().to_string(),
-        languages,
-        frontend_stacks,
-        backend_stacks,
-        database_stacks,
-        infrastructure_stacks,
-        package_managers,
-        build_tools,
+        api_data_models,
+        api_request_models,
+        api_response_models,
+        api_mock_cases,
+        frontend_pages,
+        frontend_navigation,
+        frontend_page_elements,
+        frontend_code_directories,
+        frontend_module_boundaries,
+        frontend_code_constraints,
         directory_summary,
         module_candidates,
     })

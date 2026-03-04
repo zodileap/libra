@@ -58,13 +58,16 @@ interface GitCloneResponse {
 //   - 定义“项目结构化信息初始化分析”命令返回结构。
 interface CodeWorkspaceProfileSeedResponse {
   project_path: string;
-  languages: string[];
-  frontend_stacks: string[];
-  backend_stacks: string[];
-  database_stacks: string[];
-  infrastructure_stacks: string[];
-  package_managers: string[];
-  build_tools: string[];
+  api_data_models: string[];
+  api_request_models: string[];
+  api_response_models: string[];
+  api_mock_cases: string[];
+  frontend_pages: string[];
+  frontend_navigation: string[];
+  frontend_page_elements: string[];
+  frontend_code_directories: string[];
+  frontend_module_boundaries: string[];
+  frontend_code_constraints: string[];
   directory_summary: string[];
   module_candidates: string[];
 }
@@ -114,7 +117,7 @@ export function CodeAgentPage(props: CodeAgentPageProps) {
 
   // 描述：
   //
-  //   - 在项目创建后补充结构化初始化分析结果（语言/技术栈/目录摘要），仅对首版草稿执行避免覆盖已编辑内容。
+  //   - 在项目创建后补充结构化初始化分析结果（API 数据模型/页面布局/代码结构），仅对首版草稿执行避免覆盖已编辑内容。
   //
   // Params:
   //
@@ -136,55 +139,63 @@ export function CodeAgentPage(props: CodeAgentPageProps) {
         return;
       }
 
-      const frontendStacks = normalizeUniqueStrings(seed.frontend_stacks);
-      const backendStacks = normalizeUniqueStrings(seed.backend_stacks);
-      const databaseStacks = normalizeUniqueStrings(seed.database_stacks);
-      const infrastructureStacks = normalizeUniqueStrings(seed.infrastructure_stacks);
+      const apiDataModels = normalizeUniqueStrings(seed.api_data_models);
+      const apiRequestModels = normalizeUniqueStrings(seed.api_request_models);
+      const apiResponseModels = normalizeUniqueStrings(seed.api_response_models);
+      const apiMockCases = normalizeUniqueStrings(seed.api_mock_cases);
+      const frontendPages = normalizeUniqueStrings(seed.frontend_pages);
+      const frontendNavigation = normalizeUniqueStrings(seed.frontend_navigation);
+      const frontendPageElements = normalizeUniqueStrings(seed.frontend_page_elements);
+      const frontendCodeDirectories = normalizeUniqueStrings(seed.frontend_code_directories);
+      const frontendModuleBoundaries = normalizeUniqueStrings(seed.frontend_module_boundaries);
+      const frontendCodeConstraints = normalizeUniqueStrings(seed.frontend_code_constraints);
       const moduleCandidates = normalizeUniqueStrings(seed.module_candidates);
-      const packageManagers = normalizeUniqueStrings(seed.package_managers);
-      const buildTools = normalizeUniqueStrings(seed.build_tools);
       const directorySummary = normalizeUniqueStrings(seed.directory_summary);
-      const languageSummary = normalizeUniqueStrings(seed.languages);
-      const summaryLine = languageSummary.length > 0
-        ? `项目语言：${languageSummary.join("、")}`
+      const pageSummary = frontendPages.length > 0
+        ? `页面：${frontendPages.join("、")}`
         : "";
       const baseSummary = String(profileCurrent.summary || "").trim();
-      const stableSummary = baseSummary.replace(/项目语言：[^；。]+/g, "").trim().replace(/[；。\s]+$/g, "");
-      const mergedSummary = summaryLine
-        ? [stableSummary || baseSummary, summaryLine].filter((item) => item.length > 0).join("；")
+      const stableSummary = baseSummary.replace(/页面：[^；。]+/g, "").trim().replace(/[；。\s]+$/g, "");
+      const mergedSummary = pageSummary
+        ? [stableSummary || baseSummary, pageSummary].filter((item) => item.length > 0).join("；")
         : baseSummary;
-      const toolingLines = [
-        packageManagers.length > 0 ? `包管理器：${packageManagers.join("、")}` : "",
-        buildTools.length > 0 ? `构建工具：${buildTools.join("、")}` : "",
-      ].filter((item) => item.length > 0);
-      const stableConstraints = profileCurrent.architecture.constraints
-        .filter((item) => !item.startsWith("包管理器：") && !item.startsWith("构建工具："));
+      const stableConstraints = profileCurrent.frontendCodeStructure.implementationConstraints
+        .filter((item) => !item.startsWith("目录摘要："))
+        .filter((item) => !item.startsWith("语言："))
+        .filter((item) => !item.startsWith("包管理器："))
+        .filter((item) => !item.startsWith("构建工具："));
       const mergedConstraints = normalizeUniqueStrings([
-        ...toolingLines,
+        ...frontendCodeConstraints,
         ...stableConstraints,
-      ]);
-      const stableDomainRules = profileCurrent.domainRules
-        .filter((item) => !item.startsWith("目录摘要："));
-      const mergedDomainRules = normalizeUniqueStrings([
-        ...stableDomainRules,
         ...directorySummary.map((item) => `目录摘要：${item}`),
+      ]);
+      const mergedDirectories = normalizeUniqueStrings([
+        ...frontendCodeDirectories,
+        ...moduleCandidates,
       ]);
 
       const saveResult = saveCodeWorkspaceProjectProfile(
         workspace.id,
         {
           summary: mergedSummary || profileCurrent.summary,
-          techStacks: {
-            frontend: frontendStacks.length > 0 ? frontendStacks : profileCurrent.techStacks.frontend,
-            backend: backendStacks.length > 0 ? backendStacks : profileCurrent.techStacks.backend,
-            database: databaseStacks.length > 0 ? databaseStacks : profileCurrent.techStacks.database,
-            infrastructure: infrastructureStacks.length > 0 ? infrastructureStacks : profileCurrent.techStacks.infrastructure,
+          apiDataModel: {
+            entities: apiDataModels.length > 0 ? apiDataModels : profileCurrent.apiDataModel.entities,
+            requestModels: apiRequestModels.length > 0 ? apiRequestModels : profileCurrent.apiDataModel.requestModels,
+            responseModels: apiResponseModels.length > 0 ? apiResponseModels : profileCurrent.apiDataModel.responseModels,
+            mockCases: apiMockCases.length > 0 ? apiMockCases : profileCurrent.apiDataModel.mockCases,
           },
-          architecture: {
-            modules: moduleCandidates.length > 0 ? moduleCandidates : profileCurrent.architecture.modules,
-            constraints: mergedConstraints,
+          frontendPageLayout: {
+            pages: frontendPages.length > 0 ? frontendPages : profileCurrent.frontendPageLayout.pages,
+            navigation: frontendNavigation.length > 0 ? frontendNavigation : profileCurrent.frontendPageLayout.navigation,
+            pageElements: frontendPageElements.length > 0 ? frontendPageElements : profileCurrent.frontendPageLayout.pageElements,
           },
-          domainRules: mergedDomainRules,
+          frontendCodeStructure: {
+            directories: mergedDirectories.length > 0 ? mergedDirectories : profileCurrent.frontendCodeStructure.directories,
+            moduleBoundaries: frontendModuleBoundaries.length > 0
+              ? frontendModuleBoundaries
+              : profileCurrent.frontendCodeStructure.moduleBoundaries,
+            implementationConstraints: mergedConstraints,
+          },
         },
         {
           expectedRevision: profileCurrent.revision,

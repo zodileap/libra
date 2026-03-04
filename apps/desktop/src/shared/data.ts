@@ -208,39 +208,30 @@ export interface CodeWorkspaceGroup {
 
 // 描述:
 //
-//   - 定义代码项目结构化技术栈分类。
-export interface CodeWorkspaceProjectTechStacks {
-  frontend: string[];
-  backend: string[];
-  database: string[];
-  infrastructure: string[];
+//   - 定义项目 API 数据模型结构化信息。
+export interface CodeWorkspaceProjectApiDataModel {
+  entities: string[];
+  requestModels: string[];
+  responseModels: string[];
+  mockCases: string[];
 }
 
 // 描述:
 //
-//   - 定义代码项目结构化架构描述。
-export interface CodeWorkspaceProjectArchitecture {
-  modules: string[];
-  boundaries: string[];
-  constraints: string[];
-}
-
-// 描述:
-//
-//   - 定义代码项目结构化 UI 语义描述。
-export interface CodeWorkspaceProjectUiSpec {
+//   - 定义项目前端页面布局结构化信息。
+export interface CodeWorkspaceProjectFrontendPageLayout {
   pages: string[];
-  layoutPrinciples: string[];
-  interactionPrinciples: string[];
+  navigation: string[];
+  pageElements: string[];
 }
 
 // 描述:
 //
-//   - 定义代码项目结构化 API 语义描述。
-export interface CodeWorkspaceProjectApiSpec {
-  services: string[];
-  contracts: string[];
-  errorConventions: string[];
+//   - 定义项目前端代码结构结构化信息。
+export interface CodeWorkspaceProjectFrontendCodeStructure {
+  directories: string[];
+  moduleBoundaries: string[];
+  implementationConstraints: string[];
 }
 
 // 描述:
@@ -255,11 +246,9 @@ export interface CodeWorkspaceProjectProfile {
   updatedAt: string;
   updatedBy: string;
   summary: string;
-  techStacks: CodeWorkspaceProjectTechStacks;
-  architecture: CodeWorkspaceProjectArchitecture;
-  uiSpec: CodeWorkspaceProjectUiSpec;
-  apiSpec: CodeWorkspaceProjectApiSpec;
-  domainRules: string[];
+  apiDataModel: CodeWorkspaceProjectApiDataModel;
+  frontendPageLayout: CodeWorkspaceProjectFrontendPageLayout;
+  frontendCodeStructure: CodeWorkspaceProjectFrontendCodeStructure;
   codingConventions: string[];
 }
 
@@ -268,11 +257,9 @@ export interface CodeWorkspaceProjectProfile {
 //   - 定义代码项目结构化信息更新入参。
 export interface CodeWorkspaceProjectProfileInput {
   summary?: string;
-  techStacks?: Partial<CodeWorkspaceProjectTechStacks>;
-  architecture?: Partial<CodeWorkspaceProjectArchitecture>;
-  uiSpec?: Partial<CodeWorkspaceProjectUiSpec>;
-  apiSpec?: Partial<CodeWorkspaceProjectApiSpec>;
-  domainRules?: string[];
+  apiDataModel?: Partial<CodeWorkspaceProjectApiDataModel>;
+  frontendPageLayout?: Partial<CodeWorkspaceProjectFrontendPageLayout>;
+  frontendCodeStructure?: Partial<CodeWorkspaceProjectFrontendCodeStructure>;
   codingConventions?: string[];
 }
 
@@ -621,7 +608,7 @@ function normalizeWorkspaceDependencyRules(rules: unknown): string[] {
 // 描述:
 //
 //   - 结构化项目信息 schema 版本，后续字段扩展时用于迁移判断。
-const CODE_WORKSPACE_PROFILE_SCHEMA_VERSION = 1;
+const CODE_WORKSPACE_PROFILE_SCHEMA_VERSION = 2;
 
 // 描述:
 //
@@ -684,97 +671,39 @@ function normalizeStringList(value: unknown): string[] {
 
 // 描述:
 //
-//   - 规范化结构化技术栈字段，缺失项自动回退为默认空数组。
-function normalizeProjectTechStacks(source: unknown): CodeWorkspaceProjectTechStacks {
-  const value = (source || {}) as Partial<CodeWorkspaceProjectTechStacks>;
+//   - 规范化结构化 API 数据模型字段，保证固定字段完整存在。
+function normalizeProjectApiDataModel(source: unknown): CodeWorkspaceProjectApiDataModel {
+  const value = (source || {}) as Partial<CodeWorkspaceProjectApiDataModel>;
   return {
-    frontend: normalizeStringList(value.frontend),
-    backend: normalizeStringList(value.backend),
-    database: normalizeStringList(value.database),
-    infrastructure: normalizeStringList(value.infrastructure),
+    entities: normalizeStringList(value.entities),
+    requestModels: normalizeStringList(value.requestModels),
+    responseModels: normalizeStringList(value.responseModels),
+    mockCases: normalizeStringList(value.mockCases),
   };
 }
 
 // 描述:
 //
-//   - 规范化结构化架构字段，保证固定字段完整存在。
-function normalizeProjectArchitecture(source: unknown): CodeWorkspaceProjectArchitecture {
-  const value = (source || {}) as Partial<CodeWorkspaceProjectArchitecture>;
-  return {
-    modules: normalizeStringList(value.modules),
-    boundaries: normalizeStringList(value.boundaries),
-    constraints: normalizeStringList(value.constraints),
-  };
-}
-
-// 描述:
-//
-//   - 规范化结构化 UI 语义字段，保证固定字段完整存在。
-function normalizeProjectUiSpec(source: unknown): CodeWorkspaceProjectUiSpec {
-  const value = (source || {}) as Partial<CodeWorkspaceProjectUiSpec>;
+//   - 规范化结构化前端页面布局字段，保证固定字段完整存在。
+function normalizeProjectFrontendPageLayout(source: unknown): CodeWorkspaceProjectFrontendPageLayout {
+  const value = (source || {}) as Partial<CodeWorkspaceProjectFrontendPageLayout>;
   return {
     pages: normalizeStringList(value.pages),
-    layoutPrinciples: normalizeStringList(value.layoutPrinciples),
-    interactionPrinciples: normalizeStringList(value.interactionPrinciples),
+    navigation: normalizeStringList(value.navigation),
+    pageElements: normalizeStringList(value.pageElements),
   };
 }
 
 // 描述:
 //
-//   - 规范化结构化 API 语义字段，保证固定字段完整存在。
-function normalizeProjectApiSpec(source: unknown): CodeWorkspaceProjectApiSpec {
-  const value = (source || {}) as Partial<CodeWorkspaceProjectApiSpec>;
+//   - 规范化结构化前端代码结构字段，保证固定字段完整存在。
+function normalizeProjectFrontendCodeStructure(source: unknown): CodeWorkspaceProjectFrontendCodeStructure {
+  const value = (source || {}) as Partial<CodeWorkspaceProjectFrontendCodeStructure>;
   return {
-    services: normalizeStringList(value.services),
-    contracts: normalizeStringList(value.contracts),
-    errorConventions: normalizeStringList(value.errorConventions),
+    directories: normalizeStringList(value.directories),
+    moduleBoundaries: normalizeStringList(value.moduleBoundaries),
+    implementationConstraints: normalizeStringList(value.implementationConstraints),
   };
-}
-
-// 描述:
-//
-//   - 按依赖规则推断项目技术栈，生成结构化项目信息初始草稿。
-function inferProjectStacksFromDependencyRules(rules: string[]): CodeWorkspaceProjectTechStacks {
-  const next: CodeWorkspaceProjectTechStacks = {
-    frontend: [],
-    backend: [],
-    database: [],
-    infrastructure: [],
-  };
-
-  const pushUnique = (list: string[], value: string) => {
-    const normalized = value.trim();
-    if (!normalized || list.includes(normalized)) {
-      return;
-    }
-    list.push(normalized);
-  };
-
-  rules.forEach((rule) => {
-    const normalizedRule = String(rule || "").trim().toLowerCase();
-    if (!normalizedRule) {
-      return;
-    }
-    const rawPackage = normalizedRule.includes(":")
-      ? normalizedRule.split(":").slice(1).join(":")
-      : normalizedRule;
-    const packageName = rawPackage.split("@")[0].trim();
-
-    if (/(react|vue|svelte|angular|next|nuxt|astro|aries_react)/.test(packageName)) {
-      pushUnique(next.frontend, packageName);
-    }
-    if (/(express|nestjs|nest|koa|fastify|hapi|spring|django|flask|gin|fiber|echo|laravel)/.test(packageName)) {
-      pushUnique(next.backend, packageName);
-    }
-    if (/(mysql|postgres|postgresql|redis|mongodb|sqlite|prisma|elasticsearch|clickhouse)/.test(packageName)) {
-      pushUnique(next.database, packageName);
-    }
-    if (/(docker|k8s|kubernetes|nginx|terraform|ansible|github-actions|gitlab-ci|jenkins)/.test(packageName)) {
-      pushUnique(next.infrastructure, packageName);
-    }
-  });
-
-  return next;
 }
 
 // 描述:
@@ -784,9 +713,8 @@ function buildDefaultCodeWorkspaceProjectProfile(
   workspace: CodeWorkspaceGroup,
   updatedBy = "system_bootstrap",
 ): CodeWorkspaceProjectProfile {
-  const inferredStacks = inferProjectStacksFromDependencyRules(workspace.dependencyRules || []);
   const now = new Date().toISOString();
-  const dependencyConstraintLines = (workspace.dependencyRules || [])
+  const dependencyConstraintLines = normalizeWorkspaceDependencyRules(workspace.dependencyRules || [])
     .map((item) => `依赖规范：${item}`)
     .slice(0, 20);
   const moduleName = String(workspace.name || "").trim() || resolveWorkspaceNameFromPath(workspace.path || "");
@@ -801,46 +729,48 @@ function buildDefaultCodeWorkspaceProjectProfile(
     updatedAt: now,
     updatedBy,
     summary,
-    techStacks: inferredStacks,
-    architecture: {
-      modules: [
-        `${moduleName || "主项目"} 应用主模块`,
-        "共享组件与公共工具模块",
+    apiDataModel: {
+      entities: [
+        "核心业务实体（待补充字段）",
       ],
-      boundaries: [
-        "UI 表达层与业务逻辑层分离",
-        "API 调用层与状态管理层隔离",
+      requestModels: [
+        "关键交互请求模型（待补充）",
       ],
-      constraints: [
+      responseModels: [
+        "关键交互响应模型（待补充）",
+      ],
+      mockCases: [
+        "核心接口 mock 场景（成功/失败/边界）",
+      ],
+    },
+    frontendPageLayout: {
+      pages: [
+        "页面清单（首页/列表/详情等）",
+      ],
+      navigation: [
+        "导航结构（顶部栏/侧边栏/菜单项）",
+      ],
+      pageElements: [
+        "页面元素（筛选区/列表区/详情区/操作区）",
+      ],
+    },
+    frontendCodeStructure: {
+      directories: [
+        "src/pages",
+        "src/components",
+        "src/modules",
+        "src/services",
+      ],
+      moduleBoundaries: [
+        "页面层负责布局编排，组件层负责复用 UI 单元",
+        "服务层负责 API 调用与数据转换，避免页面直接拼装接口细节",
+      ],
+      implementationConstraints: [
         ...dependencyConstraintLines,
         "优先依据结构化项目信息生成与重构代码",
+        "前端实现应保持页面结构语义稳定",
       ],
     },
-    uiSpec: {
-      pages: [
-        "页面结构按业务域拆分并保持信息架构稳定",
-      ],
-      layoutPrinciples: [
-        "页面布局优先复用已有组件体系",
-      ],
-      interactionPrinciples: [
-        "关键流程提供明确反馈与可恢复路径",
-      ],
-    },
-    apiSpec: {
-      services: [
-        "按业务域分层组织服务接口",
-      ],
-      contracts: [
-        "接口字段命名与含义保持稳定向后兼容",
-      ],
-      errorConventions: [
-        "错误信息用户友好化，不暴露后端技术细节",
-      ],
-    },
-    domainRules: [
-      "需求实现前先校验是否满足项目依赖规范",
-    ],
     codingConventions: [
       "新增功能需补充对应单元测试",
       "优先复用现有组件与工具函数，避免重复实现",
@@ -856,10 +786,17 @@ function normalizeCodeWorkspaceProjectProfile(
   workspace: CodeWorkspaceGroup,
 ): CodeWorkspaceProjectProfile {
   const fallback = buildDefaultCodeWorkspaceProjectProfile(workspace);
-  const value = (source || {}) as Partial<CodeWorkspaceProjectProfile>;
+  const value = (source || {}) as Partial<CodeWorkspaceProjectProfile> & Record<string, unknown>;
+  const apiDataModel = (value.apiDataModel || {}) as Partial<CodeWorkspaceProjectApiDataModel>;
+  const frontendPageLayout = (value.frontendPageLayout || {}) as Partial<CodeWorkspaceProjectFrontendPageLayout>;
+  const frontendCodeStructure = (value.frontendCodeStructure || {}) as Partial<CodeWorkspaceProjectFrontendCodeStructure>;
+  const legacyArchitecture = (value.architecture || {}) as Record<string, unknown>;
+  const legacyUiSpec = (value.uiSpec || {}) as Record<string, unknown>;
+  const legacyApiSpec = (value.apiSpec || {}) as Record<string, unknown>;
   const summary = String(value.summary || "").trim() || fallback.summary;
-  const normalizedSchemaVersion = Number(value.schemaVersion) > 0
-    ? Number(value.schemaVersion)
+  const sourceSchemaVersion = Number(value.schemaVersion);
+  const normalizedSchemaVersion = Number.isFinite(sourceSchemaVersion) && sourceSchemaVersion > 0
+    ? Math.max(CODE_WORKSPACE_PROFILE_SCHEMA_VERSION, Math.trunc(sourceSchemaVersion))
     : CODE_WORKSPACE_PROFILE_SCHEMA_VERSION;
   const revision = Number.isFinite(Number(value.revision)) && Number(value.revision) > 0
     ? Math.trunc(Number(value.revision))
@@ -876,12 +813,25 @@ function normalizeCodeWorkspaceProjectProfile(
     updatedAt: String(value.updatedAt || "").trim() || fallback.updatedAt,
     updatedBy: String(value.updatedBy || "").trim() || fallback.updatedBy,
     summary,
-    techStacks: normalizeProjectTechStacks(value.techStacks),
-    architecture: normalizeProjectArchitecture(value.architecture),
-    uiSpec: normalizeProjectUiSpec(value.uiSpec),
-    apiSpec: normalizeProjectApiSpec(value.apiSpec),
-    domainRules: normalizeStringList(value.domainRules),
-    codingConventions: normalizeStringList(value.codingConventions),
+    apiDataModel: {
+      entities: normalizeStringList(apiDataModel.entities ?? legacyApiSpec.services),
+      requestModels: normalizeStringList(apiDataModel.requestModels),
+      responseModels: normalizeStringList(apiDataModel.responseModels ?? legacyApiSpec.contracts),
+      mockCases: normalizeStringList(apiDataModel.mockCases ?? legacyApiSpec.errorConventions ?? value.domainRules),
+    },
+    frontendPageLayout: {
+      pages: normalizeStringList(frontendPageLayout.pages ?? legacyUiSpec.pages),
+      navigation: normalizeStringList(frontendPageLayout.navigation ?? legacyUiSpec.layoutPrinciples),
+      pageElements: normalizeStringList(frontendPageLayout.pageElements ?? legacyUiSpec.interactionPrinciples),
+    },
+    frontendCodeStructure: {
+      directories: normalizeStringList(frontendCodeStructure.directories ?? legacyArchitecture.modules),
+      moduleBoundaries: normalizeStringList(frontendCodeStructure.moduleBoundaries ?? legacyArchitecture.boundaries),
+      implementationConstraints: normalizeStringList(
+        frontendCodeStructure.implementationConstraints ?? legacyArchitecture.constraints,
+      ),
+    },
+    codingConventions: normalizeStringList(value.codingConventions ?? value.domainRules),
   };
 }
 
@@ -1452,13 +1402,13 @@ export function updateCodeWorkspaceGroupSettings(
   );
   const currentProfile = getCodeWorkspaceProjectProfile(workspaceId);
   if (currentProfile) {
-    const stableConstraints = currentProfile.architecture.constraints
+    const stableConstraints = currentProfile.frontendCodeStructure.implementationConstraints
       .filter((item) => !item.startsWith("依赖规范："));
     saveCodeWorkspaceProjectProfile(
       workspaceId,
       {
-        architecture: {
-          constraints: [
+        frontendCodeStructure: {
+          implementationConstraints: [
             ...normalizedRules.map((item) => `依赖规范：${item}`),
             ...stableConstraints,
           ],
@@ -1664,56 +1614,42 @@ export function saveCodeWorkspaceProjectProfile(
     summary: input.summary === undefined
       ? current.summary
       : String(input.summary || "").trim() || current.summary,
-    techStacks: {
-      frontend: input.techStacks?.frontend === undefined
-        ? current.techStacks.frontend
-        : normalizeStringList(input.techStacks.frontend),
-      backend: input.techStacks?.backend === undefined
-        ? current.techStacks.backend
-        : normalizeStringList(input.techStacks.backend),
-      database: input.techStacks?.database === undefined
-        ? current.techStacks.database
-        : normalizeStringList(input.techStacks.database),
-      infrastructure: input.techStacks?.infrastructure === undefined
-        ? current.techStacks.infrastructure
-        : normalizeStringList(input.techStacks.infrastructure),
+    apiDataModel: {
+      entities: input.apiDataModel?.entities === undefined
+        ? current.apiDataModel.entities
+        : normalizeStringList(input.apiDataModel.entities),
+      requestModels: input.apiDataModel?.requestModels === undefined
+        ? current.apiDataModel.requestModels
+        : normalizeStringList(input.apiDataModel.requestModels),
+      responseModels: input.apiDataModel?.responseModels === undefined
+        ? current.apiDataModel.responseModels
+        : normalizeStringList(input.apiDataModel.responseModels),
+      mockCases: input.apiDataModel?.mockCases === undefined
+        ? current.apiDataModel.mockCases
+        : normalizeStringList(input.apiDataModel.mockCases),
     },
-    architecture: {
-      modules: input.architecture?.modules === undefined
-        ? current.architecture.modules
-        : normalizeStringList(input.architecture.modules),
-      boundaries: input.architecture?.boundaries === undefined
-        ? current.architecture.boundaries
-        : normalizeStringList(input.architecture.boundaries),
-      constraints: input.architecture?.constraints === undefined
-        ? current.architecture.constraints
-        : normalizeStringList(input.architecture.constraints),
+    frontendPageLayout: {
+      pages: input.frontendPageLayout?.pages === undefined
+        ? current.frontendPageLayout.pages
+        : normalizeStringList(input.frontendPageLayout.pages),
+      navigation: input.frontendPageLayout?.navigation === undefined
+        ? current.frontendPageLayout.navigation
+        : normalizeStringList(input.frontendPageLayout.navigation),
+      pageElements: input.frontendPageLayout?.pageElements === undefined
+        ? current.frontendPageLayout.pageElements
+        : normalizeStringList(input.frontendPageLayout.pageElements),
     },
-    uiSpec: {
-      pages: input.uiSpec?.pages === undefined
-        ? current.uiSpec.pages
-        : normalizeStringList(input.uiSpec.pages),
-      layoutPrinciples: input.uiSpec?.layoutPrinciples === undefined
-        ? current.uiSpec.layoutPrinciples
-        : normalizeStringList(input.uiSpec.layoutPrinciples),
-      interactionPrinciples: input.uiSpec?.interactionPrinciples === undefined
-        ? current.uiSpec.interactionPrinciples
-        : normalizeStringList(input.uiSpec.interactionPrinciples),
+    frontendCodeStructure: {
+      directories: input.frontendCodeStructure?.directories === undefined
+        ? current.frontendCodeStructure.directories
+        : normalizeStringList(input.frontendCodeStructure.directories),
+      moduleBoundaries: input.frontendCodeStructure?.moduleBoundaries === undefined
+        ? current.frontendCodeStructure.moduleBoundaries
+        : normalizeStringList(input.frontendCodeStructure.moduleBoundaries),
+      implementationConstraints: input.frontendCodeStructure?.implementationConstraints === undefined
+        ? current.frontendCodeStructure.implementationConstraints
+        : normalizeStringList(input.frontendCodeStructure.implementationConstraints),
     },
-    apiSpec: {
-      services: input.apiSpec?.services === undefined
-        ? current.apiSpec.services
-        : normalizeStringList(input.apiSpec.services),
-      contracts: input.apiSpec?.contracts === undefined
-        ? current.apiSpec.contracts
-        : normalizeStringList(input.apiSpec.contracts),
-      errorConventions: input.apiSpec?.errorConventions === undefined
-        ? current.apiSpec.errorConventions
-        : normalizeStringList(input.apiSpec.errorConventions),
-    },
-    domainRules: input.domainRules === undefined
-      ? current.domainRules
-      : normalizeStringList(input.domainRules),
     codingConventions: input.codingConventions === undefined
       ? current.codingConventions
       : normalizeStringList(input.codingConventions),

@@ -974,15 +974,16 @@ function buildCodeProjectProfileContextLines(
     lines.push(`${label}：${normalized.join("；")}`);
   };
 
-  pushList("前端技术栈", profile.techStacks.frontend || []);
-  pushList("后端技术栈", profile.techStacks.backend || []);
-  pushList("数据库", profile.techStacks.database || []);
-  pushList("基础设施", profile.techStacks.infrastructure || []);
-  pushList("模块边界", profile.architecture.modules || []);
-  pushList("架构约束", profile.architecture.constraints || []);
-  pushList("页面结构语义", profile.uiSpec.pages || []);
-  pushList("接口契约", profile.apiSpec.contracts || []);
-  pushList("业务规则", profile.domainRules || []);
+  pushList("API 数据实体", profile.apiDataModel.entities || []);
+  pushList("API 请求模型", profile.apiDataModel.requestModels || []);
+  pushList("API 响应模型", profile.apiDataModel.responseModels || []);
+  pushList("API Mock 场景", profile.apiDataModel.mockCases || []);
+  pushList("前端页面清单", profile.frontendPageLayout.pages || []);
+  pushList("导航与菜单项", profile.frontendPageLayout.navigation || []);
+  pushList("页面元素结构", profile.frontendPageLayout.pageElements || []);
+  pushList("前端目录结构", profile.frontendCodeStructure.directories || []);
+  pushList("前端模块边界", profile.frontendCodeStructure.moduleBoundaries || []);
+  pushList("前端实现约束", profile.frontendCodeStructure.implementationConstraints || []);
   pushList("编码约定", profile.codingConventions || []);
   lines.push("");
   return lines;
@@ -1019,7 +1020,7 @@ function isFrameworkReplacementPrompt(prompt: string): boolean {
 
 // 描述：
 //
-//   - 为“框架替换”场景构建结构保持约束，优先要求沿用 uiSpec 与 architecture 语义。
+//   - 为“框架替换”场景构建结构保持约束，优先要求沿用页面布局与前端代码结构语义。
 //
 // Params:
 //
@@ -1036,19 +1037,22 @@ function buildFrameworkReplacementContextLines(
   if (!profile || !isFrameworkReplacementPrompt(prompt)) {
     return [];
   }
-  const pageBaseline = (profile.uiSpec.pages || [])
+  const pageBaseline = (profile.frontendPageLayout.pages || [])
     .map((item) => String(item || "").trim())
     .filter((item) => item.length > 0)
     .slice(0, CODE_PROFILE_CONTEXT_ITEM_LIMIT);
-  const moduleBaseline = [...(profile.architecture.modules || []), ...(profile.architecture.boundaries || [])]
+  const moduleBaseline = [
+    ...(profile.frontendCodeStructure.directories || []),
+    ...(profile.frontendCodeStructure.moduleBoundaries || []),
+  ]
     .map((item) => String(item || "").trim())
     .filter((item) => item.length > 0)
     .slice(0, CODE_PROFILE_CONTEXT_ITEM_LIMIT);
   const hasUiBaseline = pageBaseline.length > 0
-    || (profile.uiSpec.layoutPrinciples || []).length > 0
-    || (profile.uiSpec.interactionPrinciples || []).length > 0;
+    || (profile.frontendPageLayout.navigation || []).length > 0
+    || (profile.frontendPageLayout.pageElements || []).length > 0;
   const hasArchitectureBaseline = moduleBaseline.length > 0
-    || (profile.architecture.constraints || []).length > 0;
+    || (profile.frontendCodeStructure.implementationConstraints || []).length > 0;
   if (!hasUiBaseline && !hasArchitectureBaseline) {
     return [];
   }
@@ -1062,7 +1066,7 @@ function buildFrameworkReplacementContextLines(
   if (moduleBaseline.length > 0) {
     lines.push(`模块边界基线：${moduleBaseline.join("；")}`);
   }
-  lines.push("优先复用既有接口契约与业务规则，避免引入无关重构。");
+  lines.push("优先复用既有 API 数据模型与页面布局定义，避免引入无关重构。");
   lines.push("若新框架能力存在差异，先说明差异，再给出兼容实现。");
   lines.push("");
   return lines;

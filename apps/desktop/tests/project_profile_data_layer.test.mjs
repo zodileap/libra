@@ -51,3 +51,20 @@ test("TestProjectProfileBootstrapShouldRemainIdempotentWhenNotForced", () => {
   assert.match(source, /if \(current && !options\?\.force\) \{\s*return current;\s*\}/s);
   assert.match(source, /revision: current\?\.revision \? current\.revision \+ 1 : bootstrap\.revision,/);
 });
+
+test("TestProjectProfileNormalizeShouldUpgradeSchemaAndKeepEmptyLists", () => {
+  const source = readDesktopSource("src/shared/data.ts");
+
+  // 描述：
+  //
+  //   - 归一化时应自动提升 schemaVersion 到当前版本，避免旧版本签名长期滞留。
+  assert.match(source, /Math\.max\(CODE_WORKSPACE_PROFILE_SCHEMA_VERSION, Math\.trunc\(sourceSchemaVersion\)\)/);
+
+  // 描述：
+  //
+  //   - 新字段与旧字段兼容迁移时，应使用 ?? 保留“用户主动清空数组”的结果，避免被旧字段回填。
+  assert.match(source, /apiDataModel\.entities \?\? legacyApiSpec\.services/);
+  assert.match(source, /frontendPageLayout\.pages \?\? legacyUiSpec\.pages/);
+  assert.match(source, /frontendCodeStructure\.directories \?\? legacyArchitecture\.modules/);
+  assert.match(source, /value\.codingConventions \?\? value\.domainRules/);
+});
