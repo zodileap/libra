@@ -45,8 +45,9 @@ test("TestWorkflowSkillExecutionPlanShouldValidateInstallStateAndBuildPrompt", (
   assert.match(sessionPageSource, /buildCodeWorkflowSkillExecutionPlan\(selectedCodeWorkflow\)/);
   assert.match(sessionPageSource, /if \(skillExecutionPlan\.blockingIssues\.length > 0\)/);
   assert.match(sessionPageSource, /throw new Error\(`技能执行前检查未通过：\$\{skillExecutionPlan\.blockingIssues\.join\("；"\)\}`\)/);
-  assert.match(sessionPageSource, /buildCodeSessionContextPrompt\(messages, normalizedContent\)/);
-  assert.match(sessionPageSource, /const codeRequestPrompt = buildCodeSessionContextPrompt\(messages, normalizedContent\);/);
+  assert.match(sessionPageSource, /const latestCodeProjectProfile = activeCodeWorkspace\?\.id\s*\?\s*\(activeCodeProjectProfile \|\| getCodeWorkspaceProjectProfile\(activeCodeWorkspace\.id\)\)\s*:\s*null;/s);
+  assert.match(sessionPageSource, /const codeRequestPrompt = buildCodeSessionContextPrompt\(\s*messages,\s*normalizedContent,\s*undefined,\s*latestCodeProjectProfile,\s*\);/s);
+  assert.match(sessionPageSource, /const contextualCodeRequestPrompt = buildCodeSessionContextPrompt\(\s*contextMessages,\s*normalizedContent,\s*String\(activeCodeWorkspace\?\.path \|\| ""\)\.trim\(\) \|\| undefined,\s*latestCodeProjectProfile,\s*\);/s);
   assert.match(sessionPageSource, /const codePrompt = skillExecutionPlan\.planPrompt/);
   assert.match(sessionPageSource, /source: "workflow:skill_plan"/);
   assert.match(sessionPageSource, /prompt: codePrompt/);

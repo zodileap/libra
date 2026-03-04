@@ -93,8 +93,10 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(sessionSource, /const contextMessages = options\?\.contextMessages \|\| messages;/);
   assert.match(sessionSource, /function buildCodeSessionContextPrompt\(/);
   assert.match(sessionSource, /workspacePath\?: string/);
+  assert.match(sessionSource, /projectProfile\?: CodeWorkspaceProjectProfile \| null/);
   assert.match(sessionSource, /路径：\$\{normalizedWorkspacePath\}/);
-  assert.match(sessionSource, /buildCodeSessionContextPrompt\(\s*contextMessages,\s*normalizedContent,\s*String\(activeCodeWorkspace\?\.path \|\| ""\)\.trim\(\) \|\| undefined,\s*\)/s);
+  assert.match(sessionSource, /buildCodeSessionContextPrompt\(\s*contextMessages,\s*normalizedContent,\s*String\(activeCodeWorkspace\?\.path \|\| ""\)\.trim\(\) \|\| undefined,\s*latestCodeProjectProfile,\s*\)/s);
+  assert.match(sessionSource, /getCodeWorkspaceProjectProfile\(activeCodeWorkspace\.id\)/);
   assert.match(sessionSource, /workdir: String\(activeCodeWorkspace\?\.path \|\| ""\)\.trim\(\) \|\| undefined,/);
   assert.match(sessionSource, /function pruneAssistantRetryTail\(/);
   assert.match(sessionSource, /const prunedRetryTail = pruneAssistantRetryTail\(messages, assistantMessageIndex\);/);

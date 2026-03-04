@@ -35,6 +35,7 @@ test("TestSidebarShouldRefreshWhenRouteSessionMissingInList", () => {
 test("TestSidebarShouldSyncWorkspaceTreeWhenWorkspaceGroupsUpdated", () => {
   const sidebarSource = readDesktopSource("src/sidebar/index.tsx");
   const dataSource = readDesktopSource("src/shared/data.ts");
+  const sessionSource = readDesktopSource("src/widgets/session/page.tsx");
 
   // 描述：
   //
@@ -52,6 +53,21 @@ test("TestSidebarShouldSyncWorkspaceTreeWhenWorkspaceGroupsUpdated", () => {
   assert.match(sidebarSource, /window\.addEventListener\(CODE_WORKSPACE_GROUPS_UPDATED_EVENT, onCodeWorkspaceGroupsUpdated as EventListener\);/);
   assert.match(sidebarSource, /setWorkspaceGroups\(listCodeWorkspaceGroups\(\)\);/);
   assert.match(sidebarSource, /window\.removeEventListener\(CODE_WORKSPACE_GROUPS_UPDATED_EVENT, onCodeWorkspaceGroupsUpdated as EventListener\);/);
+
+  // 描述：
+  //
+  //   - 数据层应提供项目结构化信息更新广播能力，用于同项目多话题共享同步。
+  assert.match(dataSource, /export const CODE_WORKSPACE_PROFILE_UPDATED_EVENT = "zodileap:code-workspace-profile-updated";/);
+  assert.match(dataSource, /new CustomEvent\(CODE_WORKSPACE_PROFILE_UPDATED_EVENT,/);
+  assert.match(dataSource, /emitCodeWorkspaceProfileUpdated\(/);
+
+  // 描述：
+  //
+  //   - 会话页应监听 profile 更新事件并刷新当前项目上下文缓存，保证同项目跨话题实时一致。
+  assert.match(sessionSource, /CODE_WORKSPACE_PROFILE_UPDATED_EVENT/);
+  assert.match(sessionSource, /window\.addEventListener\(\s*CODE_WORKSPACE_PROFILE_UPDATED_EVENT,\s*onCodeWorkspaceProfileUpdated as EventListener,\s*\);/s);
+  assert.match(sessionSource, /setActiveCodeProjectProfile\(getCodeWorkspaceProjectProfile\(activeCodeWorkspace\.id\)\);/);
+  assert.match(sessionSource, /window\.removeEventListener\(\s*CODE_WORKSPACE_PROFILE_UPDATED_EVENT,\s*onCodeWorkspaceProfileUpdated as EventListener,\s*\);/s);
 });
 
 test("TestRemoveWorkspaceShouldAlsoRemoveBoundSessions", () => {

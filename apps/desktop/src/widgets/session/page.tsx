@@ -20,6 +20,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
+  CODE_WORKSPACE_PROFILE_UPDATED_EVENT,
+  getCodeWorkspaceProjectProfile,
   getCodeWorkspaceGroupById,
   getCodeWorkspaceIdBySessionId,
   getSessionRunState,
@@ -34,6 +36,7 @@ import {
   removeAgentSession,
   renameAgentSession,
   togglePinnedAgentSession,
+  type CodeWorkspaceProjectProfile,
   type SessionRunMeta as PersistedSessionRunMeta,
 } from "../../shared/data";
 import { updateRuntimeSessionStatus } from "../../shared/services/backend-api";
@@ -897,6 +900,60 @@ const CODE_RETRY_HINT_KEYWORDS = ["重试", "再试", "retry", "继续", "继续
 
 // 描述：
 //
+//   - 结构化项目信息上下文每个分类最多注入条数，避免提示词过长。
+const CODE_PROFILE_CONTEXT_ITEM_LIMIT = 4;
+
+// 描述：
+//
+//   - 将结构化项目信息转换为会话提示词上下文片段。
+//
+// Params:
+//
+//   - profile: 当前项目结构化信息。
+//
+// Returns:
+//
+//   - 可拼接到提示词的行数组。
+function buildCodeProjectProfileContextLines(
+  profile?: CodeWorkspaceProjectProfile | null,
+): string[] {
+  if (!profile) {
+    return [];
+  }
+
+  const lines: string[] = ["【项目结构化信息】"];
+  const summary = String(profile.summary || "").trim();
+  if (summary) {
+    lines.push(`摘要：${summary}`);
+  }
+
+  const pushList = (label: string, items: string[]) => {
+    const normalized = items
+      .map((item) => String(item || "").trim())
+      .filter((item) => item.length > 0)
+      .slice(0, CODE_PROFILE_CONTEXT_ITEM_LIMIT);
+    if (normalized.length === 0) {
+      return;
+    }
+    lines.push(`${label}：${normalized.join("；")}`);
+  };
+
+  pushList("前端技术栈", profile.techStacks.frontend || []);
+  pushList("后端技术栈", profile.techStacks.backend || []);
+  pushList("数据库", profile.techStacks.database || []);
+  pushList("基础设施", profile.techStacks.infrastructure || []);
+  pushList("模块边界", profile.architecture.modules || []);
+  pushList("架构约束", profile.architecture.constraints || []);
+  pushList("页面结构语义", profile.uiSpec.pages || []);
+  pushList("接口契约", profile.apiSpec.contracts || []);
+  pushList("业务规则", profile.domainRules || []);
+  pushList("编码约定", profile.codingConventions || []);
+  lines.push("");
+  return lines;
+}
+
+// 描述：
+//
 //   - 压缩并裁剪单条会话消息文本，减少上下文噪声并控制 token 体积。
 //
 // Params:
@@ -950,12 +1007,14 @@ function buildCodeSessionContextPrompt(
   historyMessages: MessageItem[],
   currentPrompt: string,
   workspacePath?: string,
+  projectProfile?: CodeWorkspaceProjectProfile | null,
 ): string {
   const normalizedCurrentPrompt = String(currentPrompt || "").trim();
   if (!normalizedCurrentPrompt) {
     return "";
   }
   const normalizedWorkspacePath = String(workspacePath || "").trim();
+  const profileContextLines = buildCodeProjectProfileContextLines(projectProfile);
   const historyLines = historyMessages
     .filter((item) => item.role === "user" || item.role === "assistant")
     .map((item) => ({
@@ -973,6 +1032,14 @@ function buildCodeSessionContextPrompt(
         `路径：${normalizedWorkspacePath}`,
         "约束：仅基于该目录进行分析与修改，不要切换到其它工程。",
         "",
+        ...profileContextLines,
+        "【当前请求】",
+        normalizedCurrentPrompt,
+      ].join("\n");
+    }
+    if (profileContextLines.length > 0) {
+      return [
+        ...profileContextLines,
         "【当前请求】",
         normalizedCurrentPrompt,
       ].join("\n");
@@ -992,6 +1059,7 @@ function buildCodeSessionContextPrompt(
     : [];
   return [
     ...workspaceLines,
+    ...profileContextLines,
     "【会话上下文】",
     ...historyLines,
     "",
@@ -1405,6 +1473,47 @@ export function SessionPage({
   }, [activeCodeWorkspace?.name]);
   // 描述：当会话处于二级目录（如 code workspace）时，在标题后展示一级菜单名（纯名字）。
   const sessionHeadParentHint = codeWorkspaceGroupName;
+
+  const [activeCodeProjectProfile, setActiveCodeProjectProfile] = useState<CodeWorkspaceProjectProfile | null>(null);
+
+  // 描述：
+  //
+  //   - 会话切换目录时加载当前项目结构化信息缓存，供后续发送请求直接复用。
+  useEffect(() => {
+    if (!activeCodeWorkspace?.id) {
+      setActiveCodeProjectProfile(null);
+      return;
+    }
+    setActiveCodeProjectProfile(getCodeWorkspaceProjectProfile(activeCodeWorkspace.id));
+  }, [activeCodeWorkspace?.id]);
+
+  // 描述：
+  //
+  //   - 监听结构化项目信息广播事件，保持同项目多话题会话上下文缓存实时一致。
+  useEffect(() => {
+    if (!IS_BROWSER || !activeCodeWorkspace?.id) {
+      return;
+    }
+    const onCodeWorkspaceProfileUpdated = (event: Event) => {
+      const customEvent = event as CustomEvent<{ workspaceId?: string; revision?: number }>;
+      const workspaceId = String(customEvent.detail?.workspaceId || "").trim();
+      if (!workspaceId || workspaceId !== activeCodeWorkspace.id) {
+        return;
+      }
+      setActiveCodeProjectProfile(getCodeWorkspaceProjectProfile(activeCodeWorkspace.id));
+    };
+    window.addEventListener(
+      CODE_WORKSPACE_PROFILE_UPDATED_EVENT,
+      onCodeWorkspaceProfileUpdated as EventListener,
+    );
+    return () => {
+      window.removeEventListener(
+        CODE_WORKSPACE_PROFILE_UPDATED_EVENT,
+        onCodeWorkspaceProfileUpdated as EventListener,
+      );
+    };
+  }, [activeCodeWorkspace?.id]);
+
   const isSessionPinned = useMemo(
     () => getAgentSessionMetaSnapshot().pinnedIds.includes(sessionId),
     [sessionId, sessionMenuVersion],
@@ -2729,12 +2838,21 @@ export function SessionPage({
         if (skillExecutionPlan.blockingIssues.length > 0) {
           throw new Error(`技能执行前检查未通过：${skillExecutionPlan.blockingIssues.join("；")}`);
         }
+        const latestCodeProjectProfile = activeCodeWorkspace?.id
+          ? (activeCodeProjectProfile || getCodeWorkspaceProjectProfile(activeCodeWorkspace.id))
+          : null;
         const selectedSessionSkillPrompt = buildSessionSkillPrompt(selectedSessionSkills);
-        const codeRequestPrompt = buildCodeSessionContextPrompt(messages, normalizedContent);
+        const codeRequestPrompt = buildCodeSessionContextPrompt(
+          messages,
+          normalizedContent,
+          undefined,
+          latestCodeProjectProfile,
+        );
         const contextualCodeRequestPrompt = buildCodeSessionContextPrompt(
           contextMessages,
           normalizedContent,
           String(activeCodeWorkspace?.path || "").trim() || undefined,
+          latestCodeProjectProfile,
         );
         const codeWorkflowPrompt = buildCodeWorkflowPrompt(
           selectedCodeWorkflow,

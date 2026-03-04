@@ -87,6 +87,11 @@ const CODE_LAST_WORKSPACE_ID_STORAGE_KEY = "zodileap.desktop.code.workspace.last
 
 // 描述:
 //
+//   - 代码项目结构化信息本地存储键（workspaceId -> profile）。
+const CODE_WORKSPACE_PROFILE_STORAGE_KEY = "zodileap.desktop.code.workspace.profiles";
+
+// 描述:
+//
 //   - 会话标题更新广播事件名。
 export const SESSION_TITLE_UPDATED_EVENT = "zodileap:session-title-updated";
 
@@ -99,6 +104,11 @@ export const SESSION_RUN_STATE_UPDATED_EVENT = "zodileap:session-run-state-updat
 //
 //   - 代码目录分组更新广播事件名。
 export const CODE_WORKSPACE_GROUPS_UPDATED_EVENT = "zodileap:code-workspace-groups-updated";
+
+// 描述:
+//
+//   - 代码项目结构化信息更新广播事件名。
+export const CODE_WORKSPACE_PROFILE_UPDATED_EVENT = "zodileap:code-workspace-profile-updated";
 
 // 描述:
 //
@@ -194,6 +204,86 @@ export interface CodeWorkspaceGroup {
   name: string;
   dependencyRules: string[];
   updatedAt: string;
+}
+
+// 描述:
+//
+//   - 定义代码项目结构化技术栈分类。
+export interface CodeWorkspaceProjectTechStacks {
+  frontend: string[];
+  backend: string[];
+  database: string[];
+  infrastructure: string[];
+}
+
+// 描述:
+//
+//   - 定义代码项目结构化架构描述。
+export interface CodeWorkspaceProjectArchitecture {
+  modules: string[];
+  boundaries: string[];
+  constraints: string[];
+}
+
+// 描述:
+//
+//   - 定义代码项目结构化 UI 语义描述。
+export interface CodeWorkspaceProjectUiSpec {
+  pages: string[];
+  layoutPrinciples: string[];
+  interactionPrinciples: string[];
+}
+
+// 描述:
+//
+//   - 定义代码项目结构化 API 语义描述。
+export interface CodeWorkspaceProjectApiSpec {
+  services: string[];
+  contracts: string[];
+  errorConventions: string[];
+}
+
+// 描述:
+//
+//   - 定义代码项目结构化信息（项目级共享资产）。
+export interface CodeWorkspaceProjectProfile {
+  schemaVersion: number;
+  workspaceId: string;
+  workspacePathHash: string;
+  workspaceSignature: string;
+  revision: number;
+  updatedAt: string;
+  updatedBy: string;
+  summary: string;
+  techStacks: CodeWorkspaceProjectTechStacks;
+  architecture: CodeWorkspaceProjectArchitecture;
+  uiSpec: CodeWorkspaceProjectUiSpec;
+  apiSpec: CodeWorkspaceProjectApiSpec;
+  domainRules: string[];
+  codingConventions: string[];
+}
+
+// 描述:
+//
+//   - 定义代码项目结构化信息更新入参。
+export interface CodeWorkspaceProjectProfileInput {
+  summary?: string;
+  techStacks?: Partial<CodeWorkspaceProjectTechStacks>;
+  architecture?: Partial<CodeWorkspaceProjectArchitecture>;
+  uiSpec?: Partial<CodeWorkspaceProjectUiSpec>;
+  apiSpec?: Partial<CodeWorkspaceProjectApiSpec>;
+  domainRules?: string[];
+  codingConventions?: string[];
+}
+
+// 描述:
+//
+//   - 定义代码项目结构化信息保存结果。
+export interface CodeWorkspaceProjectProfileSaveResult {
+  ok: boolean;
+  conflict: boolean;
+  profile: CodeWorkspaceProjectProfile | null;
+  message: string;
 }
 
 // 描述:
@@ -338,6 +428,28 @@ function emitCodeWorkspaceGroupsUpdated(reason: string) {
     new CustomEvent(CODE_WORKSPACE_GROUPS_UPDATED_EVENT, {
       detail: {
         reason,
+      },
+    }),
+  );
+}
+
+// 描述：向当前窗口广播代码项目结构化信息变更事件，供会话页和设置页同步最新项目语义上下文。
+//
+// Params:
+//
+//   - workspaceId: 项目 ID。
+//   - reason: 触发原因（bootstrap/settings/manual 等）。
+//   - revision: 最新结构化信息版本号。
+function emitCodeWorkspaceProfileUpdated(workspaceId: string, reason: string, revision: number) {
+  if (!IS_BROWSER || !workspaceId) {
+    return;
+  }
+  window.dispatchEvent(
+    new CustomEvent(CODE_WORKSPACE_PROFILE_UPDATED_EVENT, {
+      detail: {
+        workspaceId,
+        reason,
+        revision,
       },
     }),
   );
@@ -504,6 +616,314 @@ function normalizeWorkspaceDependencyRules(rules: unknown): string[] {
     .map((item) => String(item || "").trim())
     .filter((item) => Boolean(item));
   return normalized.filter((item, index) => normalized.indexOf(item) === index);
+}
+
+// 描述:
+//
+//   - 结构化项目信息 schema 版本，后续字段扩展时用于迁移判断。
+const CODE_WORKSPACE_PROFILE_SCHEMA_VERSION = 1;
+
+// 描述:
+//
+//   - 使用稳定哈希算法生成目录路径指纹，用于构建项目结构化信息唯一签名。
+//
+// Params:
+//
+//   - workspacePath: 目录路径。
+//
+// Returns:
+//
+//   - 16 进制哈希字符串。
+function buildWorkspacePathHash(workspacePath: string): string {
+  const normalized = normalizeWorkspacePath(String(workspacePath || ""));
+  let hash = 2166136261;
+  for (let index = 0; index < normalized.length; index += 1) {
+    hash ^= normalized.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+// 描述:
+//
+//   - 生成结构化项目信息签名，组合 workspaceId、路径哈希和 schemaVersion 以便迁移与冲突排查。
+//
+// Params:
+//
+//   - workspace: 项目目录。
+//   - schemaVersion: profile schema 版本。
+//
+// Returns:
+//
+//   - 项目结构化信息签名。
+function buildWorkspaceProfileSignature(workspace: CodeWorkspaceGroup, schemaVersion: number): string {
+  const pathHash = buildWorkspacePathHash(workspace.path);
+  return `${workspace.id}:${pathHash}:v${schemaVersion}`;
+}
+
+// 描述:
+//
+//   - 规范化字符串数组，移除空值并去重，保持输入顺序。
+//
+// Params:
+//
+//   - value: 待规范化原始值。
+//
+// Returns:
+//
+//   - 规范化后的字符串数组。
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const normalized = value
+    .map((item) => String(item || "").trim())
+    .filter((item) => item.length > 0);
+  return normalized.filter((item, index) => normalized.indexOf(item) === index);
+}
+
+// 描述:
+//
+//   - 规范化结构化技术栈字段，缺失项自动回退为默认空数组。
+function normalizeProjectTechStacks(source: unknown): CodeWorkspaceProjectTechStacks {
+  const value = (source || {}) as Partial<CodeWorkspaceProjectTechStacks>;
+  return {
+    frontend: normalizeStringList(value.frontend),
+    backend: normalizeStringList(value.backend),
+    database: normalizeStringList(value.database),
+    infrastructure: normalizeStringList(value.infrastructure),
+  };
+}
+
+// 描述:
+//
+//   - 规范化结构化架构字段，保证固定字段完整存在。
+function normalizeProjectArchitecture(source: unknown): CodeWorkspaceProjectArchitecture {
+  const value = (source || {}) as Partial<CodeWorkspaceProjectArchitecture>;
+  return {
+    modules: normalizeStringList(value.modules),
+    boundaries: normalizeStringList(value.boundaries),
+    constraints: normalizeStringList(value.constraints),
+  };
+}
+
+// 描述:
+//
+//   - 规范化结构化 UI 语义字段，保证固定字段完整存在。
+function normalizeProjectUiSpec(source: unknown): CodeWorkspaceProjectUiSpec {
+  const value = (source || {}) as Partial<CodeWorkspaceProjectUiSpec>;
+  return {
+    pages: normalizeStringList(value.pages),
+    layoutPrinciples: normalizeStringList(value.layoutPrinciples),
+    interactionPrinciples: normalizeStringList(value.interactionPrinciples),
+  };
+}
+
+// 描述:
+//
+//   - 规范化结构化 API 语义字段，保证固定字段完整存在。
+function normalizeProjectApiSpec(source: unknown): CodeWorkspaceProjectApiSpec {
+  const value = (source || {}) as Partial<CodeWorkspaceProjectApiSpec>;
+  return {
+    services: normalizeStringList(value.services),
+    contracts: normalizeStringList(value.contracts),
+    errorConventions: normalizeStringList(value.errorConventions),
+  };
+}
+
+// 描述:
+//
+//   - 按依赖规则推断项目技术栈，生成结构化项目信息初始草稿。
+function inferProjectStacksFromDependencyRules(rules: string[]): CodeWorkspaceProjectTechStacks {
+  const next: CodeWorkspaceProjectTechStacks = {
+    frontend: [],
+    backend: [],
+    database: [],
+    infrastructure: [],
+  };
+
+  const pushUnique = (list: string[], value: string) => {
+    const normalized = value.trim();
+    if (!normalized || list.includes(normalized)) {
+      return;
+    }
+    list.push(normalized);
+  };
+
+  rules.forEach((rule) => {
+    const normalizedRule = String(rule || "").trim().toLowerCase();
+    if (!normalizedRule) {
+      return;
+    }
+    const rawPackage = normalizedRule.includes(":")
+      ? normalizedRule.split(":").slice(1).join(":")
+      : normalizedRule;
+    const packageName = rawPackage.split("@")[0].trim();
+
+    if (/(react|vue|svelte|angular|next|nuxt|astro|aries_react)/.test(packageName)) {
+      pushUnique(next.frontend, packageName);
+    }
+    if (/(express|nestjs|nest|koa|fastify|hapi|spring|django|flask|gin|fiber|echo|laravel)/.test(packageName)) {
+      pushUnique(next.backend, packageName);
+    }
+    if (/(mysql|postgres|postgresql|redis|mongodb|sqlite|prisma|elasticsearch|clickhouse)/.test(packageName)) {
+      pushUnique(next.database, packageName);
+    }
+    if (/(docker|k8s|kubernetes|nginx|terraform|ansible|github-actions|gitlab-ci|jenkins)/.test(packageName)) {
+      pushUnique(next.infrastructure, packageName);
+    }
+  });
+
+  return next;
+}
+
+// 描述:
+//
+//   - 基于项目基础信息生成结构化项目信息默认草稿。
+function buildDefaultCodeWorkspaceProjectProfile(
+  workspace: CodeWorkspaceGroup,
+  updatedBy = "system_bootstrap",
+): CodeWorkspaceProjectProfile {
+  const inferredStacks = inferProjectStacksFromDependencyRules(workspace.dependencyRules || []);
+  const now = new Date().toISOString();
+  const dependencyConstraintLines = (workspace.dependencyRules || [])
+    .map((item) => `依赖规范：${item}`)
+    .slice(0, 20);
+  const moduleName = String(workspace.name || "").trim() || resolveWorkspaceNameFromPath(workspace.path || "");
+  const summary = `项目「${moduleName || "未命名项目"}」结构化语义基线，供代码智能体跨话题复用。`;
+
+  return {
+    schemaVersion: CODE_WORKSPACE_PROFILE_SCHEMA_VERSION,
+    workspaceId: workspace.id,
+    workspacePathHash: buildWorkspacePathHash(workspace.path),
+    workspaceSignature: buildWorkspaceProfileSignature(workspace, CODE_WORKSPACE_PROFILE_SCHEMA_VERSION),
+    revision: 1,
+    updatedAt: now,
+    updatedBy,
+    summary,
+    techStacks: inferredStacks,
+    architecture: {
+      modules: [
+        `${moduleName || "主项目"} 应用主模块`,
+        "共享组件与公共工具模块",
+      ],
+      boundaries: [
+        "UI 表达层与业务逻辑层分离",
+        "API 调用层与状态管理层隔离",
+      ],
+      constraints: [
+        ...dependencyConstraintLines,
+        "优先依据结构化项目信息生成与重构代码",
+      ],
+    },
+    uiSpec: {
+      pages: [
+        "页面结构按业务域拆分并保持信息架构稳定",
+      ],
+      layoutPrinciples: [
+        "页面布局优先复用已有组件体系",
+      ],
+      interactionPrinciples: [
+        "关键流程提供明确反馈与可恢复路径",
+      ],
+    },
+    apiSpec: {
+      services: [
+        "按业务域分层组织服务接口",
+      ],
+      contracts: [
+        "接口字段命名与含义保持稳定向后兼容",
+      ],
+      errorConventions: [
+        "错误信息用户友好化，不暴露后端技术细节",
+      ],
+    },
+    domainRules: [
+      "需求实现前先校验是否满足项目依赖规范",
+    ],
+    codingConventions: [
+      "新增功能需补充对应单元测试",
+      "优先复用现有组件与工具函数，避免重复实现",
+    ],
+  };
+}
+
+// 描述:
+//
+//   - 规范化单条结构化项目信息，兜底修复缺失字段并保证数据可读写。
+function normalizeCodeWorkspaceProjectProfile(
+  source: unknown,
+  workspace: CodeWorkspaceGroup,
+): CodeWorkspaceProjectProfile {
+  const fallback = buildDefaultCodeWorkspaceProjectProfile(workspace);
+  const value = (source || {}) as Partial<CodeWorkspaceProjectProfile>;
+  const summary = String(value.summary || "").trim() || fallback.summary;
+  const normalizedSchemaVersion = Number(value.schemaVersion) > 0
+    ? Number(value.schemaVersion)
+    : CODE_WORKSPACE_PROFILE_SCHEMA_VERSION;
+  const revision = Number.isFinite(Number(value.revision)) && Number(value.revision) > 0
+    ? Math.trunc(Number(value.revision))
+    : fallback.revision;
+  const workspacePathHash = buildWorkspacePathHash(workspace.path);
+  const workspaceSignature = buildWorkspaceProfileSignature(workspace, normalizedSchemaVersion);
+
+  return {
+    schemaVersion: normalizedSchemaVersion,
+    workspaceId: workspace.id,
+    workspacePathHash,
+    workspaceSignature,
+    revision,
+    updatedAt: String(value.updatedAt || "").trim() || fallback.updatedAt,
+    updatedBy: String(value.updatedBy || "").trim() || fallback.updatedBy,
+    summary,
+    techStacks: normalizeProjectTechStacks(value.techStacks),
+    architecture: normalizeProjectArchitecture(value.architecture),
+    uiSpec: normalizeProjectUiSpec(value.uiSpec),
+    apiSpec: normalizeProjectApiSpec(value.apiSpec),
+    domainRules: normalizeStringList(value.domainRules),
+    codingConventions: normalizeStringList(value.codingConventions),
+  };
+}
+
+// 描述:
+//
+//   - 读取全部项目结构化信息映射，并按当前存在的 workspace 进行归一化。
+function readCodeWorkspaceProjectProfileMap(): Record<string, CodeWorkspaceProjectProfile> {
+  if (!IS_BROWSER) {
+    return {};
+  }
+  const raw = window.localStorage.getItem(CODE_WORKSPACE_PROFILE_STORAGE_KEY);
+  if (!raw) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") {
+      return {};
+    }
+    const workspaceById = new Map(readCodeWorkspaceGroups().map((item) => [item.id, item]));
+    const next: Record<string, CodeWorkspaceProjectProfile> = {};
+    Object.entries(parsed).forEach(([workspaceId, profile]) => {
+      const workspace = workspaceById.get(workspaceId);
+      if (!workspace) {
+        return;
+      }
+      next[workspaceId] = normalizeCodeWorkspaceProjectProfile(profile, workspace);
+    });
+    return next;
+  } catch (_err) {
+    return {};
+  }
+}
+
+// 描述:
+//
+//   - 写入全部项目结构化信息映射到本地存储。
+function writeCodeWorkspaceProjectProfileMap(profiles: Record<string, CodeWorkspaceProjectProfile>) {
+  if (!IS_BROWSER) {
+    return;
+  }
+  window.localStorage.setItem(CODE_WORKSPACE_PROFILE_STORAGE_KEY, JSON.stringify(profiles));
 }
 
 // 描述：读取代码目录分组列表。
@@ -927,6 +1347,11 @@ export function upsertCodeWorkspaceGroup(path: string): CodeWorkspaceGroup | nul
       ...groups.filter((item) => item.id !== hit.id),
     ]);
     writeLastCodeWorkspaceId(next.id);
+    bootstrapCodeWorkspaceProjectProfile(next.id, {
+      force: false,
+      updatedBy: "workspace_upsert",
+      reason: "workspace_upsert",
+    });
     emitCodeWorkspaceGroupsUpdated("upsert");
     return next;
   }
@@ -940,6 +1365,11 @@ export function upsertCodeWorkspaceGroup(path: string): CodeWorkspaceGroup | nul
   };
   writeCodeWorkspaceGroups([created, ...groups]);
   writeLastCodeWorkspaceId(created.id);
+  bootstrapCodeWorkspaceProjectProfile(created.id, {
+    force: false,
+    updatedBy: "workspace_create",
+    reason: "workspace_create",
+  });
   emitCodeWorkspaceGroupsUpdated("upsert");
   return created;
 }
@@ -1020,6 +1450,32 @@ export function updateCodeWorkspaceGroupSettings(
       }
       : item)),
   );
+  const currentProfile = getCodeWorkspaceProjectProfile(workspaceId);
+  if (currentProfile) {
+    const stableConstraints = currentProfile.architecture.constraints
+      .filter((item) => !item.startsWith("依赖规范："));
+    saveCodeWorkspaceProjectProfile(
+      workspaceId,
+      {
+        architecture: {
+          constraints: [
+            ...normalizedRules.map((item) => `依赖规范：${item}`),
+            ...stableConstraints,
+          ],
+        },
+      },
+      {
+        updatedBy: "workspace_settings",
+        reason: "workspace_settings_sync",
+      },
+    );
+  } else {
+    bootstrapCodeWorkspaceProjectProfile(workspaceId, {
+      force: false,
+      updatedBy: "workspace_settings",
+      reason: "workspace_settings_sync",
+    });
+  }
   emitCodeWorkspaceGroupsUpdated("settings");
   return true;
 }
@@ -1045,12 +1501,18 @@ export function removeCodeWorkspaceGroup(workspaceId: string) {
   });
 
   writeCodeWorkspaceGroups(groups.filter((item) => item.id !== workspaceId));
+  const profiles = readCodeWorkspaceProjectProfileMap();
+  if (profiles[workspaceId]) {
+    delete profiles[workspaceId];
+    writeCodeWorkspaceProjectProfileMap(profiles);
+  }
   const latestMapItems = readCodeSessionWorkspaceMap();
   writeCodeSessionWorkspaceMap(latestMapItems.filter((item) => item.workspaceId !== workspaceId));
   if (readLastCodeWorkspaceId() === workspaceId) {
     const next = listCodeWorkspaceGroups()[0];
     writeLastCodeWorkspaceId(next?.id || "");
   }
+  emitCodeWorkspaceProfileUpdated(workspaceId, "workspace_remove", 0);
   emitCodeWorkspaceGroupsUpdated("remove");
 }
 
@@ -1118,6 +1580,250 @@ export function getCodeWorkspaceGroupById(workspaceId: string): CodeWorkspaceGro
     return null;
   }
   return readCodeWorkspaceGroups().find((item) => item.id === workspaceId) || null;
+}
+
+// 描述：读取指定项目的结构化项目信息，未命中时返回 null。
+//
+// Params:
+//
+//   - workspaceId: 项目 ID。
+//
+// Returns:
+//
+//   - 项目结构化信息；未命中返回 null。
+export function getCodeWorkspaceProjectProfile(workspaceId: string): CodeWorkspaceProjectProfile | null {
+  if (!workspaceId) {
+    return null;
+  }
+  const workspace = getCodeWorkspaceGroupById(workspaceId);
+  if (!workspace) {
+    return null;
+  }
+  const profiles = readCodeWorkspaceProjectProfileMap();
+  const hit = profiles[workspaceId];
+  if (!hit) {
+    return null;
+  }
+  return normalizeCodeWorkspaceProjectProfile(hit, workspace);
+}
+
+// 描述：将结构化项目信息补丁合并到目标项目，并进行版本冲突检测。
+//
+// Params:
+//
+//   - workspaceId: 项目 ID。
+//   - input: 结构化信息补丁。
+//   - options: 保存选项（可选）。
+//
+// Returns:
+//
+//   - 保存结果（成功/冲突/失败）。
+export function saveCodeWorkspaceProjectProfile(
+  workspaceId: string,
+  input: CodeWorkspaceProjectProfileInput,
+  options?: {
+    expectedRevision?: number;
+    updatedBy?: string;
+    reason?: string;
+  },
+): CodeWorkspaceProjectProfileSaveResult {
+  const workspace = getCodeWorkspaceGroupById(workspaceId);
+  if (!workspace) {
+    return {
+      ok: false,
+      conflict: false,
+      profile: null,
+      message: "项目不存在，无法保存结构化信息。",
+    };
+  }
+
+  const profiles = readCodeWorkspaceProjectProfileMap();
+  const hasCurrent = Boolean(profiles[workspaceId]);
+  const current = profiles[workspaceId] || buildDefaultCodeWorkspaceProjectProfile(workspace);
+  const expectedRevision = options?.expectedRevision;
+  if (Number.isFinite(expectedRevision) && typeof expectedRevision === "number") {
+    if (current.revision !== expectedRevision) {
+      return {
+        ok: false,
+        conflict: true,
+        profile: current,
+        message: "结构化信息已被其他会话更新，请刷新后重试。",
+      };
+    }
+  }
+
+  const next: CodeWorkspaceProjectProfile = {
+    ...current,
+    workspaceId,
+    schemaVersion: CODE_WORKSPACE_PROFILE_SCHEMA_VERSION,
+    workspacePathHash: buildWorkspacePathHash(workspace.path),
+    workspaceSignature: buildWorkspaceProfileSignature(workspace, CODE_WORKSPACE_PROFILE_SCHEMA_VERSION),
+    revision: hasCurrent ? current.revision + 1 : 1,
+    updatedAt: new Date().toISOString(),
+    updatedBy: String(options?.updatedBy || "").trim() || "manual_update",
+    summary: input.summary === undefined
+      ? current.summary
+      : String(input.summary || "").trim() || current.summary,
+    techStacks: {
+      frontend: input.techStacks?.frontend === undefined
+        ? current.techStacks.frontend
+        : normalizeStringList(input.techStacks.frontend),
+      backend: input.techStacks?.backend === undefined
+        ? current.techStacks.backend
+        : normalizeStringList(input.techStacks.backend),
+      database: input.techStacks?.database === undefined
+        ? current.techStacks.database
+        : normalizeStringList(input.techStacks.database),
+      infrastructure: input.techStacks?.infrastructure === undefined
+        ? current.techStacks.infrastructure
+        : normalizeStringList(input.techStacks.infrastructure),
+    },
+    architecture: {
+      modules: input.architecture?.modules === undefined
+        ? current.architecture.modules
+        : normalizeStringList(input.architecture.modules),
+      boundaries: input.architecture?.boundaries === undefined
+        ? current.architecture.boundaries
+        : normalizeStringList(input.architecture.boundaries),
+      constraints: input.architecture?.constraints === undefined
+        ? current.architecture.constraints
+        : normalizeStringList(input.architecture.constraints),
+    },
+    uiSpec: {
+      pages: input.uiSpec?.pages === undefined
+        ? current.uiSpec.pages
+        : normalizeStringList(input.uiSpec.pages),
+      layoutPrinciples: input.uiSpec?.layoutPrinciples === undefined
+        ? current.uiSpec.layoutPrinciples
+        : normalizeStringList(input.uiSpec.layoutPrinciples),
+      interactionPrinciples: input.uiSpec?.interactionPrinciples === undefined
+        ? current.uiSpec.interactionPrinciples
+        : normalizeStringList(input.uiSpec.interactionPrinciples),
+    },
+    apiSpec: {
+      services: input.apiSpec?.services === undefined
+        ? current.apiSpec.services
+        : normalizeStringList(input.apiSpec.services),
+      contracts: input.apiSpec?.contracts === undefined
+        ? current.apiSpec.contracts
+        : normalizeStringList(input.apiSpec.contracts),
+      errorConventions: input.apiSpec?.errorConventions === undefined
+        ? current.apiSpec.errorConventions
+        : normalizeStringList(input.apiSpec.errorConventions),
+    },
+    domainRules: input.domainRules === undefined
+      ? current.domainRules
+      : normalizeStringList(input.domainRules),
+    codingConventions: input.codingConventions === undefined
+      ? current.codingConventions
+      : normalizeStringList(input.codingConventions),
+  };
+
+  profiles[workspaceId] = normalizeCodeWorkspaceProjectProfile(next, workspace);
+  writeCodeWorkspaceProjectProfileMap(profiles);
+  emitCodeWorkspaceProfileUpdated(
+    workspaceId,
+    String(options?.reason || "").trim() || "manual_update",
+    profiles[workspaceId].revision,
+  );
+  return {
+    ok: true,
+    conflict: false,
+    profile: profiles[workspaceId],
+    message: "结构化信息已保存。",
+  };
+}
+
+// 描述：按项目目录信息自动初始化结构化项目信息，支持首次接入和手动强制重建。
+//
+// Params:
+//
+//   - workspaceId: 项目 ID。
+//   - options: 初始化选项（可选）。
+//
+// Returns:
+//
+//   - 初始化后的结构化信息；项目不存在时返回 null。
+export function bootstrapCodeWorkspaceProjectProfile(
+  workspaceId: string,
+  options?: {
+    force?: boolean;
+    updatedBy?: string;
+    reason?: string;
+  },
+): CodeWorkspaceProjectProfile | null {
+  const workspace = getCodeWorkspaceGroupById(workspaceId);
+  if (!workspace) {
+    return null;
+  }
+  const profiles = readCodeWorkspaceProjectProfileMap();
+  const current = profiles[workspaceId];
+  if (current && !options?.force) {
+    return current;
+  }
+
+  const bootstrap = buildDefaultCodeWorkspaceProjectProfile(
+    workspace,
+    String(options?.updatedBy || "").trim() || "system_bootstrap",
+  );
+  const next: CodeWorkspaceProjectProfile = {
+    ...bootstrap,
+    revision: current?.revision ? current.revision + 1 : bootstrap.revision,
+  };
+  profiles[workspaceId] = normalizeCodeWorkspaceProjectProfile(next, workspace);
+  writeCodeWorkspaceProjectProfileMap(profiles);
+  emitCodeWorkspaceProfileUpdated(
+    workspaceId,
+    String(options?.reason || "").trim() || "bootstrap",
+    profiles[workspaceId].revision,
+  );
+  return profiles[workspaceId];
+}
+
+// 描述：向外暴露“upsert”语义的结构化项目信息保存接口，供工作流与设置页复用。
+//
+// Params:
+//
+//   - workspaceId: 项目 ID。
+//   - input: 结构化信息补丁。
+//   - options: 保存选项（可选）。
+//
+// Returns:
+//
+//   - 保存结果（成功/冲突/失败）。
+export function upsertCodeWorkspaceProjectProfile(
+  workspaceId: string,
+  input: CodeWorkspaceProjectProfileInput,
+  options?: {
+    expectedRevision?: number;
+    updatedBy?: string;
+    reason?: string;
+  },
+): CodeWorkspaceProjectProfileSaveResult {
+  return saveCodeWorkspaceProjectProfile(workspaceId, input, options);
+}
+
+// 描述：向外暴露“patch”语义的结构化项目信息保存接口，语义上强调局部字段更新。
+//
+// Params:
+//
+//   - workspaceId: 项目 ID。
+//   - patch: 局部字段补丁。
+//   - options: 保存选项（可选）。
+//
+// Returns:
+//
+//   - 保存结果（成功/冲突/失败）。
+export function patchCodeWorkspaceProjectProfile(
+  workspaceId: string,
+  patch: CodeWorkspaceProjectProfileInput,
+  options?: {
+    expectedRevision?: number;
+    updatedBy?: string;
+    reason?: string;
+  },
+): CodeWorkspaceProjectProfileSaveResult {
+  return saveCodeWorkspaceProjectProfile(workspaceId, patch, options);
 }
 
 // 描述：读取最近一次编辑会话使用的代码目录分组 ID。
