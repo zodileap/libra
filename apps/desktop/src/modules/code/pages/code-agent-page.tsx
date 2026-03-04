@@ -18,6 +18,7 @@ import {
   setLastUsedCodeWorkspaceId,
   upsertCodeWorkspaceGroup,
 } from "../../../shared/data";
+import { CODE_PROJECT_SETTINGS_PATH } from "../routes";
 import { createRuntimeSession } from "../../../shared/services/backend-api";
 import { AgentPage } from "../../../widgets/agent/page";
 import type { LoginUser, ModelMcpCapabilities } from "../../../shared/types";
@@ -115,6 +116,14 @@ export function CodeAgentPage(props: CodeAgentPageProps) {
   const handleOpenWorkspaceSelectionPage = () => {
     setStatus("");
     setSearchParams(new URLSearchParams(), { replace: true });
+  };
+
+  // 描述：进入当前项目的设置页，支持在主内容区直接维护结构化项目信息。
+  const handleOpenProjectSettingsPage = () => {
+    if (!selectedWorkspace?.id) {
+      return;
+    }
+    navigate(`${CODE_PROJECT_SETTINGS_PATH}?workspaceId=${encodeURIComponent(selectedWorkspace.id)}`);
   };
 
   // 描述：通过系统文件夹选择器选择本地目录，并立即创建目录分组。
@@ -390,12 +399,20 @@ export function CodeAgentPage(props: CodeAgentPageProps) {
       <AriContainer className="desk-inline-gap" />
       <AriFlex align="center" justify="space-between" space={8}>
         <AriTypography variant="caption" value={selectedWorkspace.name} />
-        <AriButton
-          type="default"
-          label="切换项目"
-          icon="folder"
-          onClick={handleOpenWorkspaceSelectionPage}
-        />
+        <AriFlex align="center" space={8}>
+          <AriButton
+            type="default"
+            label="项目信息"
+            icon="settings"
+            onClick={handleOpenProjectSettingsPage}
+          />
+          <AriButton
+            type="default"
+            label="切换项目"
+            icon="folder"
+            onClick={handleOpenWorkspaceSelectionPage}
+          />
+        </AriFlex>
       </AriFlex>
     </AriCard>
   ) : undefined;

@@ -34,11 +34,13 @@ test("TestCodeProjectSettingsShouldExposeRouteAndSidebarEntry", () => {
 
   // 描述:
   //
-  //   - 代码目录一级菜单 hover 操作应包含“更多”与“新话题”入口，并通过菜单承载“编辑/删除”。
+  //   - 代码目录一级菜单 hover 操作应包含“更多/设置/新话题”入口，并将“编辑”从更多菜单迁移为独立设置按钮。
   assert.match(sidebarSource, /icon="more_horiz"/);
+  assert.match(sidebarSource, /icon="settings"/);
+  assert.match(sidebarSource, /aria-label="项目设置"/);
   assert.match(sidebarSource, /icon="edit"/);
-  assert.match(sidebarSource, /\{ key: "edit", label: "编辑", icon: "edit" \}/);
   assert.match(sidebarSource, /\{ key: "delete", label: "删除", icon: "delete", fillIcon: "delete_fill" \}/);
+  assert.doesNotMatch(sidebarSource, /\{ key: "edit", label: "编辑", icon: "edit" \}/);
   assert.match(sidebarSource, /aria-label="在项目内新增话题"/);
   assert.match(sidebarSource, /void handleCreateSessionInWorkspace\(group\.workspace\.id\);/);
   assert.match(sidebarSource, /setOpenWorkspaceActionMenuId\(""\);/);
@@ -65,6 +67,15 @@ test("TestCodeProjectSettingsShouldExposeRouteAndSidebarEntry", () => {
   assert.doesNotMatch(sidebarSource, /label: <AriTypography className="desk-session-item-title"/);
   assert.doesNotMatch(sidebarSource, /handleOpenWorkspaceRenameModal/);
   assert.doesNotMatch(sidebarSource, /workspaceRenameModalVisible/);
+
+  // 描述:
+  //
+  //   - Main 区应提供“项目信息”入口，允许不经侧边栏更多菜单直接进入项目设置。
+  const codeAgentSource = readDesktopSource("src/modules/code/pages/code-agent-page.tsx");
+  assert.match(codeAgentSource, /label="项目信息"/);
+  assert.match(codeAgentSource, /icon="settings"/);
+  assert.match(codeAgentSource, /handleOpenProjectSettingsPage/);
+  assert.match(codeAgentSource, /navigate\(`\$\{CODE_PROJECT_SETTINGS_PATH\}\?workspaceId=\$\{encodeURIComponent\(selectedWorkspace\.id\)\}`\)/);
 });
 
 test("TestCodeProjectSettingsPageShouldSupportNameAndDependencyRules", () => {
@@ -74,13 +85,24 @@ test("TestCodeProjectSettingsPageShouldSupportNameAndDependencyRules", () => {
 
   // 描述:
   //
-  //   - 项目设置页应提供项目名称输入和依赖限制列表维护能力。
+  //   - 项目设置页应提供项目名称、依赖限制和结构化项目信息维护能力。
   assert.match(pageSource, /<DeskSectionTitle title="基础信息" \/>/);
   assert.match(pageSource, /<DeskSettingsRow title="项目名称">/);
   assert.match(pageSource, /<DeskSectionTitle title="依赖规范" \/>/);
+  assert.match(pageSource, /<DeskSectionTitle title="结构化项目信息" \/>/);
   assert.match(pageSource, /<AriInput\.TextList/);
+  assert.match(pageSource, /<AriInput\.TextArea/);
   assert.match(pageSource, /updateCodeWorkspaceGroupSettings\(/);
+  assert.match(pageSource, /saveCodeWorkspaceProjectProfile\(/);
+  assert.match(pageSource, /getCodeWorkspaceProjectProfile\(/);
+  assert.match(pageSource, /bootstrapCodeWorkspaceProjectProfile\(/);
+  assert.match(pageSource, /CODE_WORKSPACE_GROUPS_UPDATED_EVENT/);
+  assert.match(pageSource, /CODE_WORKSPACE_PROFILE_UPDATED_EVENT/);
   assert.match(pageSource, /getCodeWorkspaceGroupById\(/);
+  assert.match(pageSource, /window\.addEventListener\(CODE_WORKSPACE_GROUPS_UPDATED_EVENT, onWorkspaceGroupsUpdated as EventListener\);/);
+  assert.match(pageSource, /handleRegenerateProjectProfile/);
+  assert.match(pageSource, /label=\{regeneratingProfile \? "重建中\.\.\." : "重新生成"\}/);
+  assert.match(pageSource, /bootstrapCodeWorkspaceProjectProfile\(workspaceId, \{\s*force: true,/s);
   assert.doesNotMatch(pageSource, /desk-settings-meta/);
   assert.doesNotMatch(pageSource, /<DeskSettingsRow title="依赖规范">/);
   assert.match(pageSource, /className="desk-project-settings-form"/);
@@ -98,8 +120,19 @@ test("TestCodeProjectSettingsPageShouldSupportNameAndDependencyRules", () => {
 
   // 描述:
   //
-  //   - 数据层应持久化 dependencyRules，并提供统一更新接口。
+  //   - 数据层应持久化 dependencyRules 与项目结构化信息，并提供统一更新接口。
   assert.match(dataSource, /dependencyRules: string\[];/);
+  assert.match(dataSource, /export interface CodeWorkspaceProjectProfile/);
+  assert.match(dataSource, /workspacePathHash: string;/);
+  assert.match(dataSource, /workspaceSignature: string;/);
+  assert.match(dataSource, /export const CODE_WORKSPACE_PROFILE_UPDATED_EVENT = "zodileap:code-workspace-profile-updated";/);
+  assert.match(dataSource, /export function saveCodeWorkspaceProjectProfile\(/);
+  assert.match(dataSource, /export function upsertCodeWorkspaceProjectProfile\(/);
+  assert.match(dataSource, /export function patchCodeWorkspaceProjectProfile\(/);
+  assert.match(dataSource, /export function bootstrapCodeWorkspaceProjectProfile\(/);
+  assert.match(dataSource, /function buildWorkspacePathHash\(workspacePath: string\): string/);
+  assert.match(dataSource, /function buildWorkspaceProfileSignature\(workspace: CodeWorkspaceGroup, schemaVersion: number\): string/);
+  assert.match(dataSource, /emitCodeWorkspaceProfileUpdated\(/);
   assert.match(dataSource, /function normalizeWorkspaceDependencyRules\(rules: unknown\): string\[]/);
   assert.match(dataSource, /export function updateCodeWorkspaceGroupSettings\(/);
 });

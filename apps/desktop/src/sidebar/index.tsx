@@ -911,15 +911,10 @@ function AgentSidebar({
             content={(
               <AriMenu
                 items={[
-                  { key: "edit", label: "编辑", icon: "edit" },
                   { key: "delete", label: "删除", icon: "delete", fillIcon: "delete_fill" },
                 ]}
                 onSelect={(key: string) => {
                   setOpenWorkspaceActionMenuId("");
-                  if (key === "edit") {
-                    openWorkspaceSettingsPage(group.workspace.id);
-                    return;
-                  }
                   if (key === "delete") {
                     handleDeleteWorkspace(group.workspace.id);
                   }
@@ -941,6 +936,19 @@ function AgentSidebar({
               }}
             />
           </AriTooltip>
+          <AriButton
+            size="sm"
+            type="text"
+            ghost
+            icon="settings"
+            aria-label="项目设置"
+            onClick={(event: MouseEvent<HTMLButtonElement>) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setOpenWorkspaceActionMenuId("");
+              openWorkspaceSettingsPage(group.workspace.id);
+            }}
+          />
           <AriButton
             size="sm"
             type="text"
