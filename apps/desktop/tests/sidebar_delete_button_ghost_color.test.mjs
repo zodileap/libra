@@ -86,13 +86,15 @@ test("TestSidebarDeleteButtonsShouldUseGhostAndColor", () => {
 
   // 描述:
   //
-  //   - 目录级操作应包含“更多”与“项目内新增话题”按钮，并在菜单里提供“编辑/删除”。
+  //   - 目录级操作应包含“更多/项目设置/项目内新增话题”按钮，菜单中仅保留删除动作。
   assert.match(source, /trigger="manual"/);
   assert.match(source, /visible=\{openWorkspaceActionMenuId === group\.workspace\.id\}/);
   assert.match(source, /icon="more_horiz"/);
+  assert.match(source, /icon="settings"/);
+  assert.match(source, /aria-label="项目设置"/);
   assert.match(source, /aria-label="在项目内新增话题"/);
   assert.match(source, /icon="edit"/);
-  assert.match(source, /\{ key: "edit", label: "编辑", icon: "edit" \}/);
   assert.match(source, /\{ key: "delete", label: "删除", icon: "delete", fillIcon: "delete_fill" \}/);
+  assert.doesNotMatch(source, /\{ key: "edit", label: "编辑", icon: "edit" \}/);
   assert.match(source, /expandIconPosition="none"/);
 });

@@ -122,7 +122,7 @@ test("TestCodeAgentSidebarShouldUseWorkspaceTreeAndWorkspaceActions", () => {
 
   // 描述:
   //
-  //   - 代码智能体侧边栏应基于 AriMenu children 渲染“目录分组 -> 会话列表”多级菜单，并将目录操作收敛到“更多”菜单。
+  //   - 代码智能体侧边栏应基于 AriMenu children 渲染“目录分组 -> 会话列表”多级菜单，并提供“更多/设置/新增话题”三类目录动作。
   assert.match(source, /interface CodeWorkspaceSessionGroup/);
   assert.match(source, /const codeWorkspaceSessionGroups = useMemo<CodeWorkspaceSessionGroup\[]>/);
   assert.match(source, /const buildWorkspaceMenuKey = \(workspaceId: string\) => `workspace:\$\{workspaceId\}`;/);
@@ -134,9 +134,12 @@ test("TestCodeAgentSidebarShouldUseWorkspaceTreeAndWorkspaceActions", () => {
   assert.match(source, /expandedKeys=\{codeWorkspaceExpandedKeys\}/);
   assert.match(source, /onExpand=\{setCodeWorkspaceExpandedKeys\}/);
   assert.match(source, /icon="more_horiz"/);
+  assert.match(source, /icon="settings"/);
+  assert.match(source, /aria-label="项目设置"/);
+  assert.match(source, /aria-label="在项目内新增话题"/);
   assert.match(source, /trigger="manual"/);
-  assert.match(source, /\{ key: "edit", label: "编辑", icon: "edit" \}/);
   assert.match(source, /\{ key: "delete", label: "删除", icon: "delete", fillIcon: "delete_fill" \}/);
+  assert.doesNotMatch(source, /\{ key: "edit", label: "编辑", icon: "edit" \}/);
 });
 
 test("TestAgentSidebarTitleUsesUnifiedResolver", () => {
