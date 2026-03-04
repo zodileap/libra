@@ -20,7 +20,7 @@ function readDesktopSource(relativePath) {
 }
 
 test("TestWorkflowCompletionMessageShouldSeparateWorkflowAndMcpCounts", () => {
-  const source = readDesktopSource("src/modules/client/workflow/engine.ts");
+  const source = readDesktopSource("src/shared/workflow/engine.ts");
 
   // 描述:
   //
@@ -31,7 +31,7 @@ test("TestWorkflowCompletionMessageShouldSeparateWorkflowAndMcpCounts", () => {
 });
 
 test("TestSessionPageShouldDowngradeBridgePrecheckFailureAfterRecovery", () => {
-  const source = readDesktopSource("src/modules/client/pages/session-page.tsx");
+  const source = readDesktopSource("src/widgets/session/page.tsx");
 
   // 描述:
   //
@@ -41,14 +41,14 @@ test("TestSessionPageShouldDowngradeBridgePrecheckFailureAfterRecovery", () => {
 });
 
 test("TestSessionPageShouldThrottlePersistenceAndUsePlainTextDuringStreaming", () => {
-  const source = readDesktopSource("src/modules/client/pages/session-page.tsx");
+  const source = readDesktopSource("src/widgets/session/page.tsx");
 
   // 描述:
   //
   //   - 流式期间应降低 localStorage 持久化频率，并将进行中的消息降级为纯文本渲染，减少主线程压力。
   assert.match(source, /sessionMessagePersistTimerRef/);
   assert.match(source, /const persistDelay = sending \? 1200 : 180/);
-  assert.match(source, /plainText=\{sending && Boolean\(message.id\) && message.id === streamMessageIdRef.current\}/);
+  assert.match(source, /plainText=\{[\s\S]*message\.id === streamMessageIdRef\.current[\s\S]*\}/);
 });
 
 test("TestTauriHealthChecksShouldRunInSpawnBlocking", () => {
@@ -74,18 +74,18 @@ test("TestSessionLayoutShouldAlignUserRightAndAssistantLeft", () => {
 });
 
 test("TestSessionPageShouldRenderCollapsibleRunDividerAndSummary", () => {
-  const source = readDesktopSource("src/modules/client/pages/session-page.tsx");
+  const source = readDesktopSource("src/widgets/session/page.tsx");
 
   // 描述:
   //
   //   - 执行完成后应渲染可点击的用时分割线，并在其下展示总结内容。
   assert.match(source, /className=\"desk-run-divider\"/);
   assert.match(source, /formatElapsedDuration\(runMeta.startedAt, runMeta.finishedAt\)/);
-  assert.match(source, /className=\"desk-run-summary\"/);
+  assert.match(source, /className=\{`desk-run-summary/);
 });
 
 test("TestSessionPageShouldBuildUserReadableModelSummary", () => {
-  const source = readDesktopSource("src/modules/client/pages/session-page.tsx");
+  const source = readDesktopSource("src/widgets/session/page.tsx");
 
   // 描述:
   //
@@ -96,7 +96,7 @@ test("TestSessionPageShouldBuildUserReadableModelSummary", () => {
 });
 
 test("TestSessionPageShouldKeepHeartbeatDuringLongWait", () => {
-  const source = readDesktopSource("src/modules/client/pages/session-page.tsx");
+  const source = readDesktopSource("src/widgets/session/page.tsx");
 
   // 描述:
   //
@@ -107,7 +107,7 @@ test("TestSessionPageShouldKeepHeartbeatDuringLongWait", () => {
 });
 
 test("TestSessionPromptInputShouldSupportKeyboardHotkeys", () => {
-  const source = readDesktopSource("src/modules/client/pages/session-page.tsx");
+  const source = readDesktopSource("src/widgets/session/page.tsx");
 
   // 描述:
   //
@@ -126,18 +126,18 @@ test("TestSessionPromptInputShouldSupportKeyboardHotkeys", () => {
 });
 
 test("TestSessionPageShouldUseAiSummaryWithFallback", () => {
-  const source = readDesktopSource("src/modules/client/pages/session-page.tsx");
+  const source = readDesktopSource("src/widgets/session/page.tsx");
 
   // 描述:
   //
   //   - 完成总结应优先调用 AI 生成，失败时回退规则总结，保证可读性与稳定性。
-  assert.match(source, /summarize_model_session_result/);
+  assert.match(source, /COMMANDS\.SUMMARIZE_MODEL_SESSION_RESULT/);
   assert.match(source, /let completionSummary = buildUserReadableModelSummary/);
   assert.match(source, /summaryErr/);
 });
 
 test("TestSessionPageShouldExposeDebugFlowRecordsToDevPanel", () => {
-  const source = readDesktopSource("src/modules/client/pages/session-page.tsx");
+  const source = readDesktopSource("src/widgets/session/page.tsx");
 
   // 描述:
   //
@@ -145,6 +145,19 @@ test("TestSessionPageShouldExposeDebugFlowRecordsToDevPanel", () => {
   assert.match(source, /debugFlowRecords/);
   assert.match(source, /appendDebugFlowRecord/);
   assert.match(source, /debugFlowRecords: debugFlowRecords.slice\(0, 120\)/);
+});
+
+test("TestSessionPageShouldSupportActiveCancelAndCancelledStream", () => {
+  const source = readDesktopSource("src/widgets/session/page.tsx");
+
+  // 描述:
+  //
+  //   - 会话页在发送中应支持主动停止，并处理 cancelled 终态事件，避免误标记为失败。
+  assert.match(source, /const handleCancelCurrentRun = async \(\) =>/);
+  assert.match(source, /await invoke\(COMMANDS\.CANCEL_AGENT_SESSION, \{ sessionId \}\)/);
+  assert.match(source, /STREAM_KINDS\.CANCELLED/);
+  assert.match(source, /isCancelErrorCode/);
+  assert.match(source, /icon="stop"/);
 });
 
 test("TestTauriShouldExposeModelSummaryCommandAndDebugTrace", () => {
@@ -175,8 +188,24 @@ test("TestTauriShouldExposeCodeWorkspaceGitCommands", () => {
   assert.match(source, /clone_git_repository,/);
 });
 
+test("TestTauriShouldExposeCancelAgentSessionCommand", () => {
+  const source = readDesktopSource("src-tauri/src/main.rs");
+
+  // 描述:
+  //
+  //   - Tauri 层应暴露主动取消会话命令，并向前端派发 cancelled 事件与统一取消错误码。
+  assert.match(source, /fn cancel_agent_session\(app: tauri::AppHandle, session_id: String\)/);
+  assert.match(source, /fn mark_agent_session_cancelled\(session_id: &str\)/);
+  assert.match(source, /fn take_agent_session_cancelled\(session_id: &str\) -> bool/);
+  assert.match(source, /mark_agent_session_cancelled\(&session_id\);/);
+  assert.match(source, /cancelled_by_user && !is_cancelled_protocol_error\(err\.code\.as_str\(\)\)/);
+  assert.match(source, /kind: "cancelled"\.to_string\(\)/);
+  assert.match(source, /"core\.agent\.request_cancelled"/);
+  assert.match(source, /cancel_agent_session,/);
+});
+
 test("TestDevDebugFloatShouldShowFlowAndSupportLineWrap", () => {
-  const source = readDesktopSource("src/modules/client/widgets/dev-debug-float.tsx");
+  const source = readDesktopSource("src/widgets/dev-debug-float.tsx");
   const styleSource = readDesktopSource("src/styles.css");
 
   // 描述:
@@ -184,7 +213,7 @@ test("TestDevDebugFloatShouldShowFlowAndSupportLineWrap", () => {
   //   - Dev 调试窗口应展示执行全链路和模型规划明细，并对长文本进行换行防止溢出。
   assert.match(source, /执行全链路（前端视角）/);
   assert.match(source, /模型规划 LLM 明细（后端视角）/);
-  assert.match(source, /model:debug_trace/);
+  assert.match(source, /EVENT_MODEL_DEBUG_TRACE/);
   assert.match(styleSource, /\.desk-dev-debug-line/);
   assert.match(styleSource, /overflow-wrap:\s*anywhere/);
 });

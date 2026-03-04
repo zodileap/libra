@@ -73,9 +73,9 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(sessionSource, /const agentStreamSeenKeysRef = useRef<Set<string>>\(new Set\(\)\);/);
   assert.match(sessionSource, /finishAssistantRunMessage\(streamMessageId, "finished", response\.message\);/);
   assert.match(sessionSource, /if \(streamMessageIdRef\.current\) \{\s*setStreamingAssistantTarget\(`执行失败：\$\{reason\}`\);\s*finishAssistantRunMessage\(streamMessageIdRef\.current, "failed", `执行失败：\$\{reason\}`\);/s);
-  assert.match(sessionSource, /if \(payload\.kind === "started"\) \{\s*setStreamingAssistantTarget\("正在准备执行\.\.\."\);/s);
-  assert.match(sessionSource, /if \(payload\.kind === "llm_started"\) \{\s*setStreamingAssistantTarget\("模型会话已开始，正在执行策略…"\);/s);
-  assert.match(sessionSource, /if \(payload\.kind === "llm_finished"\) \{/);
+  assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.STARTED\) \{\s*setStreamingAssistantTarget\("正在准备执行\.\.\."\);/s);
+  assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.LLM_STARTED\) \{\s*setStreamingAssistantTarget\("模型会话已开始，正在执行策略…"\);/s);
+  assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.LLM_FINISHED\) \{/);
   assert.match(sessionSource, /buildCodeSessionContextPrompt\(/);
   assert.match(sessionSource, /if \(normalizedSkillIds\.length > 0\) \{\s*setDraftWorkflowId\(""\);\s*setDraftSkillIds\(normalizedSkillIds\);/s);
   assert.match(sessionSource, /setDraftWorkflowId\(item\.key\);\s*setDraftSkillIds\(\[\]\);/s);

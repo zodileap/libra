@@ -8,7 +8,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tauri::Emitter;
@@ -31,6 +31,30 @@ use zodileap_mcp_model::{
     ModelSessionPlannedStep, ModelToolAction, ModelToolRequest, ModelToolResult, ModelToolTarget,
 };
 
+// ── Tauri 事件名常量 ──────────────────────────────────────────────────
+//
+// 描述：前后端约定的 Tauri emit 事件名，前端 listen 时使用相同字符串。
+
+/// 描述：代码智能体文本流事件名。
+const EVENT_AGENT_TEXT_STREAM: &str = "agent:text_stream";
+
+/// 描述：智能体后台日志事件名。
+const EVENT_AGENT_LOG: &str = "agent:log";
+
+/// 描述：模型会话流式事件名。
+const EVENT_MODEL_SESSION_STREAM: &str = "model:session_stream";
+
+/// 描述：模型调试轨迹事件名。
+const EVENT_MODEL_DEBUG_TRACE: &str = "model:debug_trace";
+
+// ── 错误码常量 ────────────────────────────────────────────────────────
+
+/// 描述：模型会话 store 锁中毒错误码。
+const ERR_STORE_LOCK_FAILED: &str = "core.desktop.model.store_lock_failed";
+
+/// 描述：模型会话不存在错误码。
+const ERR_SESSION_NOT_FOUND: &str = "core.desktop.model.session_not_found";
+
 #[derive(Serialize)]
 struct ExportModelResponse {
     exported_file: String,
@@ -41,6 +65,43 @@ struct ExportModelResponse {
 #[derive(Serialize)]
 struct InstallBridgeResponse {
     message: String,
+}
+
+/// 描述：返回代码智能体会话取消标记表，用于跨命令处理主动取消竞态。
+fn cancelled_agent_sessions() -> &'static Mutex<HashSet<String>> {
+    static CANCELLED_AGENT_SESSIONS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    CANCELLED_AGENT_SESSIONS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// 描述：标记会话为“用户主动取消”，供执行线程在错误归一阶段识别。
+fn mark_agent_session_cancelled(session_id: &str) {
+    if session_id.trim().is_empty() {
+        return;
+    }
+    if let Ok(mut set) = cancelled_agent_sessions().lock() {
+        set.insert(session_id.to_string());
+    }
+}
+
+/// 描述：消费会话取消标记，返回是否命中并在命中后清除，避免影响后续新任务。
+fn take_agent_session_cancelled(session_id: &str) -> bool {
+    if session_id.trim().is_empty() {
+        return false;
+    }
+    if let Ok(mut set) = cancelled_agent_sessions().lock() {
+        return set.remove(session_id);
+    }
+    false
+}
+
+/// 描述：在新任务开始前清理旧取消标记，防止历史取消状态串扰。
+fn clear_agent_session_cancelled(session_id: &str) {
+    if session_id.trim().is_empty() {
+        return;
+    }
+    if let Ok(mut set) = cancelled_agent_sessions().lock() {
+        set.remove(session_id);
+    }
 }
 
 #[derive(Serialize)]
@@ -153,6 +214,16 @@ impl From<ProtocolError> for DesktopProtocolError {
     }
 }
 
+/// 描述：构造 store 锁中毒 DesktopProtocolError，统一替代 14 处重复样板码。
+fn store_lock_error() -> DesktopProtocolError {
+    DesktopProtocolError {
+        code: ERR_STORE_LOCK_FAILED.to_string(),
+        message: "model session store lock poisoned".to_string(),
+        suggestion: None,
+        retryable: true,
+    }
+}
+
 #[derive(Deserialize, Clone, Default)]
 struct ModelMcpCapabilities {
     export: Option<bool>,
@@ -217,6 +288,7 @@ struct AgentTextStreamEvent {
     kind: String,
     message: String,
     delta: Option<String>,
+    data: Option<serde_json::Value>,
 }
 
 #[derive(Serialize, Clone)]
@@ -249,17 +321,17 @@ struct ModelSessionAiSummaryResponse {
 
 /// 描述：向前端派发通用智能体文本流事件，供代码会话逐字渲染。
 fn emit_agent_text_stream_event(app: &tauri::AppHandle, payload: AgentTextStreamEvent) {
-    let _ = app.emit("agent:text_stream", payload);
+    let _ = app.emit(EVENT_AGENT_TEXT_STREAM, payload);
 }
 
 /// 描述：向前端派发模型会话流式事件，供会话页实时渲染中间过程。
 fn emit_model_session_stream_event(app: &tauri::AppHandle, payload: ModelSessionStreamEvent) {
-    let _ = app.emit("model:session_stream", payload);
+    let _ = app.emit(EVENT_MODEL_SESSION_STREAM, payload);
 }
 
 /// 描述：向前端派发模型会话调试事件，包含规划 prompt、原始返回与解析结果等关键信息。
 fn emit_model_debug_trace_event(app: &tauri::AppHandle, payload: ModelDebugTraceEvent) {
-    let _ = app.emit("model:debug_trace", payload);
+    let _ = app.emit(EVENT_MODEL_DEBUG_TRACE, payload);
 }
 
 #[derive(Serialize)]
@@ -1173,12 +1245,21 @@ fn run_agent_command_inner(
     output_dir: Option<String>,
     workdir: Option<String>,
 ) -> Result<AgentRunResponse, DesktopProtocolError> {
+    fn is_cancelled_protocol_error(code: &str) -> bool {
+        code == "core.agent.python.orchestration_timeout"
+            || code == "core.agent.request_cancelled"
+            || code == "core.agent.human_approval_timeout"
+    }
+
     let trace_id = trace_id
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("trace-unknown")
         .to_string();
+    if let Some(session) = session_id.as_deref() {
+        clear_agent_session_cancelled(session);
+    }
     let log = |level: &str, stage: &str, message: String| {
         eprintln!("[agent][{}][{}][{}] {}", trace_id, level, stage, message);
         let payload = AgentLogEvent {
@@ -1187,7 +1268,7 @@ fn run_agent_command_inner(
             stage: stage.to_string(),
             message,
         };
-        let _ = app.emit("agent:log", payload);
+        let _ = app.emit(EVENT_AGENT_LOG, payload);
     };
 
     let current_dir = env::current_dir().map_err(|err| DesktopProtocolError {
@@ -1288,11 +1369,14 @@ fn run_agent_command_inner(
             kind: "started".to_string(),
             message: "LLM 执行已开始".to_string(),
             delta: None,
+            data: None,
         },
     );
 
     let result = run_agent_with_protocol_error_stream(
         AgentRunRequest {
+            trace_id: trace_id.clone(),
+            session_id: session_id.clone().unwrap_or_else(|| "default".to_string()),
             agent_key,
             provider: provider.unwrap_or_else(|| "codex".to_string()),
             prompt,
@@ -1302,16 +1386,19 @@ fn run_agent_command_inner(
             output_dir: Some(selected_output_dir.to_string_lossy().to_string()),
             workdir: Some(selected_workdir.to_string_lossy().to_string()),
         },
-        |stream_event| match stream_event {
+        |stream_event| {
+            let kind = stream_event.kind().to_string();
+            match stream_event {
             AgentStreamEvent::LlmStarted { provider } => {
                 emit_agent_text_stream_event(
                     &app,
                     AgentTextStreamEvent {
                         trace_id: trace_id.clone(),
                         session_id: session_id.clone(),
-                        kind: "llm_started".to_string(),
+                        kind,
                         message: format!("provider={} started", provider),
                         delta: None,
+                        data: None,
                     },
                 );
             }
@@ -1321,9 +1408,10 @@ fn run_agent_command_inner(
                     AgentTextStreamEvent {
                         trace_id: trace_id.clone(),
                         session_id: session_id.clone(),
-                        kind: "delta".to_string(),
+                        kind,
                         message: "chunk".to_string(),
                         delta: Some(content),
+                        data: None,
                     },
                 );
             }
@@ -1333,13 +1421,126 @@ fn run_agent_command_inner(
                     AgentTextStreamEvent {
                         trace_id: trace_id.clone(),
                         session_id: session_id.clone(),
-                        kind: "llm_finished".to_string(),
+                        kind,
                         message: format!("provider={} finished", provider),
                         delta: None,
+                        data: None,
                     },
                 );
             }
-        },
+            AgentStreamEvent::Planning { message } => {
+                emit_agent_text_stream_event(
+                    &app,
+                    AgentTextStreamEvent {
+                        trace_id: trace_id.clone(),
+                        session_id: session_id.clone(),
+                        kind,
+                        message,
+                        delta: None,
+                        data: None,
+                    },
+                );
+            }
+            AgentStreamEvent::ToolCallStarted { name, args } => {
+                emit_agent_text_stream_event(
+                    &app,
+                    AgentTextStreamEvent {
+                        trace_id: trace_id.clone(),
+                        session_id: session_id.clone(),
+                        kind,
+                        message: format!("正在执行工具: {}", name),
+                        delta: None,
+                        data: Some(json!({ "name": name, "args": args })),
+                    },
+                );
+            }
+            AgentStreamEvent::ToolCallFinished { name, ok, result } => {
+                emit_agent_text_stream_event(
+                    &app,
+                    AgentTextStreamEvent {
+                        trace_id: trace_id.clone(),
+                        session_id: session_id.clone(),
+                        kind,
+                        message: format!("工具 {} 执行{}", name, if ok { "成功" } else { "失败" }),
+                        delta: None,
+                        data: Some(json!({ "name": name, "ok": ok, "result": result })),
+                    },
+                );
+            }
+            AgentStreamEvent::RequireApproval {
+                approval_id,
+                tool_name,
+                tool_args,
+            } => {
+                emit_agent_text_stream_event(
+                    &app,
+                    AgentTextStreamEvent {
+                        trace_id: trace_id.clone(),
+                        session_id: session_id.clone(),
+                        kind,
+                        message: format!("操作待授权: {}", tool_name),
+                        delta: None,
+                        data: Some(json!({
+                            "approval_id": approval_id,
+                            "tool_name": tool_name,
+                            "tool_args": tool_args,
+                        })),
+                    },
+                );
+            }
+            AgentStreamEvent::Heartbeat { message } => {
+                emit_agent_text_stream_event(
+                    &app,
+                    AgentTextStreamEvent {
+                        trace_id: trace_id.clone(),
+                        session_id: session_id.clone(),
+                        kind,
+                        message,
+                        delta: None,
+                        data: None,
+                    },
+                );
+            }
+            AgentStreamEvent::Final { message } => {
+                emit_agent_text_stream_event(
+                    &app,
+                    AgentTextStreamEvent {
+                        trace_id: trace_id.clone(),
+                        session_id: session_id.clone(),
+                        kind,
+                        message,
+                        delta: None,
+                        data: None,
+                    },
+                );
+            }
+            AgentStreamEvent::Cancelled { message } => {
+                emit_agent_text_stream_event(
+                    &app,
+                    AgentTextStreamEvent {
+                        trace_id: trace_id.clone(),
+                        session_id: session_id.clone(),
+                        kind,
+                        message: message.clone(),
+                        delta: None,
+                        data: Some(json!({ "source": "core", "message": message })),
+                    },
+                );
+            }
+            AgentStreamEvent::Error { code, message } => {
+                emit_agent_text_stream_event(
+                    &app,
+                    AgentTextStreamEvent {
+                        trace_id: trace_id.clone(),
+                        session_id: session_id.clone(),
+                        kind,
+                        message: format!("{}: {}", code, message),
+                        delta: None,
+                        data: Some(json!({ "code": code })),
+                    },
+                );
+            }
+        }},
     );
 
     let result = match result {
@@ -1360,18 +1561,33 @@ fn run_agent_command_inner(
             value
         }
         Err(err) => {
-            log("error", "result", err.to_string());
+            let cancelled_by_user = session_id
+                .as_deref()
+                .map(take_agent_session_cancelled)
+                .unwrap_or(false);
+            let protocol_err = if cancelled_by_user && !is_cancelled_protocol_error(err.code.as_str()) {
+                ProtocolError::new("core.agent.request_cancelled", "任务已取消（用户主动终止）")
+                    .with_suggestion("如需继续，请重新发起任务")
+            } else {
+                err
+            };
+            log("error", "result", protocol_err.to_string());
             emit_agent_text_stream_event(
                 &app,
                 AgentTextStreamEvent {
                     trace_id: trace_id.clone(),
                     session_id: session_id.clone(),
-                    kind: "error".to_string(),
-                    message: err.message.clone(),
+                    kind: if is_cancelled_protocol_error(protocol_err.code.as_str()) {
+                        "cancelled".to_string()
+                    } else {
+                        "error".to_string()
+                    },
+                    message: protocol_err.message.clone(),
                     delta: None,
+                    data: Some(json!({ "code": protocol_err.code.clone() })),
                 },
             );
-            return Err(err.into());
+            return Err(protocol_err.into());
         }
     };
 
@@ -1383,6 +1599,7 @@ fn run_agent_command_inner(
             kind: "finished".to_string(),
             message: "智能体执行完成".to_string(),
             delta: None,
+            data: None,
         },
     );
 
@@ -3865,12 +4082,12 @@ fn plan_model_session_steps_with_llm(
             observer(
                 "llm_plan_raw_response",
                 &format!("模型规划原始返回（attempt={}）", attempt),
-                raw_plan.as_str(),
+                raw_plan.content.as_str(),
             );
         }
-        previous_raw_plan = raw_plan.clone();
+        previous_raw_plan = raw_plan.content.clone();
 
-        let parsed = parse_llm_model_plan(raw_plan.as_str());
+        let parsed = parse_llm_model_plan(raw_plan.content.as_str());
         let (steps, reason) = match parsed {
             Ok(value) => value,
             Err(err) => {
@@ -5640,12 +5857,7 @@ fn run_model_session_command_inner(
     let mut planner_selection_snapshot: Option<SelectionContextSnapshot> = None;
 
     {
-        let mut map = store.sessions.lock().map_err(|_| DesktopProtocolError {
-            code: "core.desktop.model.store_lock_failed".to_string(),
-            message: "model session store lock poisoned".to_string(),
-            suggestion: None,
-            retryable: true,
-        })?;
+        let mut map = store.sessions.lock().map_err(|_| store_lock_error())?;
         let session = map.entry(session_id.clone()).or_default();
         session.cancelled = false;
         session.last_prompt = Some(normalized_prompt.to_string());
@@ -5708,12 +5920,7 @@ fn run_model_session_command_inner(
                 let snapshot_selected = snapshot.selected_objects.clone();
                 let snapshot_selected_count = snapshot_selected.len();
                 let base_index = {
-                    let map = store.sessions.lock().map_err(|_| DesktopProtocolError {
-                        code: "core.desktop.model.store_lock_failed".to_string(),
-                        message: "model session store lock poisoned".to_string(),
-                        suggestion: None,
-                        retryable: true,
-                    })?;
+                    let map = store.sessions.lock().map_err(|_| store_lock_error())?;
                     map.get(&session_id)
                         .map(|state| state.steps.len())
                         .unwrap_or(0)
@@ -5755,12 +5962,7 @@ fn run_model_session_command_inner(
                 }];
                 let ui_hint = build_selection_required_ui_hint(required_scope, &snapshot);
                 let (all_steps, all_events, all_assets) = {
-                    let mut map = store.sessions.lock().map_err(|_| DesktopProtocolError {
-                        code: "core.desktop.model.store_lock_failed".to_string(),
-                        message: "model session store lock poisoned".to_string(),
-                        suggestion: None,
-                        retryable: true,
-                    })?;
+                    let mut map = store.sessions.lock().map_err(|_| store_lock_error())?;
                     let session = map.entry(session_id.clone()).or_default();
                     session.steps.extend(created_steps.clone());
                     session.events.extend(created_events.clone());
@@ -5801,12 +6003,7 @@ fn run_model_session_command_inner(
                 );
                 let ui_hint = build_ui_hint_from_protocol_error(&protocol_error);
                 let base_index = {
-                    let map = store.sessions.lock().map_err(|_| DesktopProtocolError {
-                        code: "core.desktop.model.store_lock_failed".to_string(),
-                        message: "model session store lock poisoned".to_string(),
-                        suggestion: None,
-                        retryable: true,
-                    })?;
+                    let map = store.sessions.lock().map_err(|_| store_lock_error())?;
                     map.get(&session_id)
                         .map(|state| state.steps.len())
                         .unwrap_or(0)
@@ -5837,12 +6034,7 @@ fn run_model_session_command_inner(
                     message: protocol_error.message.clone(),
                 }];
                 let (all_steps, all_events, all_assets) = {
-                    let mut map = store.sessions.lock().map_err(|_| DesktopProtocolError {
-                        code: "core.desktop.model.store_lock_failed".to_string(),
-                        message: "model session store lock poisoned".to_string(),
-                        suggestion: None,
-                        retryable: true,
-                    })?;
+                    let mut map = store.sessions.lock().map_err(|_| store_lock_error())?;
                     let session = map.entry(session_id.clone()).or_default();
                     session.steps.extend(created_steps.clone());
                     session.events.extend(created_events.clone());
@@ -5917,12 +6109,7 @@ fn run_model_session_command_inner(
             .unwrap_or(false);
         if !valid {
             let base_index = {
-                let map = store.sessions.lock().map_err(|_| DesktopProtocolError {
-                    code: "core.desktop.model.store_lock_failed".to_string(),
-                    message: "model session store lock poisoned".to_string(),
-                    suggestion: None,
-                    retryable: true,
-                })?;
+                let map = store.sessions.lock().map_err(|_| store_lock_error())?;
                 map.get(&session_id)
                     .map(|state| state.steps.len())
                     .unwrap_or(0)
@@ -5953,12 +6140,7 @@ fn run_model_session_command_inner(
                 message: "complex session requires one-time confirmation token".to_string(),
             }];
             let (all_steps, all_events, all_assets) = {
-                let mut map = store.sessions.lock().map_err(|_| DesktopProtocolError {
-                    code: "core.desktop.model.store_lock_failed".to_string(),
-                    message: "model session store lock poisoned".to_string(),
-                    suggestion: None,
-                    retryable: true,
-                })?;
+                let mut map = store.sessions.lock().map_err(|_| store_lock_error())?;
                 let session = map.entry(session_id.clone()).or_default();
                 session.steps.extend(created_steps.clone());
                 session.events.extend(created_events.clone());
@@ -6094,14 +6276,9 @@ fn run_model_session_command_inner(
 
     for step in primary_steps {
         {
-            let map = store.sessions.lock().map_err(|_| DesktopProtocolError {
-                code: "core.desktop.model.store_lock_failed".to_string(),
-                message: "model session store lock poisoned".to_string(),
-                suggestion: None,
-                retryable: true,
-            })?;
+            let map = store.sessions.lock().map_err(|_| store_lock_error())?;
             let session = map.get(&session_id).ok_or_else(|| DesktopProtocolError {
-                code: "core.desktop.model.session_not_found".to_string(),
+                code: ERR_SESSION_NOT_FOUND.to_string(),
                 message: "session state not found".to_string(),
                 suggestion: None,
                 retryable: false,
@@ -6124,12 +6301,7 @@ fn run_model_session_command_inner(
             )
         })?;
         let next_index = {
-            let map = store.sessions.lock().map_err(|_| DesktopProtocolError {
-                code: "core.desktop.model.store_lock_failed".to_string(),
-                message: "model session store lock poisoned".to_string(),
-                suggestion: None,
-                retryable: true,
-            })?;
+            let map = store.sessions.lock().map_err(|_| store_lock_error())?;
             map.get(&session_id)
                 .map(|state| state.steps.len())
                 .unwrap_or(0)
@@ -6302,12 +6474,7 @@ fn run_model_session_command_inner(
                         message: blocked_error.message.clone(),
                     });
                     let (all_steps, all_events, all_assets) = {
-                        let mut map = store.sessions.lock().map_err(|_| DesktopProtocolError {
-                            code: "core.desktop.model.store_lock_failed".to_string(),
-                            message: "model session store lock poisoned".to_string(),
-                            suggestion: None,
-                            retryable: true,
-                        })?;
+                        let mut map = store.sessions.lock().map_err(|_| store_lock_error())?;
                         let session = map.entry(session_id.clone()).or_default();
                         session.steps.extend(created_steps.clone());
                         session.events.extend(created_events.clone());
@@ -6491,16 +6658,11 @@ fn run_model_session_command_inner(
                 if let Some(path) = output_path.clone() {
                     exported_file = Some(path.clone());
                     let version = {
-                        let mut map = store.sessions.lock().map_err(|_| DesktopProtocolError {
-                            code: "core.desktop.model.store_lock_failed".to_string(),
-                            message: "model session store lock poisoned".to_string(),
-                            suggestion: None,
-                            retryable: true,
-                        })?;
+                        let mut map = store.sessions.lock().map_err(|_| store_lock_error())?;
                         let session =
                             map.get_mut(&session_id)
                                 .ok_or_else(|| DesktopProtocolError {
-                                    code: "core.desktop.model.session_not_found".to_string(),
+                                    code: ERR_SESSION_NOT_FOUND.to_string(),
                                     message: "session state not found".to_string(),
                                     suggestion: None,
                                     retryable: false,
@@ -6740,12 +6902,7 @@ fn run_model_session_command_inner(
                 }
 
                 let (all_steps, all_events, all_assets) = {
-                    let mut map = store.sessions.lock().map_err(|_| DesktopProtocolError {
-                        code: "core.desktop.model.store_lock_failed".to_string(),
-                        message: "model session store lock poisoned".to_string(),
-                        suggestion: None,
-                        retryable: true,
-                    })?;
+                    let mut map = store.sessions.lock().map_err(|_| store_lock_error())?;
                     let session = map.entry(session_id.clone()).or_default();
                     session.steps.extend(created_steps.clone());
                     session.events.extend(created_events.clone());
@@ -6803,12 +6960,7 @@ fn run_model_session_command_inner(
     }
 
     let (all_steps, all_events, all_assets) = {
-        let mut map = store.sessions.lock().map_err(|_| DesktopProtocolError {
-            code: "core.desktop.model.store_lock_failed".to_string(),
-            message: "model session store lock poisoned".to_string(),
-            suggestion: None,
-            retryable: true,
-        })?;
+        let mut map = store.sessions.lock().map_err(|_| store_lock_error())?;
         let session = map.entry(session_id.clone()).or_default();
         session.steps.extend(created_steps.clone());
         session.events.extend(created_events.clone());
@@ -6831,7 +6983,7 @@ fn run_model_session_command_inner(
         .collect::<Vec<_>>()
         .join("\n");
     let _ = app.emit(
-        "agent:log",
+        EVENT_AGENT_LOG,
         AgentLogEvent {
             trace_id: trace_id.clone(),
             level: "info".to_string(),
@@ -6921,14 +7073,9 @@ fn retry_model_session_last_step_inner(
     blender_bridge_addr: Option<String>,
 ) -> Result<ModelSessionRunResponse, DesktopProtocolError> {
     let (last_prompt, last_provider, last_output_dir) = {
-        let map = store.sessions.lock().map_err(|_| DesktopProtocolError {
-            code: "core.desktop.model.store_lock_failed".to_string(),
-            message: "model session store lock poisoned".to_string(),
-            suggestion: None,
-            retryable: true,
-        })?;
+        let map = store.sessions.lock().map_err(|_| store_lock_error())?;
         let state = map.get(&session_id).ok_or_else(|| DesktopProtocolError {
-            code: "core.desktop.model.session_not_found".to_string(),
+            code: ERR_SESSION_NOT_FOUND.to_string(),
             message: "会话不存在，无法重试".to_string(),
             suggestion: None,
             retryable: false,
@@ -7188,7 +7335,7 @@ fn summarize_model_session_result_inner(
         .map(|path| path.to_string_lossy().to_string());
     let raw_response = call_model(parsed_provider, summary_prompt.as_str(), workdir.as_deref())
         .map_err(|err| DesktopProtocolError::from(err.to_protocol_error()))?;
-    let summary = raw_response.trim().to_string();
+    let summary = raw_response.content.trim().to_string();
     if summary.is_empty() {
         return Err(DesktopProtocolError {
             code: "core.desktop.model.summary_empty".to_string(),
@@ -7200,7 +7347,7 @@ fn summarize_model_session_result_inner(
     Ok(ModelSessionAiSummaryResponse {
         summary,
         prompt: summary_prompt,
-        raw_response,
+        raw_response: raw_response.content,
         provider: provider_name,
     })
 }
@@ -7238,6 +7385,47 @@ fn apply_main_window_effects(app: &tauri::AppHandle) {
     }
 }
 
+#[tauri::command]
+fn get_agent_sandbox_metrics(session_id: String) -> Result<Option<zodileap_agent_core::sandbox::SandboxMetrics>, String> {
+    Ok(zodileap_agent_core::sandbox::SANDBOX_REGISTRY.get_metrics(&session_id))
+}
+
+#[tauri::command]
+fn reset_agent_sandbox(session_id: String) -> Result<(), String> {
+    zodileap_agent_core::sandbox::SANDBOX_REGISTRY.reset(&session_id);
+    Ok(())
+}
+
+#[tauri::command]
+fn cancel_agent_session(app: tauri::AppHandle, session_id: String) -> Result<bool, String> {
+    mark_agent_session_cancelled(&session_id);
+    zodileap_agent_core::sandbox::SANDBOX_REGISTRY.reset(&session_id);
+    emit_agent_text_stream_event(
+        &app,
+        AgentTextStreamEvent {
+            trace_id: format!("cancel-{}", now_millis()),
+            session_id: Some(session_id),
+            // 描述：复用 Core AgentStreamEvent 的 kind 映射，避免手写字符串。
+            kind: "cancelled".to_string(),
+            message: "任务已取消（用户主动终止）".to_string(),
+            delta: None,
+            data: Some(json!({ "code": "core.agent.request_cancelled" })),
+        },
+    );
+    Ok(true)
+}
+
+#[tauri::command]
+fn approve_agent_action(id: String, approved: bool) -> Result<bool, String> {
+    let outcome = if approved {
+        zodileap_agent_core::ApprovalOutcome::Approved
+    } else {
+        zodileap_agent_core::ApprovalOutcome::Rejected
+    };
+    let ok = zodileap_agent_core::APPROVAL_REGISTRY.submit_decision(&id, outcome);
+    Ok(ok)
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -7264,7 +7452,11 @@ fn main() {
             undo_model_session_step,
             cancel_model_session_step,
             get_model_session_records,
-            summarize_model_session_result
+            summarize_model_session_result,
+            approve_agent_action,
+            reset_agent_sandbox,
+            cancel_agent_session,
+            get_agent_sandbox_metrics,
         ])
         .run(tauri::generate_context!())
         .expect("error while running zodileap_agen_desktop");

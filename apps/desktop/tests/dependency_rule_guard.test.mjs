@@ -25,8 +25,8 @@ test("TestSessionPageShouldCheckAndUpgradeProjectDependencyRules", () => {
   // 描述：
   //
   //   - 代码智能体发送前应先检查项目依赖规则，并提供“升级并继续 / 跳过继续”的确认路径。
-  assert.match(sessionSource, /invoke<DependencyRuleCheckResponse>\("check_project_dependency_rules"/);
-  assert.match(sessionSource, /invoke<DependencyRuleUpgradeResponse>\("apply_project_dependency_rule_upgrades"/);
+  assert.match(sessionSource, /invoke<DependencyRuleCheckResponse>\(COMMANDS\.CHECK_PROJECT_DEPENDENCY_RULES/);
+  assert.match(sessionSource, /invoke<DependencyRuleUpgradeResponse>\(COMMANDS\.APPLY_PROJECT_DEPENDENCY_RULE_UPGRADES/);
   assert.match(sessionSource, /skipDependencyRuleCheck/);
   assert.match(sessionSource, /title="依赖版本需确认"/);
   assert.match(sessionSource, /"升级并继续"/);

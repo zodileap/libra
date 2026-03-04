@@ -11,7 +11,7 @@ import path from "node:path";
 //
 //   - UTF-8 编码的页面源码文本。
 function readLoginPageSource() {
-  const sourcePath = path.resolve(process.cwd(), "src/modules/client/pages/login-page.tsx");
+  const sourcePath = path.resolve(process.cwd(), "src/modules/common/pages/login-page.tsx");
   return fs.readFileSync(sourcePath, "utf8");
 }
 

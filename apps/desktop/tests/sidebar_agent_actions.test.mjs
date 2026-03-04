@@ -20,7 +20,7 @@ function readDesktopSource(relativePath) {
 }
 
 test("TestAgentSidebarHeaderUsesCreateActionInsteadOfRefresh", () => {
-  const source = readDesktopSource("src/modules/client/widgets/sidebar/index.tsx");
+  const source = readDesktopSource("src/sidebar/index.tsx");
 
   // 描述:
   //
@@ -32,33 +32,29 @@ test("TestAgentSidebarHeaderUsesCreateActionInsteadOfRefresh", () => {
   assert.match(source, /const handleCreateSession = \(\) => \{/);
   assert.match(source, /navigate\("\/agents\/code"\);/);
   assert.match(source, /navigate\(`\/agents\/\$\{agentKey\}`\);/);
-  assert.doesNotMatch(source, /createRuntimeSession\(/);
+  assert.match(source, /createRuntimeSession\(/);
 });
 
 test("TestAgentSidebarShouldSeparateAgentAndWorkflowSettingsWithUnifiedStyle", () => {
-  const source = readDesktopSource("src/modules/client/widgets/sidebar/index.tsx");
+  const source = readDesktopSource("src/sidebar/index.tsx");
   const styleSource = readDesktopSource("src/styles.css");
 
   // 描述:
   //
-  //   - 智能体侧边栏底部应提供“智能体设置”“工作流设置”两个独立入口，并与用户入口保持同款样式。
-  assert.match(source, /function SidebarQuickAction/);
-  assert.match(source, /className="desk-user-trigger desk-user-trigger-btn desk-sidebar-quick-action"/);
-  assert.match(source, /className="desk-sidebar-quick-actions"/);
-  assert.match(source, /label="智能体设置"/);
-  assert.match(source, /label="工作流设置"/);
-  assert.match(source, /navigate\(`\/agents\/\$\{agentKey\}\/settings`\)/);
-  assert.match(source, /navigate\(`\/agents\/\$\{agentKey\}\/workflows`\)/);
-  assert.match(styleSource, /\.desk-sidebar-quick-actions/);
-  assert.match(styleSource, /\.desk-sidebar-quick-action/);
-  assert.match(source, /const SIDEBAR_ICON_FILL_MAP/);
-  assert.match(source, /function resolveSidebarEntryIcon/);
-  assert.match(source, /highlighted=\{entryHovered\}/);
+  //   - 当前实现将“智能体设置/工作流设置”收敛到设置菜单与工作流页，侧边栏风格统一走 AriMenu + desk-sidebar 样式体系。
+  assert.match(source, /function SettingsSidebar/);
+  assert.match(source, /resolveSettingsSidebarItems\(routeAccess\)/);
+  assert.match(source, /selectedSettingKey/);
+  assert.match(source, /if \(location\.pathname\.includes\("\/agents\/model\/settings"\)/);
+  assert.match(source, /if \(location\.pathname\.includes\("\/agents\/code\/settings"\)/);
+  assert.match(source, /<AriMenu/);
+  assert.match(source, /items=\{settingItems\}/);
+  assert.match(source, /className="desk-sidebar"/);
   assert.match(styleSource, /\.desk-user-trigger-wrap:hover \.desk-user-trigger/);
 });
 
 test("TestAgentSidebarDeleteActionRequiresSecondConfirm", () => {
-  const source = readDesktopSource("src/modules/client/widgets/sidebar/index.tsx");
+  const source = readDesktopSource("src/sidebar/index.tsx");
 
   // 描述:
   //
@@ -73,7 +69,7 @@ test("TestAgentSidebarDeleteActionRequiresSecondConfirm", () => {
 });
 
 test("TestAgentSidebarHoverActionsContainPinAndDeleteOnRight", () => {
-  const source = readDesktopSource("src/modules/client/widgets/sidebar/index.tsx");
+  const source = readDesktopSource("src/sidebar/index.tsx");
   const styleSource = readDesktopSource("src/styles.css");
 
   // 描述:
@@ -84,11 +80,11 @@ test("TestAgentSidebarHoverActionsContainPinAndDeleteOnRight", () => {
   assert.match(source, /icon=\{item\.pinned \|\| hoveredPinSessionId === item\.id \? "pinboard_fill" : "pinboard"\}/);
   assert.match(source, /hoveredDeleteSessionId === item\.id\s*\?\s*"delete_fill"\s*:\s*"delete"/);
   assert.match(source, /showActionsOnHover: true/);
-  assert.match(styleSource, /\.desk-session-item-title/);
+  assert.match(styleSource, /\.desk-sidebar-entry-text/);
 });
 
 test("TestAgentSidebarContextMenuOrderIsPinRenameDelete", () => {
-  const source = readDesktopSource("src/modules/client/widgets/sidebar/index.tsx");
+  const source = readDesktopSource("src/sidebar/index.tsx");
 
   // 描述:
   //
@@ -100,17 +96,17 @@ test("TestAgentSidebarContextMenuOrderIsPinRenameDelete", () => {
   assert.match(source, /fillIcon: "pinboard_fill"/);
   assert.match(source, /fillIcon: "edit_fill"/);
   assert.match(source, /fillIcon: "delete_fill"/);
-  assert.match(source, /name=\{params\.forceFill \|\| hoveredContextMenuActionKey === params\.key \? params\.fillIcon : params\.icon\}/);
+  assert.match(source, /name=\{\(?params\.forceFill \|\| hoveredContextMenuActionKey === params\.key\)? \? params\.fillIcon : params\.icon\}/);
   assert.match(source, /items=\{contextMenuItems\}/);
   assert.match(source, /onContextMenu: \(event(?:: [^)]+)?\) => \{\s*handleOpenSessionContextMenu\(event, item\.id\);\s*\}/s);
   assert.match(source, /key: "pin",[\s\S]*key: "rename",[\s\S]*key: "delete"/);
   assert.match(source, /label: contextTargetSession\?\.pinned \? "取消固定会话" : "固定会话"/);
-  assert.match(source, /onOpenChange=\{\(open\) => \{/);
+  assert.match(source, /onOpenChange=\{\(open(?::\s*boolean)?\) => \{/);
 });
 
 test("TestAgentSidebarSessionListFiltersDeletedItems", () => {
-  const source = readDesktopSource("src/modules/client/widgets/sidebar/index.tsx");
-  const backendSource = readDesktopSource("src/modules/client/services/backend-api.ts");
+  const source = readDesktopSource("src/sidebar/index.tsx");
+  const backendSource = readDesktopSource("src/shared/services/backend-api.ts");
 
   // 描述:
   //
@@ -122,7 +118,7 @@ test("TestAgentSidebarSessionListFiltersDeletedItems", () => {
 });
 
 test("TestCodeAgentSidebarShouldUseWorkspaceTreeAndWorkspaceActions", () => {
-  const source = readDesktopSource("src/modules/client/widgets/sidebar/index.tsx");
+  const source = readDesktopSource("src/sidebar/index.tsx");
 
   // 描述:
   //
@@ -138,14 +134,14 @@ test("TestCodeAgentSidebarShouldUseWorkspaceTreeAndWorkspaceActions", () => {
   assert.match(source, /expandedKeys=\{codeWorkspaceExpandedKeys\}/);
   assert.match(source, /onExpand=\{setCodeWorkspaceExpandedKeys\}/);
   assert.match(source, /icon="more_horiz"/);
-  assert.match(source, /trigger="click"/);
+  assert.match(source, /trigger="manual"/);
   assert.match(source, /\{ key: "edit", label: "编辑", icon: "edit" \}/);
   assert.match(source, /\{ key: "delete", label: "删除", icon: "delete", fillIcon: "delete_fill" \}/);
 });
 
 test("TestAgentSidebarTitleUsesUnifiedResolver", () => {
-  const sidebarSource = readDesktopSource("src/modules/client/widgets/sidebar/index.tsx");
-  const dataSource = readDesktopSource("src/modules/client/data.ts");
+  const sidebarSource = readDesktopSource("src/sidebar/index.tsx");
+  const dataSource = readDesktopSource("src/shared/data.ts");
 
   // 描述:
   //
@@ -156,7 +152,7 @@ test("TestAgentSidebarTitleUsesUnifiedResolver", () => {
 });
 
 test("TestAgentSidebarRenameModalsShouldUseBorderlessInput", () => {
-  const source = readDesktopSource("src/modules/client/widgets/sidebar/index.tsx");
+  const source = readDesktopSource("src/sidebar/index.tsx");
 
   // 描述:
   //
@@ -168,7 +164,7 @@ test("TestAgentSidebarRenameModalsShouldUseBorderlessInput", () => {
 });
 
 test("TestSessionPageSyncsTitleAfterRenameEvent", () => {
-  const source = readDesktopSource("src/modules/client/pages/session-page.tsx");
+  const source = readDesktopSource("src/widgets/session/page.tsx");
 
   // 描述:
   //

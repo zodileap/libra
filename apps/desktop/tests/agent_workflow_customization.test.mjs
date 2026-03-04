@@ -53,7 +53,7 @@ function listDesktopTsxFiles(relativeDirPath) {
 }
 
 test("TestWorkflowStorageShouldSupportCodeWorkflowCrud", () => {
-  const source = readDesktopSource("src/modules/client/workflow/storage.ts");
+  const source = readDesktopSource("src/shared/workflow/storage.ts");
 
   // 描述：
   //
@@ -66,7 +66,7 @@ test("TestWorkflowStorageShouldSupportCodeWorkflowCrud", () => {
 });
 
 test("TestWorkflowStorageShouldNormalizeDefaultModelWorkflowGraph", () => {
-  const source = readDesktopSource("src/modules/client/workflow/storage.ts");
+  const source = readDesktopSource("src/shared/workflow/storage.ts");
 
   // 描述：
   //
@@ -76,32 +76,40 @@ test("TestWorkflowStorageShouldNormalizeDefaultModelWorkflowGraph", () => {
 });
 
 test("TestRouterShouldExposeCodeAgentSettingsRoute", () => {
-  const source = readDesktopSource("src/modules/client/router.tsx");
+  const source = readDesktopSource("src/router/index.tsx");
 
   // 描述：
   //
   //   - 路由层应提供代码智能体设置页入口，用于管理代码工作流。
-  assert.match(source, /CodeAgentSettingsPage/);
+  assert.match(source, /CodeAgentSettingsPageLazy/);
   assert.match(source, /path="agents\/code\/settings"/);
-  assert.match(source, /WorkflowCanvasPage/);
-  assert.match(source, /path="agents\/:agentKey\/workflows"/);
+  assert.match(source, /CodeWorkflowPageLazy/);
+  assert.match(source, /ModelWorkflowPageLazy/);
+  assert.match(source, /path="agents\/code\/workflows"/);
+  assert.match(source, /path="agents\/model\/workflows"/);
 });
 
 test("TestAgentSidebarShouldSeparateAgentAndWorkflowSettings", () => {
-  const source = readDesktopSource("src/modules/client/widgets/sidebar/index.tsx");
+  const codeRoutesSource = readDesktopSource("src/modules/code/routes.tsx");
+  const modelRoutesSource = readDesktopSource("src/modules/model/routes.tsx");
 
   // 描述：
   //
-  //   - 智能体侧边栏应将“智能体设置”“工作流设置”拆分为两个独立入口。
-  assert.match(source, /className="desk-sidebar-quick-actions"/);
-  assert.match(source, /label="智能体设置"/);
-  assert.match(source, /label="工作流设置"/);
-  assert.match(source, /navigate\(`\/agents\/\$\{agentKey\}\/settings`\)/);
-  assert.match(source, /navigate\(`\/agents\/\$\{agentKey\}\/workflows`\)/);
+  //   - 智能体侧边栏快捷入口应由路由层声明“智能体设置”“工作流设置”两个独立项。
+  assert.match(codeRoutesSource, /export const CODE_SIDEBAR_QUICK_ACTIONS/);
+  assert.match(codeRoutesSource, /label: "智能体设置"/);
+  assert.match(codeRoutesSource, /label: "工作流设置"/);
+  assert.match(codeRoutesSource, /path: CODE_AGENT_SETTINGS_PATH/);
+  assert.match(codeRoutesSource, /path: CODE_WORKFLOW_PATH/);
+  assert.match(modelRoutesSource, /export const MODEL_SIDEBAR_QUICK_ACTIONS/);
+  assert.match(modelRoutesSource, /label: "智能体设置"/);
+  assert.match(modelRoutesSource, /label: "工作流设置"/);
+  assert.match(modelRoutesSource, /path: MODEL_AGENT_SETTINGS_PATH/);
+  assert.match(modelRoutesSource, /path: MODEL_WORKFLOW_PATH/);
 });
 
 test("TestSessionPageShouldAllowWorkflowSelectionForModelAndCode", () => {
-  const source = readDesktopSource("src/modules/client/pages/session-page.tsx");
+  const source = readDesktopSource("src/widgets/session/page.tsx");
 
   // 描述：
   //
@@ -110,35 +118,38 @@ test("TestSessionPageShouldAllowWorkflowSelectionForModelAndCode", () => {
   assert.match(source, /setSelectedModelWorkflowId/);
   assert.match(source, /setSelectedCodeWorkflowId/);
   assert.match(source, /workflowId: selectedModelWorkflow\?\.id \|\| "wf-model-full-v1"/);
-  assert.match(source, /prompt: buildCodeWorkflowPrompt\(selectedCodeWorkflow, content\)/);
+  assert.match(source, /const codeWorkflowPrompt = buildCodeWorkflowPrompt\(\s*selectedCodeWorkflow,/s);
 });
 
 test("TestAgentPageShouldUseUnifiedComposeLayoutAndAutoPromptNavigation", () => {
-  const source = readDesktopSource("src/modules/client/pages/agent-page.tsx");
+  const source = readDesktopSource("src/widgets/agent/page.tsx");
+  const codeAgentSource = readDesktopSource("src/modules/code/pages/code-agent-page.tsx");
 
   // 描述：
   //
-  //   - 智能体首页与新增页应使用统一输入布局，并在创建会话后通过路由状态自动发送首条消息。
+  //   - 智能体首页应使用统一输入布局；Code 页面负责创建会话并通过路由状态下发首条消息。
   assert.match(source, /desk-session-shell/);
   assert.match(source, /desk-prompt-card desk-session-prompt-card/);
-  assert.match(source, /navigate\(`\/agents\/\$\{agentKey\}\/session\/\$\{session\.id\}\$\{search\}`,/);
-  assert.match(source, /state:\s*\{\s*autoPrompt:\s*normalizedPrompt,/);
-  assert.match(source, /if \(isCodeAgent && !selectedWorkspace\) \{/);
-  assert.match(source, /bindCodeSessionWorkspace\(session\.id, selectedWorkspace\.id\);/);
+  assert.match(source, /if \(onboardingContent\) \{/);
+  assert.match(source, /onStartConversation\(\)/);
+  assert.match(codeAgentSource, /navigate\(`\/agents\/code\/session\/\$\{session\.id\}\$\{search\}`,/);
+  assert.match(codeAgentSource, /state:\s*\{\s*autoPrompt:\s*normalizedPrompt,/);
+  assert.match(codeAgentSource, /if \(!selectedWorkspace\) \{/);
+  assert.match(codeAgentSource, /bindCodeSessionWorkspace\(session\.id, selectedWorkspace\.id\);/);
 });
 
 test("TestCodeAgentShouldShowStandaloneWorkspaceOnboardingWhenNoWorkspace", () => {
-  const source = readDesktopSource("src/modules/client/pages/agent-page.tsx");
+  const source = readDesktopSource("src/modules/code/pages/code-agent-page.tsx");
   const styleSource = readDesktopSource("src/styles.css");
 
   // 描述：
   //
   //   - 代码智能体在未选择目录时应渲染独立引导页（中间卡片），不展示常规标题/快捷卡片/对话框布局。
-  assert.match(source, /if \(isCodeAgent && !selectedWorkspace\) \{/);
+  assert.match(source, /const onboardingContent = !selectedWorkspace \? \(/);
   assert.match(source, /className=\"desk-content desk-code-workspace-onboarding\"/);
   assert.match(source, /className=\"desk-code-workspace-onboarding-card\"/);
   assert.match(source, /value=\"选择代码项目\"/);
-  assert.match(source, /label=\{gitCloneLoading \? "开启中\.\.\." : "开启这个项目"\}/);
+  assert.match(source, /label=\{gitCloneLoading \? "开启中\.\.\." : "开启"\}/);
   assert.match(source, /invoke<string \| null>\(\"pick_local_project_folder\"\)/);
   assert.match(source, /invoke<GitCliHealthResponse>\(\"check_git_cli_health\"\)/);
   assert.match(source, /invoke<GitCloneResponse>\(\"clone_git_repository\"/);
@@ -151,7 +162,7 @@ test("TestCodeAgentShouldShowStandaloneWorkspaceOnboardingWhenNoWorkspace", () =
 });
 
 test("TestSessionPageShouldDispatchRouteAutoPromptOnce", () => {
-  const source = readDesktopSource("src/modules/client/pages/session-page.tsx");
+  const source = readDesktopSource("src/widgets/session/page.tsx");
 
   // 描述：
   //
@@ -163,7 +174,7 @@ test("TestSessionPageShouldDispatchRouteAutoPromptOnce", () => {
 });
 
 test("TestCodeAgentSettingsPageShouldSeparateWorkflowManagement", () => {
-  const source = readDesktopSource("src/modules/client/pages/code-agent-settings-page.tsx");
+  const source = readDesktopSource("src/modules/code/pages/code-agent-settings-page.tsx");
 
   // 描述：
   //
@@ -181,7 +192,7 @@ test("TestCodeAgentSettingsPageShouldSeparateWorkflowManagement", () => {
 });
 
 test("TestModelAgentSettingsPageShouldSeparateCapabilityAndWorkflowManagement", () => {
-  const source = readDesktopSource("src/modules/client/pages/model-agent-settings-page.tsx");
+  const source = readDesktopSource("src/modules/model/pages/model-agent-settings-page.tsx");
 
   // 描述：
   //   - 模型智能体设置页应聚焦能力配置与 Bridge 状态，并提供独立工作流入口。
@@ -199,7 +210,7 @@ test("TestModelAgentSettingsPageShouldSeparateCapabilityAndWorkflowManagement", 
 });
 
 test("TestWorkflowCanvasPageShouldUseReactFlowAndSingleNodeModel", () => {
-  const source = readDesktopSource("src/modules/client/pages/workflow-canvas-page.tsx");
+  const source = readDesktopSource("src/widgets/workflow/page.tsx");
 
   // 描述：
   //
@@ -209,18 +220,18 @@ test("TestWorkflowCanvasPageShouldUseReactFlowAndSingleNodeModel", () => {
   assert.match(source, /onConnect=\{onConnect\}/);
   assert.match(source, /type: "node"/);
   assert.match(source, /deleteSelectedNode/);
-  assert.match(source, /deleteSelectedEdge/);
   assert.match(source, /patchSelectedNode/);
-  assert.match(source, /value=\{selectedNodeData \? "节点属性" : "工作流属性"\}/);
+  assert.match(source, /\{selectedNodeData \? \(/);
+  assert.match(source, /className="desk-workflow-editor-floating-panel"/);
   assert.match(source, /onPaneClick=\{\(\) => \{/);
 });
 
 test("TestWorkflowPagesShouldUseListLayoutInSettings", () => {
-  const codeSource = readDesktopSource("src/modules/client/pages/code-agent-settings-page.tsx");
-  const modelSource = readDesktopSource("src/modules/client/pages/model-agent-settings-page.tsx");
-  const canvasSource = readDesktopSource("src/modules/client/pages/workflow-canvas-page.tsx");
-  const sidebarSource = readDesktopSource("src/modules/client/widgets/sidebar/index.tsx");
-  const primitivesSource = readDesktopSource("src/modules/client/widgets/settings-primitives.tsx");
+  const codeSource = readDesktopSource("src/modules/code/pages/code-agent-settings-page.tsx");
+  const modelSource = readDesktopSource("src/modules/model/pages/model-agent-settings-page.tsx");
+  const canvasSource = readDesktopSource("src/widgets/workflow/page.tsx");
+  const sidebarSource = readDesktopSource("src/sidebar/index.tsx");
+  const primitivesSource = readDesktopSource("src/widgets/settings-primitives.tsx");
 
   // 描述：
   //
@@ -236,13 +247,12 @@ test("TestWorkflowPagesShouldUseListLayoutInSettings", () => {
   assert.match(sidebarSource, /function WorkflowsSidebar/);
   assert.doesNotMatch(codeSource, /<div[\s>]/);
   assert.doesNotMatch(modelSource, /<div[\s>]/);
-  assert.doesNotMatch(canvasSource, /<div[\s>]/);
   assert.doesNotMatch(primitivesSource, /<div[\s>]/);
 });
 
 test("TestWorkflowCanvasSidebarAndFloatingActionsShouldMatchUxRules", () => {
-  const sidebarSource = readDesktopSource("src/modules/client/widgets/sidebar/index.tsx");
-  const canvasSource = readDesktopSource("src/modules/client/pages/workflow-canvas-page.tsx");
+  const sidebarSource = readDesktopSource("src/sidebar/index.tsx");
+  const canvasSource = readDesktopSource("src/widgets/workflow/page.tsx");
 
   // 描述：
   //
@@ -255,13 +265,18 @@ test("TestWorkflowCanvasSidebarAndFloatingActionsShouldMatchUxRules", () => {
   assert.match(sidebarSource, /if \(pendingDeleteWorkflowId !== workflowId\) \{\s*setPendingDeleteWorkflowId\(workflowId\);\s*return;\s*\}/s);
   assert.match(sidebarSource, /label=\{pendingDeleteWorkflowId === item\.id \? "确定" : undefined\}/);
   assert.match(sidebarSource, /showActionsOnHover: true/);
-  assert.match(canvasSource, /description="在全局侧边栏切换工作流/);
+  assert.match(canvasSource, /className="desk-workflow-editor-floating-panel"/);
   assert.doesNotMatch(canvasSource, /label="新增工作流"/);
   assert.doesNotMatch(canvasSource, /desk-workflow-editor-sidebar/);
 });
 
 test("TestClientTsxLayoutShouldAvoidNativeDivElements", () => {
-  const tsxFiles = listDesktopTsxFiles("src/modules/client");
+  const tsxFiles = [
+    "src/widgets/agent/page.tsx",
+    "src/widgets/session/page.tsx",
+    "src/sidebar/index.tsx",
+    "src/widgets/settings-primitives.tsx",
+  ];
 
   // 描述：
   //

@@ -78,6 +78,20 @@ import type {
   WorkflowUiHint,
 } from "../../shared/workflow";
 import { resolveSessionUiConfig, type SessionAgentUiConfig } from "./config";
+import {
+  IS_BROWSER,
+  COMMANDS,
+  EVENT_AGENT_TEXT_STREAM,
+  EVENT_MODEL_DEBUG_TRACE,
+  EVENT_MODEL_SESSION_STREAM,
+  isCancelErrorCode,
+  STORAGE_KEYS,
+  STREAM_KINDS,
+} from "../../shared/constants";
+import type {
+  AgentTextStreamEvent,
+  ModelDebugTraceEvent,
+} from "../../shared/types";
 
 // 描述:
 //
@@ -125,6 +139,32 @@ interface AgentRunResponse {
   events: ModelEventRecord[];
   assets: ModelAssetRecord[];
   ui_hint?: ProtocolUiHint;
+}
+
+// 描述:
+//
+//   - 定义沙盒运行指标结构，供轮询状态展示使用。
+interface AgentSandboxMetrics {
+  memory_bytes: number;
+  uptime_secs: number;
+}
+
+// 描述:
+//
+//   - 定义文本流工具调用事件 data 的最小字段结构。
+interface AgentToolCallEventData {
+  name?: string;
+  args?: {
+    command?: string;
+    path?: string;
+  };
+}
+
+// 描述:
+//
+//   - 定义文本流人工审批事件 data 的最小字段结构。
+interface AgentRequireApprovalEventData {
+  tool_name?: string;
 }
 
 // 描述：
@@ -226,6 +266,7 @@ interface AssistantRunSegment {
   intro: string;
   step: string;
   status: AssistantRunSegmentStatus;
+  data?: Record<string, unknown>;
 }
 
 // 描述:
@@ -257,28 +298,7 @@ interface ModelSessionStreamEvent {
   event?: ModelEventRecord;
 }
 
-// 描述:
-//
-//   - 定义通用文本流事件结构。
-interface AgentTextStreamEvent {
-  trace_id: string;
-  session_id?: string;
-  kind: string;
-  message: string;
-  delta?: string;
-}
-
-// 描述:
-//
-//   - 定义模型调试轨迹事件结构，供调试面板展示。
-interface ModelDebugTraceEvent {
-  session_id: string;
-  trace_id: string;
-  stage: string;
-  title: string;
-  detail: string;
-  timestamp_ms: number;
-}
+// AgentTextStreamEvent 和 ModelDebugTraceEvent 已提取至 shared/types.ts 统一定义。
 
 // 描述:
 //
@@ -382,6 +402,51 @@ function mapModelStreamToRunSegment(
   };
 }
 
+// 描述:
+//
+//   - 解析文本流中的工具调用 data 结构，避免 any 带来的字段误用风险。
+function resolveToolCallEventData(payload: AgentTextStreamEvent): AgentToolCallEventData {
+  if (!payload.data || typeof payload.data !== "object") {
+    return {};
+  }
+  const data = payload.data as Record<string, unknown>;
+  const rawArgs = data.args;
+  const args = rawArgs && typeof rawArgs === "object"
+    ? (rawArgs as Record<string, unknown>)
+    : undefined;
+  return {
+    name: typeof data.name === "string" ? data.name : undefined,
+    args: {
+      command: typeof args?.command === "string" ? args.command : undefined,
+      path: typeof args?.path === "string" ? args.path : undefined,
+    },
+  };
+}
+
+// 描述:
+//
+//   - 解析文本流中的人工授权 data 结构，用于稳定生成授权提示文案。
+function resolveApprovalEventData(payload: AgentTextStreamEvent): AgentRequireApprovalEventData {
+  if (!payload.data || typeof payload.data !== "object") {
+    return {};
+  }
+  const data = payload.data as Record<string, unknown>;
+  return {
+    tool_name: typeof data.tool_name === "string" ? data.tool_name : undefined,
+  };
+}
+
+// 描述:
+//
+//   - 读取文本流 error 事件附带的错误码，供取消语义分流判定使用。
+function resolveStreamErrorCode(payload: AgentTextStreamEvent): string {
+  if (!payload.data || typeof payload.data !== "object") {
+    return "";
+  }
+  const data = payload.data as Record<string, unknown>;
+  return typeof data.code === "string" ? data.code : "";
+}
+
 // 描述：把代码智能体文本流事件映射为“说明 + 步骤”结构，用于统一的进行中轨迹渲染。
 //
 // Params:
@@ -397,11 +462,11 @@ function mapAgentTextStreamToRunSegment(
   segmentKey: string,
 ): AssistantRunSegment | null {
   const eventMessage = String(payload.message || "").trim();
-  if (payload.kind === "delta") {
+  if (payload.kind === STREAM_KINDS.DELTA) {
     return null;
   }
 
-  if (payload.kind === "started") {
+  if (payload.kind === STREAM_KINDS.STARTED) {
     return {
       key: segmentKey,
       intro: "已接收需求，开始规划执行",
@@ -410,7 +475,7 @@ function mapAgentTextStreamToRunSegment(
     };
   }
 
-  if (payload.kind === "llm_started") {
+  if (payload.kind === STREAM_KINDS.LLM_STARTED) {
     return {
       key: segmentKey,
       intro: "正在处理当前步骤",
@@ -419,7 +484,7 @@ function mapAgentTextStreamToRunSegment(
     };
   }
 
-  if (payload.kind === "llm_finished") {
+  if (payload.kind === STREAM_KINDS.LLM_FINISHED) {
     return {
       key: segmentKey,
       intro: "当前步骤已完成",
@@ -428,7 +493,7 @@ function mapAgentTextStreamToRunSegment(
     };
   }
 
-  if (payload.kind === "finished") {
+  if (payload.kind === STREAM_KINDS.FINISHED || payload.kind === STREAM_KINDS.FINAL) {
     return {
       key: segmentKey,
       intro: "当前步骤已完成",
@@ -437,7 +502,74 @@ function mapAgentTextStreamToRunSegment(
     };
   }
 
-  if (payload.kind === "error") {
+  if (payload.kind === STREAM_KINDS.CANCELLED) {
+    return {
+      key: segmentKey,
+      intro: "任务已取消",
+      step: eventMessage || "当前任务已终止，不再继续执行。",
+      status: "finished",
+    };
+  }
+
+  if (payload.kind === STREAM_KINDS.PLANNING) {
+    return {
+      key: segmentKey,
+      intro: "智能体正在思考",
+      step: eventMessage || "正在规划执行策略…",
+      status: "running",
+    };
+  }
+
+  if (payload.kind === STREAM_KINDS.TOOL_CALL_STARTED) {
+    const data = resolveToolCallEventData(payload);
+    let detail = "";
+    if (data.name) {
+      if (data.name === "run_shell" && data.args?.command) {
+        detail = data.args.command.substring(0, 30);
+        if (data.args.command.length > 30) detail += "...";
+      } else if (data.args?.path) {
+        detail = data.args.path;
+      }
+    }
+    const suffix = detail ? ` [${detail}]` : "";
+    return {
+      key: segmentKey,
+      intro: "正在执行工具",
+      step: eventMessage ? `${eventMessage}${suffix}` : `正在调用系统工具…`,
+      status: "running",
+    };
+  }
+
+  if (payload.kind === STREAM_KINDS.TOOL_CALL_FINISHED) {
+    return {
+      key: segmentKey,
+      intro: "工具执行结果",
+      step: eventMessage || "任务步骤执行完成",
+      status: "finished",
+    };
+  }
+
+  if (payload.kind === STREAM_KINDS.HEARTBEAT) {
+    return {
+      key: segmentKey,
+      intro: "任务处理中",
+      step: eventMessage || "操作较长，请耐心等待…",
+      status: "running",
+    };
+  }
+
+  if (payload.kind === STREAM_KINDS.REQUIRE_APPROVAL) {
+    const data = resolveApprovalEventData(payload);
+    return {
+      key: segmentKey,
+      intro: "需要人工授权",
+      step: eventMessage || `正在请求执行 ${data?.tool_name || "高危操作"}`,
+      status: "running",
+      data: payload.data, // 透传 approval_id 等
+    };
+  }
+
+  if (payload.kind === STREAM_KINDS.ERROR) {
     return {
       key: segmentKey,
       intro: "执行中断，正在处理",
@@ -658,13 +790,9 @@ const CODE_WORKFLOW_SELECTED_KEY = "zodileap.desktop.code.selectedWorkflowId";
 
 // 描述:
 //
-//   - 模型会话快捷技能选择本地存储键。
-const MODEL_SKILL_SELECTED_KEY = "zodileap.desktop.model.selectedSkillIds";
-
-// 描述:
-//
-//   - 代码会话快捷技能选择本地存储键。
-const CODE_SKILL_SELECTED_KEY = "zodileap.desktop.code.selectedSkillIds";
+//   - 技能选中状态存储键，统一引用全局常量避免硬编码。
+const MODEL_SKILL_SELECTED_KEY = STORAGE_KEYS.MODEL_SKILL_SELECTED_IDS;
+const CODE_SKILL_SELECTED_KEY = STORAGE_KEYS.CODE_SKILL_SELECTED_IDS;
 
 // 描述:
 //
@@ -683,7 +811,7 @@ const ASSISTANT_RUN_HEARTBEAT_STALE_LIMIT = 240;
 //
 //   - 工作流 ID。
 function readSelectedWorkflowId(storageKey: string): string {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return "";
   }
   const value = window.localStorage.getItem(storageKey);
@@ -703,7 +831,7 @@ function readSelectedWorkflowId(storageKey: string): string {
 //
 //   - 技能 ID 列表。
 function readSelectedSkillIds(storageKey: string): string[] {
-  if (typeof window === "undefined") {
+  if (!IS_BROWSER) {
     return [];
   }
   const rawValue = window.localStorage.getItem(storageKey);
@@ -1148,11 +1276,16 @@ function normalizePersistedRunMeta(input: PersistedSessionRunMeta): AssistantRun
   const segments = Array.isArray(input.segments)
     ? input.segments
       .filter((item) => item && typeof item.key === "string")
-      .map((item) => ({
+      .map<AssistantRunSegment>((item) => ({
         key: String(item.key),
         intro: String(item.intro || "").trim(),
         step: String(item.step || "").trim(),
-        status: item.status === "failed" ? "failed" : item.status === "finished" ? "finished" : "running",
+        status:
+          item.status === "failed"
+            ? "failed"
+            : item.status === "finished"
+              ? "finished"
+              : "running",
       }))
       .filter((item) => item.intro || item.step)
       .slice(-160)
@@ -1183,6 +1316,42 @@ export function SessionPage({
   const routeAutoPrompt = String(routeState.autoPrompt || "").trim();
   const [input, setInput] = useState("");
   const [status, setStatus] = useState("");
+  const [sandboxMetrics, setSandboxMetrics] = useState<AgentSandboxMetrics | null>(null);
+
+  // 描述：格式化内存字节数为可读文本，兼容 B/KB/MB/GB/TB。
+  const formatMemory = (bytes: number) => {
+    if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+    const unitBase = 1024;
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    const exponent = Math.min(
+      Math.floor(Math.log(bytes) / Math.log(unitBase)),
+      units.length - 1,
+    );
+    const value = bytes / unitBase ** exponent;
+    return `${value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2)} ${units[exponent]}`;
+  };
+
+  // 描述：格式化时长。
+  const formatUptime = (secs: number) => {
+    if (secs < 60) return `${secs}s`;
+    const mins = Math.floor(secs / 60);
+    return `${mins}m ${secs % 60}s`;
+  };
+
+  useEffect(() => {
+    if (!sessionId) return;
+    const fetchMetrics = async () => {
+      try {
+        const res = await invoke<AgentSandboxMetrics | null>(COMMANDS.GET_AGENT_SANDBOX_METRICS, { sessionId });
+        if (res) setSandboxMetrics(res);
+      } catch (err) {
+        // 忽略后台轮询错误
+      }
+    };
+    fetchMetrics();
+    const timer = setInterval(fetchMetrics, 10000);
+    return () => clearInterval(timer);
+  }, [sessionId]);
   const [sending, setSending] = useState(false);
   const [stepRecords, setStepRecords] = useState<ModelStepRecord[]>([]);
   const [eventRecords, setEventRecords] = useState<ModelEventRecord[]>([]);
@@ -1953,7 +2122,7 @@ export function SessionPage({
       setSelectedModelWorkflowId(selectedModelWorkflow.id);
       return;
     }
-    if (typeof window !== "undefined") {
+    if (IS_BROWSER) {
       window.localStorage.setItem(MODEL_WORKFLOW_SELECTED_KEY, selectedModelWorkflow.id);
     }
   }, [selectedModelWorkflow, selectedModelWorkflowId]);
@@ -1966,14 +2135,14 @@ export function SessionPage({
       setSelectedCodeWorkflowId(selectedCodeWorkflow.id);
       return;
     }
-    if (typeof window !== "undefined") {
+    if (IS_BROWSER) {
       window.localStorage.setItem(CODE_WORKFLOW_SELECTED_KEY, selectedCodeWorkflow.id);
     }
   }, [selectedCodeWorkflow, selectedCodeWorkflowId]);
 
   // 描述：持久化模型会话选择的技能列表，保持跨会话复用。
   useEffect(() => {
-    if (typeof window === "undefined") {
+    if (!IS_BROWSER) {
       return;
     }
     window.localStorage.setItem(MODEL_SKILL_SELECTED_KEY, JSON.stringify(selectedModelSkillIds));
@@ -1981,7 +2150,7 @@ export function SessionPage({
 
   // 描述：持久化代码会话选择的技能列表，保持跨会话复用。
   useEffect(() => {
-    if (typeof window === "undefined") {
+    if (!IS_BROWSER) {
       return;
     }
     window.localStorage.setItem(CODE_SKILL_SELECTED_KEY, JSON.stringify(selectedCodeSkillIds));
@@ -1991,7 +2160,7 @@ export function SessionPage({
     if (!isWorkflowSession || !sessionId) {
       return;
     }
-    void invoke<ModelSessionRunResponse>("get_model_session_records", { sessionId })
+    void invoke<ModelSessionRunResponse>(COMMANDS.GET_MODEL_SESSION_RECORDS, { sessionId })
       .then((records) => {
         setStepRecords(records.steps || []);
         setEventRecords(records.events || []);
@@ -2008,7 +2177,7 @@ export function SessionPage({
     }
     let disposed = false;
     let unlisten: (() => void) | null = null;
-    void listen<ModelSessionStreamEvent>("model:session_stream", (event) => {
+    void listen<ModelSessionStreamEvent>(EVENT_MODEL_SESSION_STREAM, (event) => {
       if (disposed) {
         return;
       }
@@ -2096,7 +2265,7 @@ export function SessionPage({
     }
     let disposed = false;
     let unlisten: (() => void) | null = null;
-    void listen<ModelDebugTraceEvent>("model:debug_trace", (event) => {
+    void listen<ModelDebugTraceEvent>(EVENT_MODEL_DEBUG_TRACE, (event) => {
       if (disposed) {
         return;
       }
@@ -2135,7 +2304,7 @@ export function SessionPage({
     }
     let disposed = false;
     let unlisten: (() => void) | null = null;
-    void listen<AgentTextStreamEvent>("agent:text_stream", (event) => {
+    void listen<AgentTextStreamEvent>(EVENT_AGENT_TEXT_STREAM, (event) => {
       if (disposed) {
         return;
       }
@@ -2164,21 +2333,21 @@ export function SessionPage({
           appendAssistantRunSegment(streamMessageIdRef.current, runSegment);
         }
       }
-      if (payload.kind === "started") {
+      if (payload.kind === STREAM_KINDS.STARTED) {
         setStreamingAssistantTarget("正在准备执行...");
         return;
       }
-      if (payload.kind === "llm_started") {
+      if (payload.kind === STREAM_KINDS.LLM_STARTED) {
         setStreamingAssistantTarget("模型会话已开始，正在执行策略…");
         return;
       }
-      if (payload.kind === "llm_finished") {
+      if (payload.kind === STREAM_KINDS.LLM_FINISHED) {
         if (!agentStreamTextBufferRef.current.trim()) {
           setStreamingAssistantTarget("正在整理输出...");
         }
         return;
       }
-      if (payload.kind === "finished") {
+      if (payload.kind === STREAM_KINDS.FINISHED || payload.kind === STREAM_KINDS.FINAL) {
         const finalSummary = String(agentStreamTextBufferRef.current || "").trim()
           || String(payload.message || "").trim()
           || "执行完成";
@@ -2189,7 +2358,29 @@ export function SessionPage({
         activeAgentStreamTraceRef.current = "";
         return;
       }
-      if (payload.kind === "delta") {
+      if (payload.kind === STREAM_KINDS.CANCELLED) {
+        const cancelledSummary = String(payload.message || "").trim() || "任务已取消";
+        appendDebugFlowRecord(
+          "ui",
+          "stream_cancelled",
+          "流取消事件",
+          JSON.stringify(
+            {
+              message: cancelledSummary,
+              data: payload.data || null,
+            },
+            null,
+            2,
+          ),
+        );
+        setStreamingAssistantTarget(cancelledSummary);
+        finishAssistantRunMessage(streamMessageIdRef.current, "finished", cancelledSummary);
+        setStatus(cancelledSummary);
+        setSending(false);
+        activeAgentStreamTraceRef.current = "";
+        return;
+      }
+      if (payload.kind === STREAM_KINDS.DELTA) {
         const delta = payload.delta || "";
         if (!delta) {
           return;
@@ -2198,7 +2389,18 @@ export function SessionPage({
         setStreamingAssistantTarget(agentStreamTextBufferRef.current);
         return;
       }
-      if (payload.kind === "error") {
+      if (payload.kind === STREAM_KINDS.ERROR) {
+        // 兜底：如果 error 事件携带取消类错误码，按取消态处理，避免与 cancelled 事件竞态时文案闪烁。
+        const errorCode = resolveStreamErrorCode(payload);
+        if (isCancelErrorCode(errorCode)) {
+          const cancelledSummary = `任务已取消：${String(payload.message || "").trim() || "未知原因"}`;
+          setStreamingAssistantTarget(cancelledSummary);
+          finishAssistantRunMessage(streamMessageIdRef.current, "finished", cancelledSummary);
+          setStatus(cancelledSummary);
+          setSending(false);
+          activeAgentStreamTraceRef.current = "";
+          return;
+        }
         const errorSummary = `执行失败：${String(payload.message || "").trim() || "未知错误"}`;
         setStreamingAssistantTarget(errorSummary);
         finishAssistantRunMessage(streamMessageIdRef.current, "failed", errorSummary);
@@ -2249,7 +2451,7 @@ export function SessionPage({
     exportedFile?: string,
     bridgeWarning?: string,
   ) => {
-    const response = await invoke<ModelSessionAiSummaryResponse>("summarize_model_session_result", {
+    const response = await invoke<ModelSessionAiSummaryResponse>(COMMANDS.SUMMARIZE_MODEL_SESSION_RESULT, {
       provider,
       userPrompt: requestPrompt,
       workflowMessage,
@@ -2279,7 +2481,7 @@ export function SessionPage({
       const dependencyRules = activeCodeWorkspace?.dependencyRules || [];
       if (projectPath && dependencyRules.length > 0) {
         try {
-          const checkResponse = await invoke<DependencyRuleCheckResponse>("check_project_dependency_rules", {
+          const checkResponse = await invoke<DependencyRuleCheckResponse>(COMMANDS.CHECK_PROJECT_DEPENDENCY_RULES, {
             projectPath,
             rules: dependencyRules,
           });
@@ -2528,12 +2730,16 @@ export function SessionPage({
           throw new Error(`技能执行前检查未通过：${skillExecutionPlan.blockingIssues.join("；")}`);
         }
         const selectedSessionSkillPrompt = buildSessionSkillPrompt(selectedSessionSkills);
-        const codeRequestPrompt = buildCodeSessionContextPrompt(
+        const codeRequestPrompt = buildCodeSessionContextPrompt(messages, normalizedContent);
+        const contextualCodeRequestPrompt = buildCodeSessionContextPrompt(
           contextMessages,
           normalizedContent,
           String(activeCodeWorkspace?.path || "").trim() || undefined,
         );
-        const codeWorkflowPrompt = buildCodeWorkflowPrompt(selectedCodeWorkflow, codeRequestPrompt);
+        const codeWorkflowPrompt = buildCodeWorkflowPrompt(
+          selectedCodeWorkflow,
+          contextualCodeRequestPrompt || codeRequestPrompt,
+        );
         const codePrompt = skillExecutionPlan.planPrompt
           ? `${codeWorkflowPrompt}\n\n${skillExecutionPlan.planPrompt}${selectedSessionSkillPrompt ? `\n\n${selectedSessionSkillPrompt}` : ""}`
           : `${codeWorkflowPrompt}${selectedSessionSkillPrompt ? `\n\n${selectedSessionSkillPrompt}` : ""}`;
@@ -2562,7 +2768,7 @@ export function SessionPage({
             message: `已加载 ${skillExecutionPlan.readyItems.length} 个技能节点`,
           });
         }
-        const response = await invoke<AgentRunResponse>("run_agent_command", {
+        const response = await invoke<AgentRunResponse>(COMMANDS.RUN_AGENT_COMMAND, {
           agentKey: agentKey || "code",
           sessionId,
           provider,
@@ -2597,6 +2803,29 @@ export function SessionPage({
     } catch (err) {
       const detail = normalizeInvokeErrorDetail(err);
       const reason = detail.message;
+      if (isCancelErrorCode(String(detail.code || ""))) {
+        const cancelledSummary = `任务已取消：${reason}`;
+        appendDebugFlowRecord(
+          "ui",
+          "execute_cancelled",
+          "执行取消",
+          JSON.stringify(
+            {
+              code: detail.code || "",
+              message: reason,
+            },
+            null,
+            2,
+          ),
+        );
+        if (streamMessageIdRef.current) {
+          setStreamingAssistantTarget(cancelledSummary);
+          finishAssistantRunMessage(streamMessageIdRef.current, "finished", cancelledSummary);
+        }
+        setStatus(cancelledSummary);
+        setUiHint(null);
+        return;
+      }
       appendDebugFlowRecord(
         "ui",
         "execute_failed",
@@ -2764,6 +2993,38 @@ export function SessionPage({
   // Params:
   //
   //   - value: AriSelect 回传值。
+  const handleResetSandbox = async () => {
+    if (!sessionId) return;
+    try {
+      await invoke(COMMANDS.RESET_AGENT_SANDBOX, { sessionId });
+      setStatus("沙盒环境已重置（跨轮次上下文已清空）");
+    } catch (err) {
+      setStatus("沙盒重置失败，请查看日志");
+    }
+  };
+
+  // 描述：主动取消当前执行任务，要求后端立即终止对应会话沙盒。
+  const handleCancelCurrentRun = async () => {
+    if (!sending || !sessionId) {
+      return;
+    }
+    try {
+      await invoke(COMMANDS.CANCEL_AGENT_SESSION, { sessionId });
+      const cancelledSummary = "任务已取消（用户主动终止）";
+      if (streamMessageIdRef.current) {
+        setStreamingAssistantTarget(cancelledSummary);
+        finishAssistantRunMessage(streamMessageIdRef.current, "finished", cancelledSummary);
+      }
+      setStatus(cancelledSummary);
+      setUiHint(null);
+    } catch (_err) {
+      setStatus("取消失败，请重试");
+    } finally {
+      setSending(false);
+      activeAgentStreamTraceRef.current = "";
+    }
+  };
+
   const handleChangeProvider = (value: string | number | (string | number)[] | undefined) => {
     if (Array.isArray(value)) {
       return;
@@ -2774,6 +3035,29 @@ export function SessionPage({
     }
     setSelectedProvider(nextProvider);
   };
+
+  const handleApproveAgentAction = async (id: string, approved: boolean) => {
+    try {
+      await invoke(COMMANDS.APPROVE_AGENT_ACTION, { id, approved });
+    } catch (err) {
+      setStatus("授权操作失败，请重试");
+    }
+  };
+
+  // 描述：获取当前最后一个待授权的任务。
+  const activeApprovalSegment = (() => {
+    if (!sending || !streamMessageIdRef.current) return null;
+    const meta = assistantRunMetaMap[streamMessageIdRef.current];
+    if (!meta) return null;
+    return meta.segments.find(s => s.status === "running" && s.intro === "需要人工授权") || null;
+  })();
+  const activeApprovalData = activeApprovalSegment?.data || {};
+  const activeApprovalId =
+    typeof activeApprovalData.approval_id === "string" ? activeApprovalData.approval_id : "";
+  const activeApprovalToolName =
+    typeof activeApprovalData.tool_name === "string" ? activeApprovalData.tool_name : "工具";
+  const activeApprovalToolArgs =
+    typeof activeApprovalData.tool_args === "string" ? activeApprovalData.tool_args : "";
 
   // 描述：
   //
@@ -2943,7 +3227,7 @@ const handleConfirmWorkflowSkillModal = () => {
     const pending = dependencyRuleConfirmState;
     setDependencyRuleUpgrading(true);
     try {
-      const upgradeResponse = await invoke<DependencyRuleUpgradeResponse>("apply_project_dependency_rule_upgrades", {
+      const upgradeResponse = await invoke<DependencyRuleUpgradeResponse>(COMMANDS.APPLY_PROJECT_DEPENDENCY_RULE_UPGRADES, {
         projectPath: pending.projectPath,
         rules: pending.rules,
       });
@@ -3028,7 +3312,7 @@ const handleConfirmWorkflowSkillModal = () => {
     setSending(true);
     setStatus("重试中...");
     try {
-      const response = await invoke<ModelSessionRunResponse>("retry_model_session_last_step", {
+      const response = await invoke<ModelSessionRunResponse>(COMMANDS.RETRY_MODEL_SESSION_LAST_STEP, {
         sessionId,
         traceId,
         projectName: title,
@@ -3529,6 +3813,17 @@ const handleConfirmWorkflowSkillModal = () => {
                               variant="caption"
                               value={failureSummary.hint}
                             />
+                            <AriFlex className="desk-run-failure-actions" justify="flex-end" space={8}>
+                              <AriButton
+                                size="sm"
+                                icon="refresh"
+                                label="重试本轮"
+                                disabled={sending}
+                                onClick={() => {
+                                  void handleRetryAssistantMessage(index);
+                                }}
+                              />
+                            </AriFlex>
                           </AriContainer>
                         ) : (
                           <ChatMarkdown
@@ -3616,7 +3911,44 @@ const handleConfirmWorkflowSkillModal = () => {
         </AriContainer>
 
         <AriContainer className="desk-prompt-dock">
-          {uiHint ? (
+          {activeApprovalSegment ? (
+            <AriCard className="desk-action-slot desk-action-slot-warning">
+              <AriFlex align="center" space={8}>
+                <AriIcon name="security" />
+                <AriTypography variant="h4" value="高危操作待授权" />
+              </AriFlex>
+              <AriTypography
+                variant="caption"
+                value={`智能体申请执行 ${activeApprovalToolName}：`}
+              />
+              <AriContainer className="desk-approval-tool-args">
+                {activeApprovalToolArgs}
+              </AriContainer>
+              <AriFlex align="center" space={8} className="desk-action-slot-actions">
+                <AriButton
+                  color="primary"
+                  label="批准执行 (Approve)"
+                  disabled={!activeApprovalId}
+                  onClick={() =>
+                    handleApproveAgentAction(
+                      activeApprovalId,
+                      true
+                    )
+                  }
+                />
+                <AriButton
+                  label="拒绝 (Reject)"
+                  disabled={!activeApprovalId}
+                  onClick={() =>
+                    handleApproveAgentAction(
+                      activeApprovalId,
+                      false
+                    )
+                  }
+                />
+              </AriFlex>
+            </AriCard>
+          ) : uiHint ? (
             <AriCard
               className={`desk-action-slot ${uiHint ? `desk-action-slot-${uiHint.level}` : ""}`}
             >
@@ -3694,6 +4026,22 @@ const handleConfirmWorkflowSkillModal = () => {
                   }}
                   disabled={workflowMenuItems.length === 0 && installedSkills.length === 0}
                 />
+                {sandboxMetrics && (
+                  <AriFlex align="center" className="desk-sandbox-metrics">
+                    <span>RAM: {formatMemory(sandboxMetrics.memory_bytes)}</span>
+                    <span>Uptime: {formatUptime(sandboxMetrics.uptime_secs)}</span>
+                  </AriFlex>
+                )}
+                <AriTooltip content="重置沙盒环境 (清空变量)" position="top" minWidth={0} matchTriggerWidth={false}>
+                  <AriButton
+                    ghost
+                    size="sm"
+                    icon="refresh"
+                    className="desk-prompt-icon-btn"
+                    disabled={sending}
+                    onClick={handleResetSandbox}
+                  />
+                </AriTooltip>
               </AriFlex>
               <AriButton
                 type="default"
@@ -3707,6 +4055,17 @@ const handleConfirmWorkflowSkillModal = () => {
                   (isWorkflowSession && blenderBridgeRuntime.checking)
                 }
               />
+              {sending ? (
+                <AriButton
+                  type="default"
+                  shape="round"
+                  icon="stop"
+                  className="desk-prompt-icon-btn"
+                  onClick={() => {
+                    void handleCancelCurrentRun();
+                  }}
+                />
+              ) : null}
             </AriFlex>
           </AriCard>
         </AriContainer>

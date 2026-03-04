@@ -169,6 +169,10 @@ body {
   --desk-app-header-padding-left: calc(calc(var(--z-inset) * 4.5) + var(--z-inset-sm));
 }
 
+.desk-platform-macos .desk-app {
+  padding-top: env(titlebar-area-height, calc(var(--z-inset) * 2.25));
+}
+
 .desk-app-header-leading.is-expanded {
   width: calc(var(--desk-active-sidebar-width) - var(--desk-app-header-padding-left));
 }
@@ -221,6 +225,10 @@ body {
 
 .desk-sidebar-toolbar + .desk-agent-menu {
   margin-top: var(--z-inset-sm);
+}
+
+.desk-sidebar-spacer {
+  flex: 1;
 }
 
 .desk-agent-session-header {
@@ -1057,6 +1065,15 @@ body {
   flex-wrap: wrap;
 }
 
+.desk-approval-tool-args {
+  background: var(--z-color-bg-subtle);
+  padding: var(--z-inset-sm);
+  border-radius: var(--z-border-radius-sm);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: calc(var(--z-font-size) * 0.92);
+  word-break: break-all;
+}
+
 .desk-dev-debug-float {
   position: fixed;
   right: var(--z-inset);
@@ -1133,6 +1150,17 @@ body {
 
 .desk-prompt-icon-btn {
   min-width: calc(var(--z-inset) * 1.8);
+}
+
+.desk-run-failure-actions {
+  margin-top: var(--z-inset);
+}
+
+.desk-sandbox-metrics {
+  margin-left: var(--z-inset-sm);
+  opacity: var(--z-color-opacity-disabled);
+  font-size: calc(var(--z-font-size) * 0.92);
+  gap: var(--z-inset-sm);
 }
 
 .desk-session-strategy-modal-body {

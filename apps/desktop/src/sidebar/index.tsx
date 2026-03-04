@@ -41,6 +41,8 @@ import {
   updateRuntimeSessionStatus,
 } from "@/shell/services/backend-api";
 import type { AgentKey, AgentSession, AuthAvailableAgentItem, LoginUser } from "@/shell/types";
+import type { AgentTextStreamEvent } from "../shared/types";
+import { EVENT_AGENT_TEXT_STREAM, IS_BROWSER, isCancelErrorCode, STREAM_KINDS } from "../shared/constants";
 import {
   createCodeWorkflowFromTemplate,
   createModelWorkflowFromTemplate,
@@ -96,13 +98,47 @@ interface CodeWorkspaceSessionGroup {
 
 // 描述:
 //
-//   - 定义代码智能体文本流事件结构，用于侧边栏跨页面同步会话运行态。
-interface AgentTextStreamEvent {
-  trace_id: string;
-  session_id?: string;
-  kind: string;
-  message: string;
-  delta?: string;
+//   - 定义工具调用事件 data 字段的最小结构，用于安全提取工具名和参数摘要。
+interface AgentToolCallEventData {
+  name?: string;
+  args?: {
+    command?: string;
+    path?: string;
+  };
+}
+
+// AgentTextStreamEvent 已提取至 shared/types.ts 统一定义。
+
+// 描述:
+//
+//   - 从文本流事件中提取工具调用 data 结构，避免直接使用 any 访问字段。
+function resolveToolCallEventData(payload: AgentTextStreamEvent): AgentToolCallEventData {
+  if (!payload.data || typeof payload.data !== "object") {
+    return {};
+  }
+  const data = payload.data as Record<string, unknown>;
+  const rawArgs = data.args;
+  const args = rawArgs && typeof rawArgs === "object"
+    ? (rawArgs as Record<string, unknown>)
+    : undefined;
+  return {
+    name: typeof data.name === "string" ? data.name : undefined,
+    args: {
+      command: typeof args?.command === "string" ? args.command : undefined,
+      path: typeof args?.path === "string" ? args.path : undefined,
+    },
+  };
+}
+
+// 描述:
+//
+//   - 读取文本流 error 事件携带的错误码，用于识别“取消语义”错误并映射为终态。
+function resolveStreamErrorCode(payload: AgentTextStreamEvent): string {
+  if (!payload.data || typeof payload.data !== "object") {
+    return "";
+  }
+  const data = payload.data as Record<string, unknown>;
+  return typeof data.code === "string" ? data.code : "";
 }
 
 // 描述:
@@ -282,7 +318,7 @@ function HomeSidebar({
         />
       </AriContainer>
 
-      <AriContainer style={{ flex: 1 }} />
+      <AriContainer className="desk-sidebar-spacer" />
       <UserHoverMenu user={user} onLogout={onLogout} routeAccess={routeAccess} />
     </AriContainer>
   );
@@ -462,22 +498,52 @@ function AgentSidebar({
   //   - 运行片段；若当前事件不需要渲染则返回 null。
   const mapCodeStreamToRunSegment = (payload: AgentTextStreamEvent, key: string) => {
     const text = String(payload.message || "").trim();
-    if (payload.kind === "delta") {
+    if (payload.kind === STREAM_KINDS.DELTA) {
       return null;
     }
-    if (payload.kind === "started") {
+    if (payload.kind === STREAM_KINDS.STARTED) {
       return { key, intro: "已接收需求，开始规划执行", step: text || "正在准备执行...", status: "running" as const };
     }
-    if (payload.kind === "llm_started") {
+    if (payload.kind === STREAM_KINDS.LLM_STARTED) {
       return { key, intro: "正在处理当前步骤", step: text || "模型会话已开始，正在执行策略…", status: "running" as const };
     }
-    if (payload.kind === "llm_finished") {
+    if (payload.kind === STREAM_KINDS.LLM_FINISHED) {
       return { key, intro: "当前步骤已完成", step: text || "当前生成步骤已完成，正在整理输出…", status: "finished" as const };
     }
-    if (payload.kind === "finished") {
+    if (payload.kind === STREAM_KINDS.FINISHED || payload.kind === STREAM_KINDS.FINAL) {
       return { key, intro: "当前步骤已完成", step: text || "执行结束，正在整理最终输出…", status: "finished" as const };
     }
-    if (payload.kind === "error") {
+    if (payload.kind === STREAM_KINDS.CANCELLED) {
+      return { key, intro: "任务已取消", step: text || "任务已终止，不再继续执行。", status: "finished" as const };
+    }
+    if (payload.kind === STREAM_KINDS.PLANNING) {
+      return { key, intro: "智能体正在思考", step: text || "正在规划执行策略…", status: "running" as const };
+    }
+    if (payload.kind === STREAM_KINDS.TOOL_CALL_STARTED) {
+      const data = resolveToolCallEventData(payload);
+      let detail = "";
+      if (data.name) {
+        if (data.name === "run_shell" && data.args?.command) {
+          detail = data.args.command.substring(0, 30);
+          if (data.args.command.length > 30) detail += "...";
+        } else if (data.args?.path) {
+          detail = data.args.path;
+        }
+      }
+      const suffix = detail ? ` [${detail}]` : "";
+      return { key, intro: "正在执行工具", step: text ? `${text}${suffix}` : `正在调用系统工具…`, status: "running" as const };
+    }
+    if (payload.kind === STREAM_KINDS.TOOL_CALL_FINISHED) {
+      return { key, intro: "工具执行结果", step: text || "任务步骤执行完成", status: "finished" as const };
+    }
+    if (payload.kind === STREAM_KINDS.HEARTBEAT) {
+      return { key, intro: "任务处理中", step: text || "操作较长，请耐心等待…", status: "running" as const };
+    }
+    if (payload.kind === STREAM_KINDS.ERROR) {
+      const errorCode = resolveStreamErrorCode(payload);
+      if (isCancelErrorCode(errorCode)) {
+        return { key, intro: "任务已取消", step: text || "任务已终止，不再继续执行。", status: "finished" as const };
+      }
       return { key, intro: "执行中断，正在处理", step: text || "执行失败，请查看详情后重试。", status: "failed" as const };
     }
     if (!text) {
@@ -1072,7 +1138,7 @@ function AgentSidebar({
   }, [defaultExpandedWorkspaceKeys, isCodeAgent]);
 
   useEffect(() => {
-    if (!isCodeAgent || typeof window === "undefined") {
+    if (!isCodeAgent || !IS_BROWSER) {
       return;
     }
     // 描述：监听代码目录分组变更事件，保证新增目录后侧边栏目录树即时刷新。
@@ -1086,7 +1152,7 @@ function AgentSidebar({
   }, [isCodeAgent]);
 
   useEffect(() => {
-    if (typeof window === "undefined") {
+    if (!IS_BROWSER) {
       return;
     }
     // 描述：监听会话运行态更新事件，实时同步侧边栏话题左侧运行图标。
@@ -1109,7 +1175,7 @@ function AgentSidebar({
     let disposed = false;
     let unlisten: (() => void) | null = null;
     // 描述：侧边栏常驻监听代码文本流事件，保证离开会话页后运行态仍能持续更新并恢复步骤流。
-    void listen<AgentTextStreamEvent>("agent:text_stream", (event) => {
+    void listen<AgentTextStreamEvent>(EVENT_AGENT_TEXT_STREAM, (event) => {
       if (disposed) {
         return;
       }
@@ -1145,21 +1211,28 @@ function AgentSidebar({
       if (segment) {
         nextMeta = appendRunSegmentToMeta(nextMeta, segment);
       }
-      if (payload.kind === "delta") {
+      if (payload.kind === STREAM_KINDS.DELTA) {
         const delta = String(payload.delta || "");
         if (delta) {
           nextMeta.summary = `${nextMeta.summary}${delta}`;
         }
       }
-      if (payload.kind === "finished") {
+      if (payload.kind === STREAM_KINDS.FINISHED || payload.kind === STREAM_KINDS.FINAL) {
         nextMeta.status = "finished";
         nextMeta.finishedAt = now;
         if (!nextMeta.summary.trim()) {
           nextMeta.summary = String(payload.message || "").trim();
         }
         nextSending = false;
-      } else if (payload.kind === "error") {
-        nextMeta.status = "failed";
+      } else if (payload.kind === STREAM_KINDS.CANCELLED) {
+        nextMeta.status = "finished";
+        nextMeta.finishedAt = now;
+        nextMeta.summary = String(payload.message || "").trim() || nextMeta.summary || "任务已取消";
+        nextSending = false;
+      } else if (payload.kind === STREAM_KINDS.ERROR) {
+        const errorCode = resolveStreamErrorCode(payload);
+        const cancelledByError = isCancelErrorCode(errorCode);
+        nextMeta.status = cancelledByError ? "finished" : "failed";
         nextMeta.finishedAt = now;
         nextMeta.summary = String(payload.message || "").trim() || nextMeta.summary;
         nextSending = false;
@@ -1196,7 +1269,7 @@ function AgentSidebar({
   }, [isCodeAgent]);
 
   useEffect(() => {
-    if (!openWorkspaceActionMenuId || typeof window === "undefined") {
+    if (!openWorkspaceActionMenuId || !IS_BROWSER) {
       return;
     }
     // 描述：监听全局点击与 ESC，保证“更多”菜单在点击页面空白区域后即时关闭。
@@ -1330,7 +1403,7 @@ function AgentSidebar({
         </AriContainer>
       </AriContextMenu>
 
-      <AriContainer style={{ flex: 1 }} />
+      <AriContainer className="desk-sidebar-spacer" />
       <UserHoverMenu user={user} onLogout={onLogout} routeAccess={routeAccess} />
 
       <AriModal
@@ -1551,7 +1624,7 @@ function WorkflowsSidebar({
         />
       </AriContainer>
 
-      <AriContainer style={{ flex: 1 }} />
+      <AriContainer className="desk-sidebar-spacer" />
       <UserHoverMenu user={user} onLogout={onLogout} routeAccess={routeAccess} />
     </AriContainer>
   );
@@ -1600,7 +1673,7 @@ function SettingsSidebar({
           }}
         />
       </AriContainer>
-      <AriContainer style={{ flex: 1 }} />
+      <AriContainer className="desk-sidebar-spacer" />
       <UserHoverMenu user={user} onLogout={onLogout} routeAccess={routeAccess} />
     </AriContainer>
   );
@@ -1626,7 +1699,7 @@ function AiKeySidebar({
         <AriTypography variant="h4" value={AI_KEY_SIDEBAR_CONTENT.title} />
         <AriTypography variant="caption" value={AI_KEY_SIDEBAR_CONTENT.description} />
       </AriContainer>
-      <AriContainer style={{ flex: 1 }} />
+      <AriContainer className="desk-sidebar-spacer" />
       <UserHoverMenu user={user} onLogout={onLogout} routeAccess={routeAccess} />
     </AriContainer>
   );
