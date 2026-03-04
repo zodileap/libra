@@ -39,12 +39,12 @@ function readDesktopStyleSource() {
   return fs.readFileSync(sourcePath, "utf8");
 }
 
-test("TestDesktopThemeOverrideShouldSetBorderRadiusTo18Px", () => {
+test("TestDesktopThemeOverrideShouldSetBorderRadiusToRem", () => {
   const css = readThemeOverrideSource();
   assert.equal(
-    css.includes("--z-border-radius: 18px;"),
+    css.includes("--z-border-radius: 1.125rem;"),
     true,
-    "theme-overrides.css 必须将 --z-border-radius 覆盖为 18px"
+    "theme-overrides.css 必须将 --z-border-radius 覆盖为 1.125rem"
   );
 });
 
