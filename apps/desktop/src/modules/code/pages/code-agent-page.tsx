@@ -13,11 +13,14 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   AGENTS,
   bindCodeSessionWorkspace,
+  getCodeWorkspaceProjectProfile,
+  saveCodeWorkspaceProjectProfile,
   type CodeWorkspaceGroup,
   listCodeWorkspaceGroups,
   setLastUsedCodeWorkspaceId,
   upsertCodeWorkspaceGroup,
 } from "../../../shared/data";
+import { COMMANDS } from "../../../shared/constants";
 import { CODE_PROJECT_SETTINGS_PATH } from "../routes";
 import { createRuntimeSession } from "../../../shared/services/backend-api";
 import { AgentPage } from "../../../widgets/agent/page";
@@ -50,6 +53,43 @@ interface GitCloneResponse {
   message: string;
 }
 
+// 描述:
+//
+//   - 定义“项目结构化信息初始化分析”命令返回结构。
+interface CodeWorkspaceProfileSeedResponse {
+  project_path: string;
+  languages: string[];
+  frontend_stacks: string[];
+  backend_stacks: string[];
+  database_stacks: string[];
+  infrastructure_stacks: string[];
+  package_managers: string[];
+  build_tools: string[];
+  directory_summary: string[];
+  module_candidates: string[];
+}
+
+// 描述:
+//
+//   - 规范化字符串数组，去空去重并保持输入顺序。
+//
+// Params:
+//
+//   - value: 原始数组。
+//
+// Returns:
+//
+//   - 规范化后的数组。
+function normalizeUniqueStrings(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const normalized = value
+    .map((item) => String(item || "").trim())
+    .filter((item) => item.length > 0);
+  return normalized.filter((item, index) => normalized.indexOf(item) === index);
+}
+
 // 描述：代码智能体入口页包装器，复用通用 agent 组件并固定为 code。
 export function CodeAgentPage(props: CodeAgentPageProps) {
   const navigate = useNavigate();
@@ -70,6 +110,94 @@ export function CodeAgentPage(props: CodeAgentPageProps) {
   // 描述：刷新代码目录分组列表，供代码智能体选择会话目录。
   const refreshWorkspaceGroups = () => {
     setWorkspaceGroups(listCodeWorkspaceGroups());
+  };
+
+  // 描述：
+  //
+  //   - 在项目创建后补充结构化初始化分析结果（语言/技术栈/目录摘要），仅对首版草稿执行避免覆盖已编辑内容。
+  //
+  // Params:
+  //
+  //   - workspace: 新建或命中的项目目录分组。
+  const bootstrapWorkspaceProfileSeed = async (workspace: CodeWorkspaceGroup) => {
+    const profileBefore = getCodeWorkspaceProjectProfile(workspace.id);
+    if (profileBefore?.revision && profileBefore.revision > 1) {
+      return;
+    }
+    try {
+      const seed = await invoke<CodeWorkspaceProfileSeedResponse>(
+        COMMANDS.INSPECT_CODE_WORKSPACE_PROFILE_SEED,
+        {
+          projectPath: workspace.path,
+        },
+      );
+      const profileCurrent = getCodeWorkspaceProjectProfile(workspace.id);
+      if (!profileCurrent) {
+        return;
+      }
+
+      const frontendStacks = normalizeUniqueStrings(seed.frontend_stacks);
+      const backendStacks = normalizeUniqueStrings(seed.backend_stacks);
+      const databaseStacks = normalizeUniqueStrings(seed.database_stacks);
+      const infrastructureStacks = normalizeUniqueStrings(seed.infrastructure_stacks);
+      const moduleCandidates = normalizeUniqueStrings(seed.module_candidates);
+      const packageManagers = normalizeUniqueStrings(seed.package_managers);
+      const buildTools = normalizeUniqueStrings(seed.build_tools);
+      const directorySummary = normalizeUniqueStrings(seed.directory_summary);
+      const languageSummary = normalizeUniqueStrings(seed.languages);
+      const summaryLine = languageSummary.length > 0
+        ? `项目语言：${languageSummary.join("、")}`
+        : "";
+      const baseSummary = String(profileCurrent.summary || "").trim();
+      const stableSummary = baseSummary.replace(/项目语言：[^；。]+/g, "").trim().replace(/[；。\s]+$/g, "");
+      const mergedSummary = summaryLine
+        ? [stableSummary || baseSummary, summaryLine].filter((item) => item.length > 0).join("；")
+        : baseSummary;
+      const toolingLines = [
+        packageManagers.length > 0 ? `包管理器：${packageManagers.join("、")}` : "",
+        buildTools.length > 0 ? `构建工具：${buildTools.join("、")}` : "",
+      ].filter((item) => item.length > 0);
+      const stableConstraints = profileCurrent.architecture.constraints
+        .filter((item) => !item.startsWith("包管理器：") && !item.startsWith("构建工具："));
+      const mergedConstraints = normalizeUniqueStrings([
+        ...toolingLines,
+        ...stableConstraints,
+      ]);
+      const stableDomainRules = profileCurrent.domainRules
+        .filter((item) => !item.startsWith("目录摘要："));
+      const mergedDomainRules = normalizeUniqueStrings([
+        ...stableDomainRules,
+        ...directorySummary.map((item) => `目录摘要：${item}`),
+      ]);
+
+      const saveResult = saveCodeWorkspaceProjectProfile(
+        workspace.id,
+        {
+          summary: mergedSummary || profileCurrent.summary,
+          techStacks: {
+            frontend: frontendStacks.length > 0 ? frontendStacks : profileCurrent.techStacks.frontend,
+            backend: backendStacks.length > 0 ? backendStacks : profileCurrent.techStacks.backend,
+            database: databaseStacks.length > 0 ? databaseStacks : profileCurrent.techStacks.database,
+            infrastructure: infrastructureStacks.length > 0 ? infrastructureStacks : profileCurrent.techStacks.infrastructure,
+          },
+          architecture: {
+            modules: moduleCandidates.length > 0 ? moduleCandidates : profileCurrent.architecture.modules,
+            constraints: mergedConstraints,
+          },
+          domainRules: mergedDomainRules,
+        },
+        {
+          expectedRevision: profileCurrent.revision,
+          updatedBy: "workspace_seed_bootstrap",
+          reason: "workspace_seed_bootstrap",
+        },
+      );
+      if (!saveResult.ok && !saveResult.conflict) {
+        console.warn("项目结构化初始化分析写入失败：", saveResult.message);
+      }
+    } catch (err) {
+      console.warn("项目结构化初始化分析失败：", err);
+    }
   };
 
   useEffect(() => {
@@ -109,6 +237,7 @@ export function CodeAgentPage(props: CodeAgentPageProps) {
     refreshWorkspaceGroups();
     setLastUsedCodeWorkspaceId(created.id);
     setSearchParams(new URLSearchParams({ workspaceId: created.id }), { replace: true });
+    void bootstrapWorkspaceProfileSeed(created);
     return created;
   };
 

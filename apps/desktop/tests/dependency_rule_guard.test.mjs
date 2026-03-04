@@ -38,11 +38,13 @@ test("TestTauriMainShouldExposeDependencyRuleCommands", () => {
 
   // 描述：
   //
-  //   - Tauri 后端应暴露依赖规则检查与升级命令，并注册到 invoke handler。
+  //   - Tauri 后端应暴露依赖规则检查/升级与项目结构化初始化分析命令，并注册到 invoke handler。
   assert.match(tauriMainSource, /async fn check_project_dependency_rules\(/);
   assert.match(tauriMainSource, /async fn apply_project_dependency_rule_upgrades\(/);
+  assert.match(tauriMainSource, /async fn inspect_code_workspace_profile_seed\(/);
   assert.match(tauriMainSource, /check_project_dependency_rules,/);
   assert.match(tauriMainSource, /apply_project_dependency_rule_upgrades,/);
+  assert.match(tauriMainSource, /inspect_code_workspace_profile_seed,/);
   assert.match(tauriMainSource, /DependencyEcosystem::Node/);
   assert.match(tauriMainSource, /DependencyEcosystem::Go/);
   assert.match(tauriMainSource, /DependencyEcosystem::Java/);

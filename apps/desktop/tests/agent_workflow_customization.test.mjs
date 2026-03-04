@@ -153,6 +153,11 @@ test("TestCodeAgentShouldShowStandaloneWorkspaceOnboardingWhenNoWorkspace", () =
   assert.match(source, /invoke<string \| null>\(\"pick_local_project_folder\"\)/);
   assert.match(source, /invoke<GitCliHealthResponse>\(\"check_git_cli_health\"\)/);
   assert.match(source, /invoke<GitCloneResponse>\(\"clone_git_repository\"/);
+  assert.match(source, /invoke<CodeWorkspaceProfileSeedResponse>\(\s*COMMANDS\.INSPECT_CODE_WORKSPACE_PROFILE_SEED,/s);
+  assert.match(source, /saveCodeWorkspaceProjectProfile\(/);
+  assert.match(source, /updatedBy: "workspace_seed_bootstrap"/);
+  assert.match(source, /reason: "workspace_seed_bootstrap"/);
+  assert.match(source, /if \(profileBefore\?\.revision && profileBefore\.revision > 1\) \{/);
   assert.match(source, /invoke\(\"open_external_url\", \{ url: \"https:\/\/git-scm\.com\/downloads\" \}\)/);
   assert.match(source, /title=\"未检测到 Git\"/);
   assert.match(source, /label=\"确认并前往下载\"/);

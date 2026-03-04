@@ -5457,6 +5457,7 @@ dependencies = [
  "sysinfo",
  "tracing",
  "tracing-subscriber",
+ "url",
  "zodileap_mcp_common",
  "zodileap_mcp_model",
 ]

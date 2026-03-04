@@ -196,6 +196,20 @@ struct ProjectDependencyRuleUpgradeResponse {
 }
 
 #[derive(Serialize, Clone)]
+struct CodeWorkspaceProfileSeedResponse {
+    project_path: String,
+    languages: Vec<String>,
+    frontend_stacks: Vec<String>,
+    backend_stacks: Vec<String>,
+    database_stacks: Vec<String>,
+    infrastructure_stacks: Vec<String>,
+    package_managers: Vec<String>,
+    build_tools: Vec<String>,
+    directory_summary: Vec<String>,
+    module_candidates: Vec<String>,
+}
+
+#[derive(Serialize, Clone)]
 struct DesktopProtocolError {
     code: String,
     message: String,
@@ -1389,158 +1403,163 @@ fn run_agent_command_inner(
         |stream_event| {
             let kind = stream_event.kind().to_string();
             match stream_event {
-            AgentStreamEvent::LlmStarted { provider } => {
-                emit_agent_text_stream_event(
-                    &app,
-                    AgentTextStreamEvent {
-                        trace_id: trace_id.clone(),
-                        session_id: session_id.clone(),
-                        kind,
-                        message: format!("provider={} started", provider),
-                        delta: None,
-                        data: None,
-                    },
-                );
+                AgentStreamEvent::LlmStarted { provider } => {
+                    emit_agent_text_stream_event(
+                        &app,
+                        AgentTextStreamEvent {
+                            trace_id: trace_id.clone(),
+                            session_id: session_id.clone(),
+                            kind,
+                            message: format!("provider={} started", provider),
+                            delta: None,
+                            data: None,
+                        },
+                    );
+                }
+                AgentStreamEvent::LlmDelta { content } => {
+                    emit_agent_text_stream_event(
+                        &app,
+                        AgentTextStreamEvent {
+                            trace_id: trace_id.clone(),
+                            session_id: session_id.clone(),
+                            kind,
+                            message: "chunk".to_string(),
+                            delta: Some(content),
+                            data: None,
+                        },
+                    );
+                }
+                AgentStreamEvent::LlmFinished { provider } => {
+                    emit_agent_text_stream_event(
+                        &app,
+                        AgentTextStreamEvent {
+                            trace_id: trace_id.clone(),
+                            session_id: session_id.clone(),
+                            kind,
+                            message: format!("provider={} finished", provider),
+                            delta: None,
+                            data: None,
+                        },
+                    );
+                }
+                AgentStreamEvent::Planning { message } => {
+                    emit_agent_text_stream_event(
+                        &app,
+                        AgentTextStreamEvent {
+                            trace_id: trace_id.clone(),
+                            session_id: session_id.clone(),
+                            kind,
+                            message,
+                            delta: None,
+                            data: None,
+                        },
+                    );
+                }
+                AgentStreamEvent::ToolCallStarted { name, args } => {
+                    emit_agent_text_stream_event(
+                        &app,
+                        AgentTextStreamEvent {
+                            trace_id: trace_id.clone(),
+                            session_id: session_id.clone(),
+                            kind,
+                            message: format!("正在执行工具: {}", name),
+                            delta: None,
+                            data: Some(json!({ "name": name, "args": args })),
+                        },
+                    );
+                }
+                AgentStreamEvent::ToolCallFinished { name, ok, result } => {
+                    emit_agent_text_stream_event(
+                        &app,
+                        AgentTextStreamEvent {
+                            trace_id: trace_id.clone(),
+                            session_id: session_id.clone(),
+                            kind,
+                            message: format!(
+                                "工具 {} 执行{}",
+                                name,
+                                if ok { "成功" } else { "失败" }
+                            ),
+                            delta: None,
+                            data: Some(json!({ "name": name, "ok": ok, "result": result })),
+                        },
+                    );
+                }
+                AgentStreamEvent::RequireApproval {
+                    approval_id,
+                    tool_name,
+                    tool_args,
+                } => {
+                    emit_agent_text_stream_event(
+                        &app,
+                        AgentTextStreamEvent {
+                            trace_id: trace_id.clone(),
+                            session_id: session_id.clone(),
+                            kind,
+                            message: format!("操作待授权: {}", tool_name),
+                            delta: None,
+                            data: Some(json!({
+                                "approval_id": approval_id,
+                                "tool_name": tool_name,
+                                "tool_args": tool_args,
+                            })),
+                        },
+                    );
+                }
+                AgentStreamEvent::Heartbeat { message } => {
+                    emit_agent_text_stream_event(
+                        &app,
+                        AgentTextStreamEvent {
+                            trace_id: trace_id.clone(),
+                            session_id: session_id.clone(),
+                            kind,
+                            message,
+                            delta: None,
+                            data: None,
+                        },
+                    );
+                }
+                AgentStreamEvent::Final { message } => {
+                    emit_agent_text_stream_event(
+                        &app,
+                        AgentTextStreamEvent {
+                            trace_id: trace_id.clone(),
+                            session_id: session_id.clone(),
+                            kind,
+                            message,
+                            delta: None,
+                            data: None,
+                        },
+                    );
+                }
+                AgentStreamEvent::Cancelled { message } => {
+                    emit_agent_text_stream_event(
+                        &app,
+                        AgentTextStreamEvent {
+                            trace_id: trace_id.clone(),
+                            session_id: session_id.clone(),
+                            kind,
+                            message: message.clone(),
+                            delta: None,
+                            data: Some(json!({ "source": "core", "message": message })),
+                        },
+                    );
+                }
+                AgentStreamEvent::Error { code, message } => {
+                    emit_agent_text_stream_event(
+                        &app,
+                        AgentTextStreamEvent {
+                            trace_id: trace_id.clone(),
+                            session_id: session_id.clone(),
+                            kind,
+                            message: format!("{}: {}", code, message),
+                            delta: None,
+                            data: Some(json!({ "code": code })),
+                        },
+                    );
+                }
             }
-            AgentStreamEvent::LlmDelta { content } => {
-                emit_agent_text_stream_event(
-                    &app,
-                    AgentTextStreamEvent {
-                        trace_id: trace_id.clone(),
-                        session_id: session_id.clone(),
-                        kind,
-                        message: "chunk".to_string(),
-                        delta: Some(content),
-                        data: None,
-                    },
-                );
-            }
-            AgentStreamEvent::LlmFinished { provider } => {
-                emit_agent_text_stream_event(
-                    &app,
-                    AgentTextStreamEvent {
-                        trace_id: trace_id.clone(),
-                        session_id: session_id.clone(),
-                        kind,
-                        message: format!("provider={} finished", provider),
-                        delta: None,
-                        data: None,
-                    },
-                );
-            }
-            AgentStreamEvent::Planning { message } => {
-                emit_agent_text_stream_event(
-                    &app,
-                    AgentTextStreamEvent {
-                        trace_id: trace_id.clone(),
-                        session_id: session_id.clone(),
-                        kind,
-                        message,
-                        delta: None,
-                        data: None,
-                    },
-                );
-            }
-            AgentStreamEvent::ToolCallStarted { name, args } => {
-                emit_agent_text_stream_event(
-                    &app,
-                    AgentTextStreamEvent {
-                        trace_id: trace_id.clone(),
-                        session_id: session_id.clone(),
-                        kind,
-                        message: format!("正在执行工具: {}", name),
-                        delta: None,
-                        data: Some(json!({ "name": name, "args": args })),
-                    },
-                );
-            }
-            AgentStreamEvent::ToolCallFinished { name, ok, result } => {
-                emit_agent_text_stream_event(
-                    &app,
-                    AgentTextStreamEvent {
-                        trace_id: trace_id.clone(),
-                        session_id: session_id.clone(),
-                        kind,
-                        message: format!("工具 {} 执行{}", name, if ok { "成功" } else { "失败" }),
-                        delta: None,
-                        data: Some(json!({ "name": name, "ok": ok, "result": result })),
-                    },
-                );
-            }
-            AgentStreamEvent::RequireApproval {
-                approval_id,
-                tool_name,
-                tool_args,
-            } => {
-                emit_agent_text_stream_event(
-                    &app,
-                    AgentTextStreamEvent {
-                        trace_id: trace_id.clone(),
-                        session_id: session_id.clone(),
-                        kind,
-                        message: format!("操作待授权: {}", tool_name),
-                        delta: None,
-                        data: Some(json!({
-                            "approval_id": approval_id,
-                            "tool_name": tool_name,
-                            "tool_args": tool_args,
-                        })),
-                    },
-                );
-            }
-            AgentStreamEvent::Heartbeat { message } => {
-                emit_agent_text_stream_event(
-                    &app,
-                    AgentTextStreamEvent {
-                        trace_id: trace_id.clone(),
-                        session_id: session_id.clone(),
-                        kind,
-                        message,
-                        delta: None,
-                        data: None,
-                    },
-                );
-            }
-            AgentStreamEvent::Final { message } => {
-                emit_agent_text_stream_event(
-                    &app,
-                    AgentTextStreamEvent {
-                        trace_id: trace_id.clone(),
-                        session_id: session_id.clone(),
-                        kind,
-                        message,
-                        delta: None,
-                        data: None,
-                    },
-                );
-            }
-            AgentStreamEvent::Cancelled { message } => {
-                emit_agent_text_stream_event(
-                    &app,
-                    AgentTextStreamEvent {
-                        trace_id: trace_id.clone(),
-                        session_id: session_id.clone(),
-                        kind,
-                        message: message.clone(),
-                        delta: None,
-                        data: Some(json!({ "source": "core", "message": message })),
-                    },
-                );
-            }
-            AgentStreamEvent::Error { code, message } => {
-                emit_agent_text_stream_event(
-                    &app,
-                    AgentTextStreamEvent {
-                        trace_id: trace_id.clone(),
-                        session_id: session_id.clone(),
-                        kind,
-                        message: format!("{}: {}", code, message),
-                        delta: None,
-                        data: Some(json!({ "code": code })),
-                    },
-                );
-            }
-        }},
+        },
     );
 
     let result = match result {
@@ -1565,12 +1584,13 @@ fn run_agent_command_inner(
                 .as_deref()
                 .map(take_agent_session_cancelled)
                 .unwrap_or(false);
-            let protocol_err = if cancelled_by_user && !is_cancelled_protocol_error(err.code.as_str()) {
-                ProtocolError::new("core.agent.request_cancelled", "任务已取消（用户主动终止）")
-                    .with_suggestion("如需继续，请重新发起任务")
-            } else {
-                err
-            };
+            let protocol_err =
+                if cancelled_by_user && !is_cancelled_protocol_error(err.code.as_str()) {
+                    ProtocolError::new("core.agent.request_cancelled", "任务已取消（用户主动终止）")
+                        .with_suggestion("如需继续，请重新发起任务")
+                } else {
+                    err
+                };
             log("error", "result", protocol_err.to_string());
             emit_agent_text_stream_event(
                 &app,
@@ -1681,6 +1701,466 @@ fn detect_project_dependency_ecosystems(project_root: &Path) -> Vec<DependencyEc
         ecosystems.push(DependencyEcosystem::Java);
     }
     ecosystems
+}
+
+/// 描述：向字符串数组追加唯一项，统一去空与去重逻辑。
+fn push_unique_string(list: &mut Vec<String>, value: &str) {
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        return;
+    }
+    if list.iter().any(|item| item == normalized) {
+        return;
+    }
+    list.push(normalized.to_string());
+}
+
+/// 描述：按文件名排序读取目录直系子项，供目录摘要与模块候选识别复用。
+fn read_dir_entries_sorted(project_root: &Path) -> Vec<fs::DirEntry> {
+    let mut entries: Vec<fs::DirEntry> = fs::read_dir(project_root)
+        .ok()
+        .into_iter()
+        .flat_map(|iter| iter.filter_map(Result::ok))
+        .collect();
+    entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_string());
+    entries
+}
+
+/// 描述：读取项目 package.json，若文件不存在或解析失败则返回 None。
+fn read_project_root_package_json(project_root: &Path) -> Option<serde_json::Value> {
+    let package_json_path = project_root.join("package.json");
+    if !package_json_path.exists() {
+        return None;
+    }
+    let text = fs::read_to_string(package_json_path).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// 描述：提取 package.json 中所有依赖名（含 dependencies/devDependencies/peerDependencies/optionalDependencies）。
+fn collect_node_dependency_names(package_json: &serde_json::Value) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for section in [
+        "dependencies",
+        "devDependencies",
+        "peerDependencies",
+        "optionalDependencies",
+    ] {
+        let Some(dep_map) = package_json
+            .get(section)
+            .and_then(|value| value.as_object())
+        else {
+            continue;
+        };
+        for name in dep_map.keys() {
+            names.insert(name.to_string());
+        }
+    }
+    names
+}
+
+/// 描述：识别 Node 构建工具，结合依赖、脚本和配置文件判断。
+fn detect_node_build_tools(
+    project_root: &Path,
+    package_json: &serde_json::Value,
+    dependency_names: &HashSet<String>,
+) -> Vec<String> {
+    let mut tools: Vec<String> = Vec::new();
+    let has_dep = |needle: &str| dependency_names.iter().any(|item| item.contains(needle));
+
+    if has_dep("vite")
+        || project_root.join("vite.config.ts").exists()
+        || project_root.join("vite.config.js").exists()
+    {
+        push_unique_string(&mut tools, "vite");
+    }
+    if has_dep("webpack")
+        || project_root.join("webpack.config.js").exists()
+        || project_root.join("webpack.config.ts").exists()
+    {
+        push_unique_string(&mut tools, "webpack");
+    }
+    if has_dep("rollup")
+        || project_root.join("rollup.config.js").exists()
+        || project_root.join("rollup.config.ts").exists()
+    {
+        push_unique_string(&mut tools, "rollup");
+    }
+    if has_dep("esbuild") {
+        push_unique_string(&mut tools, "esbuild");
+    }
+    if has_dep("next") {
+        push_unique_string(&mut tools, "next build");
+    }
+    if has_dep("nuxt") {
+        push_unique_string(&mut tools, "nuxt build");
+    }
+    if project_root.join("turbo.json").exists() || has_dep("turbo") {
+        push_unique_string(&mut tools, "turbo");
+    }
+
+    if let Some(scripts) = package_json
+        .get("scripts")
+        .and_then(|value| value.as_object())
+    {
+        for (name, command) in scripts {
+            let command_text = command.as_str().unwrap_or("").to_lowercase();
+            if name == "build" || name == "dev" || name == "start" {
+                if command_text.contains("vite") {
+                    push_unique_string(&mut tools, "vite");
+                }
+                if command_text.contains("webpack") {
+                    push_unique_string(&mut tools, "webpack");
+                }
+                if command_text.contains("rollup") {
+                    push_unique_string(&mut tools, "rollup");
+                }
+                if command_text.contains("next") {
+                    push_unique_string(&mut tools, "next build");
+                }
+                if command_text.contains("nuxt") {
+                    push_unique_string(&mut tools, "nuxt build");
+                }
+                if command_text.contains("turbo") {
+                    push_unique_string(&mut tools, "turbo");
+                }
+            }
+        }
+    }
+
+    tools
+}
+
+/// 描述：读取顶层目录名称摘要，用于生成结构化项目模块候选。
+fn collect_top_level_directory_names(project_root: &Path, limit: usize) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for entry in read_dir_entries_sorted(project_root) {
+        if names.len() >= limit {
+            break;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.is_empty() || name.starts_with('.') {
+            continue;
+        }
+        names.push(name);
+    }
+    names
+}
+
+/// 描述：读取顶层关键文件名称摘要，帮助初始化阶段识别工程形态。
+fn collect_top_level_file_names(project_root: &Path, limit: usize) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for entry in read_dir_entries_sorted(project_root) {
+        if names.len() >= limit {
+            break;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.is_empty() || name.starts_with('.') {
+            continue;
+        }
+        names.push(name);
+    }
+    names
+}
+
+/// 描述：收集指定目录下一级子目录名称，供模块候选拓展。
+fn collect_child_directory_names(target_dir: &Path, limit: usize) -> Vec<String> {
+    if !target_dir.exists() || !target_dir.is_dir() {
+        return Vec::new();
+    }
+    let mut names: Vec<String> = Vec::new();
+    for entry in read_dir_entries_sorted(target_dir) {
+        if names.len() >= limit {
+            break;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.is_empty() || name.starts_with('.') {
+            continue;
+        }
+        names.push(name);
+    }
+    names
+}
+
+/// 描述：识别可放入架构模块边界的目录候选，优先提取常见业务层级目录。
+fn collect_workspace_module_candidates(project_root: &Path) -> Vec<String> {
+    let mut modules: Vec<String> = Vec::new();
+    let top_level_dirs = collect_top_level_directory_names(project_root, 16);
+    for dir in &top_level_dirs {
+        if [
+            "apps", "packages", "modules", "services", "frontend", "backend", "client", "server",
+        ]
+        .contains(&dir.as_str())
+        {
+            push_unique_string(&mut modules, dir);
+        }
+    }
+
+    for child in collect_child_directory_names(&project_root.join("src"), 8) {
+        push_unique_string(&mut modules, format!("src/{}", child).as_str());
+    }
+    for child in collect_child_directory_names(&project_root.join("src/modules"), 8) {
+        push_unique_string(&mut modules, format!("src/modules/{}", child).as_str());
+    }
+    for child in collect_child_directory_names(&project_root.join("modules"), 8) {
+        push_unique_string(&mut modules, format!("modules/{}", child).as_str());
+    }
+    for child in collect_child_directory_names(&project_root.join("services"), 8) {
+        push_unique_string(&mut modules, format!("services/{}", child).as_str());
+    }
+
+    if modules.is_empty() {
+        for dir in top_level_dirs.iter().take(3) {
+            push_unique_string(&mut modules, dir);
+        }
+    }
+    modules
+}
+
+/// 描述：执行代码项目初始化分析，输出结构化项目信息可用的语言/技术栈/目录摘要草稿。
+fn inspect_code_workspace_profile_seed_inner(
+    project_path: String,
+) -> Result<CodeWorkspaceProfileSeedResponse, String> {
+    let project_root = PathBuf::from(project_path.trim());
+    if !project_root.exists() || !project_root.is_dir() {
+        return Err("项目路径不存在或不是目录".to_string());
+    }
+
+    let mut languages: Vec<String> = Vec::new();
+    let mut frontend_stacks: Vec<String> = Vec::new();
+    let mut backend_stacks: Vec<String> = Vec::new();
+    let mut database_stacks: Vec<String> = Vec::new();
+    let mut infrastructure_stacks: Vec<String> = Vec::new();
+    let mut package_managers: Vec<String> = Vec::new();
+    let mut build_tools: Vec<String> = Vec::new();
+
+    if project_root.join("go.mod").exists() {
+        push_unique_string(&mut languages, "go");
+        push_unique_string(&mut package_managers, "go modules");
+        push_unique_string(&mut build_tools, "go build");
+    }
+    if project_root.join("Cargo.toml").exists() {
+        push_unique_string(&mut languages, "rust");
+        push_unique_string(&mut package_managers, "cargo");
+        push_unique_string(&mut build_tools, "cargo build");
+    }
+    if project_root.join("pyproject.toml").exists()
+        || project_root.join("requirements.txt").exists()
+    {
+        push_unique_string(&mut languages, "python");
+        if project_root.join("poetry.lock").exists() {
+            push_unique_string(&mut package_managers, "poetry");
+        } else if project_root.join("uv.lock").exists() {
+            push_unique_string(&mut package_managers, "uv");
+        } else if project_root.join("Pipfile.lock").exists() {
+            push_unique_string(&mut package_managers, "pipenv");
+        } else {
+            push_unique_string(&mut package_managers, "pip");
+        }
+    }
+    if project_root.join("pom.xml").exists()
+        || project_root.join("build.gradle").exists()
+        || project_root.join("build.gradle.kts").exists()
+    {
+        push_unique_string(&mut languages, "java");
+        if project_root.join("pom.xml").exists() {
+            push_unique_string(&mut package_managers, "maven");
+            push_unique_string(&mut build_tools, "maven");
+        }
+        if project_root.join("build.gradle").exists()
+            || project_root.join("build.gradle.kts").exists()
+        {
+            push_unique_string(&mut package_managers, "gradle");
+            push_unique_string(&mut build_tools, "gradle");
+        }
+    }
+
+    if project_root.join("Dockerfile").exists()
+        || project_root.join("docker-compose.yml").exists()
+        || project_root.join("docker-compose.yaml").exists()
+    {
+        push_unique_string(&mut infrastructure_stacks, "docker");
+    }
+    if project_root.join(".github/workflows").exists() {
+        push_unique_string(&mut infrastructure_stacks, "github actions");
+    }
+
+    if let Some(package_json) = read_project_root_package_json(&project_root) {
+        push_unique_string(&mut languages, "javascript");
+        if project_root.join("tsconfig.json").exists()
+            || project_root.join("tsconfig.base.json").exists()
+        {
+            push_unique_string(&mut languages, "typescript");
+        }
+
+        let package_manager = detect_node_package_manager(&project_root, &package_json);
+        push_unique_string(&mut package_managers, package_manager.as_str());
+        let node_dependency_names = collect_node_dependency_names(&package_json);
+        for tool in detect_node_build_tools(&project_root, &package_json, &node_dependency_names) {
+            push_unique_string(&mut build_tools, tool.as_str());
+        }
+
+        let has_dep = |needle: &str| {
+            node_dependency_names
+                .iter()
+                .any(|item| item.contains(needle))
+        };
+        if has_dep("react") {
+            push_unique_string(&mut frontend_stacks, "react");
+        }
+        if has_dep("vue") {
+            push_unique_string(&mut frontend_stacks, "vue");
+        }
+        if has_dep("svelte") {
+            push_unique_string(&mut frontend_stacks, "svelte");
+        }
+        if has_dep("angular") {
+            push_unique_string(&mut frontend_stacks, "angular");
+        }
+        if has_dep("next") {
+            push_unique_string(&mut frontend_stacks, "next.js");
+        }
+        if has_dep("nuxt") {
+            push_unique_string(&mut frontend_stacks, "nuxt");
+        }
+        if has_dep("astro") {
+            push_unique_string(&mut frontend_stacks, "astro");
+        }
+        if has_dep("aries_react") {
+            push_unique_string(&mut frontend_stacks, "aries_react");
+        }
+
+        if has_dep("express") {
+            push_unique_string(&mut backend_stacks, "express");
+        }
+        if has_dep("koa") {
+            push_unique_string(&mut backend_stacks, "koa");
+        }
+        if has_dep("nestjs") || has_dep("@nestjs/") {
+            push_unique_string(&mut backend_stacks, "nestjs");
+        }
+        if has_dep("fastify") {
+            push_unique_string(&mut backend_stacks, "fastify");
+        }
+        if has_dep("hapi") {
+            push_unique_string(&mut backend_stacks, "hapi");
+        }
+
+        if has_dep("prisma") {
+            push_unique_string(&mut database_stacks, "prisma");
+        }
+        if has_dep("typeorm") {
+            push_unique_string(&mut database_stacks, "typeorm");
+        }
+        if has_dep("sequelize") {
+            push_unique_string(&mut database_stacks, "sequelize");
+        }
+        if has_dep("mongoose") || has_dep("mongodb") {
+            push_unique_string(&mut database_stacks, "mongodb");
+        }
+        if has_dep("mysql") {
+            push_unique_string(&mut database_stacks, "mysql");
+        }
+        if has_dep("postgres") {
+            push_unique_string(&mut database_stacks, "postgres");
+        }
+        if has_dep("redis") {
+            push_unique_string(&mut database_stacks, "redis");
+        }
+    }
+
+    if let Ok(go_snapshots) = read_go_dependency_snapshots(&project_root) {
+        for module_name in go_snapshots.keys() {
+            if module_name.contains("gin-gonic/gin") {
+                push_unique_string(&mut backend_stacks, "gin");
+            }
+            if module_name.contains("gofiber/fiber") {
+                push_unique_string(&mut backend_stacks, "fiber");
+            }
+            if module_name.contains("labstack/echo") {
+                push_unique_string(&mut backend_stacks, "echo");
+            }
+            if module_name.contains("gorm.io/gorm") {
+                push_unique_string(&mut database_stacks, "gorm");
+            }
+        }
+    }
+
+    if let Ok(java_snapshots) = read_java_dependency_snapshots(&project_root) {
+        for package_name in java_snapshots.keys() {
+            if package_name.contains("spring-boot") || package_name.contains("springframework") {
+                push_unique_string(&mut backend_stacks, "spring");
+            }
+            if package_name.contains("mybatis") {
+                push_unique_string(&mut database_stacks, "mybatis");
+            }
+            if package_name.contains("hibernate") {
+                push_unique_string(&mut database_stacks, "hibernate");
+            }
+            if package_name.contains("mysql") {
+                push_unique_string(&mut database_stacks, "mysql");
+            }
+            if package_name.contains("postgresql") {
+                push_unique_string(&mut database_stacks, "postgres");
+            }
+            if package_name.contains("redis") {
+                push_unique_string(&mut database_stacks, "redis");
+            }
+        }
+    }
+
+    let top_dirs = collect_top_level_directory_names(&project_root, 8);
+    let top_files = collect_top_level_file_names(&project_root, 8);
+    let mut directory_summary: Vec<String> = Vec::new();
+    if !top_dirs.is_empty() {
+        directory_summary.push(format!("顶层目录：{}", top_dirs.join("、")));
+    }
+    if !top_files.is_empty() {
+        directory_summary.push(format!("关键文件：{}", top_files.join("、")));
+    }
+
+    let module_candidates = collect_workspace_module_candidates(&project_root);
+    if !module_candidates.is_empty() {
+        directory_summary.push(format!(
+            "模块候选：{}",
+            module_candidates
+                .iter()
+                .take(6)
+                .cloned()
+                .collect::<Vec<String>>()
+                .join("、")
+        ));
+    }
+
+    Ok(CodeWorkspaceProfileSeedResponse {
+        project_path: project_root.to_string_lossy().to_string(),
+        languages,
+        frontend_stacks,
+        backend_stacks,
+        database_stacks,
+        infrastructure_stacks,
+        package_managers,
+        build_tools,
+        directory_summary,
+        module_candidates,
+    })
 }
 
 /// 描述：抽取 XML 标签文本，若标签不存在则返回 None。
@@ -2497,6 +2977,17 @@ async fn apply_project_dependency_rule_upgrades(
     })
     .await
     .map_err(|err| format!("升级依赖规则任务异常: {}", err))?
+}
+
+#[tauri::command]
+async fn inspect_code_workspace_profile_seed(
+    project_path: String,
+) -> Result<CodeWorkspaceProfileSeedResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        inspect_code_workspace_profile_seed_inner(project_path)
+    })
+    .await
+    .map_err(|err| format!("项目结构化初始化分析任务异常: {}", err))?
 }
 
 #[tauri::command]
@@ -7386,7 +7877,9 @@ fn apply_main_window_effects(app: &tauri::AppHandle) {
 }
 
 #[tauri::command]
-fn get_agent_sandbox_metrics(session_id: String) -> Result<Option<zodileap_agent_core::sandbox::SandboxMetrics>, String> {
+fn get_agent_sandbox_metrics(
+    session_id: String,
+) -> Result<Option<zodileap_agent_core::sandbox::SandboxMetrics>, String> {
     Ok(zodileap_agent_core::sandbox::SANDBOX_REGISTRY.get_metrics(&session_id))
 }
 
@@ -7447,6 +7940,7 @@ fn main() {
             clone_git_repository,
             check_project_dependency_rules,
             apply_project_dependency_rule_upgrades,
+            inspect_code_workspace_profile_seed,
             run_model_session_command,
             retry_model_session_last_step,
             undo_model_session_step,

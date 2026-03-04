@@ -47,6 +47,7 @@ export const COMMANDS = {
   SUMMARIZE_MODEL_SESSION_RESULT: "summarize_model_session_result",
   CHECK_PROJECT_DEPENDENCY_RULES: "check_project_dependency_rules",
   APPLY_PROJECT_DEPENDENCY_RULE_UPGRADES: "apply_project_dependency_rule_upgrades",
+  INSPECT_CODE_WORKSPACE_PROFILE_SEED: "inspect_code_workspace_profile_seed",
   RETRY_MODEL_SESSION_LAST_STEP: "retry_model_session_last_step",
 } as const;
 
