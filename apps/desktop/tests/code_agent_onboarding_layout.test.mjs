@@ -42,6 +42,7 @@ test("TestCodeAgentOnboardingShouldRenderMethodCardsInVerticalOrder", () => {
   assert.match(source, /<AriTypography variant=\"body\" value=\"Git 仓库\" \/>/);
   assert.match(source, /label=\{gitCloneLoading \? "开启中\.\.\." : "开启"\}/);
   assert.match(source, /className=\"desk-code-workspace-git-input\"/);
+  assert.match(source, /className=\"desk-code-workspace-git-input\"[\s\S]*enableHoverFocusEffect=\{false\}/);
   assert.doesNotMatch(source, /desk-code-workspace-link-btn/);
 
   const localMethodIndex = source.indexOf("value=\"本地文件夹\"");

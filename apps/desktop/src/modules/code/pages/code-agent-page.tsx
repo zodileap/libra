@@ -471,6 +471,7 @@ export function CodeAgentPage(props: CodeAgentPageProps) {
                   onChange={setGitRepoUrl}
                   placeholder="输入 Git 地址"
                   className="desk-code-workspace-git-input"
+                  enableHoverFocusEffect={false}
                 />
               </AriContainer>
               <AriFlex
