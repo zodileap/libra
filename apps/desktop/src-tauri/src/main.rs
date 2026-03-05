@@ -5,14 +5,16 @@ use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::thread;
 use std::time::{Duration, Instant};
 use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tauri::Emitter;
 use tauri::Manager;
+use sha2::{Digest, Sha256};
 use zodileap_agent_core::llm::{call_model, parse_provider};
 use zodileap_agent_core::{
     run_agent_with_protocol_error_stream, AgentRunRequest, AgentStreamEvent,
@@ -67,10 +69,93 @@ struct InstallBridgeResponse {
     message: String,
 }
 
+#[derive(Serialize, Clone)]
+struct DesktopRuntimeInfoResponse {
+    current_version: String,
+    platform: String,
+    arch: String,
+}
+
+#[derive(Deserialize, Clone)]
+struct DesktopUpdateDownloadRequest {
+    version: String,
+    download_url: String,
+    checksum_sha256: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+struct DesktopUpdateStateResponse {
+    status: String,
+    current_version: String,
+    target_version: String,
+    progress: f64,
+    message: String,
+    download_path: Option<String>,
+}
+
+#[derive(Default, Clone)]
+struct DesktopUpdateState {
+    status: String,
+    current_version: String,
+    target_version: String,
+    progress: f64,
+    message: String,
+    download_path: Option<String>,
+    checksum_sha256: Option<String>,
+}
+
 /// 描述：返回代码智能体会话取消标记表，用于跨命令处理主动取消竞态。
 fn cancelled_agent_sessions() -> &'static Mutex<HashSet<String>> {
     static CANCELLED_AGENT_SESSIONS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
     CANCELLED_AGENT_SESSIONS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// 描述：返回桌面端更新状态存储，统一管理下载/安装流程状态。
+fn desktop_update_state_store() -> &'static Mutex<DesktopUpdateState> {
+    static DESKTOP_UPDATE_STATE: OnceLock<Mutex<DesktopUpdateState>> = OnceLock::new();
+    DESKTOP_UPDATE_STATE.get_or_init(|| {
+        Mutex::new(DesktopUpdateState {
+            status: "idle".to_string(),
+            current_version: env!("CARGO_PKG_VERSION").to_string(),
+            target_version: String::new(),
+            progress: 0.0,
+            message: "尚未检查更新".to_string(),
+            download_path: None,
+            checksum_sha256: None,
+        })
+    })
+}
+
+/// 描述：将内部桌面更新状态转换为前端可消费结构。
+fn snapshot_desktop_update_state() -> DesktopUpdateStateResponse {
+    let fallback = DesktopUpdateState {
+        status: "failed".to_string(),
+        current_version: env!("CARGO_PKG_VERSION").to_string(),
+        target_version: String::new(),
+        progress: 0.0,
+        message: "更新状态读取失败".to_string(),
+        download_path: None,
+        checksum_sha256: None,
+    };
+    let state = desktop_update_state_store()
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or(fallback);
+    DesktopUpdateStateResponse {
+        status: state.status,
+        current_version: state.current_version,
+        target_version: state.target_version,
+        progress: state.progress,
+        message: state.message,
+        download_path: state.download_path,
+    }
+}
+
+/// 描述：更新桌面端状态存储，供下载线程与命令统一复用。
+fn set_desktop_update_state(mutator: impl FnOnce(&mut DesktopUpdateState)) {
+    if let Ok(mut guard) = desktop_update_state_store().lock() {
+        mutator(&mut guard);
+    }
 }
 
 /// 描述：标记会话为“用户主动取消”，供执行线程在错误归一阶段识别。
@@ -308,6 +393,22 @@ struct AgentTextStreamEvent {
     message: String,
     delta: Option<String>,
     data: Option<serde_json::Value>,
+}
+
+const AGENT_STREAM_ARGS_MAX_CHARS: usize = 1200;
+const AGENT_STREAM_APPROVAL_ARGS_MAX_CHARS: usize = 2000;
+
+/// 描述：裁剪流式事件文本，避免超长载荷在 Tauri 事件桥接阶段阻塞前端。
+fn truncate_agent_stream_text(value: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let mut text = value.chars().take(max_chars).collect::<String>();
+    text.push('…');
+    text
 }
 
 #[derive(Serialize, Clone)]
@@ -1514,6 +1615,8 @@ fn run_agent_command_inner(
                     );
                 }
                 AgentStreamEvent::ToolCallStarted { name, args } => {
+                    let args_preview =
+                        truncate_agent_stream_text(args.as_str(), AGENT_STREAM_ARGS_MAX_CHARS);
                     emit_agent_text_stream_event(
                         &app,
                         AgentTextStreamEvent {
@@ -1522,7 +1625,7 @@ fn run_agent_command_inner(
                             kind,
                             message: format!("正在执行工具: {}", name),
                             delta: None,
-                            data: Some(json!({ "name": name, "args": args })),
+                            data: Some(json!({ "name": name, "args": args_preview })),
                         },
                     );
                 }
@@ -1548,6 +1651,10 @@ fn run_agent_command_inner(
                     tool_name,
                     tool_args,
                 } => {
+                    let tool_args_preview = truncate_agent_stream_text(
+                        tool_args.as_str(),
+                        AGENT_STREAM_APPROVAL_ARGS_MAX_CHARS,
+                    );
                     emit_agent_text_stream_event(
                         &app,
                         AgentTextStreamEvent {
@@ -1559,7 +1666,7 @@ fn run_agent_command_inner(
                             data: Some(json!({
                                 "approval_id": approval_id,
                                 "tool_name": tool_name,
-                                "tool_args": tool_args,
+                                "tool_args": tool_args_preview,
                             })),
                         },
                     );
@@ -8364,6 +8471,225 @@ fn apply_main_window_effects(app: &tauri::AppHandle) {
     }
 }
 
+/// 描述：获取桌面端运行时信息（版本/平台/架构），供前端检查更新时上报。
+#[tauri::command]
+fn get_desktop_runtime_info() -> DesktopRuntimeInfoResponse {
+    DesktopRuntimeInfoResponse {
+        current_version: env!("CARGO_PKG_VERSION").to_string(),
+        platform: env::consts::OS.to_string(),
+        arch: env::consts::ARCH.to_string(),
+    }
+}
+
+/// 描述：返回当前桌面端更新状态快照。
+#[tauri::command]
+fn get_desktop_update_state() -> DesktopUpdateStateResponse {
+    snapshot_desktop_update_state()
+}
+
+/// 描述：根据下载 URL 解析文件扩展名，命中失败时回退到 bin。
+fn resolve_update_file_extension(download_url: &str) -> String {
+    let lower_url = download_url.to_lowercase();
+    for extension in ["dmg", "pkg", "zip", "exe", "msi", "appimage", "deb", "rpm"] {
+        if lower_url.contains(&format!(".{}", extension)) {
+            return extension.to_string();
+        }
+    }
+    "bin".to_string()
+}
+
+/// 描述：构建更新包下载路径，按目标版本和下载地址生成稳定文件名。
+fn resolve_update_download_path(version: &str, download_url: &str) -> Result<PathBuf, String> {
+    let updates_root = env::temp_dir().join("zodileap-desktop-updates");
+    fs::create_dir_all(&updates_root).map_err(|err| format!("create update temp dir failed: {}", err))?;
+    let extension = resolve_update_file_extension(download_url);
+    let safe_version = version.replace(['/', '\\', ' '], "_");
+    Ok(updates_root.join(format!("zodileap-agen-{}.{}", safe_version, extension)))
+}
+
+/// 描述：计算文件的 SHA256 哈希值，用于更新包完整性校验。
+fn calculate_file_sha256(path: &Path) -> Result<String, String> {
+    let mut file = fs::File::open(path).map_err(|err| format!("open file failed: {}", err))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 1024 * 64];
+    loop {
+        let size = file
+            .read(&mut buffer)
+            .map_err(|err| format!("read file failed: {}", err))?;
+        if size == 0 {
+            break;
+        }
+        hasher.update(&buffer[..size]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// 描述：执行更新包下载，并按进度同步全局状态。
+fn download_desktop_update_package(request: DesktopUpdateDownloadRequest) -> Result<PathBuf, String> {
+    let download_path = resolve_update_download_path(&request.version, &request.download_url)?;
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(60 * 20))
+        .build()
+        .map_err(|err| format!("create update http client failed: {}", err))?;
+    let mut response = client
+        .get(&request.download_url)
+        .send()
+        .map_err(|err| format!("download update package failed: {}", err))?;
+    if !response.status().is_success() {
+        return Err(format!("download update package failed: status {}", response.status()));
+    }
+
+    let total_bytes = response.content_length().unwrap_or(0);
+    let mut file =
+        fs::File::create(&download_path).map_err(|err| format!("create update package file failed: {}", err))?;
+    let mut downloaded_bytes: u64 = 0;
+    let mut buffer = [0u8; 1024 * 64];
+    loop {
+        let size = response
+            .read(&mut buffer)
+            .map_err(|err| format!("read update package stream failed: {}", err))?;
+        if size == 0 {
+            break;
+        }
+        file.write_all(&buffer[..size])
+            .map_err(|err| format!("write update package file failed: {}", err))?;
+        downloaded_bytes += size as u64;
+        let progress = if total_bytes > 0 {
+            (downloaded_bytes as f64 / total_bytes as f64) * 100.0
+        } else {
+            0.0
+        };
+        set_desktop_update_state(|state| {
+            state.progress = progress;
+            state.message = if total_bytes > 0 {
+                format!("更新下载中（{:.1}%）", progress.clamp(0.0, 100.0))
+            } else {
+                "更新下载中".to_string()
+            };
+        });
+    }
+
+    if let Some(expected) = request.checksum_sha256.as_ref() {
+        let actual = calculate_file_sha256(&download_path)?;
+        if actual.to_lowercase() != expected.trim().to_lowercase() {
+            let _ = fs::remove_file(&download_path);
+            return Err("更新包校验失败，请重新检查版本源配置".to_string());
+        }
+    }
+
+    Ok(download_path)
+}
+
+/// 描述：后台启动更新包下载任务，下载完成后前端可展示“更新”按钮。
+#[tauri::command]
+fn start_desktop_update_download(request: DesktopUpdateDownloadRequest) -> Result<DesktopUpdateStateResponse, String> {
+    let normalized_version = request.version.trim().to_string();
+    let normalized_url = request.download_url.trim().to_string();
+    if normalized_version.is_empty() || normalized_url.is_empty() {
+        return Err("更新参数无效，缺少版本号或下载地址".to_string());
+    }
+
+    let current_state = snapshot_desktop_update_state();
+    if current_state.status == "downloading" {
+        return Ok(current_state);
+    }
+
+    set_desktop_update_state(|state| {
+        state.status = "downloading".to_string();
+        state.target_version = normalized_version.clone();
+        state.progress = 0.0;
+        state.message = "更新下载中".to_string();
+        state.download_path = None;
+        state.checksum_sha256 = request.checksum_sha256.clone();
+    });
+
+    let async_request = DesktopUpdateDownloadRequest {
+        version: normalized_version,
+        download_url: normalized_url,
+        checksum_sha256: request.checksum_sha256,
+    };
+    thread::spawn(move || match download_desktop_update_package(async_request.clone()) {
+        Ok(path) => {
+            set_desktop_update_state(|state| {
+                state.status = "ready".to_string();
+                state.progress = 100.0;
+                state.message = "更新已准备完成，点击“更新”开始安装".to_string();
+                state.download_path = Some(path.to_string_lossy().to_string());
+                state.target_version = async_request.version;
+            });
+        }
+        Err(err) => {
+            set_desktop_update_state(|state| {
+                state.status = "failed".to_string();
+                state.progress = 0.0;
+                state.message = format!("更新下载失败：{}", err);
+                state.download_path = None;
+            });
+        }
+    });
+
+    Ok(snapshot_desktop_update_state())
+}
+
+/// 描述：打开已下载的安装包，触发系统安装流程。
+fn open_downloaded_update_installer(path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(path)
+            .spawn()
+            .map_err(|err| format!("open installer failed: {}", err))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("cmd")
+            .args(["/C", "start", ""])
+            .arg(path.to_string_lossy().to_string())
+            .spawn()
+            .map_err(|err| format!("start installer failed: {}", err))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map_err(|err| format!("open installer failed: {}", err))?;
+        return Ok(());
+    }
+
+    #[allow(unreachable_code)]
+    Err("当前平台暂不支持自动打开安装包".to_string())
+}
+
+/// 描述：执行更新安装（打开系统安装器）；仅在下载完成后可触发。
+#[tauri::command]
+fn install_downloaded_desktop_update() -> Result<DesktopUpdateStateResponse, String> {
+    let (download_path, target_version) = desktop_update_state_store()
+        .lock()
+        .map(|guard| (guard.download_path.clone(), guard.target_version.clone()))
+        .map_err(|_| "更新状态读取失败".to_string())?;
+    let Some(path_text) = download_path else {
+        return Err("尚未下载更新包，请先检查更新".to_string());
+    };
+    let installer_path = PathBuf::from(path_text);
+    if !installer_path.exists() {
+        return Err("更新包不存在，请重新下载".to_string());
+    }
+
+    open_downloaded_update_installer(&installer_path)?;
+    set_desktop_update_state(|state| {
+        state.status = "installing".to_string();
+        state.progress = 100.0;
+        state.message = format!("已启动安装器（目标版本：{}）", target_version);
+    });
+    Ok(snapshot_desktop_update_state())
+}
+
 #[tauri::command]
 fn get_agent_sandbox_metrics(
     session_id: String,
@@ -8439,6 +8765,10 @@ fn main() {
             get_model_session_records,
             summarize_model_session_result,
             approve_agent_action,
+            get_desktop_runtime_info,
+            start_desktop_update_download,
+            get_desktop_update_state,
+            install_downloaded_desktop_update,
             reset_agent_sandbox,
             cancel_agent_session,
             get_agent_sandbox_metrics,
@@ -8462,6 +8792,7 @@ mod tests {
         should_block_destructive_plan_for_empty_selection,
         should_create_file_recover_point_for_step, should_create_operation_transaction,
         should_run_topology_check_after_step, split_error_code_and_message,
+        truncate_agent_stream_text,
         validate_llm_model_plan_steps, ModelMcpCapabilities, PlannedModelStep,
         SelectionContextSnapshot,
     };
@@ -8471,6 +8802,14 @@ mod tests {
         ExportModelFormat, ModelPlanBranch, ModelPlanOperationKind, ModelPlanRiskLevel,
         ModelSessionPlannedStep, ModelToolAction,
     };
+
+    #[test]
+    fn should_truncate_agent_stream_text_by_char_count() {
+        let source = "你好".repeat(2000);
+        let result = truncate_agent_stream_text(source.as_str(), 120);
+        assert!(result.chars().count() <= 121);
+        assert!(result.ends_with('…'));
+    }
 
     #[test]
     fn add_cube_should_not_trigger_export() {

@@ -213,12 +213,15 @@ export function DesktopRouter({ auth }: { auth: AuthState }) {
         path="/"
         element={
           auth.user ? (
-            <DesktopLayout
-              user={auth.user}
-              onLogout={auth.logout}
-              availableAgents={auth.availableAgents}
-              routeAccess={routeAccess}
-            />
+              <DesktopLayout
+                user={auth.user}
+                onLogout={auth.logout}
+                availableAgents={auth.availableAgents}
+                routeAccess={routeAccess}
+                desktopUpdateState={auth.desktopUpdateState}
+                onCheckDesktopUpdate={auth.checkDesktopUpdate}
+                onInstallDesktopUpdate={auth.installDesktopUpdate}
+              />
           ) : (
             <Navigate to="/login" replace />
           )

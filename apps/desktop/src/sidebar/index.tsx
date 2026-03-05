@@ -40,7 +40,13 @@ import {
   listRuntimeSessions,
   updateRuntimeSessionStatus,
 } from "@/shell/services/backend-api";
-import type { AgentKey, AgentSession, AuthAvailableAgentItem, LoginUser } from "@/shell/types";
+import type {
+  AgentKey,
+  AgentSession,
+  AuthAvailableAgentItem,
+  DesktopUpdateState,
+  LoginUser,
+} from "@/shell/types";
 import type { AgentTextStreamEvent } from "../shared/types";
 import { EVENT_AGENT_TEXT_STREAM, IS_BROWSER, isCancelErrorCode, STREAM_KINDS } from "../shared/constants";
 import {
@@ -79,6 +85,9 @@ interface ClientSidebarProps {
   onLogout: () => Promise<void>;
   availableAgents: AuthAvailableAgentItem[];
   routeAccess: RouteAccess;
+  desktopUpdateState: DesktopUpdateState;
+  onCheckDesktopUpdate: () => Promise<void>;
+  onInstallDesktopUpdate: () => Promise<void>;
 }
 
 // 描述:
@@ -102,11 +111,22 @@ interface CodeWorkspaceSessionGroup {
 //   - 定义工具调用事件 data 字段的最小结构，用于安全提取工具名和参数摘要。
 interface AgentToolCallEventData {
   name?: string;
+  ok?: boolean;
+  result?: string;
   args?: {
     command?: string;
     path?: string;
   };
 }
+
+// 描述：
+//
+//   - 定义人工授权事件 data 字段的最小结构，用于跨页面恢复后继续授权。
+interface AgentRequireApprovalEventData {
+  tool_name?: string;
+}
+
+const APPROVAL_TOOL_ARGS_PREVIEW_MAX_CHARS = 2000;
 
 // AgentTextStreamEvent 已提取至 shared/types.ts 统一定义。
 
@@ -124,11 +144,62 @@ function resolveToolCallEventData(payload: AgentTextStreamEvent): AgentToolCallE
     : undefined;
   return {
     name: typeof data.name === "string" ? data.name : undefined,
+    ok: typeof data.ok === "boolean" ? data.ok : undefined,
+    result: typeof data.result === "string" ? data.result : undefined,
     args: {
       command: typeof args?.command === "string" ? args.command : undefined,
       path: typeof args?.path === "string" ? args.path : undefined,
     },
   };
+}
+
+// 描述：
+//
+//   - 解析文本流中的人工授权 data 结构，提取工具名用于展示。
+function resolveApprovalEventData(payload: AgentTextStreamEvent): AgentRequireApprovalEventData {
+  if (!payload.data || typeof payload.data !== "object") {
+    return {};
+  }
+  const data = payload.data as Record<string, unknown>;
+  return {
+    tool_name: typeof data.tool_name === "string" ? data.tool_name : undefined,
+  };
+}
+
+// 描述：
+//
+//   - 裁剪长文本，避免侧边栏运行态持久化超大字符串导致主线程阻塞。
+function truncateRunText(value: string, maxChars: number): string {
+  const normalized = String(value || "").trim();
+  if (!normalized || maxChars <= 0) {
+    return "";
+  }
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxChars)}…`;
+}
+
+// 描述：
+//
+//   - 构建授权运行片段 data，只保留跨页恢复所需关键字段并裁剪超长参数。
+function buildApprovalSegmentData(payload: AgentTextStreamEvent): Record<string, unknown> {
+  const rawData = payload.data && typeof payload.data === "object"
+    ? (payload.data as Record<string, unknown>)
+    : {};
+  const data: Record<string, unknown> = {
+    __segment_kind: payload.kind,
+  };
+  if (typeof rawData.approval_id === "string") {
+    data.approval_id = truncateRunText(rawData.approval_id, 120);
+  }
+  if (typeof rawData.tool_name === "string") {
+    data.tool_name = truncateRunText(rawData.tool_name, 120);
+  }
+  if (typeof rawData.tool_args === "string") {
+    data.tool_args = truncateRunText(rawData.tool_args, APPROVAL_TOOL_ARGS_PREVIEW_MAX_CHARS);
+  }
+  return data;
 }
 
 // 描述:
@@ -211,11 +282,17 @@ function HomeSidebar({
   onLogout,
   availableAgents,
   routeAccess,
+  desktopUpdateState,
+  onCheckDesktopUpdate,
+  onInstallDesktopUpdate,
 }: {
   user: LoginUser;
   onLogout: () => Promise<void>;
   availableAgents: AuthAvailableAgentItem[];
   routeAccess: RouteAccess;
+  desktopUpdateState: DesktopUpdateState;
+  onCheckDesktopUpdate: () => Promise<void>;
+  onInstallDesktopUpdate: () => Promise<void>;
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -323,7 +400,14 @@ function HomeSidebar({
       </AriContainer>
 
       <AriContainer className="desk-sidebar-spacer" />
-      <UserHoverMenu user={user} onLogout={onLogout} routeAccess={routeAccess} />
+      <UserHoverMenu
+        user={user}
+        onLogout={onLogout}
+        routeAccess={routeAccess}
+        desktopUpdateState={desktopUpdateState}
+        onCheckDesktopUpdate={onCheckDesktopUpdate}
+        onInstallDesktopUpdate={onInstallDesktopUpdate}
+      />
     </AriContainer>
   );
 }
@@ -336,11 +420,17 @@ function AgentSidebar({
   onLogout,
   agentKey,
   routeAccess,
+  desktopUpdateState,
+  onCheckDesktopUpdate,
+  onInstallDesktopUpdate,
 }: {
   user: LoginUser;
   onLogout: () => Promise<void>;
   agentKey: AgentKey;
   routeAccess: RouteAccess;
+  desktopUpdateState: DesktopUpdateState;
+  onCheckDesktopUpdate: () => Promise<void>;
+  onInstallDesktopUpdate: () => Promise<void>;
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -506,59 +596,155 @@ function AgentSidebar({
       return null;
     }
     if (payload.kind === STREAM_KINDS.STARTED) {
-      return { key, intro: "已接收需求，开始规划执行", step: text || "正在准备执行...", status: "running" as const };
+      return null;
     }
     if (payload.kind === STREAM_KINDS.LLM_STARTED) {
-      return { key, intro: "模型会话已开始，等待返回首段结果…", step: text || "provider 已启动，正在生成编排脚本。", status: "running" as const };
+      return null;
     }
     if (payload.kind === STREAM_KINDS.LLM_FINISHED) {
-      return { key, intro: "模型返回完成，开始执行脚本…", step: text || "已收到完整脚本，准备进入沙盒执行。", status: "finished" as const };
+      return null;
     }
-    if (payload.kind === STREAM_KINDS.FINISHED || payload.kind === STREAM_KINDS.FINAL) {
-      return { key, intro: "执行完成", step: text || "执行结束，正在整理最终输出…", status: "finished" as const };
+    if (payload.kind === STREAM_KINDS.FINISHED) {
+      return null;
+    }
+    if (payload.kind === STREAM_KINDS.FINAL) {
+      return {
+        key,
+        intro: "执行完成",
+        step: text || "执行结束，正在输出最终结果…",
+        status: "finished" as const,
+        data: {
+          __segment_kind: payload.kind,
+        },
+      };
     }
     if (payload.kind === STREAM_KINDS.CANCELLED) {
-      return { key, intro: "任务已取消", step: text || "任务已终止，不再继续执行。", status: "finished" as const };
+      return {
+        key,
+        intro: "任务已取消",
+        step: text || "当前任务已终止，不再继续执行。",
+        status: "finished" as const,
+        data: {
+          __segment_kind: payload.kind,
+        },
+      };
     }
     if (payload.kind === STREAM_KINDS.PLANNING) {
-      return { key, intro: "智能体正在思考", step: text || "正在规划执行策略…", status: "running" as const };
+      const turnSummaryMatch = text.match(/^第\s*(\d+)\s*轮已完成(?:[：:，,]\s*(.+))?$/u);
+      if (!turnSummaryMatch) {
+        return null;
+      }
+      return {
+        key,
+        intro: `第 ${turnSummaryMatch[1]} 轮执行结果`,
+        step: String(turnSummaryMatch[2] || "").trim() || text,
+        status: "finished" as const,
+      };
     }
     if (payload.kind === STREAM_KINDS.TOOL_CALL_STARTED) {
       const data = resolveToolCallEventData(payload);
+      const toolName = String(data.name || "").trim();
       let detail = "";
-      if (data.name) {
-        if (data.name === "run_shell" && data.args?.command) {
-          detail = data.args.command.substring(0, 30);
-          if (data.args.command.length > 30) detail += "...";
-        } else if (data.args?.path) {
-          detail = data.args.path;
+      if (toolName === "run_shell" && data.args?.command) {
+        detail = data.args.command.substring(0, 30);
+        if (data.args.command.length > 30) {
+          detail += "...";
         }
+      } else if (data.args?.path) {
+        detail = data.args.path;
       }
-      const suffix = detail ? ` [${detail}]` : "";
-      return { key, intro: `执行工具：${data.name || "unknown"}`, step: text ? `${text}${suffix}` : `正在调用系统工具…`, status: "running" as const };
+      return {
+        key,
+        intro: `执行工具：${toolName || "unknown"}`,
+        step: text ? `执行中：${text}` : "执行中：正在调用系统工具…",
+        status: "running" as const,
+        data: {
+          __segment_kind: payload.kind,
+        },
+      };
     }
     if (payload.kind === STREAM_KINDS.TOOL_CALL_FINISHED) {
       const data = resolveToolCallEventData(payload);
-      return { key, intro: `工具完成：${data.name || "unknown"}`, step: text || "任务步骤执行完成", status: "finished" as const };
+      const toolName = String(data.name || "").trim();
+      const runOk = data.ok !== false;
+      const stepText = String(data.result || "").trim() || text || "任务步骤执行完成";
+      return {
+        key,
+        intro: `工具完成：${toolName || "unknown"}`,
+        step: `${runOk ? "已完成" : "失败"}：${stepText}`,
+        status: runOk ? "finished" as const : "failed" as const,
+        data: {
+          __segment_kind: payload.kind,
+        },
+      };
     }
     if (payload.kind === STREAM_KINDS.HEARTBEAT) {
       const heartbeatText = text || "等待执行结果回传…";
       const intro = heartbeatText.includes("（")
         ? heartbeatText.split("（")[0]
         : heartbeatText;
-      return { key, intro: intro || "等待执行结果回传…", step: heartbeatText, status: "running" as const };
+      return {
+        key,
+        intro: intro || "等待执行结果回传…",
+        step: heartbeatText,
+        status: "running" as const,
+        data: {
+          __segment_kind: payload.kind,
+        },
+      };
+    }
+    if (payload.kind === STREAM_KINDS.REQUIRE_APPROVAL) {
+      const data = resolveApprovalEventData(payload);
+      return {
+        key,
+        intro: "需要人工授权",
+        step: text || `正在请求执行 ${data.tool_name || "高危操作"}`,
+        status: "running" as const,
+        data: buildApprovalSegmentData(payload),
+      };
     }
     if (payload.kind === STREAM_KINDS.ERROR) {
       const errorCode = resolveStreamErrorCode(payload);
       if (isCancelErrorCode(errorCode)) {
-        return { key, intro: "任务已取消", step: text || "任务已终止，不再继续执行。", status: "finished" as const };
+        return {
+          key,
+          intro: "任务已取消",
+          step: text || "任务已终止，不再继续执行。",
+          status: "finished" as const,
+          data: {
+            __segment_kind: payload.kind,
+          },
+        };
       }
-      return { key, intro: "执行失败", step: text || "执行失败，请查看详情后重试。", status: "failed" as const };
+      return {
+        key,
+        intro: "执行失败",
+        step: text || "执行失败，请查看详情后重试。",
+        status: "failed" as const,
+        data: {
+          __segment_kind: payload.kind,
+        },
+      };
     }
     if (!text) {
       return null;
     }
-    return { key, intro: "执行进度更新", step: text, status: "running" as const };
+    return {
+      key,
+      intro: "执行进度更新",
+      step: text,
+      status: "running" as const,
+    };
+  };
+
+  // 描述：
+  //
+  //   - 判断运行片段是否属于“待人工授权”片段，供侧边栏跨页面恢复时保持授权状态。
+  const isApprovalPendingSegment = (segment: SessionRunMeta["segments"][number]) => {
+    const segmentKind = segment.data && typeof segment.data.__segment_kind === "string"
+      ? segment.data.__segment_kind
+      : "";
+    return segment.intro === "需要人工授权" || segmentKind === STREAM_KINDS.REQUIRE_APPROVAL;
   };
 
   // 描述：将片段追加到运行元数据，并保证同一时刻仅有一个 running 片段。
@@ -576,10 +762,34 @@ function AgentSidebar({
     intro: string;
     step: string;
     status: "running" | "finished" | "failed";
+    data?: Record<string, unknown>;
   }): SessionRunMeta => {
-    const normalizedSegments = (current.segments || []).map((item) =>
-      item.status === "running" ? { ...item, status: "finished" as const } : item,
+    const incomingSegmentKind = segment.data && typeof segment.data.__segment_kind === "string"
+      ? segment.data.__segment_kind
+      : "";
+    const hasPendingApproval = (current.segments || []).some(
+      (item) => item.status === "running" && isApprovalPendingSegment(item),
     );
+    // 描述：
+    //
+    //   - 授权等待期间忽略心跳片段，避免“需要人工授权”被覆盖后页面返回看不到授权卡片。
+    if (hasPendingApproval && incomingSegmentKind === STREAM_KINDS.HEARTBEAT) {
+      return current;
+    }
+    const shouldResolveApprovalPending = incomingSegmentKind === STREAM_KINDS.TOOL_CALL_FINISHED
+      || incomingSegmentKind === STREAM_KINDS.ERROR
+      || incomingSegmentKind === STREAM_KINDS.CANCELLED
+      || incomingSegmentKind === STREAM_KINDS.FINISHED
+      || incomingSegmentKind === STREAM_KINDS.FINAL;
+    const normalizedSegments = (current.segments || []).map((item) => {
+      if (item.status !== "running") {
+        return item;
+      }
+      if (isApprovalPendingSegment(item) && !shouldResolveApprovalPending) {
+        return item;
+      }
+      return { ...item, status: "finished" as const };
+    });
     return {
       ...current,
       segments: [...normalizedSegments, segment].slice(-160),
@@ -1166,7 +1376,7 @@ function AgentSidebar({
     return () => {
       window.removeEventListener(CODE_WORKSPACE_GROUPS_UPDATED_EVENT, onCodeWorkspaceGroupsUpdated as EventListener);
     };
-  }, [isCodeAgent]);
+  }, [isCodeAgent, location.pathname, selectedSessionKey]);
 
   useEffect(() => {
     if (!IS_BROWSER) {
@@ -1204,6 +1414,14 @@ function AgentSidebar({
       if (!sessionId) {
         return;
       }
+      // 描述：
+      //
+      //   - 当前正处于该会话详情页时，由会话页负责写入运行态，侧边栏跳过以避免双写造成主线程抖动。
+      const isActiveSessionPage = location.pathname.includes("/agents/code/session/")
+        && selectedSessionKey === sessionId;
+      if (isActiveSessionPage) {
+        return;
+      }
       const now = Date.now();
       const snapshot = getSessionRunState("code", sessionId);
       const activeMessageId = String(snapshot?.activeMessageId || "").trim() || `assistant-stream-${now}`;
@@ -1234,12 +1452,14 @@ function AgentSidebar({
           nextMeta.summary = `${nextMeta.summary}${delta}`;
         }
       }
-      if (payload.kind === STREAM_KINDS.FINISHED || payload.kind === STREAM_KINDS.FINAL) {
+      if (payload.kind === STREAM_KINDS.FINAL) {
         nextMeta.status = "finished";
         nextMeta.finishedAt = now;
-        if (!nextMeta.summary.trim()) {
-          nextMeta.summary = String(payload.message || "").trim();
-        }
+        nextMeta.summary = String(payload.message || "").trim() || nextMeta.summary;
+        nextSending = false;
+      } else if (payload.kind === STREAM_KINDS.FINISHED) {
+        nextMeta.status = "finished";
+        nextMeta.finishedAt = now;
         nextSending = false;
       } else if (payload.kind === STREAM_KINDS.CANCELLED) {
         nextMeta.status = "finished";
@@ -1421,7 +1641,14 @@ function AgentSidebar({
       </AriContextMenu>
 
       <AriContainer className="desk-sidebar-spacer" />
-      <UserHoverMenu user={user} onLogout={onLogout} routeAccess={routeAccess} />
+      <UserHoverMenu
+        user={user}
+        onLogout={onLogout}
+        routeAccess={routeAccess}
+        desktopUpdateState={desktopUpdateState}
+        onCheckDesktopUpdate={onCheckDesktopUpdate}
+        onInstallDesktopUpdate={onInstallDesktopUpdate}
+      />
 
       <AriModal
         visible={renameModalVisible}
@@ -1467,10 +1694,16 @@ function WorkflowsSidebar({
   user,
   onLogout,
   routeAccess,
+  desktopUpdateState,
+  onCheckDesktopUpdate,
+  onInstallDesktopUpdate,
 }: {
   user: LoginUser;
   onLogout: () => Promise<void>;
   routeAccess: RouteAccess;
+  desktopUpdateState: DesktopUpdateState;
+  onCheckDesktopUpdate: () => Promise<void>;
+  onInstallDesktopUpdate: () => Promise<void>;
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -1684,7 +1917,14 @@ function WorkflowsSidebar({
       </AriContainer>
 
       <AriContainer className="desk-sidebar-spacer" />
-      <UserHoverMenu user={user} onLogout={onLogout} routeAccess={routeAccess} />
+      <UserHoverMenu
+        user={user}
+        onLogout={onLogout}
+        routeAccess={routeAccess}
+        desktopUpdateState={desktopUpdateState}
+        onCheckDesktopUpdate={onCheckDesktopUpdate}
+        onInstallDesktopUpdate={onInstallDesktopUpdate}
+      />
     </AriContainer>
   );
 }
@@ -1696,10 +1936,16 @@ function SettingsSidebar({
   user,
   onLogout,
   routeAccess,
+  desktopUpdateState,
+  onCheckDesktopUpdate,
+  onInstallDesktopUpdate,
 }: {
   user: LoginUser;
   onLogout: () => Promise<void>;
   routeAccess: RouteAccess;
+  desktopUpdateState: DesktopUpdateState;
+  onCheckDesktopUpdate: () => Promise<void>;
+  onInstallDesktopUpdate: () => Promise<void>;
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -1733,7 +1979,14 @@ function SettingsSidebar({
         />
       </AriContainer>
       <AriContainer className="desk-sidebar-spacer" />
-      <UserHoverMenu user={user} onLogout={onLogout} routeAccess={routeAccess} />
+      <UserHoverMenu
+        user={user}
+        onLogout={onLogout}
+        routeAccess={routeAccess}
+        desktopUpdateState={desktopUpdateState}
+        onCheckDesktopUpdate={onCheckDesktopUpdate}
+        onInstallDesktopUpdate={onInstallDesktopUpdate}
+      />
     </AriContainer>
   );
 }
@@ -1745,10 +1998,16 @@ function AiKeySidebar({
   user,
   onLogout,
   routeAccess,
+  desktopUpdateState,
+  onCheckDesktopUpdate,
+  onInstallDesktopUpdate,
 }: {
   user: LoginUser;
   onLogout: () => Promise<void>;
   routeAccess: RouteAccess;
+  desktopUpdateState: DesktopUpdateState;
+  onCheckDesktopUpdate: () => Promise<void>;
+  onInstallDesktopUpdate: () => Promise<void>;
 }) {
   const navigate = useNavigate();
   return (
@@ -1759,7 +2018,14 @@ function AiKeySidebar({
         <AriTypography variant="caption" value={AI_KEY_SIDEBAR_CONTENT.description} />
       </AriContainer>
       <AriContainer className="desk-sidebar-spacer" />
-      <UserHoverMenu user={user} onLogout={onLogout} routeAccess={routeAccess} />
+      <UserHoverMenu
+        user={user}
+        onLogout={onLogout}
+        routeAccess={routeAccess}
+        desktopUpdateState={desktopUpdateState}
+        onCheckDesktopUpdate={onCheckDesktopUpdate}
+        onInstallDesktopUpdate={onInstallDesktopUpdate}
+      />
     </AriContainer>
   );
 }
@@ -1767,17 +2033,43 @@ function AiKeySidebar({
 // 描述:
 //
 //   - 侧边栏总入口，根据路由模式切换 home/agent/settings/workflow/ai-key 视图。
-export function ClientSidebar({ user, onLogout, availableAgents, routeAccess }: ClientSidebarProps) {
+export function ClientSidebar({
+  user,
+  onLogout,
+  availableAgents,
+  routeAccess,
+  desktopUpdateState,
+  onCheckDesktopUpdate,
+  onInstallDesktopUpdate,
+}: ClientSidebarProps) {
   const location = useLocation();
   const mode = matchSidebarMode(location.pathname);
   const agentKey = matchAgentKey(location.pathname);
 
   if (mode === "settings") {
-    return <SettingsSidebar user={user} onLogout={onLogout} routeAccess={routeAccess} />;
+    return (
+      <SettingsSidebar
+        user={user}
+        onLogout={onLogout}
+        routeAccess={routeAccess}
+        desktopUpdateState={desktopUpdateState}
+        onCheckDesktopUpdate={onCheckDesktopUpdate}
+        onInstallDesktopUpdate={onInstallDesktopUpdate}
+      />
+    );
   }
 
   if (mode === "ai-key") {
-    return <AiKeySidebar user={user} onLogout={onLogout} routeAccess={routeAccess} />;
+    return (
+      <AiKeySidebar
+        user={user}
+        onLogout={onLogout}
+        routeAccess={routeAccess}
+        desktopUpdateState={desktopUpdateState}
+        onCheckDesktopUpdate={onCheckDesktopUpdate}
+        onInstallDesktopUpdate={onInstallDesktopUpdate}
+      />
+    );
   }
 
   if (mode === "workflow") {
@@ -1786,12 +2078,25 @@ export function ClientSidebar({ user, onLogout, availableAgents, routeAccess }: 
         user={user}
         onLogout={onLogout}
         routeAccess={routeAccess}
+        desktopUpdateState={desktopUpdateState}
+        onCheckDesktopUpdate={onCheckDesktopUpdate}
+        onInstallDesktopUpdate={onInstallDesktopUpdate}
       />
     );
   }
 
   if (mode === "agent" && agentKey) {
-    return <AgentSidebar user={user} onLogout={onLogout} agentKey={agentKey} routeAccess={routeAccess} />;
+    return (
+      <AgentSidebar
+        user={user}
+        onLogout={onLogout}
+        agentKey={agentKey}
+        routeAccess={routeAccess}
+        desktopUpdateState={desktopUpdateState}
+        onCheckDesktopUpdate={onCheckDesktopUpdate}
+        onInstallDesktopUpdate={onInstallDesktopUpdate}
+      />
+    );
   }
 
   return (
@@ -1800,6 +2105,9 @@ export function ClientSidebar({ user, onLogout, availableAgents, routeAccess }: 
       onLogout={onLogout}
       availableAgents={availableAgents}
       routeAccess={routeAccess}
+      desktopUpdateState={desktopUpdateState}
+      onCheckDesktopUpdate={onCheckDesktopUpdate}
+      onInstallDesktopUpdate={onInstallDesktopUpdate}
     />
   );
 }

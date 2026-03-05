@@ -8,7 +8,8 @@
     "build:ui": "vite build",
     "test:unit": "node --test ./tests/**/*.test.mjs",
     "dev": "pnpm exec tauri dev",
-    "build": "pnpm exec tauri build"
+    "build": "pnpm exec tauri build",
+    "package": "pnpm exec tauri build --bundles app"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

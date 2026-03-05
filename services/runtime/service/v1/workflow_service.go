@@ -1,6 +1,8 @@
 package service
 
 import (
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +21,8 @@ const (
 	defaultMessagePageSize = 20
 	// 描述：会话消息最大分页大小。
 	maxMessagePageSize = 200
+	// 描述：桌面端更新检查默认通道。
+	defaultDesktopUpdateChannel = "stable"
 )
 
 var (
@@ -381,6 +385,38 @@ func (s *WorkflowService) ExpirePreview(req specs.WorkflowPreviewExpireReq) (spe
 	)
 }
 
+// 描述：检查桌面端是否存在可更新版本，并返回对应平台下载地址。
+func (s *WorkflowService) CheckDesktopUpdate(req specs.WorkflowDesktopUpdateCheckReq) (specs.WorkflowDesktopUpdateCheckResp, error) {
+	return WithService(
+		specs.WorkflowDesktopUpdateCheckResp{},
+		func(resp specs.WorkflowDesktopUpdateCheckResp) (specs.WorkflowDesktopUpdateCheckResp, error) {
+			channel := resolveDesktopUpdateChannel(req.Channel)
+			currentVersion := strings.TrimSpace(req.CurrentVersion)
+			latestVersion := strings.TrimSpace(os.Getenv("ZODILEAP_DESKTOP_LATEST_VERSION"))
+			downloadURL := resolveDesktopUpdateDownloadURL(req.Platform, req.Arch, channel)
+			checksumSHA256 := strings.TrimSpace(os.Getenv("ZODILEAP_DESKTOP_CHECKSUM_SHA256"))
+			releaseNotes := strings.TrimSpace(os.Getenv("ZODILEAP_DESKTOP_RELEASE_NOTES"))
+			publishedAt := resolveDesktopUpdatePublishedAt()
+
+			resp.Channel = channel
+			resp.LatestVersion = latestVersion
+			resp.DownloadURL = downloadURL
+			resp.ChecksumSHA256 = checksumSHA256
+			resp.ReleaseNotes = releaseNotes
+			resp.PublishedAt = publishedAt
+
+			if latestVersion == "" || downloadURL == "" {
+				resp.HasUpdate = false
+				return resp, nil
+			}
+
+			comparison := compareSemverVersion(currentVersion, latestVersion)
+			resp.HasUpdate = comparison < 0
+			return resp, nil
+		},
+	)
+}
+
 // 描述：校验会话是否归属当前用户。
 func (s *WorkflowService) mustSessionOwner(sessionID zspecs.Id, userID zspecs.UserId) (*runtime.AgentSessionEntity, error) {
 	session, err := s.AgentSession.Get(runtime.AgentSessionQuery{
@@ -427,6 +463,118 @@ func normalizePagination(page int, pageSize int) (int, int) {
 		pageSize = maxMessagePageSize
 	}
 	return page, pageSize
+}
+
+// 描述：归一化桌面更新通道，未传时回退到 stable。
+func resolveDesktopUpdateChannel(raw string) string {
+	channel := strings.ToLower(strings.TrimSpace(raw))
+	if channel == "" {
+		return defaultDesktopUpdateChannel
+	}
+	return channel
+}
+
+// 描述：解析桌面端更新发布时间，未配置时回退到当前时间，保证前端展示字段始终有值。
+func resolveDesktopUpdatePublishedAt() string {
+	raw := strings.TrimSpace(os.Getenv("ZODILEAP_DESKTOP_PUBLISHED_AT"))
+	if raw != "" {
+		return raw
+	}
+	return time.Now().Format(time.RFC3339)
+}
+
+// 描述：根据平台、架构与通道解析桌面端下载地址，优先命中最具体环境变量。
+func resolveDesktopUpdateDownloadURL(platform string, arch string, channel string) string {
+	platformKey := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(platform), "-", "_"))
+	archKey := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(arch), "-", "_"))
+	channelKey := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(channel), "-", "_"))
+	keys := []string{
+		"ZODILEAP_DESKTOP_DOWNLOAD_URL",
+		"ZODILEAP_DESKTOP_DOWNLOAD_URL_" + platformKey,
+		"ZODILEAP_DESKTOP_DOWNLOAD_URL_" + platformKey + "_" + archKey,
+	}
+	if channelKey != "" {
+		keys = append(
+			keys,
+			"ZODILEAP_DESKTOP_DOWNLOAD_URL_"+channelKey,
+			"ZODILEAP_DESKTOP_DOWNLOAD_URL_"+platformKey+"_"+channelKey,
+			"ZODILEAP_DESKTOP_DOWNLOAD_URL_"+platformKey+"_"+archKey+"_"+channelKey,
+		)
+	}
+
+	// 描述：按优先级倒序读取，保证“平台+架构+通道”覆盖基础配置。
+	for index := len(keys) - 1; index >= 0; index-- {
+		value := strings.TrimSpace(os.Getenv(keys[index]))
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// 描述：比较语义化版本号，返回 -1/0/1。
+//
+// Params:
+//
+//   - current: 当前版本。
+//   - target: 目标版本。
+//
+// Returns:
+//
+//   - -1: current < target。
+//   - 0: current == target 或版本号不可比。
+//   - 1: current > target。
+func compareSemverVersion(current string, target string) int {
+	currentParts := parseSemverParts(current)
+	targetParts := parseSemverParts(target)
+	if len(currentParts) == 0 || len(targetParts) == 0 {
+		return 0
+	}
+	limit := len(currentParts)
+	if len(targetParts) > limit {
+		limit = len(targetParts)
+	}
+	for len(currentParts) < limit {
+		currentParts = append(currentParts, 0)
+	}
+	for len(targetParts) < limit {
+		targetParts = append(targetParts, 0)
+	}
+	for index := 0; index < limit; index++ {
+		if currentParts[index] < targetParts[index] {
+			return -1
+		}
+		if currentParts[index] > targetParts[index] {
+			return 1
+		}
+	}
+	return 0
+}
+
+// 描述：解析语义化版本号为整数切片，忽略前缀 `v` 和后缀标签（如 -beta.1）。
+func parseSemverParts(raw string) []int {
+	normalized := strings.ToLower(strings.TrimSpace(raw))
+	normalized = strings.TrimPrefix(normalized, "v")
+	if normalized == "" {
+		return nil
+	}
+	if dashIndex := strings.Index(normalized, "-"); dashIndex >= 0 {
+		normalized = normalized[:dashIndex]
+	}
+	segments := strings.Split(normalized, ".")
+	parts := make([]int, 0, len(segments))
+	for _, segment := range segments {
+		text := strings.TrimSpace(segment)
+		if text == "" {
+			return nil
+		}
+		value, err := strconv.Atoi(text)
+		if err != nil {
+			return nil
+		}
+		parts = append(parts, value)
+	}
+	return parts
 }
 
 // 描述：构造 workflow 业务错误。

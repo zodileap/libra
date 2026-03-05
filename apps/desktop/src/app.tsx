@@ -5,6 +5,7 @@ import { HashRouter } from "react-router-dom";
 import { DesktopRouter } from "./router";
 import { ensureBlenderBridge } from "./shared/services/blender-bridge";
 import {
+	checkDesktopUpdate as requestDesktopUpdateCheck,
 	clearAuthToken,
 	getAuthToken,
 	getCurrentUser,
@@ -22,10 +23,11 @@ import type {
 	BlenderBridgeEnsureResult,
 	BlenderBridgeRuntime,
 	ColorThemeMode,
+	DesktopUpdateState,
 	LoginUser,
 	ModelMcpCapabilities,
 } from "./shared/types";
-import { defaultServiceUrl, STORAGE_KEYS } from "./shared/constants";
+import { COMMANDS, defaultServiceUrl, STORAGE_KEYS } from "./shared/constants";
 
 // 描述:
 //
@@ -49,6 +51,27 @@ interface GeminiCliHealthResponse {
 	minimum_version: string;
 	bin_path: string;
 	message: string;
+}
+
+// 描述：
+//
+//   - 定义桌面端运行时信息结构，用于更新检查请求参数组装。
+interface DesktopRuntimeInfoResponse {
+	current_version: string;
+	platform: string;
+	arch: string;
+}
+
+// 描述：
+//
+//   - 定义 Tauri 更新状态响应结构，供前端状态同步复用。
+interface DesktopUpdateStateResponse {
+	status: DesktopUpdateState["status"];
+	current_version: string;
+	target_version: string;
+	progress: number;
+	message: string;
+	download_path?: string;
 }
 
 // 描述：
@@ -187,6 +210,20 @@ function normalizeAiKeys(raw: unknown, now: string): AiKeyItem[] {
 	return uniqueByProvider;
 }
 
+// 描述：
+//
+//   - 将 Tauri 更新状态响应映射为前端统一状态结构。
+function mapDesktopUpdateStateResponse(payload: DesktopUpdateStateResponse): DesktopUpdateState {
+	return {
+		status: payload.status,
+		currentVersion: String(payload.current_version || ""),
+		targetVersion: String(payload.target_version || ""),
+		progress: Number(payload.progress || 0),
+		message: String(payload.message || ""),
+		downloadPath: payload.download_path || "",
+	};
+}
+
 // 描述:
 //
 //   - 初始化全局应用配置。
@@ -264,6 +301,19 @@ export default function App() {
 		}
 		return buildDefaultAiKeys(now);
 	});
+	// 描述：桌面端更新流程状态（检查/下载/就绪/安装）。
+	const [desktopUpdateState, setDesktopUpdateState] = useState<DesktopUpdateState>({
+		status: "idle",
+		currentVersion: "",
+		targetVersion: "",
+		progress: 0,
+		message: "尚未检查更新",
+		downloadPath: "",
+	});
+	// 描述：标记更新检查进行中，避免并发触发重复下载。
+	const checkingDesktopUpdateRef = useRef(false);
+	// 描述：更新状态轮询定时器句柄。
+	const desktopUpdatePollTimerRef = useRef<number | null>(null);
 	// 描述：Blender Bridge 运行态（检测中/可用性/提示文案）。
 	const [blenderBridgeRuntime, setBlenderBridgeRuntime] = useState<BlenderBridgeRuntime>({
 		checking: false,
@@ -465,6 +515,134 @@ export default function App() {
 		void ensureBlenderBridgeRuntime();
 	}, [ensureBlenderBridgeRuntime]);
 
+	// 描述：轮询 Tauri 更新状态并同步到前端。
+	const syncDesktopUpdateState = useCallback(async () => {
+		const payload = await invoke<DesktopUpdateStateResponse>(COMMANDS.GET_DESKTOP_UPDATE_STATE, {});
+		setDesktopUpdateState(mapDesktopUpdateStateResponse(payload));
+		return payload;
+	}, []);
+
+	// 描述：停止更新轮询任务，避免重复定时器。
+	const stopDesktopUpdatePolling = useCallback(() => {
+		if (desktopUpdatePollTimerRef.current !== null) {
+			window.clearInterval(desktopUpdatePollTimerRef.current);
+			desktopUpdatePollTimerRef.current = null;
+		}
+	}, []);
+
+	// 描述：检查桌面端更新；命中新版时自动后台下载。
+	const checkDesktopUpdate = useCallback(async () => {
+		if (checkingDesktopUpdateRef.current) {
+			return;
+		}
+		checkingDesktopUpdateRef.current = true;
+		try {
+			const runtimeInfo = await invoke<DesktopRuntimeInfoResponse>(COMMANDS.GET_DESKTOP_RUNTIME_INFO, {});
+			setDesktopUpdateState((prev) => ({
+				...prev,
+				status: "checking",
+				currentVersion: runtimeInfo.current_version,
+				message: "正在检查更新...",
+			}));
+
+			const update = await requestDesktopUpdateCheck({
+				platform: runtimeInfo.platform,
+				arch: runtimeInfo.arch,
+				currentVersion: runtimeInfo.current_version,
+				channel: "stable",
+			});
+
+			if (!update.hasUpdate || !update.downloadUrl) {
+				stopDesktopUpdatePolling();
+				setDesktopUpdateState({
+					status: "idle",
+					currentVersion: runtimeInfo.current_version,
+					targetVersion: update.latestVersion || "",
+					progress: 0,
+					message: update.latestVersion
+						? "当前已是最新版本"
+						: "未配置可用更新源",
+					downloadPath: "",
+				});
+				return;
+			}
+
+			const downloadState = await invoke<DesktopUpdateStateResponse>(
+				COMMANDS.START_DESKTOP_UPDATE_DOWNLOAD,
+				{
+					request: {
+						version: update.latestVersion,
+						downloadUrl: update.downloadUrl,
+						checksumSha256: update.checksumSha256 || "",
+					},
+				},
+			);
+			setDesktopUpdateState(mapDesktopUpdateStateResponse(downloadState));
+			stopDesktopUpdatePolling();
+			desktopUpdatePollTimerRef.current = window.setInterval(() => {
+				void syncDesktopUpdateState().then((nextState) => {
+					if (nextState.status !== "downloading") {
+						stopDesktopUpdatePolling();
+					}
+				});
+			}, 2000);
+		} catch (err) {
+			stopDesktopUpdatePolling();
+			setDesktopUpdateState((prev) => ({
+				...prev,
+				status: "failed",
+				message: "更新检查失败，请稍后重试。",
+			}));
+			AriMessage.warning({
+				content: "更新检查失败，请稍后重试。",
+				duration: 2800,
+			});
+			console.warn("check desktop update failed:", err);
+		} finally {
+			checkingDesktopUpdateRef.current = false;
+		}
+	}, [stopDesktopUpdatePolling, syncDesktopUpdateState]);
+
+	// 描述：触发桌面端安装更新（打开系统安装器）。
+	const installDesktopUpdate = useCallback(async () => {
+		try {
+			const payload = await invoke<DesktopUpdateStateResponse>(
+				COMMANDS.INSTALL_DOWNLOADED_DESKTOP_UPDATE,
+				{},
+			);
+			setDesktopUpdateState(mapDesktopUpdateStateResponse(payload));
+			AriMessage.success({
+				content: payload.message || "已启动更新安装器，请按系统提示完成更新。",
+				duration: 3200,
+			});
+		} catch (_err) {
+			AriMessage.warning({
+				content: "启动安装失败，请重新下载更新包后重试。",
+				duration: 3000,
+			});
+		}
+	}, []);
+
+	useEffect(() => {
+		if (!user) {
+			stopDesktopUpdatePolling();
+			return;
+		}
+		void checkDesktopUpdate();
+		const timer = window.setInterval(() => {
+			void checkDesktopUpdate();
+		}, 30 * 60 * 1000);
+		return () => {
+			window.clearInterval(timer);
+		};
+	}, [user, checkDesktopUpdate, stopDesktopUpdatePolling]);
+
+	useEffect(() => {
+		return () => {
+			stopDesktopUpdatePolling();
+		};
+	}, [stopDesktopUpdatePolling]);
+
 	// 描述：聚合路由层所需的认证上下文对象。
 	const auth: AuthState = useMemo(
 		() => ({
@@ -494,6 +672,9 @@ export default function App() {
 			setModelMcpCapabilities,
 			aiKeys,
 			setAiKeys,
+			desktopUpdateState,
+			checkDesktopUpdate,
+			installDesktopUpdate,
 			blenderBridgeRuntime,
 			ensureBlenderBridge: ensureBlenderBridgeRuntime
 		}),
@@ -504,6 +685,9 @@ export default function App() {
 			colorThemeMode,
 			modelMcpCapabilities,
 			aiKeys,
+			desktopUpdateState,
+			checkDesktopUpdate,
+			installDesktopUpdate,
 			blenderBridgeRuntime,
 			ensureBlenderBridgeRuntime,
 		]

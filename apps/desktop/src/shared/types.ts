@@ -121,6 +121,29 @@ export interface BlenderBridgeEnsureOptions {
   forceInstall?: boolean;
 }
 
+// 描述：
+//
+//   - 定义桌面端更新状态枚举。
+export type DesktopUpdateStatus =
+  | "idle"
+  | "checking"
+  | "downloading"
+  | "ready"
+  | "installing"
+  | "failed";
+
+// 描述：
+//
+//   - 定义桌面端更新运行态结构，供 App 与侧边栏共享。
+export interface DesktopUpdateState {
+  status: DesktopUpdateStatus;
+  currentVersion: string;
+  targetVersion: string;
+  progress: number;
+  message: string;
+  downloadPath?: string;
+}
+
 // 描述:
 //
 //   - 定义智能体日志事件结构。

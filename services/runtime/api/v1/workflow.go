@@ -45,6 +45,7 @@ func (i WorkflowAPI) SetRouter(group *gin.RouterGroup) []gin.IRoutes {
 		group.POST("/preview", base.createPreview),
 		group.GET("/preview", base.getPreview),
 		group.DELETE("/preview", base.expirePreview),
+		group.GET("/desktop-update/check", base.desktopUpdateCheck),
 	}
 }
 
@@ -247,6 +248,22 @@ func (api *BaseWorkflow) expirePreview(c *gin.Context) {
 		zstatuscode.Global_API_DeleteFailed,
 		func(headerParam zapi.HeaderParam, req specs.WorkflowPreviewExpireReq) zapi.Result {
 			resp, err := api.Workflow.ExpirePreview(req)
+			return zapi.Result{Resp: resp, Err: err}
+		},
+	)
+}
+
+// 描述：检查桌面端是否存在可更新版本。
+func (api *BaseWorkflow) desktopUpdateCheck(c *gin.Context) {
+	processName := zlog.NewProcessName("api", "BaseWorkflow", "desktopUpdateCheck")
+	ctx := zlog.WithLogProcess(context.Background(), processName)
+	zapi.WithGet(
+		c,
+		ctx,
+		nil,
+		zstatuscode.Global_API_GetFailed,
+		func(headerParam zapi.HeaderParam, req specs.WorkflowDesktopUpdateCheckReq) zapi.Result {
+			resp, err := api.Workflow.CheckDesktopUpdate(req)
 			return zapi.Result{Resp: resp, Err: err}
 		},
 	)

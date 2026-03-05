@@ -11,6 +11,7 @@
     "sync:aries:web:dev": "bash scripts/sync-aries-web.sh --dev",
     "dev:desktop": "pnpm --dir apps/desktop dev",
     "build:desktop": "pnpm --dir apps/desktop build",
+    "package:desktop": "pnpm --dir apps/desktop package",
     "bootstrap": "bash scripts/bootstrap.sh"
   }
 }

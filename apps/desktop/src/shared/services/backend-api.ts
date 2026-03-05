@@ -67,6 +67,19 @@ export interface RuntimeSessionMessageItem {
   createdAt?: string;
 }
 
+// 描述：
+//
+//   - 定义桌面端更新检查返回结构。
+export interface DesktopUpdateCheckResult {
+  hasUpdate: boolean;
+  latestVersion: string;
+  downloadUrl: string;
+  checksumSha256?: string;
+  releaseNotes: string;
+  publishedAt: string;
+  channel: string;
+}
+
 // 描述:
 //
 //   - 定义代码执行步骤结构。
@@ -296,6 +309,22 @@ export async function logoutCurrentUser(): Promise<void> {
 export async function listAvailableAgents(): Promise<AuthAvailableAgentItem[]> {
   const data = await request<{ list: AuthAvailableAgentItem[] }>(`${accountBaseUrl}/auth/v1/available-agents`);
   return data.list || [];
+}
+
+// 描述：检查桌面端是否存在可更新版本。
+export async function checkDesktopUpdate(params: {
+  platform: string;
+  arch: string;
+  currentVersion: string;
+  channel?: string;
+}): Promise<DesktopUpdateCheckResult> {
+  const query = toQueryString({
+    platform: params.platform,
+    arch: params.arch,
+    currentVersion: params.currentVersion,
+    channel: params.channel,
+  });
+  return request<DesktopUpdateCheckResult>(`${runtimeBaseUrl}/workflow/v1/desktop-update/check${query}`);
 }
 
 // 描述：创建会话。

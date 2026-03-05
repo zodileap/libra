@@ -52,6 +52,10 @@ export const COMMANDS = {
   INSTALL_APIFOX_MCP_RUNTIME: "install_apifox_mcp_runtime",
   UNINSTALL_APIFOX_MCP_RUNTIME: "uninstall_apifox_mcp_runtime",
   RETRY_MODEL_SESSION_LAST_STEP: "retry_model_session_last_step",
+  GET_DESKTOP_RUNTIME_INFO: "get_desktop_runtime_info",
+  START_DESKTOP_UPDATE_DOWNLOAD: "start_desktop_update_download",
+  GET_DESKTOP_UPDATE_STATE: "get_desktop_update_state",
+  INSTALL_DOWNLOADED_DESKTOP_UPDATE: "install_downloaded_desktop_update",
 } as const;
 
 // ── 取消错误码 ────────────────────────────────────────────────────────

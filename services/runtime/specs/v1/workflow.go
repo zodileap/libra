@@ -167,3 +167,22 @@ type WorkflowPreviewExpireReq struct {
 type WorkflowPreviewExpireResp struct {
 	Success bool `json:"success"` // 是否失效成功
 }
+
+// 描述：桌面端更新检查请求。
+type WorkflowDesktopUpdateCheckReq struct {
+	Platform       string `json:"platform" form:"platform"`             // 平台标识（darwin/windows/linux）
+	Arch           string `json:"arch" form:"arch"`                     // 架构标识（arm64/x86_64）
+	CurrentVersion string `json:"currentVersion" form:"currentVersion"` // 当前桌面端版本
+	Channel        string `json:"channel" form:"channel"`               // 更新通道（stable/beta）
+}
+
+// 描述：桌面端更新检查响应。
+type WorkflowDesktopUpdateCheckResp struct {
+	HasUpdate      bool   `json:"hasUpdate"`                // 是否存在可更新版本
+	LatestVersion  string `json:"latestVersion"`            // 最新版本号
+	DownloadURL    string `json:"downloadUrl"`              // 平台安装包下载地址
+	ChecksumSHA256 string `json:"checksumSha256,omitempty"` // 可选：安装包 sha256
+	ReleaseNotes   string `json:"releaseNotes"`             // 更新说明
+	PublishedAt    string `json:"publishedAt"`              // 发布时间（RFC3339）
+	Channel        string `json:"channel"`                  // 更新通道
+}

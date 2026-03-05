@@ -6,6 +6,7 @@ import type {
   BlenderBridgeEnsureResult,
   BlenderBridgeRuntime,
   ColorThemeMode,
+  DesktopUpdateState,
   LoginUser,
   ModelMcpCapabilities,
 } from "../shared/types";
@@ -32,6 +33,9 @@ export interface AuthState {
   setModelMcpCapabilities: (value: ModelMcpCapabilities) => void;
   aiKeys: AiKeyItem[];
   setAiKeys: (value: AiKeyItem[]) => void;
+  desktopUpdateState: DesktopUpdateState;
+  checkDesktopUpdate: () => Promise<void>;
+  installDesktopUpdate: () => Promise<void>;
   blenderBridgeRuntime: BlenderBridgeRuntime;
   ensureBlenderBridge: (options?: BlenderBridgeEnsureOptions) => Promise<BlenderBridgeEnsureResult>;
 }

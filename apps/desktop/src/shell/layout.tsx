@@ -3,7 +3,7 @@ import { Outlet } from "react-router-dom";
 import { AriContainer } from "aries_react";
 import { ClientSidebar } from "../sidebar";
 import type { RouteAccess } from "../router/types";
-import type { AuthAvailableAgentItem, LoginUser } from "./types";
+import type { AuthAvailableAgentItem, DesktopUpdateState, LoginUser } from "./types";
 import { DevDebugFloat } from "../widgets/dev-debug-float";
 import { DesktopAppHeader } from "../widgets/app-header";
 import { DesktopHeaderSlotProvider } from "../widgets/app-header/header-slot-context";
@@ -16,12 +16,23 @@ interface DesktopLayoutProps {
   onLogout: () => Promise<void>;
   availableAgents: AuthAvailableAgentItem[];
   routeAccess: RouteAccess;
+  desktopUpdateState: DesktopUpdateState;
+  onCheckDesktopUpdate: () => Promise<void>;
+  onInstallDesktopUpdate: () => Promise<void>;
 }
 
 // 描述:
 //
 //   - 渲染桌面端主布局，组合侧边栏与主路由内容区。
-export function DesktopLayout({ user, onLogout, availableAgents, routeAccess }: DesktopLayoutProps) {
+export function DesktopLayout({
+  user,
+  onLogout,
+  availableAgents,
+  routeAccess,
+  desktopUpdateState,
+  onCheckDesktopUpdate,
+  onInstallDesktopUpdate,
+}: DesktopLayoutProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [debugFloatVisible, setDebugFloatVisible] = useState(false);
   const [headerSlotElement, setHeaderSlotElement] = useState<HTMLElement | null>(null);
@@ -49,6 +60,9 @@ export function DesktopLayout({ user, onLogout, availableAgents, routeAccess }: 
             onLogout={onLogout}
             availableAgents={availableAgents}
             routeAccess={routeAccess}
+            desktopUpdateState={desktopUpdateState}
+            onCheckDesktopUpdate={onCheckDesktopUpdate}
+            onInstallDesktopUpdate={onInstallDesktopUpdate}
           />
         </AriContainer>
         {/* 描述：主内容区容器固定启用阴影效果，确保视觉层级稳定。 */}

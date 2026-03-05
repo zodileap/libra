@@ -1,6 +1,7 @@
 package service
 
 import (
+	"os"
 	"testing"
 
 	zspecs "git.zodileap.com/taurus/zodileap_go_zspecs"
@@ -88,5 +89,45 @@ func TestWorkflowMessageStoreSessionIsolation(t *testing.T) {
 	}
 	if listB[0].Content != "B-1" {
 		t.Fatalf("sessionB 内容错误: got=%s want=B-1", listB[0].Content)
+	}
+}
+
+// 描述：校验语义化版本比较逻辑（含 v 前缀与补零对齐）。
+func TestCompareSemverVersion(t *testing.T) {
+	t.Parallel()
+
+	if compareSemverVersion("0.1.0", "0.2.0") >= 0 {
+		t.Fatalf("版本比较错误: 0.1.0 应小于 0.2.0")
+	}
+	if compareSemverVersion("v1.2.0", "1.2.0") != 0 {
+		t.Fatalf("版本比较错误: v1.2.0 应等于 1.2.0")
+	}
+	if compareSemverVersion("1.2", "1.2.0") != 0 {
+		t.Fatalf("版本比较错误: 1.2 应等于 1.2.0")
+	}
+	if compareSemverVersion("1.2.1", "1.2.0") <= 0 {
+		t.Fatalf("版本比较错误: 1.2.1 应大于 1.2.0")
+	}
+}
+
+// 描述：校验按平台/架构/通道解析下载地址的优先级。
+func TestResolveDesktopUpdateDownloadURL(t *testing.T) {
+	t.Setenv("ZODILEAP_DESKTOP_DOWNLOAD_URL", "https://fallback/update.pkg")
+	t.Setenv("ZODILEAP_DESKTOP_DOWNLOAD_URL_DARWIN", "https://darwin/update.pkg")
+	t.Setenv("ZODILEAP_DESKTOP_DOWNLOAD_URL_DARWIN_ARM64", "https://darwin-arm64/update.pkg")
+	t.Setenv("ZODILEAP_DESKTOP_DOWNLOAD_URL_DARWIN_ARM64_STABLE", "https://darwin-arm64-stable/update.pkg")
+
+	got := resolveDesktopUpdateDownloadURL("darwin", "arm64", "stable")
+	if got != "https://darwin-arm64-stable/update.pkg" {
+		t.Fatalf("下载地址优先级错误: got=%s", got)
+	}
+
+	// 描述：移除最精确配置后，应回退到平台+架构配置。
+	if err := os.Unsetenv("ZODILEAP_DESKTOP_DOWNLOAD_URL_DARWIN_ARM64_STABLE"); err != nil {
+		t.Fatalf("清理环境变量失败: %v", err)
+	}
+	got = resolveDesktopUpdateDownloadURL("darwin", "arm64", "stable")
+	if got != "https://darwin-arm64/update.pkg" {
+		t.Fatalf("下载地址回退错误: got=%s", got)
 	}
 }
