@@ -53,18 +53,19 @@ import {
 } from "@/widgets/workflow";
 import {
   AI_KEY_SIDEBAR_CONTENT,
+  MCP_PAGE_PATH,
   resolveHomeSidebarAgentItems,
+  resolveWorkflowEditorPath,
   resolveSettingsSidebarItems,
   SKILL_PAGE_PATH,
+  WORKFLOW_PAGE_PATH,
 } from "../modules/common/routes";
 import {
   CODE_AGENT_ROOT_PATH,
   CODE_PROJECT_SETTINGS_PATH,
-  resolveCodeWorkflowPath,
 } from "../modules/code/routes";
 import {
   MODEL_AGENT_ROOT_PATH,
-  resolveModelWorkflowPath,
 } from "../modules/model/routes";
 import type { RouteAccess } from "../router/types";
 import { SidebarBackHeader } from "./widgets/sidebar-back-header";
@@ -227,22 +228,14 @@ function HomeSidebar({
   );
   // 描述：解析首页顶部工具栏入口（工作流、技能）。
   const homeToolbarEntries = useMemo(() => {
-    const workflowEnabled = routeAccess.isModuleEnabled("workflow");
-    const workflowPath = routeAccess.isAgentEnabled("code")
-      ? resolveCodeWorkflowPath("")
-      : routeAccess.isAgentEnabled("model")
-        ? resolveModelWorkflowPath("")
-        : "";
     return [
       {
         key: "workflow",
         label: "工作流",
         icon: "account_tree",
-        enabled: workflowEnabled && Boolean(workflowPath),
-        path: workflowPath,
-        deniedMessage: workflowEnabled
-          ? "当前账号暂无可用工作流入口。"
-          : "当前构建未启用工作流模块。",
+        enabled: routeAccess.isModuleEnabled("workflow"),
+        path: WORKFLOW_PAGE_PATH,
+        deniedMessage: "当前构建未启用工作流模块。",
       },
       {
         key: "skills",
@@ -252,6 +245,14 @@ function HomeSidebar({
         path: SKILL_PAGE_PATH,
         deniedMessage: "当前构建未启用技能模块。",
       },
+      {
+        key: "mcp",
+        label: "MCP",
+        icon: "hub",
+        enabled: routeAccess.isModuleEnabled("mcp"),
+        path: MCP_PAGE_PATH,
+        deniedMessage: "当前构建未启用 MCP 模块。",
+      },
     ];
   }, [routeAccess]);
 
@@ -260,7 +261,10 @@ function HomeSidebar({
     if (location.pathname.startsWith(SKILL_PAGE_PATH)) {
       return "skills";
     }
-    if (location.pathname.includes("/workflows")) {
+    if (location.pathname.startsWith(MCP_PAGE_PATH)) {
+      return "mcp";
+    }
+    if (location.pathname.startsWith(WORKFLOW_PAGE_PATH) || location.pathname.includes("/workflows")) {
       return "workflow";
     }
     return "";
@@ -505,13 +509,13 @@ function AgentSidebar({
       return { key, intro: "已接收需求，开始规划执行", step: text || "正在准备执行...", status: "running" as const };
     }
     if (payload.kind === STREAM_KINDS.LLM_STARTED) {
-      return { key, intro: "正在处理当前步骤", step: text || "模型会话已开始，正在执行策略…", status: "running" as const };
+      return { key, intro: "模型会话已开始，等待返回首段结果…", step: text || "provider 已启动，正在生成编排脚本。", status: "running" as const };
     }
     if (payload.kind === STREAM_KINDS.LLM_FINISHED) {
-      return { key, intro: "当前步骤已完成", step: text || "当前生成步骤已完成，正在整理输出…", status: "finished" as const };
+      return { key, intro: "模型返回完成，开始执行脚本…", step: text || "已收到完整脚本，准备进入沙盒执行。", status: "finished" as const };
     }
     if (payload.kind === STREAM_KINDS.FINISHED || payload.kind === STREAM_KINDS.FINAL) {
-      return { key, intro: "当前步骤已完成", step: text || "执行结束，正在整理最终输出…", status: "finished" as const };
+      return { key, intro: "执行完成", step: text || "执行结束，正在整理最终输出…", status: "finished" as const };
     }
     if (payload.kind === STREAM_KINDS.CANCELLED) {
       return { key, intro: "任务已取消", step: text || "任务已终止，不再继续执行。", status: "finished" as const };
@@ -531,20 +535,25 @@ function AgentSidebar({
         }
       }
       const suffix = detail ? ` [${detail}]` : "";
-      return { key, intro: "正在执行工具", step: text ? `${text}${suffix}` : `正在调用系统工具…`, status: "running" as const };
+      return { key, intro: `执行工具：${data.name || "unknown"}`, step: text ? `${text}${suffix}` : `正在调用系统工具…`, status: "running" as const };
     }
     if (payload.kind === STREAM_KINDS.TOOL_CALL_FINISHED) {
-      return { key, intro: "工具执行结果", step: text || "任务步骤执行完成", status: "finished" as const };
+      const data = resolveToolCallEventData(payload);
+      return { key, intro: `工具完成：${data.name || "unknown"}`, step: text || "任务步骤执行完成", status: "finished" as const };
     }
     if (payload.kind === STREAM_KINDS.HEARTBEAT) {
-      return { key, intro: "任务处理中", step: text || "操作较长，请耐心等待…", status: "running" as const };
+      const heartbeatText = text || "等待执行结果回传…";
+      const intro = heartbeatText.includes("（")
+        ? heartbeatText.split("（")[0]
+        : heartbeatText;
+      return { key, intro: intro || "等待执行结果回传…", step: heartbeatText, status: "running" as const };
     }
     if (payload.kind === STREAM_KINDS.ERROR) {
       const errorCode = resolveStreamErrorCode(payload);
       if (isCancelErrorCode(errorCode)) {
         return { key, intro: "任务已取消", step: text || "任务已终止，不再继续执行。", status: "finished" as const };
       }
-      return { key, intro: "执行中断，正在处理", step: text || "执行失败，请查看详情后重试。", status: "failed" as const };
+      return { key, intro: "执行失败", step: text || "执行失败，请查看详情后重试。", status: "failed" as const };
     }
     if (!text) {
       return null;
@@ -1457,12 +1466,10 @@ function AgentSidebar({
 function WorkflowsSidebar({
   user,
   onLogout,
-  agentKey,
   routeAccess,
 }: {
   user: LoginUser;
   onLogout: () => Promise<void>;
-  agentKey: AgentKey;
   routeAccess: RouteAccess;
 }) {
   const navigate = useNavigate();
@@ -1471,44 +1478,72 @@ function WorkflowsSidebar({
   const [pendingDeleteWorkflowId, setPendingDeleteWorkflowId] = useState("");
   const [hoveredDeleteWorkflowId, setHoveredDeleteWorkflowId] = useState("");
   const [createButtonHovered, setCreateButtonHovered] = useState(false);
-  const isModelAgent = agentKey === "model";
 
   // 描述：解析当前路由中的 workflowId，用于高亮当前菜单项。
-  const selectedWorkflowIdFromQuery = useMemo(
-    () => new URLSearchParams(location.search).get("workflowId")?.trim() || "",
-    [location.search],
-  );
+  const selectedWorkflowIdFromQuery = useMemo(() => {
+    return new URLSearchParams(location.search).get("workflowId")?.trim() || "";
+  }, [location.search]);
+  // 描述：解析当前路由中的 workflowType，未命中时回退 code。
+  const selectedWorkflowTypeFromQuery = useMemo<AgentKey>(() => {
+    return new URLSearchParams(location.search).get("workflowType")?.trim() === "model"
+      ? "model"
+      : "code";
+  }, [location.search]);
 
-  // 描述：读取当前智能体可用工作流列表，供侧边栏菜单渲染。
+  // 描述：读取全局可用工作流列表，供侧边栏菜单渲染。
   const workflows = useMemo(
-    () => (isModelAgent ? listModelWorkflows() : listCodeWorkflows()),
-    [isModelAgent, workflowVersion, selectedWorkflowIdFromQuery],
+    () => {
+      const codeWorkflows = listCodeWorkflows().map((item) => ({
+        key: `code:${item.id}`,
+        id: item.id,
+        type: "code" as AgentKey,
+        name: item.name,
+        shared: item.shared,
+      }));
+      const modelWorkflows = listModelWorkflows().map((item) => ({
+        key: `model:${item.id}`,
+        id: item.id,
+        type: "model" as AgentKey,
+        name: item.name,
+        shared: item.shared,
+      }));
+      return [...codeWorkflows, ...modelWorkflows];
+    },
+    [workflowVersion, selectedWorkflowIdFromQuery, selectedWorkflowTypeFromQuery],
   );
 
-  // 描述：归一化当前选中工作流 ID，查询参数为空或非法时回退到首项。
-  const selectedWorkflowId = useMemo(() => {
-    if (selectedWorkflowIdFromQuery && workflows.some((item) => item.id === selectedWorkflowIdFromQuery)) {
-      return selectedWorkflowIdFromQuery;
+  // 描述：归一化当前选中工作流，查询参数为空或非法时回退到首项。
+  const selectedWorkflow = useMemo(() => {
+    const matched = workflows.find(
+      (item) => item.id === selectedWorkflowIdFromQuery && item.type === selectedWorkflowTypeFromQuery,
+    );
+    if (matched) {
+      return matched;
     }
-    return workflows[0]?.id || "";
-  }, [selectedWorkflowIdFromQuery, workflows]);
+    return workflows[0] || null;
+  }, [selectedWorkflowIdFromQuery, selectedWorkflowTypeFromQuery, workflows]);
+  const selectedWorkflowMenuKey = selectedWorkflow?.key || "";
 
-  // 描述：导航到工作流编辑页并携带 workflowId 参数，保证画布页和侧边栏选中态一致。
-  const navigateToWorkflowPage = (workflowId: string, replace = false) => {
-    const targetPath = isModelAgent
-      ? resolveModelWorkflowPath(workflowId)
-      : resolveCodeWorkflowPath(workflowId);
+  // 描述：导航到工作流编辑页并携带 workflowType/workflowId 参数，保证画布页和侧边栏选中态一致。
+  const navigateToWorkflowPage = (workflowType: AgentKey, workflowId: string, replace = false) => {
+    const targetPath = resolveWorkflowEditorPath(workflowType, workflowId);
     navigate(targetPath, replace ? { replace: true } : undefined);
   };
 
   // 描述：当 query 丢失或无效时自动修正 URL，避免画布页和侧边栏选中不一致。
   useEffect(() => {
-    if (selectedWorkflowId === selectedWorkflowIdFromQuery) {
+    if (!selectedWorkflow) {
       return;
     }
-    navigateToWorkflowPage(selectedWorkflowId, true);
+    if (
+      selectedWorkflow.id === selectedWorkflowIdFromQuery
+      && selectedWorkflow.type === selectedWorkflowTypeFromQuery
+    ) {
+      return;
+    }
+    navigateToWorkflowPage(selectedWorkflow.type, selectedWorkflow.id, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedWorkflowId, selectedWorkflowIdFromQuery]);
+  }, [selectedWorkflow, selectedWorkflowIdFromQuery, selectedWorkflowTypeFromQuery]);
 
   // 描述：路由变化时清空删除确认态，避免跨工作流残留“确定删除”状态。
   useEffect(() => {
@@ -1518,12 +1553,13 @@ function WorkflowsSidebar({
 
   // 描述：基于当前选中工作流创建新工作流，并自动切换到新建项继续编辑。
   const handleCreateWorkflow = () => {
-    const created = isModelAgent
-      ? createModelWorkflowFromTemplate(selectedWorkflowId || undefined)
-      : createCodeWorkflowFromTemplate(selectedWorkflowId || undefined);
+    const workflowType = selectedWorkflow?.type || "code";
+    const created = workflowType === "model"
+      ? createModelWorkflowFromTemplate(selectedWorkflow?.id || undefined)
+      : createCodeWorkflowFromTemplate(selectedWorkflow?.id || undefined);
     setWorkflowVersion((value) => value + 1);
     setPendingDeleteWorkflowId("");
-    navigateToWorkflowPage(created.id);
+    navigateToWorkflowPage(workflowType, created.id);
   };
 
   // 描述：删除按钮采用二次确认交互：首次点击进入确认态，二次点击执行删除。
@@ -1535,16 +1571,23 @@ function WorkflowsSidebar({
       return;
     }
 
-    const targetWorkflow = workflows.find((item) => item.id === workflowId);
-    const deleted = isModelAgent
-      ? deleteModelWorkflow(workflowId)
-      : deleteCodeWorkflow(workflowId);
+    const targetWorkflow = workflows.find((item) => item.key === workflowId);
+    if (!targetWorkflow) {
+      AriMessage.warning({
+        content: "工作流不存在或已删除，请刷新后重试。",
+        duration: 3000,
+        showClose: true,
+      });
+      setPendingDeleteWorkflowId("");
+      return;
+    }
+    const deleted = targetWorkflow.type === "model"
+      ? deleteModelWorkflow(targetWorkflow.id)
+      : deleteCodeWorkflow(targetWorkflow.id);
     if (!deleted) {
-      const warningContent = !targetWorkflow
-        ? "工作流不存在或已删除，请刷新后重试。"
-        : targetWorkflow.shared
-          ? "默认工作流不可删除，请先复制后再管理。"
-          : "工作流删除失败，请稍后重试。";
+      const warningContent = targetWorkflow.shared
+        ? "默认工作流不可删除，请先复制后再管理。"
+        : "工作流删除失败，请稍后重试。";
       AriMessage.warning({
         content: warningContent,
         duration: 3000,
@@ -1557,9 +1600,13 @@ function WorkflowsSidebar({
     setWorkflowVersion((value) => value + 1);
     setPendingDeleteWorkflowId("");
 
-    if (selectedWorkflowId === workflowId) {
-      const nextWorkflows = isModelAgent ? listModelWorkflows() : listCodeWorkflows();
-      navigateToWorkflowPage(nextWorkflows[0]?.id || "", true);
+    if (selectedWorkflow?.key === workflowId) {
+      const nextWorkflows = [
+        ...listCodeWorkflows().map((item) => ({ type: "code" as AgentKey, id: item.id })),
+        ...listModelWorkflows().map((item) => ({ type: "model" as AgentKey, id: item.id })),
+      ];
+      const nextTarget = nextWorkflows[0];
+      navigateToWorkflowPage(nextTarget?.type || "code", nextTarget?.id || "", true);
     }
   };
 
@@ -1567,31 +1614,31 @@ function WorkflowsSidebar({
   const workflowMenuItems = useMemo(
     () =>
       workflows.map((item) => ({
-        key: item.id,
+        key: item.key,
         label: item.name,
         actions: (
           <AriButton
             size="sm"
-            type={pendingDeleteWorkflowId === item.id ? "default" : "text"}
-            ghost={pendingDeleteWorkflowId !== item.id}
-            color={pendingDeleteWorkflowId === item.id ? "danger" : "default"}
+            type={pendingDeleteWorkflowId === item.key ? "default" : "text"}
+            ghost={pendingDeleteWorkflowId !== item.key}
+            color={pendingDeleteWorkflowId === item.key ? "danger" : "default"}
             icon={
-              pendingDeleteWorkflowId === item.id
+              pendingDeleteWorkflowId === item.key
                 ? undefined
-                : hoveredDeleteWorkflowId === item.id
+                : hoveredDeleteWorkflowId === item.key
                   ? "delete_fill"
                   : "delete"
             }
-            label={pendingDeleteWorkflowId === item.id ? "确定" : undefined}
+            label={pendingDeleteWorkflowId === item.key ? "确定" : undefined}
             onMouseEnter={() => {
-              setHoveredDeleteWorkflowId(item.id);
+              setHoveredDeleteWorkflowId(item.key);
             }}
             onMouseLeave={() => {
-              setHoveredDeleteWorkflowId((current) => (current === item.id ? "" : current));
-              setPendingDeleteWorkflowId((current) => (current === item.id ? "" : current));
+              setHoveredDeleteWorkflowId((current) => (current === item.key ? "" : current));
+              setPendingDeleteWorkflowId((current) => (current === item.key ? "" : current));
             }}
             onClick={(event: MouseEvent<HTMLElement>) => {
-              handleDeleteWorkflow(event, item.id);
+              handleDeleteWorkflow(event, item.key);
             }}
           />
         ),
@@ -1603,7 +1650,7 @@ function WorkflowsSidebar({
   return (
     <AriContainer className="desk-sidebar">
       <SidebarBackHeader
-        onBack={() => navigate(`/agents/${agentKey}/settings`)}
+        onBack={() => navigate("/home")}
         label="返回"
         rightAction={(
           <AriButton
@@ -1624,10 +1671,14 @@ function WorkflowsSidebar({
         <AriMenu
           className="desk-sidebar-nav"
           items={workflowMenuItems}
-          selectedKey={selectedWorkflowId}
+          selectedKey={selectedWorkflowMenuKey}
           onSelect={(key: string) => {
             setPendingDeleteWorkflowId("");
-            navigateToWorkflowPage(key);
+            const target = workflows.find((item) => item.key === key);
+            if (!target) {
+              return;
+            }
+            navigateToWorkflowPage(target.type, target.id);
           }}
         />
       </AriContainer>
@@ -1729,12 +1780,11 @@ export function ClientSidebar({ user, onLogout, availableAgents, routeAccess }: 
     return <AiKeySidebar user={user} onLogout={onLogout} routeAccess={routeAccess} />;
   }
 
-  if (mode === "workflow" && agentKey) {
+  if (mode === "workflow") {
     return (
       <WorkflowsSidebar
         user={user}
         onLogout={onLogout}
-        agentKey={agentKey}
         routeAccess={routeAccess}
       />
     );

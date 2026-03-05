@@ -26,11 +26,7 @@ impl AgentTool for RunShellTool {
         crate::tools::RiskLevel::High
     }
 
-    fn execute(
-        &self,
-        args: &Value,
-        context: ToolContext,
-    ) -> Result<Value, ProtocolError> {
+    fn execute(&self, args: &Value, context: ToolContext) -> Result<Value, ProtocolError> {
         let command_text = get_required_string(
             args,
             "command",
@@ -43,7 +39,8 @@ impl AgentTool for RunShellTool {
             600,
         )? as u64;
         let command_names = evaluate_run_shell_policy(command_text.as_str())?;
-        let validated_paths = validate_shell_paths_in_sandbox(command_text.as_str(), context.sandbox_root)?;
+        let validated_paths =
+            validate_shell_paths_in_sandbox(command_text.as_str(), context.sandbox_root)?;
 
         #[cfg(target_os = "windows")]
         let command = {
@@ -450,9 +447,7 @@ pub fn normalize_shell_path_input(token: &str) -> String {
     if let Some(value) = raw.strip_prefix("file://") {
         raw = value.to_string();
     }
-    let wildcard_pos = raw
-        .find(['*', '?', '['])
-        .unwrap_or(raw.len());
+    let wildcard_pos = raw.find(['*', '?', '[']).unwrap_or(raw.len());
     let mut candidate = raw
         .get(..wildcard_pos)
         .unwrap_or_default()

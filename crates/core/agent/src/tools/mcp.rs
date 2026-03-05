@@ -3,9 +3,9 @@ use serde_json::Value;
 use zodileap_mcp_common::ProtocolError;
 
 #[allow(unused_imports)]
-use serde_json::json;
-#[allow(unused_imports)]
 use super::utils::get_required_string;
+#[allow(unused_imports)]
+use serde_json::json;
 
 pub struct McpModelTool {
     pub blender_bridge_addr: Option<String>,
@@ -20,11 +20,7 @@ impl AgentTool for McpModelTool {
         "执行模型工具桥接调用；当前默认未启用，作为后续 MCP 接入预留。"
     }
 
-    fn execute(
-        &self,
-        args: &Value,
-        _context: ToolContext,
-    ) -> Result<Value, ProtocolError> {
+    fn execute(&self, args: &Value, _context: ToolContext) -> Result<Value, ProtocolError> {
         #[cfg(feature = "with-mcp-model")]
         {
             let action_text = get_required_string(

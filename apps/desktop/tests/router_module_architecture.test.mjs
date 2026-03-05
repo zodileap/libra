@@ -30,8 +30,11 @@ test("TestDesktopRouterShouldUseModuleFoldersAndBuildTimeModuleFilter", () => {
   assert.match(routerSource, /from "\.\.\/modules\/common\/routes"/);
   assert.match(routerSource, /from "\.\.\/modules\/code\/routes"/);
   assert.match(routerSource, /from "\.\.\/modules\/model\/routes"/);
-  assert.match(routerSource, /CodeWorkflowPageLazy/);
-  assert.match(routerSource, /ModelWorkflowPageLazy/);
+  assert.match(routerSource, /CommonWorkflowsPageLazy/);
+  assert.match(routerSource, /CommonMcpPageLazy/);
+  assert.match(routerSource, /LegacyWorkflowRedirect/);
+  assert.match(routerSource, /path=\{WORKFLOW_PAGE_PATH\.slice\(1\)\}/);
+  assert.match(routerSource, /path=\{MCP_PAGE_PATH\.slice\(1\)\}/);
   assert.match(routerSource, /path="agents\/code\/workflows"/);
   assert.match(routerSource, /path="agents\/model\/workflows"/);
   assert.match(moduleAccessSource, /export function resolveBuildEnabledModules/);
@@ -60,4 +63,5 @@ test("TestDesktopSidebarShouldRespectRouteAccessVisibility", () => {
   assert.match(commonRoutesSource, /routeAccess\.isAgentEnabled\(agent\.key\)/);
   assert.match(sidebarSource, /routeAccess\.isModuleEnabled\("workflow"\)/);
   assert.match(sidebarSource, /routeAccess\.isModuleEnabled\("skill"\)/);
+  assert.match(sidebarSource, /routeAccess\.isModuleEnabled\("mcp"\)/);
 });

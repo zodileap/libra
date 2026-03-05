@@ -1,4 +1,6 @@
-use super::utils::{execute_command_with_timeout, parse_positive_usize_arg, resolve_executable_binary};
+use super::utils::{
+    execute_command_with_timeout, parse_positive_usize_arg, resolve_executable_binary,
+};
 use super::{AgentTool, ToolContext};
 use serde_json::{json, Value};
 use std::process::Command;
@@ -16,11 +18,7 @@ impl AgentTool for GitStatusTool {
         "查看当前沙盒工作目录的 git 状态（包括未追踪、已修改和暂存的文件）。无参数。"
     }
 
-    fn execute(
-        &self,
-        _args: &Value,
-        context: ToolContext,
-    ) -> Result<Value, ProtocolError> {
+    fn execute(&self, _args: &Value, context: ToolContext) -> Result<Value, ProtocolError> {
         let git_bin = resolve_executable_binary("git", "--version").ok_or_else(|| {
             ProtocolError::new(
                 "core.agent.python.git_status.git_missing",
@@ -29,9 +27,15 @@ impl AgentTool for GitStatusTool {
         })?;
 
         let mut command = Command::new(git_bin);
-        command.arg("status").arg("-s").current_dir(context.sandbox_root);
+        command
+            .arg("status")
+            .arg("-s")
+            .current_dir(context.sandbox_root);
 
-        let output = execute_command_with_timeout(command, Duration::from_secs(context.policy.tool_timeout_secs))?;
+        let output = execute_command_with_timeout(
+            command,
+            Duration::from_secs(context.policy.tool_timeout_secs),
+        )?;
         if output.timed_out {
             return Err(ProtocolError::new(
                 "core.agent.python.git_status.timeout",
@@ -67,11 +71,7 @@ impl AgentTool for GitDiffTool {
         "查看当前沙盒工作目录的 Git diff。支持通过 path 过滤。参数：{\"path\": \"可选的相对路径或文件模式\"}"
     }
 
-    fn execute(
-        &self,
-        args: &Value,
-        context: ToolContext,
-    ) -> Result<Value, ProtocolError> {
+    fn execute(&self, args: &Value, context: ToolContext) -> Result<Value, ProtocolError> {
         let git_bin = resolve_executable_binary("git", "--version").ok_or_else(|| {
             ProtocolError::new(
                 "core.agent.python.git_diff.git_missing",
@@ -80,22 +80,28 @@ impl AgentTool for GitDiffTool {
         })?;
 
         let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
-        
+
         let mut staged_cmd = Command::new(git_bin.as_str());
         staged_cmd.arg("diff").arg("--staged");
         if !path.trim().is_empty() {
             staged_cmd.arg("--").arg(path.trim());
         }
         staged_cmd.current_dir(context.sandbox_root);
-        let staged_output = execute_command_with_timeout(staged_cmd, Duration::from_secs(context.policy.tool_timeout_secs))?;
-        
+        let staged_output = execute_command_with_timeout(
+            staged_cmd,
+            Duration::from_secs(context.policy.tool_timeout_secs),
+        )?;
+
         let mut unstaged_cmd = Command::new(git_bin.as_str());
         unstaged_cmd.arg("diff");
         if !path.trim().is_empty() {
             unstaged_cmd.arg("--").arg(path.trim());
         }
         unstaged_cmd.current_dir(context.sandbox_root);
-        let unstaged_output = execute_command_with_timeout(unstaged_cmd, Duration::from_secs(context.policy.tool_timeout_secs))?;
+        let unstaged_output = execute_command_with_timeout(
+            unstaged_cmd,
+            Duration::from_secs(context.policy.tool_timeout_secs),
+        )?;
 
         if staged_output.timed_out || unstaged_output.timed_out {
             return Err(ProtocolError::new(
@@ -147,11 +153,7 @@ impl AgentTool for GitLogTool {
         "查看项目的 Git 提交日志历史。参数：{\"limit\": \"限制条数，默认 5\"}"
     }
 
-    fn execute(
-        &self,
-        args: &Value,
-        context: ToolContext,
-    ) -> Result<Value, ProtocolError> {
+    fn execute(&self, args: &Value, context: ToolContext) -> Result<Value, ProtocolError> {
         let git_bin = resolve_executable_binary("git", "--version").ok_or_else(|| {
             ProtocolError::new(
                 "core.agent.python.git_log.git_missing",
@@ -168,8 +170,11 @@ impl AgentTool for GitLogTool {
             .arg("--oneline")
             .current_dir(context.sandbox_root);
 
-        let output = execute_command_with_timeout(command, Duration::from_secs(context.policy.tool_timeout_secs))?;
-        
+        let output = execute_command_with_timeout(
+            command,
+            Duration::from_secs(context.policy.tool_timeout_secs),
+        )?;
+
         if output.timed_out {
             return Err(ProtocolError::new(
                 "core.agent.python.git_log.timeout",

@@ -97,9 +97,10 @@ test("TestCodeProjectSettingsPageShouldSupportNameAndDependencyRules", () => {
   assert.match(pageSource, /handleApplyProjectProfileJson/);
   assert.match(pageSource, /parseProjectProfileDraftFromJson\(/);
   assert.match(pageSource, /setProjectProfileJsonStatus\("JSON 已应用，结构化信息将自动保存。"\);/);
-  assert.match(pageSource, /title="API 数据实体"/);
-  assert.match(pageSource, /title="前端页面清单"/);
-  assert.match(pageSource, /title="前端目录结构"/);
+  assert.match(pageSource, /orderedKnowledgeSections\.map\(\(section\) =>/);
+  assert.match(pageSource, /handleUpdateKnowledgeSectionFacet/);
+  assert.match(pageSource, /buildFacetRowTitle\(section\.title, facet\.label\)/);
+  assert.match(pageSource, /PROJECT_PROFILE_SECTION_KEYS/);
   assert.doesNotMatch(pageSource, /title="前端技术栈"/);
   assert.doesNotMatch(pageSource, /title="后端技术栈"/);
   assert.match(pageSource, /<AriInput\.TextList/);
@@ -137,6 +138,7 @@ test("TestCodeProjectSettingsPageShouldSupportNameAndDependencyRules", () => {
   assert.match(dataSource, /export interface CodeWorkspaceProjectProfile/);
   assert.match(dataSource, /workspacePathHash: string;/);
   assert.match(dataSource, /workspaceSignature: string;/);
+  assert.match(dataSource, /knowledgeSections: CodeWorkspaceProjectKnowledgeSection\[];/);
   assert.match(dataSource, /apiDataModel: CodeWorkspaceProjectApiDataModel;/);
   assert.match(dataSource, /frontendPageLayout: CodeWorkspaceProjectFrontendPageLayout;/);
   assert.match(dataSource, /frontendCodeStructure: CodeWorkspaceProjectFrontendCodeStructure;/);

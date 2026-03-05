@@ -7,6 +7,7 @@ export const DESKTOP_ROUTE_MODULE_MANIFEST: Array<{
 }> = [
   { key: "settings", title: "设置" },
   { key: "skill", title: "技能" },
+  { key: "mcp", title: "MCP" },
   { key: "agent", title: "智能体" },
   { key: "session", title: "会话" },
   { key: "workflow", title: "工作流" },

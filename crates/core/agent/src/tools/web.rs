@@ -78,13 +78,11 @@ fn ensure_url_allowed(url: &str, allowlist: &[String]) -> Result<(), ProtocolErr
     if is_host_allowed(host.as_str(), allowlist) {
         return Ok(());
     }
-    Err(
-        ProtocolError::new(
-            "core.agent.python.web.domain_not_allowed",
-            format!("当前域名不在白名单中: {}", host),
-        )
-        .with_suggestion("请通过 ZODILEAP_WEB_ALLOWED_DOMAINS 配置允许访问的域名。"),
+    Err(ProtocolError::new(
+        "core.agent.python.web.domain_not_allowed",
+        format!("当前域名不在白名单中: {}", host),
     )
+    .with_suggestion("请通过 ZODILEAP_WEB_ALLOWED_DOMAINS 配置允许访问的域名。"))
 }
 
 /// 描述：解析联网工具 method 参数，当前仅允许 GET。
@@ -97,13 +95,11 @@ fn resolve_web_method(args: &Value, default_value: &str) -> Result<String, Proto
         .unwrap_or(default_value)
         .to_uppercase();
     if method != "GET" {
-        return Err(
-            ProtocolError::new(
-                "core.agent.python.web.method_not_allowed",
-                format!("仅支持 GET 方法，收到 {}", method),
-            )
-            .with_suggestion("请将 method 调整为 GET。"),
-        );
+        return Err(ProtocolError::new(
+            "core.agent.python.web.method_not_allowed",
+            format!("仅支持 GET 方法，收到 {}", method),
+        )
+        .with_suggestion("请将 method 调整为 GET。"));
     }
     Ok(method)
 }
@@ -119,12 +115,9 @@ impl AgentTool for WebSearchTool {
         "联网搜索公开网页并返回结构化结果，默认通过 DuckDuckGo Instant Answer API。参数：{\"query\": \"搜索词\", \"limit\": \"条数，默认 5\"}"
     }
 
-    fn execute(
-        &self,
-        args: &Value,
-        context: ToolContext,
-    ) -> Result<Value, ProtocolError> {
-        let query = get_required_string(args, "query", "core.agent.python.web_search.query_missing")?;
+    fn execute(&self, args: &Value, context: ToolContext) -> Result<Value, ProtocolError> {
+        let query =
+            get_required_string(args, "query", "core.agent.python.web_search.query_missing")?;
         let limit = parse_positive_usize_arg(args, "limit", 5, 20)?;
         let timeout_secs = parse_positive_usize_arg(
             args,
@@ -132,12 +125,8 @@ impl AgentTool for WebSearchTool {
             context.policy.tool_timeout_secs as usize,
             120,
         )?;
-        let max_bytes = parse_positive_usize_arg(
-            args,
-            "max_bytes",
-            DEFAULT_WEB_MAX_BYTES,
-            MAX_WEB_MAX_BYTES,
-        )?;
+        let max_bytes =
+            parse_positive_usize_arg(args, "max_bytes", DEFAULT_WEB_MAX_BYTES, MAX_WEB_MAX_BYTES)?;
         let _method = resolve_web_method(args, "GET")?;
         let curl_bin = resolve_executable_binary("curl", "--version").ok_or_else(|| {
             ProtocolError::new(
@@ -176,13 +165,11 @@ impl AgentTool for WebSearchTool {
             ));
         }
         if output.stdout.len() > max_bytes {
-            return Err(
-                ProtocolError::new(
-                    "core.agent.python.web_search.too_large",
-                    format!("响应体过大（{} bytes）", output.stdout.len()),
-                )
-                .with_suggestion("请缩小查询范围，或调小 max_bytes。"),
-            );
+            return Err(ProtocolError::new(
+                "core.agent.python.web_search.too_large",
+                format!("响应体过大（{} bytes）", output.stdout.len()),
+            )
+            .with_suggestion("请缩小查询范围，或调小 max_bytes。"));
         }
         let body = String::from_utf8_lossy(output.stdout.as_slice()).to_string();
         let parsed: Value = serde_json::from_str(body.as_str()).map_err(|err| {
@@ -211,11 +198,7 @@ impl AgentTool for FetchUrlTool {
         "抓取网页正文片段，用于读取文档详情而非仅搜索摘要。参数：{\"url\": \"URL\", \"max_chars\": \"最大字符数，默认 8000\"}"
     }
 
-    fn execute(
-        &self,
-        args: &Value,
-        context: ToolContext,
-    ) -> Result<Value, ProtocolError> {
+    fn execute(&self, args: &Value, context: ToolContext) -> Result<Value, ProtocolError> {
         let url = get_required_string(args, "url", "core.agent.python.fetch_url.url_missing")?;
         if !(url.starts_with("https://") || url.starts_with("http://")) {
             return Err(ProtocolError::new(
@@ -231,12 +214,8 @@ impl AgentTool for FetchUrlTool {
             120,
         )?;
         let max_chars = parse_positive_usize_arg(args, "max_chars", 8000, 120_000)?;
-        let max_bytes = parse_positive_usize_arg(
-            args,
-            "max_bytes",
-            DEFAULT_WEB_MAX_BYTES,
-            MAX_WEB_MAX_BYTES,
-        )?;
+        let max_bytes =
+            parse_positive_usize_arg(args, "max_bytes", DEFAULT_WEB_MAX_BYTES, MAX_WEB_MAX_BYTES)?;
         let allowlist = resolve_allowed_web_domains();
         ensure_url_allowed(url.as_str(), allowlist.as_slice())?;
         let timeout_text = timeout_secs.to_string();
@@ -272,13 +251,11 @@ impl AgentTool for FetchUrlTool {
             ));
         }
         if output.stdout.len() > max_bytes {
-            return Err(
-                ProtocolError::new(
-                    "core.agent.python.fetch_url.too_large",
-                    format!("响应体过大（{} bytes）", output.stdout.len()),
-                )
-                .with_suggestion("请缩小抓取范围，或调小 max_bytes。"),
-            );
+            return Err(ProtocolError::new(
+                "core.agent.python.fetch_url.too_large",
+                format!("响应体过大（{} bytes）", output.stdout.len()),
+            )
+            .with_suggestion("请缩小抓取范围，或调小 max_bytes。"));
         }
         let html = String::from_utf8_lossy(output.stdout.as_slice()).to_string();
         let plain_text = strip_html_tags(html.as_str());

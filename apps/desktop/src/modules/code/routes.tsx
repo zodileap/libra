@@ -2,6 +2,7 @@ import { lazy, type ComponentType } from "react";
 import { useParams } from "react-router-dom";
 import { SessionPage } from "../../widgets/session/page";
 import { CODE_SESSION_UI_CONFIG } from "../../widgets/session/config";
+import { resolveWorkflowEditorPath, WORKFLOW_PAGE_PATH } from "../common/routes";
 import { CodeAgentPage } from "./pages/code-agent-page";
 import { CodeAgentSettingsPage } from "./pages/code-agent-settings-page";
 import { CodeProjectSettingsPage } from "./pages/code-project-settings-page";
@@ -35,7 +36,7 @@ export const CODE_AGENT_SETTINGS_PATH = "/agents/code/settings" as const;
 // 描述:
 //
 //   - 代码智能体工作流页路径。
-export const CODE_WORKFLOW_PATH = "/agents/code/workflows" as const;
+export const CODE_WORKFLOW_PATH = WORKFLOW_PAGE_PATH;
 
 // 描述:
 //
@@ -81,8 +82,5 @@ export const CODE_SIDEBAR_QUICK_ACTIONS = [
 
 // 描述：构建代码智能体工作流页跳转地址，保持 workflowId 查询参数一致。
 export function resolveCodeWorkflowPath(workflowId: string): string {
-  if (!workflowId) {
-    return CODE_WORKFLOW_PATH;
-  }
-  return `${CODE_WORKFLOW_PATH}?workflowId=${encodeURIComponent(workflowId)}`;
+  return resolveWorkflowEditorPath("code", workflowId);
 }

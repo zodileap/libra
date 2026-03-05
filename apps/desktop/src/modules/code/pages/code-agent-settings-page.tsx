@@ -21,7 +21,7 @@ export function CodeAgentSettingsPage() {
             <AriButton
               color="primary"
               label="进入工作流设置"
-              onClick={() => navigate("/agents/code/workflows")}
+              onClick={() => navigate("/workflows")}
             />
           )}
         />
@@ -47,7 +47,7 @@ export function CodeAgentSettingsPage() {
             <AriButton
               color="primary"
               label="打开工作流设置"
-              onClick={() => navigate("/agents/code/workflows")}
+              onClick={() => navigate("/workflows")}
             />
           </DeskSettingsRow>
         </AriContainer>

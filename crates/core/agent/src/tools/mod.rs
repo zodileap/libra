@@ -7,11 +7,11 @@ pub mod todo;
 pub mod utils;
 pub mod web;
 
+use crate::policy::AgentPolicy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
 use zodileap_mcp_common::ProtocolError;
-use crate::policy::AgentPolicy;
 
 /// 描述：工具执行风险等级。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,15 +43,11 @@ pub trait AgentTool: Send + Sync {
     }
 
     /// 描述：执行工具逻辑。
-    /// 
+    ///
     /// Params:
     ///   - args: 调用参数（JSON）。
     ///   - context: 执行上下文。
-    fn execute(
-        &self,
-        args: &Value,
-        context: ToolContext,
-    ) -> Result<Value, ProtocolError>;
+    fn execute(&self, args: &Value, context: ToolContext) -> Result<Value, ProtocolError>;
 }
 
 /// 描述：工具注册表，管理一组可用的智能体工具。
@@ -81,6 +77,9 @@ impl ToolRegistry {
     }
 
     pub fn list_tools(&self) -> Vec<(&str, &str)> {
-        self.tools.iter().map(|(name, tool)| (name.as_str(), tool.description())).collect()
+        self.tools
+            .iter()
+            .map(|(name, tool)| (name.as_str(), tool.description()))
+            .collect()
     }
 }

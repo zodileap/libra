@@ -103,7 +103,7 @@ test("TestSessionPageShouldKeepHeartbeatDuringLongWait", () => {
   //   - 在长时间无流式事件时，应存在心跳机制持续输出进行中提示，避免用户感知卡死。
   assert.match(source, /function buildAssistantHeartbeatSegment/);
   assert.match(source, /const startAssistantRunHeartbeat = \(messageId: string\) =>/);
-  assert.match(source, /正在处理当前步骤/);
+  assert.match(source, /等待工具返回本步结果…/);
 });
 
 test("TestSessionPromptInputShouldSupportKeyboardHotkeys", () => {
@@ -144,7 +144,47 @@ test("TestSessionPageShouldExposeDebugFlowRecordsToDevPanel", () => {
   //   - Dev 调试快照应携带全链路 debugFlowRecords，便于定位“发送→规划→执行→总结”全流程。
   assert.match(source, /debugFlowRecords/);
   assert.match(source, /appendDebugFlowRecord/);
+  assert.match(source, /const emitSessionDebugSnapshot = useCallback\(\(\) =>/);
+  assert.match(source, /window\.addEventListener\("zodileap:session-debug-request"/);
   assert.match(source, /debugFlowRecords: debugFlowRecords.slice\(0, 120\)/);
+});
+
+test("TestSessionPageShouldPersistDebugArtifactsWithoutOpeningDevPanel", () => {
+  const source = readDesktopSource("src/widgets/session/page.tsx");
+  const dataSource = readDesktopSource("src/shared/data.ts");
+
+  // 描述:
+  //
+  //   - 会话调试资产应独立持久化，不依赖 Dev 调试窗口是否打开，避免复制排查内容出现“暂无原始收发”。
+  assert.match(source, /setSessionAiPromptRaw\(codePrompt\);/);
+  assert.match(source, /setSessionAiResponseRaw\(""\);/);
+  assert.match(source, /const promptRaw = String\(sessionAiPromptRaw \|\| codeAgentPromptRawRef\.current \|\| ""\)\.trim\(\);/);
+  assert.match(source, /upsertSessionDebugArtifact\(\{/);
+  assert.match(source, /getSessionDebugArtifact\(normalizedAgentKey, sessionId\)/);
+  assert.match(dataSource, /SESSION_DEBUG_ARTIFACT_STORAGE_KEY/);
+  assert.match(dataSource, /export function upsertSessionDebugArtifact/);
+  assert.match(dataSource, /export function getSessionDebugArtifact/);
+  assert.match(dataSource, /export function removeSessionDebugArtifact/);
+});
+
+test("TestSessionPageShouldNotClearDevSnapshotOnEachStateRefresh", () => {
+  const source = readDesktopSource("src/widgets/session/page.tsx");
+
+  // 描述:
+  //
+  //   - 会话调试快照刷新 effect 的 cleanup 只能清理定时器，避免每次状态更新都把 Dev 面板置空。
+  assert.match(
+    source,
+    /const dispatchDelay = sending \? 360 : 120[\s\S]*return \(\) => \{\s*clearDebugSnapshotTimer\(\);\s*\};\s*\n  \}, \[/,
+  );
+
+  // 描述:
+  //
+  //   - 快照清空事件应只在页面真正卸载时触发，防止调试内容闪烁丢失。
+  assert.match(
+    source,
+    /useEffect\(\(\) => \(\) => \{[\s\S]*new CustomEvent\("zodileap:session-debug", \{\s*detail: null,/,
+  );
 });
 
 test("TestSessionPageShouldSupportActiveCancelAndCancelledStream", () => {
@@ -204,16 +244,40 @@ test("TestTauriShouldExposeCancelAgentSessionCommand", () => {
   assert.match(source, /cancel_agent_session,/);
 });
 
-test("TestDevDebugFloatShouldShowFlowAndSupportLineWrap", () => {
+test("TestTauriShouldRejectEmptyAgentRunResultPayload", () => {
+  const source = readDesktopSource("src-tauri/src/main.rs");
+
+  // 描述:
+  //
+  //   - 当核心返回空消息且无动作时，桌面层应判定为失败，避免前端出现“执行完成但无任何产物”的假成功状态。
+  assert.match(source, /core\.desktop\.agent\.empty_result/);
+  assert.match(source, /执行结束但未返回任何结果，请重试。/);
+  assert.match(source, /value\.message = format!\("执行完成（工具调用 \{\} 次）", value\.actions\.len\(\)\);/);
+});
+
+test("TestDevDebugFloatShouldUseCompactCopyFirstPanel", () => {
   const source = readDesktopSource("src/widgets/dev-debug-float.tsx");
   const styleSource = readDesktopSource("src/styles.css");
 
   // 描述:
   //
-  //   - Dev 调试窗口应展示执行全链路和模型规划明细，并对长文本进行换行防止溢出。
-  assert.match(source, /执行全链路（前端视角）/);
-  assert.match(source, /模型规划 LLM 明细（后端视角）/);
-  assert.match(source, /EVENT_MODEL_DEBUG_TRACE/);
+  //   - Dev 调试窗口应采用精简模式，仅保留复制入口与基础提示，不再展示过程日志列表。
+  assert.match(source, /label="复制会话内容"/);
+  assert.match(source, /resolveCopyTargetSessionId/);
+  assert.match(source, /zodileap:session-debug-request/);
+  assert.match(source, /zodileap:session-copy-request/);
+  assert.match(source, /zodileap:session-copy-result/);
+  assert.match(source, /当前会话已连接，点击“复制会话内容”可导出完整排查信息。/);
+  assert.doesNotMatch(source, /执行全链路（前端视角）/);
+  assert.doesNotMatch(source, /模型规划 LLM 明细（后端视角）/);
+  assert.doesNotMatch(source, /Agent 日志/);
+  assert.doesNotMatch(source, /Workflow 步骤/);
+  assert.doesNotMatch(source, /Trace \/ Session 事件 \/ 资产/);
+  assert.doesNotMatch(source, /消息数=/);
+  assert.doesNotMatch(source, /暂无全链路记录/);
+  assert.doesNotMatch(source, /暂无模型规划 LLM 明细/);
+  assert.doesNotMatch(source, /暂无 session 轨迹记录/);
+  assert.match(styleSource, /\.desk-dev-debug-head-actions/);
   assert.match(styleSource, /\.desk-dev-debug-line/);
   assert.match(styleSource, /overflow-wrap:\s*anywhere/);
 });

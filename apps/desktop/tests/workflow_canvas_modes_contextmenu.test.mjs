@@ -63,7 +63,7 @@ test("TestWorkflowCanvasShouldSupportModeSwitchAndContextDelete", () => {
   assert.match(source, /rows=\{3\}/);
   assert.match(source, /autoSize=\{\{\s*minRows:\s*3,\s*maxRows:\s*8\s*\}\}/);
   assert.match(source, /value=\{workflowInfoName\}/);
-  assert.match(source, /value=\{\`\$\{agentKey === "model" \? "模型工作流" : "代码工作流"\} · \$\{workflowInfoDescription\} · v\$\{workflowInfoVersion\}\`\}/);
+  assert.match(source, /value=\{\`工作流 · \$\{workflowInfoDescription\} · v\$\{workflowInfoVersion\}\`\}/);
   assert.match(source, /const WORKFLOW_NODE_TYPE = "workflowNode";/);
   assert.match(source, /<NodeResizer/);
   assert.match(source, /isVisible=\{Boolean\(selected\)\}/);

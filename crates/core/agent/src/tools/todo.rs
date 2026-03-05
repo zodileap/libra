@@ -16,11 +16,7 @@ impl AgentTool for TodoReadTool {
         "读取当前工作目录的任务清单内容。无参数。"
     }
 
-    fn execute(
-        &self,
-        _args: &Value,
-        context: ToolContext,
-    ) -> Result<Value, ProtocolError> {
+    fn execute(&self, _args: &Value, context: ToolContext) -> Result<Value, ProtocolError> {
         let todo_path = resolve_todo_file_path(context.sandbox_root);
         if !todo_path.exists() {
             return Ok(json!({
@@ -69,11 +65,7 @@ impl AgentTool for TodoWriteTool {
         crate::tools::RiskLevel::High
     }
 
-    fn execute(
-        &self,
-        args: &Value,
-        context: ToolContext,
-    ) -> Result<Value, ProtocolError> {
+    fn execute(&self, args: &Value, context: ToolContext) -> Result<Value, ProtocolError> {
         let items = args
             .get("items")
             .and_then(|value| value.as_array())

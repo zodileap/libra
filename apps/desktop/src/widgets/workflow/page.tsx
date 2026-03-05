@@ -79,7 +79,7 @@ interface ParsedCanvasNodeData {
 
 // 描述:
 //
-//   - 定义工作流画布页面入参，用于区分 code/model 两类工作流。
+//   - 定义工作流画布页面入参，用于加载目标工作流集合。
 interface WorkflowCanvasPageProps {
   agentKey: AgentKey;
 }
@@ -536,11 +536,11 @@ function buildSkillVersionOptions(versions: string[], selectedVersion: string) {
 
 // 描述：
 //
-//   - 渲染工作流编辑器页面，按智能体类型加载并保存对应工作流数据。
+//   - 渲染工作流编辑器页面，按工作流类型加载并保存对应工作流数据。
 //
 // Params:
 //
-//   - agentKey: 智能体标识（code/model）。
+//   - agentKey: 工作流类型标识（code/model）。
 export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
   const [searchParams] = useSearchParams();
   const preferredWorkflowId = searchParams.get("workflowId") || "";
@@ -1132,7 +1132,7 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
           <AriTypography
             className="desk-workflow-head-subtitle"
             variant="caption"
-            value={`${agentKey === "model" ? "模型工作流" : "代码工作流"} · ${workflowInfoDescription} · v${workflowInfoVersion}`}
+            value={`工作流 · ${workflowInfoDescription} · v${workflowInfoVersion}`}
           />
         </AriFlex>
         <AriFlex

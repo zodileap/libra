@@ -48,6 +48,9 @@ export const COMMANDS = {
   CHECK_PROJECT_DEPENDENCY_RULES: "check_project_dependency_rules",
   APPLY_PROJECT_DEPENDENCY_RULE_UPGRADES: "apply_project_dependency_rule_upgrades",
   INSPECT_CODE_WORKSPACE_PROFILE_SEED: "inspect_code_workspace_profile_seed",
+  CHECK_APIFOX_MCP_RUNTIME_STATUS: "check_apifox_mcp_runtime_status",
+  INSTALL_APIFOX_MCP_RUNTIME: "install_apifox_mcp_runtime",
+  UNINSTALL_APIFOX_MCP_RUNTIME: "uninstall_apifox_mcp_runtime",
   RETRY_MODEL_SESSION_LAST_STEP: "retry_model_session_last_step",
 } as const;
 
@@ -122,6 +125,7 @@ export const STORAGE_KEYS = {
   MODEL_MCP_CAPABILITIES: "zodileap.desktop.modelMcpCapabilities",
   AI_KEYS: "zodileap.desktop.aiKeys",
   SKILL_INSTALLED_IDS: "zodileap.desktop.skills.installed",
+  MCP_INSTALLED_IDS: "zodileap.desktop.mcps.installed",
   MODEL_SKILL_SELECTED_IDS: "zodileap.desktop.model.selectedSkillIds",
   CODE_SKILL_SELECTED_IDS: "zodileap.desktop.code.selectedSkillIds",
   MODEL_WORKFLOWS: "zodileap.desktop.model.workflows",

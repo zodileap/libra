@@ -18,7 +18,11 @@ pub fn get_required_string(args: &Value, key: &str, code: &str) -> Result<String
 }
 
 /// 描述：读取必填原始字符串参数，保留首尾空白与换行，适用于文件内容和补丁内容。
-pub fn get_required_raw_string(args: &Value, key: &str, code: &str) -> Result<String, ProtocolError> {
+pub fn get_required_raw_string(
+    args: &Value,
+    key: &str,
+    code: &str,
+) -> Result<String, ProtocolError> {
     args.get(key)
         .and_then(|value| value.as_str())
         .map(str::to_string)
@@ -246,7 +250,14 @@ pub fn scrub_sensitive_info(text: &str) -> String {
     }
 
     let patterns = [
-        "key", "password", "secret", "token", "auth", "credential", "api_key", "access_key",
+        "key",
+        "password",
+        "secret",
+        "token",
+        "auth",
+        "credential",
+        "api_key",
+        "access_key",
     ];
 
     let mut result = text.to_string();

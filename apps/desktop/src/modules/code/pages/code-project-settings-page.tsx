@@ -10,9 +10,7 @@ import {
   getCodeWorkspaceProjectProfile,
   saveCodeWorkspaceProjectProfile,
   updateCodeWorkspaceGroupSettings,
-  type CodeWorkspaceProjectApiDataModel,
-  type CodeWorkspaceProjectFrontendCodeStructure,
-  type CodeWorkspaceProjectFrontendPageLayout,
+  type CodeWorkspaceProjectKnowledgeSection,
   type CodeWorkspaceProjectProfile,
 } from "../../../shared/data";
 import { useDesktopHeaderSlot } from "../../../widgets/app-header/header-slot-context";
@@ -23,10 +21,7 @@ import { DeskEmptyState, DeskSectionTitle, DeskSettingsRow } from "../../../widg
 //   - 定义项目结构化信息编辑草稿，保证设置页可在不丢字段的前提下自动保存。
 interface ProjectProfileDraft {
   summary: string;
-  apiDataModel: CodeWorkspaceProjectApiDataModel;
-  frontendPageLayout: CodeWorkspaceProjectFrontendPageLayout;
-  frontendCodeStructure: CodeWorkspaceProjectFrontendCodeStructure;
-  codingConventions: string[];
+  knowledgeSections: CodeWorkspaceProjectKnowledgeSection[];
 }
 
 // 描述：
@@ -39,24 +34,34 @@ interface ProjectProfileDraft {
 function createEmptyProjectProfileDraft(): ProjectProfileDraft {
   return {
     summary: "",
-    apiDataModel: {
-      entities: [],
-      requestModels: [],
-      responseModels: [],
-      mockCases: [],
-    },
-    frontendPageLayout: {
-      pages: [],
-      navigation: [],
-      pageElements: [],
-    },
-    frontendCodeStructure: {
-      directories: [],
-      moduleBoundaries: [],
-      implementationConstraints: [],
-    },
-    codingConventions: [],
+    knowledgeSections: [],
   };
+}
+
+// 描述：
+//
+//   - 深拷贝结构化分类列表，避免表单态与持久化对象共享引用。
+//
+// Params:
+//
+//   - sections: 分类列表。
+//
+// Returns:
+//
+//   - 深拷贝后的分类列表。
+function cloneProjectKnowledgeSections(
+  sections: CodeWorkspaceProjectKnowledgeSection[],
+): CodeWorkspaceProjectKnowledgeSection[] {
+  return sections.map((section) => ({
+    key: String(section.key || "").trim(),
+    title: String(section.title || "").trim(),
+    description: String(section.description || "").trim(),
+    facets: (section.facets || []).map((facet) => ({
+      key: String(facet.key || "").trim(),
+      label: String(facet.label || "").trim(),
+      entries: normalizeProfileDraftTextList(facet.entries),
+    })),
+  }));
 }
 
 // 描述：
@@ -76,23 +81,7 @@ function toProjectProfileDraft(profile: CodeWorkspaceProjectProfile | null): Pro
   }
   return {
     summary: String(profile.summary || "").trim(),
-    apiDataModel: {
-      entities: [...(profile.apiDataModel.entities || [])],
-      requestModels: [...(profile.apiDataModel.requestModels || [])],
-      responseModels: [...(profile.apiDataModel.responseModels || [])],
-      mockCases: [...(profile.apiDataModel.mockCases || [])],
-    },
-    frontendPageLayout: {
-      pages: [...(profile.frontendPageLayout.pages || [])],
-      navigation: [...(profile.frontendPageLayout.navigation || [])],
-      pageElements: [...(profile.frontendPageLayout.pageElements || [])],
-    },
-    frontendCodeStructure: {
-      directories: [...(profile.frontendCodeStructure.directories || [])],
-      moduleBoundaries: [...(profile.frontendCodeStructure.moduleBoundaries || [])],
-      implementationConstraints: [...(profile.frontendCodeStructure.implementationConstraints || [])],
-    },
-    codingConventions: [...(profile.codingConventions || [])],
+    knowledgeSections: cloneProjectKnowledgeSections(profile.knowledgeSections || []),
   };
 }
 
@@ -115,6 +104,227 @@ function normalizeProfileDraftTextList(value: unknown): string[] {
     .map((item) => String(item || "").trim())
     .filter((item) => item.length > 0);
   return normalized.filter((item, index) => normalized.indexOf(item) === index);
+}
+
+const PROJECT_PROFILE_SECTION_KEYS = {
+  interactionContracts: "interaction_contracts",
+  uiInformationArchitecture: "ui_information_architecture",
+  frontendImplementationArchitecture: "frontend_implementation_architecture",
+  engineeringGuardrails: "engineering_guardrails",
+} as const;
+
+// 描述：
+//
+//   - 按 section/facet key 写入条目，未命中时保持原值。
+//
+// Params:
+//
+//   - sections: 当前分类列表。
+//   - sectionKey: 分类键。
+//   - facetKey: 细分键。
+//   - entries: 待写入条目。
+//
+// Returns:
+//
+//   - 写入后的分类列表。
+function writeSectionFacetEntries(
+  sections: CodeWorkspaceProjectKnowledgeSection[],
+  sectionKey: string,
+  facetKey: string,
+  entries: string[],
+): CodeWorkspaceProjectKnowledgeSection[] {
+  return sections.map((section) => {
+    if (section.key !== sectionKey) {
+      return section;
+    }
+    return {
+      ...section,
+      facets: (section.facets || []).map((facet) => (facet.key === facetKey
+        ? { ...facet, entries: normalizeProfileDraftTextList(entries) }
+        : facet)),
+    };
+  });
+}
+
+interface ProjectProfileDraftLegacyPayload {
+  apiDataModel?: {
+    entities?: string[];
+    requestModels?: string[];
+    responseModels?: string[];
+    mockCases?: string[];
+  };
+  frontendPageLayout?: {
+    pages?: string[];
+    navigation?: string[];
+    pageElements?: string[];
+  };
+  frontendCodeStructure?: {
+    directories?: string[];
+    moduleBoundaries?: string[];
+    implementationConstraints?: string[];
+  };
+  codingConventions?: string[];
+}
+
+// 描述：
+//
+//   - 兼容旧版 JSON 字段（apiDataModel/frontendPageLayout/frontendCodeStructure/codingConventions），并投影到新分类结构。
+//
+// Params:
+//
+//   - sections: 当前分类列表。
+//   - payload: 旧版字段载荷。
+//
+// Returns:
+//
+//   - 融合后的分类列表。
+function applyLegacyPayloadToKnowledgeSections(
+  sections: CodeWorkspaceProjectKnowledgeSection[],
+  payload: ProjectProfileDraftLegacyPayload,
+): CodeWorkspaceProjectKnowledgeSection[] {
+  let nextSections = sections;
+  if (payload.apiDataModel?.entities !== undefined) {
+    nextSections = writeSectionFacetEntries(
+      nextSections,
+      PROJECT_PROFILE_SECTION_KEYS.interactionContracts,
+      "entities",
+      payload.apiDataModel.entities,
+    );
+  }
+  if (payload.apiDataModel?.requestModels !== undefined) {
+    nextSections = writeSectionFacetEntries(
+      nextSections,
+      PROJECT_PROFILE_SECTION_KEYS.interactionContracts,
+      "requestModels",
+      payload.apiDataModel.requestModels,
+    );
+  }
+  if (payload.apiDataModel?.responseModels !== undefined) {
+    nextSections = writeSectionFacetEntries(
+      nextSections,
+      PROJECT_PROFILE_SECTION_KEYS.interactionContracts,
+      "responseModels",
+      payload.apiDataModel.responseModels,
+    );
+  }
+  if (payload.apiDataModel?.mockCases !== undefined) {
+    nextSections = writeSectionFacetEntries(
+      nextSections,
+      PROJECT_PROFILE_SECTION_KEYS.interactionContracts,
+      "mockCases",
+      payload.apiDataModel.mockCases,
+    );
+  }
+  if (payload.frontendPageLayout?.pages !== undefined) {
+    nextSections = writeSectionFacetEntries(
+      nextSections,
+      PROJECT_PROFILE_SECTION_KEYS.uiInformationArchitecture,
+      "pages",
+      payload.frontendPageLayout.pages,
+    );
+  }
+  if (payload.frontendPageLayout?.navigation !== undefined) {
+    nextSections = writeSectionFacetEntries(
+      nextSections,
+      PROJECT_PROFILE_SECTION_KEYS.uiInformationArchitecture,
+      "navigation",
+      payload.frontendPageLayout.navigation,
+    );
+  }
+  if (payload.frontendPageLayout?.pageElements !== undefined) {
+    nextSections = writeSectionFacetEntries(
+      nextSections,
+      PROJECT_PROFILE_SECTION_KEYS.uiInformationArchitecture,
+      "pageElements",
+      payload.frontendPageLayout.pageElements,
+    );
+  }
+  if (payload.frontendCodeStructure?.directories !== undefined) {
+    nextSections = writeSectionFacetEntries(
+      nextSections,
+      PROJECT_PROFILE_SECTION_KEYS.frontendImplementationArchitecture,
+      "directories",
+      payload.frontendCodeStructure.directories,
+    );
+  }
+  if (payload.frontendCodeStructure?.moduleBoundaries !== undefined) {
+    nextSections = writeSectionFacetEntries(
+      nextSections,
+      PROJECT_PROFILE_SECTION_KEYS.frontendImplementationArchitecture,
+      "moduleBoundaries",
+      payload.frontendCodeStructure.moduleBoundaries,
+    );
+  }
+  if (payload.frontendCodeStructure?.implementationConstraints !== undefined) {
+    nextSections = writeSectionFacetEntries(
+      nextSections,
+      PROJECT_PROFILE_SECTION_KEYS.frontendImplementationArchitecture,
+      "implementationConstraints",
+      payload.frontendCodeStructure.implementationConstraints,
+    );
+  }
+  if (payload.codingConventions !== undefined) {
+    nextSections = writeSectionFacetEntries(
+      nextSections,
+      PROJECT_PROFILE_SECTION_KEYS.engineeringGuardrails,
+      "codingConventions",
+      payload.codingConventions,
+    );
+  }
+  return nextSections;
+}
+
+// 描述：
+//
+//   - 规范化 JSON 草稿中的分类结构。
+//
+// Params:
+//
+//   - value: 原始分类输入。
+//   - fallback: 兜底分类。
+//
+// Returns:
+//
+//   - 规范化分类。
+function normalizeDraftKnowledgeSections(
+  value: unknown,
+  fallback: CodeWorkspaceProjectKnowledgeSection[],
+): CodeWorkspaceProjectKnowledgeSection[] {
+  if (!Array.isArray(value)) {
+    return cloneProjectKnowledgeSections(fallback);
+  }
+  const normalized = value
+    .map((item) => {
+      const section = (item || {}) as Partial<CodeWorkspaceProjectKnowledgeSection>;
+      const key = String(section.key || "").trim();
+      if (!key) {
+        return null;
+      }
+      const facetsRaw = Array.isArray(section.facets) ? section.facets : [];
+      const facets = facetsRaw
+        .map((facetItem, index) => {
+          const facet = (facetItem || {}) as { key?: string; label?: string; entries?: string[] };
+          const facetKey = String(facet.key || "").trim() || `facet_${index + 1}`;
+          const facetLabel = String(facet.label || "").trim() || `字段 ${index + 1}`;
+          return {
+            key: facetKey,
+            label: facetLabel,
+            entries: normalizeProfileDraftTextList(facet.entries),
+          };
+        })
+        .filter((facet) => facet.key.length > 0);
+      if (facets.length === 0) {
+        return null;
+      }
+      return {
+        key,
+        title: String(section.title || "").trim() || key,
+        description: String(section.description || "").trim(),
+        facets,
+      } as CodeWorkspaceProjectKnowledgeSection;
+    })
+    .filter((item): item is CodeWorkspaceProjectKnowledgeSection => Boolean(item));
+  return normalized.length > 0 ? normalized : cloneProjectKnowledgeSections(fallback);
 }
 
 // 描述：
@@ -161,7 +371,8 @@ function parseProjectProfileDraftFromJson(
     };
   }
   try {
-    const parsed = JSON.parse(normalizedRawJson) as Partial<ProjectProfileDraft> | null;
+    const parsed = JSON.parse(normalizedRawJson) as
+      (Partial<ProjectProfileDraft> & ProjectProfileDraftLegacyPayload) | null;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return {
         ok: false,
@@ -169,49 +380,16 @@ function parseProjectProfileDraftFromJson(
         message: "JSON 顶层必须是对象结构。",
       };
     }
+    const baseSections = cloneProjectKnowledgeSections(baseDraft.knowledgeSections);
+    const parsedSections = parsed.knowledgeSections === undefined
+      ? baseSections
+      : normalizeDraftKnowledgeSections(parsed.knowledgeSections, baseSections);
+    const mergedSections = applyLegacyPayloadToKnowledgeSections(parsedSections, parsed);
     const nextDraft: ProjectProfileDraft = {
       summary: parsed.summary === undefined
         ? String(baseDraft.summary || "").trim()
         : String(parsed.summary || "").trim(),
-      apiDataModel: {
-        entities: parsed.apiDataModel?.entities === undefined
-          ? normalizeProfileDraftTextList(baseDraft.apiDataModel.entities)
-          : normalizeProfileDraftTextList(parsed.apiDataModel.entities),
-        requestModels: parsed.apiDataModel?.requestModels === undefined
-          ? normalizeProfileDraftTextList(baseDraft.apiDataModel.requestModels)
-          : normalizeProfileDraftTextList(parsed.apiDataModel.requestModels),
-        responseModels: parsed.apiDataModel?.responseModels === undefined
-          ? normalizeProfileDraftTextList(baseDraft.apiDataModel.responseModels)
-          : normalizeProfileDraftTextList(parsed.apiDataModel.responseModels),
-        mockCases: parsed.apiDataModel?.mockCases === undefined
-          ? normalizeProfileDraftTextList(baseDraft.apiDataModel.mockCases)
-          : normalizeProfileDraftTextList(parsed.apiDataModel.mockCases),
-      },
-      frontendPageLayout: {
-        pages: parsed.frontendPageLayout?.pages === undefined
-          ? normalizeProfileDraftTextList(baseDraft.frontendPageLayout.pages)
-          : normalizeProfileDraftTextList(parsed.frontendPageLayout.pages),
-        navigation: parsed.frontendPageLayout?.navigation === undefined
-          ? normalizeProfileDraftTextList(baseDraft.frontendPageLayout.navigation)
-          : normalizeProfileDraftTextList(parsed.frontendPageLayout.navigation),
-        pageElements: parsed.frontendPageLayout?.pageElements === undefined
-          ? normalizeProfileDraftTextList(baseDraft.frontendPageLayout.pageElements)
-          : normalizeProfileDraftTextList(parsed.frontendPageLayout.pageElements),
-      },
-      frontendCodeStructure: {
-        directories: parsed.frontendCodeStructure?.directories === undefined
-          ? normalizeProfileDraftTextList(baseDraft.frontendCodeStructure.directories)
-          : normalizeProfileDraftTextList(parsed.frontendCodeStructure.directories),
-        moduleBoundaries: parsed.frontendCodeStructure?.moduleBoundaries === undefined
-          ? normalizeProfileDraftTextList(baseDraft.frontendCodeStructure.moduleBoundaries)
-          : normalizeProfileDraftTextList(parsed.frontendCodeStructure.moduleBoundaries),
-        implementationConstraints: parsed.frontendCodeStructure?.implementationConstraints === undefined
-          ? normalizeProfileDraftTextList(baseDraft.frontendCodeStructure.implementationConstraints)
-          : normalizeProfileDraftTextList(parsed.frontendCodeStructure.implementationConstraints),
-      },
-      codingConventions: parsed.codingConventions === undefined
-        ? normalizeProfileDraftTextList(baseDraft.codingConventions)
-        : normalizeProfileDraftTextList(parsed.codingConventions),
+      knowledgeSections: mergedSections,
     };
     return {
       ok: true,
@@ -367,7 +545,10 @@ export function CodeProjectSettingsPage() {
     const timer = window.setTimeout(() => {
       const saveResult = saveCodeWorkspaceProjectProfile(
         workspaceId,
-        projectProfileDraft,
+        {
+          summary: projectProfileDraft.summary,
+          knowledgeSections: projectProfileDraft.knowledgeSections,
+        },
         {
           expectedRevision: profileRevisionRef.current,
           updatedBy: "project_settings",
@@ -427,50 +608,94 @@ export function CodeProjectSettingsPage() {
 
   // 描述：
   //
-  //   - 更新结构化信息中的 API 数据模型字段。
-  const handleUpdateApiDataModel = (
-    key: keyof CodeWorkspaceProjectApiDataModel,
+  //   - 更新结构化信息分类下的指定 facet 条目。
+  const handleUpdateKnowledgeSectionFacet = (
+    sectionKey: string,
+    facetKey: string,
     value: string[],
   ) => {
-    setProjectProfileDraft((current) => ({
-      ...current,
-      apiDataModel: {
-        ...current.apiDataModel,
-        [key]: value,
-      },
-    }));
+    const normalizedValue = normalizeProfileDraftTextList(value);
+    setProjectProfileDraft((current) => {
+      const nextSections = current.knowledgeSections.map((section) => (section.key !== sectionKey
+        ? section
+        : {
+          ...section,
+          facets: (section.facets || []).map((facet) => (facet.key !== facetKey
+            ? facet
+            : {
+              ...facet,
+              entries: normalizedValue,
+            })),
+        }));
+      return {
+        ...current,
+        knowledgeSections: nextSections,
+      };
+    });
+  };
+
+  const orderedKnowledgeSections = useMemo(
+    () => cloneProjectKnowledgeSections(projectProfileDraft.knowledgeSections),
+    [projectProfileDraft.knowledgeSections],
+  );
+
+  // 描述：
+  //
+  //   - 基于 section+facet key 生成输入占位文案，帮助快速填写高质量结构化条目。
+  const buildFacetPlaceholder = (sectionKey: string, facetKey: string): string => {
+    if (sectionKey === PROJECT_PROFILE_SECTION_KEYS.interactionContracts && facetKey === "entities") {
+      return "User: id, name, role";
+    }
+    if (sectionKey === PROJECT_PROFILE_SECTION_KEYS.interactionContracts && facetKey === "requestModels") {
+      return "CreateUserRequest: name, role";
+    }
+    if (sectionKey === PROJECT_PROFILE_SECTION_KEYS.interactionContracts && facetKey === "responseModels") {
+      return "UserResponse: id, name, role";
+    }
+    if (sectionKey === PROJECT_PROFILE_SECTION_KEYS.interactionContracts && facetKey === "mockCases") {
+      return "/users/list 成功/空数据/鉴权失败";
+    }
+    if (sectionKey === PROJECT_PROFILE_SECTION_KEYS.uiInformationArchitecture && facetKey === "pages") {
+      return "用户管理页 / 用户详情页";
+    }
+    if (sectionKey === PROJECT_PROFILE_SECTION_KEYS.uiInformationArchitecture && facetKey === "navigation") {
+      return "侧边栏：仪表盘 / 用户管理 / 系统设置";
+    }
+    if (sectionKey === PROJECT_PROFILE_SECTION_KEYS.uiInformationArchitecture && facetKey === "pageElements") {
+      return "用户管理页：筛选栏 / 数据表格 / 分页器";
+    }
+    if (sectionKey === PROJECT_PROFILE_SECTION_KEYS.frontendImplementationArchitecture && facetKey === "directories") {
+      return "src/modules/user / src/components/common";
+    }
+    if (
+      sectionKey === PROJECT_PROFILE_SECTION_KEYS.frontendImplementationArchitecture
+      && facetKey === "moduleBoundaries"
+    ) {
+      return "页面层只编排，不直接写请求细节";
+    }
+    if (
+      sectionKey === PROJECT_PROFILE_SECTION_KEYS.frontendImplementationArchitecture
+      && facetKey === "implementationConstraints"
+    ) {
+      return "路由定义统一维护在 src/routes.ts";
+    }
+    if (sectionKey === PROJECT_PROFILE_SECTION_KEYS.engineeringGuardrails && facetKey === "codingConventions") {
+      return "新增功能必须补充单测";
+    }
+    return "请输入结构化条目";
   };
 
   // 描述：
   //
-  //   - 更新结构化信息中的前端页面布局字段。
-  const handleUpdateFrontendPageLayout = (
-    key: keyof CodeWorkspaceProjectFrontendPageLayout,
-    value: string[],
-  ) => {
-    setProjectProfileDraft((current) => ({
-      ...current,
-      frontendPageLayout: {
-        ...current.frontendPageLayout,
-        [key]: value,
-      },
-    }));
-  };
-
-  // 描述：
-  //
-  //   - 更新结构化信息中的前端代码结构字段。
-  const handleUpdateFrontendCodeStructure = (
-    key: keyof CodeWorkspaceProjectFrontendCodeStructure,
-    value: string[],
-  ) => {
-    setProjectProfileDraft((current) => ({
-      ...current,
-      frontendCodeStructure: {
-        ...current.frontendCodeStructure,
-        [key]: value,
-      },
-    }));
+  //   - 基于 section+facet key 生成行标题，确保新分类口径保持统一且可读。
+  const buildFacetRowTitle = (sectionTitle: string, facetLabel: string): string => {
+    if (!sectionTitle) {
+      return facetLabel || "分类条目";
+    }
+    if (!facetLabel) {
+      return sectionTitle;
+    }
+    return `${sectionTitle} · ${facetLabel}`;
   };
 
   // 描述：
@@ -646,152 +871,31 @@ export function CodeProjectSettingsPage() {
                     minWidth={360}
                   />
                 </DeskSettingsRow>
-
-                <DeskSettingsRow title="API 数据实体">
-                  <AriInput.TextList
-                    value={projectProfileDraft.apiDataModel.entities}
-                    onChange={(value: string[]) => {
-                      handleUpdateApiDataModel("entities", value);
-                    }}
-                    itemPlaceholder="User: id, name, role"
-                    addText="新增"
-                    allowDrag={false}
-                    minWidth={360}
-                  />
-                </DeskSettingsRow>
-
-                <DeskSettingsRow title="API 请求模型">
-                  <AriInput.TextList
-                    value={projectProfileDraft.apiDataModel.requestModels}
-                    onChange={(value: string[]) => {
-                      handleUpdateApiDataModel("requestModels", value);
-                    }}
-                    itemPlaceholder="CreateUserRequest: name, role"
-                    addText="新增"
-                    allowDrag={false}
-                    minWidth={360}
-                  />
-                </DeskSettingsRow>
-
-                <DeskSettingsRow title="API 响应模型">
-                  <AriInput.TextList
-                    value={projectProfileDraft.apiDataModel.responseModels}
-                    onChange={(value: string[]) => {
-                      handleUpdateApiDataModel("responseModels", value);
-                    }}
-                    itemPlaceholder="UserResponse: id, name, role"
-                    addText="新增"
-                    allowDrag={false}
-                    minWidth={360}
-                  />
-                </DeskSettingsRow>
-
-                <DeskSettingsRow title="API Mock 场景">
-                  <AriInput.TextList
-                    value={projectProfileDraft.apiDataModel.mockCases}
-                    onChange={(value: string[]) => {
-                      handleUpdateApiDataModel("mockCases", value);
-                    }}
-                    itemPlaceholder="/users/list 成功/空数据/鉴权失败"
-                    addText="新增"
-                    allowDrag={false}
-                    minWidth={360}
-                  />
-                </DeskSettingsRow>
-
-                <DeskSettingsRow title="前端页面清单">
-                  <AriInput.TextList
-                    value={projectProfileDraft.frontendPageLayout.pages}
-                    onChange={(value: string[]) => {
-                      handleUpdateFrontendPageLayout("pages", value);
-                    }}
-                    itemPlaceholder="用户管理页 / 用户详情页"
-                    addText="新增"
-                    allowDrag={false}
-                    minWidth={360}
-                  />
-                </DeskSettingsRow>
-
-                <DeskSettingsRow title="导航与菜单项">
-                  <AriInput.TextList
-                    value={projectProfileDraft.frontendPageLayout.navigation}
-                    onChange={(value: string[]) => {
-                      handleUpdateFrontendPageLayout("navigation", value);
-                    }}
-                    itemPlaceholder="侧边栏：仪表盘 / 用户管理 / 系统设置"
-                    addText="新增"
-                    allowDrag={false}
-                    minWidth={360}
-                  />
-                </DeskSettingsRow>
-
-                <DeskSettingsRow title="页面元素结构">
-                  <AriInput.TextList
-                    value={projectProfileDraft.frontendPageLayout.pageElements}
-                    onChange={(value: string[]) => {
-                      handleUpdateFrontendPageLayout("pageElements", value);
-                    }}
-                    itemPlaceholder="用户管理页：筛选栏 / 数据表格 / 分页器"
-                    addText="新增"
-                    allowDrag={false}
-                    minWidth={360}
-                  />
-                </DeskSettingsRow>
-
-                <DeskSettingsRow title="前端目录结构">
-                  <AriInput.TextList
-                    value={projectProfileDraft.frontendCodeStructure.directories}
-                    onChange={(value: string[]) => {
-                      handleUpdateFrontendCodeStructure("directories", value);
-                    }}
-                    itemPlaceholder="src/modules/user / src/components/common"
-                    addText="新增"
-                    allowDrag={false}
-                    minWidth={360}
-                  />
-                </DeskSettingsRow>
-
-                <DeskSettingsRow title="前端模块边界">
-                  <AriInput.TextList
-                    value={projectProfileDraft.frontendCodeStructure.moduleBoundaries}
-                    onChange={(value: string[]) => {
-                      handleUpdateFrontendCodeStructure("moduleBoundaries", value);
-                    }}
-                    itemPlaceholder="页面层只编排，不直接写请求细节"
-                    addText="新增"
-                    allowDrag={false}
-                    minWidth={360}
-                  />
-                </DeskSettingsRow>
-
-                <DeskSettingsRow title="前端实现约束">
-                  <AriInput.TextList
-                    value={projectProfileDraft.frontendCodeStructure.implementationConstraints}
-                    onChange={(value: string[]) => {
-                      handleUpdateFrontendCodeStructure("implementationConstraints", value);
-                    }}
-                    itemPlaceholder="路由定义统一维护在 src/routes.ts"
-                    addText="新增"
-                    allowDrag={false}
-                    minWidth={360}
-                  />
-                </DeskSettingsRow>
-
-                <DeskSettingsRow title="编码约定">
-                  <AriInput.TextList
-                    value={projectProfileDraft.codingConventions}
-                    onChange={(value: string[]) => {
-                      setProjectProfileDraft((current) => ({
-                        ...current,
-                        codingConventions: value,
-                      }));
-                    }}
-                    itemPlaceholder="新增功能必须补充单测"
-                    addText="新增"
-                    allowDrag={false}
-                    minWidth={360}
-                  />
-                </DeskSettingsRow>
+                {orderedKnowledgeSections.map((section) => (
+                  <AriContainer key={section.key} padding={0}>
+                    <AriTypography
+                      variant="caption"
+                      value={section.description || `${section.title}：请补充该分类的关键语义。`}
+                    />
+                    {(section.facets || []).map((facet) => (
+                      <DeskSettingsRow
+                        key={`${section.key}:${facet.key}`}
+                        title={buildFacetRowTitle(section.title, facet.label)}
+                      >
+                        <AriInput.TextList
+                          value={facet.entries || []}
+                          onChange={(value: string[]) => {
+                            handleUpdateKnowledgeSectionFacet(section.key, facet.key, value);
+                          }}
+                          itemPlaceholder={buildFacetPlaceholder(section.key, facet.key)}
+                          addText="新增"
+                          allowDrag={false}
+                          minWidth={360}
+                        />
+                      </DeskSettingsRow>
+                    ))}
+                  </AriContainer>
+                ))}
               </>
             ) : (
               <>

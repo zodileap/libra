@@ -80,11 +80,13 @@ test("TestRouterShouldExposeCodeAgentSettingsRoute", () => {
 
   // 描述：
   //
-  //   - 路由层应提供代码智能体设置页入口，用于管理代码工作流。
+  //   - 路由层应提供代码智能体设置页入口，并暴露全局工作流页路由。
   assert.match(source, /CodeAgentSettingsPageLazy/);
   assert.match(source, /path="agents\/code\/settings"/);
-  assert.match(source, /CodeWorkflowPageLazy/);
-  assert.match(source, /ModelWorkflowPageLazy/);
+  assert.match(source, /CommonWorkflowsPageLazy/);
+  assert.match(source, /WORKFLOW_PAGE_PATH/);
+  assert.match(source, /LegacyWorkflowRedirect/);
+  assert.match(source, /path=\{WORKFLOW_PAGE_PATH\.slice\(1\)\}/);
   assert.match(source, /path="agents\/code\/workflows"/);
   assert.match(source, /path="agents\/model\/workflows"/);
 });
@@ -187,7 +189,7 @@ test("TestCodeAgentSettingsPageShouldSeparateWorkflowManagement", () => {
   assert.match(source, /title="代码智能体设置"/);
   assert.match(source, /label="进入工作流设置"/);
   assert.match(source, /label="打开工作流设置"/);
-  assert.match(source, /navigate\("\/agents\/code\/workflows"\)/);
+  assert.match(source, /navigate\("\/workflows"\)/);
   assert.match(source, /title="执行偏好"/);
   assert.match(source, /AriSwitch/);
   assert.doesNotMatch(source, /createCodeWorkflowFromTemplate/);
@@ -208,7 +210,7 @@ test("TestModelAgentSettingsPageShouldSeparateCapabilityAndWorkflowManagement", 
   assert.match(source, /ensureBlenderBridge/);
   assert.match(source, /label="进入工作流设置"/);
   assert.match(source, /label="打开工作流设置"/);
-  assert.match(source, /navigate\("\/agents\/model\/workflows"\)/);
+  assert.match(source, /navigate\("\/workflows"\)/);
   assert.doesNotMatch(source, /createModelWorkflowFromTemplate/);
   assert.doesNotMatch(source, /deleteModelWorkflow/);
   assert.doesNotMatch(source, /title="删除模型工作流"/);
@@ -266,9 +268,9 @@ test("TestWorkflowCanvasSidebarAndFloatingActionsShouldMatchUxRules", () => {
   assert.match(sidebarSource, /function WorkflowsSidebar/);
   assert.match(sidebarSource, /label="返回"/);
   assert.match(sidebarSource, /label="新增"/);
-  assert.match(sidebarSource, /onBack=\{\(\) => navigate\(`\/agents\/\$\{agentKey\}\/settings`\)\}/);
+  assert.match(sidebarSource, /onBack=\{\(\) => navigate\("\/home"\)\}/);
   assert.match(sidebarSource, /if \(pendingDeleteWorkflowId !== workflowId\) \{\s*setPendingDeleteWorkflowId\(workflowId\);\s*return;\s*\}/s);
-  assert.match(sidebarSource, /label=\{pendingDeleteWorkflowId === item\.id \? "确定" : undefined\}/);
+  assert.match(sidebarSource, /label=\{pendingDeleteWorkflowId === item\.key \? "确定" : undefined\}/);
   assert.match(sidebarSource, /showActionsOnHover: true/);
   assert.match(canvasSource, /className="desk-workflow-editor-floating-panel"/);
   assert.doesNotMatch(canvasSource, /label="新增工作流"/);

@@ -5,15 +5,15 @@ pub mod flow;
 pub mod llm;
 pub mod policy;
 pub mod profile;
+mod python_orchestrator;
 pub mod sandbox;
 pub mod tools;
-mod python_orchestrator;
 pub mod workflow;
 
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use once_cell::sync::Lazy;
 
 /// 描述：授权结果。
 #[derive(Debug, Clone, Copy)]
@@ -70,9 +70,9 @@ pub static APPROVAL_REGISTRY: Lazy<ApprovalRegistry> = Lazy::new(|| ApprovalRegi
 });
 use flow::{compose_prompt, AgentKind};
 use llm::{parse_provider, LlmUsage};
-use serde_json::json;
 use policy::AgentPolicy;
 use profile::AgentProfile;
+use serde_json::json;
 use tracing::{info, info_span};
 use zodileap_mcp_common::{
     now_millis, ProtocolAssetRecord, ProtocolError, ProtocolEventRecord, ProtocolStepRecord,
@@ -243,7 +243,8 @@ where
     let policy = AgentPolicy::from_env();
 
     // 触发闲置沙盒清理
-    sandbox::SANDBOX_REGISTRY.cleanup_idle(Duration::from_secs(policy.sandbox_idle_timeout_mins * 60));
+    sandbox::SANDBOX_REGISTRY
+        .cleanup_idle(Duration::from_secs(policy.sandbox_idle_timeout_mins * 60));
 
     let agent_kind = parse_agent_kind(&request.agent_key);
 
@@ -265,7 +266,12 @@ impl AgentExecutor for CodeAgentExecutor {
         profile: AgentProfile,
         on_stream_event: &mut dyn FnMut(AgentStreamEvent),
     ) -> Result<AgentRunResult, ProtocolError> {
-        python_orchestrator::run_code_agent_with_python_workflow(request, policy, profile, on_stream_event)
+        python_orchestrator::run_code_agent_with_python_workflow(
+            request,
+            policy,
+            profile,
+            on_stream_event,
+        )
     }
 }
 

@@ -14,6 +14,7 @@ import type {
 export type DesktopRouteModuleKey =
   | "settings"
   | "skill"
+  | "mcp"
   | "agent"
   | "session"
   | "workflow";

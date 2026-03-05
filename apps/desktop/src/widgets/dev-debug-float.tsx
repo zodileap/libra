@@ -1,8 +1,5 @@
-import { useEffect, useState } from "react";
-import { AriButton, AriCard, AriContainer, AriTypography } from "aries_react";
-import { listen } from "@tauri-apps/api/event";
-import type { AgentLogEvent, ModelDebugTraceEvent } from "../shared/types";
-import { EVENT_AGENT_LOG, EVENT_MODEL_DEBUG_TRACE } from "../shared/constants";
+import { useEffect, useRef, useState } from "react";
+import { AriButton, AriCard, AriContainer, AriMessage, AriTypography } from "aries_react";
 
 // 描述:
 //
@@ -16,88 +13,164 @@ interface DevDebugFloatProps {
 //   - 定义会话调试快照结构，统一承载前端调试窗口展示数据。
 interface SessionDebugSnapshot {
   sessionId?: string;
-  agentKey?: string;
-  title?: string;
-  status?: string;
-  traceRecords?: Array<{ traceId?: string; source?: string; code?: string; message?: string }>;
-  workflowStepRecords?: Array<{ name?: string; status?: string; summary?: string }>;
-  stepRecords?: Array<{ code?: string; status?: string; elapsed_ms?: number }>;
-  eventRecords?: Array<{ event?: string; message?: string }>;
-  assetRecords?: Array<{ kind?: string; path?: string; version?: number }>;
-  debugFlowRecords?: Array<{
-    id?: string;
-    source?: "ui" | "backend";
-    stage?: string;
-    title?: string;
-    detail?: string;
-    timestamp?: number;
-  }>;
-  messageCount?: number;
-  timestamp?: number;
 }
 
-// ModelDebugTraceEvent 已提取至 shared/types.ts 统一定义。
+// 描述：
+//
+//   - 定义会话复制结果事件结构，供 Dev 调试窗口反馈复制结果。
+interface SessionCopyResultPayload {
+  sessionId?: string;
+  ok?: boolean;
+  message?: string;
+  timestamp?: number;
+}
 
 // 描述:
 //
 //   - 在开发环境渲染调试浮层并订阅会话与后端调试事件。
 export function DevDebugFloat({ visible = true }: DevDebugFloatProps) {
   const [collapsed, setCollapsed] = useState(false);
-  const [logs, setLogs] = useState<string[]>([]);
   const [snapshot, setSnapshot] = useState<SessionDebugSnapshot | null>(null);
-  const [modelDebugTraces, setModelDebugTraces] = useState<ModelDebugTraceEvent[]>([]);
+  const [copyingSessionId, setCopyingSessionId] = useState("");
+  const copyingSessionIdRef = useRef("");
+  const copyRequestTimeoutRef = useRef<number | null>(null);
+
+  // 描述：
+  //
+  //   - 关闭当前复制请求超时定时器，避免重复触发失败提示。
+  const clearCopyRequestTimeout = () => {
+    if (copyRequestTimeoutRef.current !== null) {
+      window.clearTimeout(copyRequestTimeoutRef.current);
+      copyRequestTimeoutRef.current = null;
+    }
+  };
+
+  // 描述：
+  //
+  //   - 从当前路由路径兜底解析会话 ID，兼容“先发送后打开 Dev 调试窗口”时尚未收到快照事件的场景。
+  //
+  // Returns:
+  //
+  //   - 路由中的会话 ID；未命中返回空字符串。
+  const resolveSessionIdFromLocation = () => {
+    if (!import.meta.env.DEV) {
+      return "";
+    }
+    const pathname = String(window.location.pathname || "");
+    const matched = pathname.match(/\/agents\/(?:code|model)\/session\/([^/?#]+)/i);
+    if (!matched?.[1]) {
+      return "";
+    }
+    try {
+      return decodeURIComponent(matched[1]).trim();
+    } catch {
+      return String(matched[1]).trim();
+    }
+  };
+
+  // 描述：
+  //
+  //   - 解析复制目标会话 ID，优先使用会话页快照，未命中时回退路由参数。
+  //
+  // Returns:
+  //
+  //   - 当前可复制的目标会话 ID。
+  const resolveCopyTargetSessionId = () => {
+    const snapshotSessionId = String(snapshot?.sessionId || "").trim();
+    if (snapshotSessionId) {
+      return snapshotSessionId;
+    }
+    return resolveSessionIdFromLocation();
+  };
 
   useEffect(() => {
     if (!import.meta.env.DEV || !visible) {
       return undefined;
     }
 
-    let disposed = false;
-    let unlisten: (() => void) | null = null;
-
-    // 描述：绑定 Tauri 事件监听并在卸载时释放句柄。
-    const setup = async () => {
-      const handler = await listen<AgentLogEvent>(EVENT_AGENT_LOG, (event) => {
-        if (disposed) return;
-        const payload = event.payload;
-        const line = `[${payload.trace_id}] [${payload.level}] [${payload.stage}] ${payload.message}`;
-        setLogs((prev) => [line, ...prev].slice(0, 300));
-      });
-      const modelDebugHandler = await listen<ModelDebugTraceEvent>(EVENT_MODEL_DEBUG_TRACE, (event) => {
-        if (disposed) return;
-        const payload = event.payload;
-        setModelDebugTraces((prev) => [payload, ...prev].slice(0, 180));
-      });
-      if (!disposed) {
-        unlisten = () => {
-          handler();
-          modelDebugHandler();
-        };
-      } else {
-        handler();
-        modelDebugHandler();
-      }
-    };
-
     // 描述：接收页面调试广播并更新当前会话调试快照。
     const handleSessionDebug = (event: Event) => {
       const customEvent = event as CustomEvent<SessionDebugSnapshot>;
       setSnapshot(customEvent.detail || null);
     };
+    const handleSessionCopyResult = (event: Event) => {
+      const customEvent = event as CustomEvent<SessionCopyResultPayload>;
+      const payload = customEvent.detail || {};
+      const targetSessionId = String(payload.sessionId || "").trim();
+      if (!targetSessionId || targetSessionId !== copyingSessionIdRef.current) {
+        return;
+      }
+      clearCopyRequestTimeout();
+      copyingSessionIdRef.current = "";
+      setCopyingSessionId("");
+      if (payload.ok) {
+        AriMessage.success({
+          content: payload.message || "会话内容已复制",
+          duration: 1800,
+        });
+      } else {
+        AriMessage.error({
+          content: payload.message || "复制失败，请检查系统剪贴板权限",
+          duration: 2200,
+        });
+      }
+    };
 
-    void setup();
     window.addEventListener("zodileap:session-debug", handleSessionDebug as EventListener);
+    window.addEventListener("zodileap:session-copy-result", handleSessionCopyResult as EventListener);
+    // 描述：打开 Dev 调试窗口时主动请求一次最新快照，避免“先发送后打开”导致按钮无法点击。
+    window.dispatchEvent(
+      new CustomEvent("zodileap:session-debug-request", {
+        detail: {
+          sessionId: resolveSessionIdFromLocation(),
+        },
+      }),
+    );
 
     return () => {
-      disposed = true;
-      if (unlisten) unlisten();
+      clearCopyRequestTimeout();
       window.removeEventListener("zodileap:session-debug", handleSessionDebug as EventListener);
+      window.removeEventListener("zodileap:session-copy-result", handleSessionCopyResult as EventListener);
     };
   }, [visible]);
+
+  // 描述：向会话页发起“复制会话内容（含过程）”请求，仅在存在已打开会话时可触发。
+  const handleRequestCopySessionContent = () => {
+    const targetSessionId = resolveCopyTargetSessionId();
+    if (!targetSessionId) {
+      AriMessage.warning({
+        content: "请先打开一个会话再复制",
+        duration: 1800,
+      });
+      return;
+    }
+    clearCopyRequestTimeout();
+    copyingSessionIdRef.current = targetSessionId;
+    setCopyingSessionId(targetSessionId);
+    copyRequestTimeoutRef.current = window.setTimeout(() => {
+      if (copyingSessionIdRef.current !== targetSessionId) {
+        return;
+      }
+      copyingSessionIdRef.current = "";
+      setCopyingSessionId("");
+      AriMessage.error({
+        content: "复制超时，请重试或确认当前会话页仍处于打开状态",
+        duration: 2200,
+      });
+    }, 6000);
+    window.dispatchEvent(
+      new CustomEvent("zodileap:session-copy-request", {
+        detail: {
+          sessionId: targetSessionId,
+        },
+      }),
+    );
+  };
 
   if (!import.meta.env.DEV || !visible) {
     return null;
   }
+  const copyTargetSessionId = resolveCopyTargetSessionId();
 
   return (
     <AriContainer
@@ -107,126 +180,33 @@ export function DevDebugFloat({ visible = true }: DevDebugFloatProps) {
       <AriCard className="desk-dev-debug-card">
         <AriContainer className="desk-dev-debug-head">
           <AriTypography variant="h4" value="Dev 调试窗口" />
-          <AriButton
-            type="text"
-            icon={collapsed ? "unfold_more" : "unfold_less"}
-            label={collapsed ? "展开" : "收起"}
-            onClick={() => setCollapsed((value) => !value)}
-          />
+          <AriContainer className="desk-dev-debug-head-actions" padding={0}>
+            <AriButton
+              type="text"
+              icon="content_copy"
+              label="复制会话内容"
+              disabled={!copyTargetSessionId || Boolean(copyingSessionId)}
+              onClick={handleRequestCopySessionContent}
+            />
+            <AriButton
+              type="text"
+              icon={collapsed ? "unfold_more" : "unfold_less"}
+              label={collapsed ? "展开" : "收起"}
+              onClick={() => setCollapsed((value) => !value)}
+            />
+          </AriContainer>
         </AriContainer>
         {!collapsed ? (
           <AriContainer className="desk-dev-debug-body">
             <AriTypography
               className="desk-dev-debug-line"
               variant="caption"
-              value={`会话：${snapshot?.title || "-"} (${snapshot?.agentKey || "-"}) status=${snapshot?.status || "-"}`}
+              value={
+                copyTargetSessionId
+                  ? "当前会话已连接，点击“复制会话内容”可导出完整排查信息。"
+                  : "请先打开一个会话，再复制会话内容。"
+              }
             />
-            <AriTypography
-              className="desk-dev-debug-line"
-              variant="caption"
-              value={`消息数=${snapshot?.messageCount ?? 0} trace=${snapshot?.traceRecords?.length || 0} workflow=${snapshot?.workflowStepRecords?.length || 0} steps=${snapshot?.stepRecords?.length || 0} events=${snapshot?.eventRecords?.length || 0} assets=${snapshot?.assetRecords?.length || 0}`}
-            />
-            <AriContainer className="desk-dev-debug-section">
-              <AriTypography variant="caption" value="执行全链路（前端视角）" />
-              <AriContainer className="desk-dev-debug-list">
-                {(snapshot?.debugFlowRecords || []).map((record, index) => {
-                  const prefix = record.timestamp
-                    ? `[${new Date(record.timestamp).toLocaleTimeString("zh-CN", { hour12: false })}]`
-                    : "[--:--:--]";
-                  return (
-                    <AriTypography
-                      key={`flow-${record.id || index}`}
-                      className="desk-dev-debug-line"
-                      variant="caption"
-                      value={`${prefix} [${record.source || "ui"}] [${record.stage || "-"}] ${record.title || "-"}\n${record.detail || "-"}`}
-                    />
-                  );
-                })}
-                {(snapshot?.debugFlowRecords?.length || 0) === 0 ? (
-                  <AriTypography className="desk-dev-debug-line" variant="caption" value="暂无全链路记录" />
-                ) : null}
-              </AriContainer>
-            </AriContainer>
-            <AriContainer className="desk-dev-debug-section">
-              <AriTypography variant="caption" value="模型规划 LLM 明细（后端视角）" />
-              <AriContainer className="desk-dev-debug-list">
-                {modelDebugTraces.map((item, index) => {
-                  const prefix = item.timestamp_ms
-                    ? `[${new Date(item.timestamp_ms).toLocaleTimeString("zh-CN", { hour12: false })}]`
-                    : "[--:--:--]";
-                  return (
-                    <AriTypography
-                      key={`model-debug-${item.trace_id || "trace"}-${index}`}
-                      className="desk-dev-debug-line"
-                      variant="caption"
-                      value={`${prefix} [${item.stage || "-"}] ${item.title || "-"}\n${item.detail || "-"}`}
-                    />
-                  );
-                })}
-                {modelDebugTraces.length === 0 ? (
-                  <AriTypography className="desk-dev-debug-line" variant="caption" value="暂无模型规划 LLM 明细" />
-                ) : null}
-              </AriContainer>
-            </AriContainer>
-            <AriContainer className="desk-dev-debug-section">
-              <AriTypography variant="caption" value="Agent 日志" />
-              <AriContainer className="desk-dev-debug-list">
-                {logs.length === 0 ? (
-                  <AriTypography className="desk-dev-debug-line" variant="caption" value="暂无日志" />
-                ) : (
-                  logs.map((line, index) => (
-                    <AriTypography className="desk-dev-debug-line" key={`${line}-${index}`} variant="caption" value={line} />
-                  ))
-                )}
-              </AriContainer>
-            </AriContainer>
-            <AriContainer className="desk-dev-debug-section">
-              <AriTypography variant="caption" value="Workflow 步骤" />
-              <AriContainer className="desk-dev-debug-list">
-                {(snapshot?.workflowStepRecords || []).slice(-10).reverse().map((item, index) => (
-                  <AriTypography
-                    className="desk-dev-debug-line"
-                    key={`${item.name}-${index}`}
-                    variant="caption"
-                    value={`${item.name || "-"} · ${item.status || "-"} · ${item.summary || "-"}`}
-                  />
-                ))}
-              </AriContainer>
-            </AriContainer>
-            <AriContainer className="desk-dev-debug-section">
-              <AriTypography variant="caption" value="Trace / Session 事件 / 资产" />
-              <AriContainer className="desk-dev-debug-list">
-                {(snapshot?.traceRecords || []).slice(0, 10).map((item, index) => (
-                  <AriTypography
-                    className="desk-dev-debug-line"
-                    key={`trace-${item.traceId}-${index}`}
-                    variant="caption"
-                    value={`[trace] ${item.traceId || "-"} · ${item.source || "-"}${item.code ? ` · ${item.code}` : ""} · ${item.message || "-"}`}
-                  />
-                ))}
-                {(snapshot?.eventRecords || []).slice(-6).reverse().map((item, index) => (
-                  <AriTypography
-                    className="desk-dev-debug-line"
-                    key={`event-${item.event}-${index}`}
-                    variant="caption"
-                    value={`[event] ${item.event || "-"}: ${item.message || "-"}`}
-                  />
-                ))}
-                {(snapshot?.assetRecords || []).slice(-6).reverse().map((item, index) => (
-                  <AriTypography
-                    className="desk-dev-debug-line"
-                    key={`asset-${item.path}-${index}`}
-                    variant="caption"
-                    value={`[asset] ${item.kind || "-"} v${item.version || 0}: ${item.path || "-"}`}
-                  />
-                ))}
-                {(snapshot?.traceRecords?.length || 0) === 0
-                && (snapshot?.eventRecords?.length || 0) === 0
-                && (snapshot?.assetRecords?.length || 0) === 0 ? (
-                  <AriTypography className="desk-dev-debug-line" variant="caption" value="暂无 session 轨迹记录" />
-                ) : null}
-              </AriContainer>
-            </AriContainer>
           </AriContainer>
         ) : null}
       </AriCard>

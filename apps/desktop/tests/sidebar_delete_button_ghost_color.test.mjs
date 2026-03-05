@@ -61,11 +61,11 @@ test("TestSidebarDeleteButtonsShouldUseGhostAndColor", () => {
   //   - 工作流删除按钮默认应为 ghost；进入“确定”确认态后应切为非 ghost。
   assert.match(
     source,
-    /type=\{pendingDeleteWorkflowId === item\.id \? "default" : "text"\}/,
+    /type=\{pendingDeleteWorkflowId === item\.key \? "default" : "text"\}/,
   );
   assert.match(
     source,
-    /ghost=\{pendingDeleteWorkflowId !== item\.id\}/,
+    /ghost=\{pendingDeleteWorkflowId !== item\.key\}/,
   );
 
   // 描述:
@@ -73,7 +73,7 @@ test("TestSidebarDeleteButtonsShouldUseGhostAndColor", () => {
   //   - 工作流删除按钮在鼠标移出后应退出确认态，避免再次 hover 仍停留“确定”状态。
   assert.match(
     source,
-    /onMouseLeave=\{\(\) => \{[\s\S]*setPendingDeleteWorkflowId\(\(current\) => \(current === item\.id \? "" : current\)\);[\s\S]*\}\}/,
+    /onMouseLeave=\{\(\) => \{[\s\S]*setPendingDeleteWorkflowId\(\(current\) => \(current === item\.key \? "" : current\)\);[\s\S]*\}\}/,
   );
 
   // 描述:
@@ -81,7 +81,7 @@ test("TestSidebarDeleteButtonsShouldUseGhostAndColor", () => {
   //   - 删除失败提示需按场景区分，默认模板提示、目标缺失提示、通用失败提示不能混淆。
   assert.match(
     source,
-    /const warningContent = !targetWorkflow\s*\?\s*"工作流不存在或已删除，请刷新后重试。"\s*:\s*targetWorkflow\.shared\s*\?\s*"默认工作流不可删除，请先复制后再管理。"\s*:\s*"工作流删除失败，请稍后重试。";/,
+    /const warningContent = targetWorkflow\.shared\s*\?\s*"默认工作流不可删除，请先复制后再管理。"\s*:\s*"工作流删除失败，请稍后重试。";/,
   );
 
   // 描述:

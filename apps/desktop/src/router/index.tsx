@@ -5,11 +5,17 @@ import {
   CommonAiKeyPageLazy,
   CommonHomePageLazy,
   CommonLoginPageLazy,
+  CommonMcpPageLazy,
   CommonSkillsPageLazy,
+  CommonWorkflowsPageLazy,
+  MCP_MODULE_KEY,
+  MCP_PAGE_PATH,
+  resolveWorkflowEditorPath,
   SKILL_MODULE_KEY,
   SKILL_PAGE_PATH,
   SETTINGS_MODULE_KEY,
   SettingsGeneralPageLazy,
+  WORKFLOW_PAGE_PATH,
 } from "../modules/common/routes";
 import {
   AGENT_MODULE_KEY,
@@ -19,13 +25,11 @@ import {
   SESSION_MODULE_KEY,
   CodeSessionPageLazy,
   WORKFLOW_MODULE_KEY,
-  CodeWorkflowPageLazy,
 } from "../modules/code/routes";
 import {
   ModelAgentPageLazy,
   ModelAgentSettingsPageLazy,
   ModelSessionPageLazy,
-  ModelWorkflowPageLazy,
 } from "../modules/model/routes";
 import { DesktopLayout } from "../shell/layout";
 import type { AgentKey } from "../shared/types";
@@ -99,6 +103,14 @@ function canAccessPath(pathname: string, auth: AuthState, routeAccess: RouteAcce
     return routeAccess.isModuleEnabled(SKILL_MODULE_KEY);
   }
 
+  if (pathname.startsWith(MCP_PAGE_PATH)) {
+    return routeAccess.isModuleEnabled(MCP_MODULE_KEY);
+  }
+
+  if (pathname.startsWith(WORKFLOW_PAGE_PATH)) {
+    return routeAccess.isModuleEnabled(WORKFLOW_MODULE_KEY);
+  }
+
   if (pathname.startsWith("/ai-keys")) {
     return true;
   }
@@ -112,11 +124,7 @@ function canAccessPath(pathname: string, auth: AuthState, routeAccess: RouteAcce
   }
 
   if (pathname.startsWith("/agents/") && pathname.includes("/workflows")) {
-    return (
-      routeAccess.isModuleEnabled(WORKFLOW_MODULE_KEY) &&
-      !!resolveAgentKeyFromPathname(pathname) &&
-      routeAccess.isAgentEnabled(resolveAgentKeyFromPathname(pathname) as AgentKey)
-    );
+    return routeAccess.isModuleEnabled(WORKFLOW_MODULE_KEY);
   }
 
   if (pathname.startsWith("/agents/")) {
@@ -174,6 +182,17 @@ function RouteGuard({ auth, routeAccess, children }: { auth: AuthState; routeAcc
   return children;
 }
 
+// 描述：兼容旧版按智能体区分的工作流路由，自动跳转到全局工作流页并保留 workflowId。
+//
+// Params:
+//
+//   - workflowType: 工作流类型（code/model）。
+function LegacyWorkflowRedirect({ workflowType }: { workflowType: AgentKey }) {
+  const location = useLocation();
+  const workflowId = new URLSearchParams(location.search).get("workflowId")?.trim() || "";
+  return <Navigate to={resolveWorkflowEditorPath(workflowType, workflowId)} replace />;
+}
+
 // 描述：桌面端总路由入口，统一编排登录态、侧边栏布局与 modules 路由模块。
 export function DesktopRouter({ auth }: { auth: AuthState }) {
   const routeAccess = useRouteAccess(auth);
@@ -213,6 +232,20 @@ export function DesktopRouter({ auth }: { auth: AuthState }) {
             <Route
               path={SKILL_PAGE_PATH.slice(1)}
               element={withRouteLoading(<CommonSkillsPageLazy />)}
+            />
+          ) : null}
+
+          {routeAccess.isModuleEnabled(MCP_MODULE_KEY) ? (
+            <Route
+              path={MCP_PAGE_PATH.slice(1)}
+              element={withRouteLoading(<CommonMcpPageLazy />)}
+            />
+          ) : null}
+
+          {routeAccess.isModuleEnabled(WORKFLOW_MODULE_KEY) ? (
+            <Route
+              path={WORKFLOW_PAGE_PATH.slice(1)}
+              element={withRouteLoading(<CommonWorkflowsPageLazy />)}
             />
           ) : null}
 
@@ -347,11 +380,7 @@ export function DesktopRouter({ auth }: { auth: AuthState }) {
             <Route
               path="agents/code/workflows"
               element={
-                withRouteLoading(
-                  <RouteGuard auth={auth} routeAccess={routeAccess}>
-                    <CodeWorkflowPageLazy />
-                  </RouteGuard>,
-                )
+                <LegacyWorkflowRedirect workflowType="code" />
               }
             />
           ) : null}
@@ -360,11 +389,7 @@ export function DesktopRouter({ auth }: { auth: AuthState }) {
             <Route
               path="agents/model/workflows"
               element={
-                withRouteLoading(
-                  <RouteGuard auth={auth} routeAccess={routeAccess}>
-                    <ModelWorkflowPageLazy />
-                  </RouteGuard>,
-                )
+                <LegacyWorkflowRedirect workflowType="model" />
               }
             />
           ) : null}

@@ -113,6 +113,8 @@ struct BridgeHealthResponse {
 const BLENDER_EXTENSION_MIN_VERSION: &str = "4.2.0";
 const BLENDER_EXTENSION_REPO_ID: &str = "zodileap_local";
 const BLENDER_EXTENSION_PACKAGE_NAME: &str = "zodileap_mcp_bridge-0.2.0.zip";
+const APIFOX_MCP_PACKAGE_NAME: &str = "apifox-mcp-server";
+const APIFOX_MCP_PACKAGE_VERSION: &str = "latest";
 
 #[derive(Serialize)]
 struct AgentRunResponse {
@@ -394,6 +396,16 @@ struct GitCloneResponse {
     message: String,
 }
 
+#[derive(Serialize)]
+struct ApifoxMcpRuntimeStatusResponse {
+    installed: bool,
+    version: String,
+    npm_bin: String,
+    runtime_dir: String,
+    entry_path: String,
+    message: String,
+}
+
 #[derive(Deserialize)]
 struct LlmModelPlanResponse {
     steps: Vec<LlmModelPlanStep>,
@@ -538,6 +550,29 @@ fn resolve_python_bins() -> Vec<String> {
     bins
 }
 
+/// 描述：解析可用于执行 npm 命令的候选二进制路径列表。
+fn resolve_npm_bins() -> Vec<String> {
+    let mut bins: Vec<String> = Vec::new();
+    if let Ok(path) = env::var("ZODILEAP_NPM_BIN") {
+        let path = path.trim().to_string();
+        if !path.is_empty() {
+            bins.push(path);
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        bins.push("npm.cmd".to_string());
+        bins.push("npm".to_string());
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        bins.push("npm".to_string());
+    }
+    bins.push("/usr/local/bin/npm".to_string());
+    bins.push("/opt/homebrew/bin/npm".to_string());
+    bins
+}
+
 /// 描述：读取 Git 版本号，命中失败时返回 None。
 fn read_git_version(bin: &str) -> Option<String> {
     let output = Command::new(bin).arg("--version").output().ok()?;
@@ -562,6 +597,16 @@ fn read_python_version(bin: &str) -> Option<String> {
     extract_semver(&stdout)
 }
 
+/// 描述：读取 npm 版本号，命中失败时返回 None。
+fn read_npm_version(bin: &str) -> Option<String> {
+    let output = Command::new(bin).arg("--version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    extract_semver(&stdout)
+}
+
 /// 描述：返回第一个可用 Python 二进制路径与版本号。
 fn detect_available_python() -> Option<(String, String)> {
     for bin in resolve_python_bins() {
@@ -576,6 +621,16 @@ fn detect_available_python() -> Option<(String, String)> {
 fn detect_available_git() -> Option<(String, String)> {
     for bin in resolve_git_bins() {
         if let Some(version) = read_git_version(&bin) {
+            return Some((bin, version));
+        }
+    }
+    None
+}
+
+/// 描述：返回第一个可用 npm 二进制路径与版本号。
+fn detect_available_npm() -> Option<(String, String)> {
+    for bin in resolve_npm_bins() {
+        if let Some(version) = read_npm_version(&bin) {
             return Some((bin, version));
         }
     }
@@ -1566,7 +1621,22 @@ fn run_agent_command_inner(
     );
 
     let result = match result {
-        Ok(value) => {
+        Ok(mut value) => {
+            let normalized_message = value.message.trim().to_string();
+            if normalized_message.is_empty() {
+                if value.actions.is_empty() {
+                    return Err(DesktopProtocolError {
+                        code: "core.desktop.agent.empty_result".to_string(),
+                        message: "执行结束但未返回任何结果，请重试。".to_string(),
+                        suggestion: Some(
+                            "建议检查当前工作流技能配置，或切换模型后重试。若问题持续，请复制会话内容用于排查。"
+                                .to_string(),
+                        ),
+                        retryable: true,
+                    });
+                }
+                value.message = format!("执行完成（工具调用 {} 次）", value.actions.len());
+            }
             log(
                 "info",
                 "result",
@@ -3332,6 +3402,38 @@ async fn check_python_cli_health() -> PythonCliHealthResponse {
         })
 }
 
+#[tauri::command]
+async fn check_apifox_mcp_runtime_status(app: tauri::AppHandle) -> ApifoxMcpRuntimeStatusResponse {
+    tauri::async_runtime::spawn_blocking(move || check_apifox_mcp_runtime_status_inner(app))
+        .await
+        .unwrap_or_else(|err| ApifoxMcpRuntimeStatusResponse {
+            installed: false,
+            version: "".to_string(),
+            npm_bin: "".to_string(),
+            runtime_dir: "".to_string(),
+            entry_path: "".to_string(),
+            message: format!("check apifox mcp runtime status task join failed: {}", err),
+        })
+}
+
+#[tauri::command]
+async fn install_apifox_mcp_runtime(
+    app: tauri::AppHandle,
+) -> Result<ApifoxMcpRuntimeStatusResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || install_apifox_mcp_runtime_inner(app))
+        .await
+        .map_err(|err| format!("install apifox mcp runtime task join failed: {}", err))?
+}
+
+#[tauri::command]
+async fn uninstall_apifox_mcp_runtime(
+    app: tauri::AppHandle,
+) -> Result<ApifoxMcpRuntimeStatusResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || uninstall_apifox_mcp_runtime_inner(app))
+        .await
+        .map_err(|err| format!("uninstall apifox mcp runtime task join failed: {}", err))?
+}
+
 /// 描述：执行 Git CLI 健康检查，返回可用性、版本与命中路径。
 fn check_git_cli_health_inner() -> GitCliHealthResponse {
     if let Some((bin, version)) = detect_available_git() {
@@ -3484,6 +3586,178 @@ fn clone_git_repository_inner(
             .to_string(),
         message: format!("已克隆仓库到 {}", destination.to_string_lossy()),
     })
+}
+
+/// 描述：解析 Apifox 官方 MCP Runtime 根目录，固定在应用数据目录下，避免污染系统全局环境。
+fn resolve_apifox_mcp_runtime_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|err| format!("无法定位应用数据目录: {}", err))?;
+    Ok(app_data_dir
+        .join("mcp_runtime")
+        .join("apifox_official"))
+}
+
+/// 描述：返回 Apifox MCP 可执行入口路径（跨平台）。
+fn resolve_apifox_mcp_entry_path(runtime_root: &Path) -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        return runtime_root
+            .join("node_modules")
+            .join(".bin")
+            .join("apifox-mcp-server.cmd");
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        return runtime_root
+            .join("node_modules")
+            .join(".bin")
+            .join("apifox-mcp-server");
+    }
+}
+
+/// 描述：确保 Runtime 根目录中的 package.json 存在，便于 npm 安装到应用私有目录。
+fn ensure_apifox_runtime_package_json(runtime_root: &Path) -> Result<(), String> {
+    fs::create_dir_all(runtime_root)
+        .map_err(|err| format!("创建 Apifox MCP runtime 目录失败: {}", err))?;
+    let package_json_path = runtime_root.join("package.json");
+    if package_json_path.exists() {
+        return Ok(());
+    }
+    let package_json = json!({
+        "name": "zodileap-desktop-apifox-mcp-runtime",
+        "private": true,
+        "version": "0.0.0"
+    });
+    let content = serde_json::to_string_pretty(&package_json)
+        .map_err(|err| format!("构建 Apifox MCP package.json 失败: {}", err))?;
+    fs::write(&package_json_path, format!("{}\n", content))
+        .map_err(|err| format!("写入 Apifox MCP package.json 失败: {}", err))?;
+    Ok(())
+}
+
+/// 描述：读取本地安装的 Apifox MCP 版本，未命中时返回空字符串。
+fn read_apifox_runtime_version(runtime_root: &Path) -> String {
+    let package_json_path = runtime_root
+        .join("node_modules")
+        .join(APIFOX_MCP_PACKAGE_NAME)
+        .join("package.json");
+    let raw = match fs::read_to_string(&package_json_path) {
+        Ok(content) => content,
+        Err(_) => return "".to_string(),
+    };
+    let parsed = match serde_json::from_str::<serde_json::Value>(raw.as_str()) {
+        Ok(value) => value,
+        Err(_) => return "".to_string(),
+    };
+    parsed
+        .get("version")
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim().to_string())
+        .unwrap_or_default()
+}
+
+/// 描述：构建 Apifox MCP Runtime 状态响应，统一前端“是否真实安装”的判定口径。
+fn build_apifox_mcp_runtime_status_response(
+    runtime_root: &Path,
+    npm_bin: String,
+) -> ApifoxMcpRuntimeStatusResponse {
+    let entry_path = resolve_apifox_mcp_entry_path(runtime_root);
+    let installed = entry_path.exists();
+    let version = read_apifox_runtime_version(runtime_root);
+    let message = if installed {
+        let version_text = if version.is_empty() {
+            "unknown".to_string()
+        } else {
+            version.clone()
+        };
+        format!(
+            "Apifox 官方 MCP 已安装（version={}，目录={}）。",
+            version_text,
+            runtime_root.to_string_lossy()
+        )
+    } else {
+        format!(
+            "Apifox 官方 MCP 未安装（目录={}）。",
+            runtime_root.to_string_lossy()
+        )
+    };
+    ApifoxMcpRuntimeStatusResponse {
+        installed,
+        version,
+        npm_bin,
+        runtime_dir: runtime_root.to_string_lossy().to_string(),
+        entry_path: entry_path.to_string_lossy().to_string(),
+        message,
+    }
+}
+
+/// 描述：读取 Apifox MCP Runtime 当前状态，不执行安装动作。
+fn check_apifox_mcp_runtime_status_inner(app: tauri::AppHandle) -> ApifoxMcpRuntimeStatusResponse {
+    let npm_bin = detect_available_npm()
+        .map(|(bin, _)| bin)
+        .unwrap_or_default();
+    match resolve_apifox_mcp_runtime_root(&app) {
+        Ok(runtime_root) => build_apifox_mcp_runtime_status_response(&runtime_root, npm_bin),
+        Err(err) => ApifoxMcpRuntimeStatusResponse {
+            installed: false,
+            version: "".to_string(),
+            npm_bin,
+            runtime_dir: "".to_string(),
+            entry_path: "".to_string(),
+            message: err,
+        },
+    }
+}
+
+/// 描述：将 Apifox 官方 MCP 安装到应用私有目录，避免写入用户全局 Node 环境。
+fn install_apifox_mcp_runtime_inner(
+    app: tauri::AppHandle,
+) -> Result<ApifoxMcpRuntimeStatusResponse, String> {
+    let (npm_bin, _) = detect_available_npm()
+        .ok_or_else(|| "未检测到可用的 npm，请先安装 Node.js（建议 LTS 版本）。".to_string())?;
+    let runtime_root = resolve_apifox_mcp_runtime_root(&app)?;
+    ensure_apifox_runtime_package_json(&runtime_root)?;
+    let output = Command::new(npm_bin.as_str())
+        .arg("install")
+        .arg(format!("{}@{}", APIFOX_MCP_PACKAGE_NAME, APIFOX_MCP_PACKAGE_VERSION))
+        .arg("--no-fund")
+        .arg("--no-audit")
+        .arg("--prefix")
+        .arg(runtime_root.as_os_str())
+        .output()
+        .map_err(|err| format!("执行 npm install 失败: {}", err))?;
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "安装 Apifox 官方 MCP 失败（code={:?}）：{} {}",
+            output.status.code(),
+            stdout.trim(),
+            stderr.trim()
+        ));
+    }
+    let status = build_apifox_mcp_runtime_status_response(&runtime_root, npm_bin);
+    if !status.installed {
+        return Err("安装完成但未检测到 Apifox MCP 可执行入口，请检查 npm 输出日志。".to_string());
+    }
+    Ok(status)
+}
+
+/// 描述：卸载应用私有目录下的 Apifox MCP Runtime。
+fn uninstall_apifox_mcp_runtime_inner(
+    app: tauri::AppHandle,
+) -> Result<ApifoxMcpRuntimeStatusResponse, String> {
+    let npm_bin = detect_available_npm()
+        .map(|(bin, _)| bin)
+        .unwrap_or_default();
+    let runtime_root = resolve_apifox_mcp_runtime_root(&app)?;
+    if runtime_root.exists() {
+        fs::remove_dir_all(&runtime_root)
+            .map_err(|err| format!("删除 Apifox MCP runtime 目录失败: {}", err))?;
+    }
+    Ok(build_apifox_mcp_runtime_status_response(&runtime_root, npm_bin))
 }
 
 fn now_millis() -> u128 {
@@ -8149,6 +8423,9 @@ fn main() {
             check_gemini_cli_health,
             check_git_cli_health,
             check_python_cli_health,
+            check_apifox_mcp_runtime_status,
+            install_apifox_mcp_runtime,
+            uninstall_apifox_mcp_runtime,
             pick_local_project_folder,
             open_external_url,
             clone_git_repository,

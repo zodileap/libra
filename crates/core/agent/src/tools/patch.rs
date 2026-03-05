@@ -26,16 +26,9 @@ impl AgentTool for ApplyPatchTool {
         crate::tools::RiskLevel::High
     }
 
-    fn execute(
-        &self,
-        args: &Value,
-        context: ToolContext,
-    ) -> Result<Value, ProtocolError> {
-        let patch_text = get_required_raw_string(
-            args,
-            "patch",
-            "core.agent.python.apply_patch.patch_missing",
-        )?;
+    fn execute(&self, args: &Value, context: ToolContext) -> Result<Value, ProtocolError> {
+        let patch_text =
+            get_required_raw_string(args, "patch", "core.agent.python.apply_patch.patch_missing")?;
         let check_only = parse_bool_arg(args, "check_only", false)?;
         if patch_text.trim().is_empty() {
             return Err(ProtocolError::new(

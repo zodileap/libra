@@ -22,11 +22,7 @@ impl AgentTool for ReadTextTool {
         "读取文本文件，返回文件内容。参数：{\"path\": \"文件相对路径\"}"
     }
 
-    fn execute(
-        &self,
-        args: &Value,
-        context: ToolContext,
-    ) -> Result<Value, ProtocolError> {
+    fn execute(&self, args: &Value, context: ToolContext) -> Result<Value, ProtocolError> {
         let path = get_required_string(args, "path", "core.agent.python.read_text.path_missing")?;
         let target = resolve_sandbox_path(context.sandbox_root, path.as_str())?;
         let content = fs::read_to_string(&target).map_err(|err| {
@@ -53,11 +49,7 @@ impl AgentTool for ReadJsonTool {
         "读取并解析 JSON 文件。参数：{\"path\": \"相对路径\"}"
     }
 
-    fn execute(
-        &self,
-        args: &Value,
-        context: ToolContext,
-    ) -> Result<Value, ProtocolError> {
+    fn execute(&self, args: &Value, context: ToolContext) -> Result<Value, ProtocolError> {
         let path = get_required_string(args, "path", "core.agent.python.read_json.path_missing")?;
         let target = resolve_sandbox_path(context.sandbox_root, path.as_str())?;
         let content = fs::read_to_string(&target).map_err(|err| {
@@ -94,11 +86,7 @@ impl AgentTool for WriteTextTool {
         crate::tools::RiskLevel::High
     }
 
-    fn execute(
-        &self,
-        args: &Value,
-        context: ToolContext,
-    ) -> Result<Value, ProtocolError> {
+    fn execute(&self, args: &Value, context: ToolContext) -> Result<Value, ProtocolError> {
         let path = get_required_string(args, "path", "core.agent.python.write_text.path_missing")?;
         let content = get_required_raw_string(
             args,
@@ -137,14 +125,13 @@ impl AgentTool for WriteJsonTool {
         crate::tools::RiskLevel::High
     }
 
-    fn execute(
-        &self,
-        args: &Value,
-        context: ToolContext,
-    ) -> Result<Value, ProtocolError> {
+    fn execute(&self, args: &Value, context: ToolContext) -> Result<Value, ProtocolError> {
         let path = get_required_string(args, "path", "core.agent.python.write_json.path_missing")?;
         let data = args.get("data").ok_or_else(|| {
-            ProtocolError::new("core.agent.python.write_json.data_missing", "缺少 data 参数")
+            ProtocolError::new(
+                "core.agent.python.write_json.data_missing",
+                "缺少 data 参数",
+            )
         })?;
         let target = resolve_sandbox_path(context.sandbox_root, path.as_str())?;
         if let Some(parent) = target.parent() {
@@ -181,11 +168,7 @@ impl AgentTool for ListDirTool {
         "列出指定目录的文件和子目录信息。参数：{\"path\": \"目录相对路径（可选，默认为当前目录）\"}"
     }
 
-    fn execute(
-        &self,
-        args: &Value,
-        context: ToolContext,
-    ) -> Result<Value, ProtocolError> {
+    fn execute(&self, args: &Value, context: ToolContext) -> Result<Value, ProtocolError> {
         let path = args
             .get("path")
             .and_then(|value| value.as_str())
@@ -238,11 +221,7 @@ impl AgentTool for MkdirTool {
         crate::tools::RiskLevel::High
     }
 
-    fn execute(
-        &self,
-        args: &Value,
-        context: ToolContext,
-    ) -> Result<Value, ProtocolError> {
+    fn execute(&self, args: &Value, context: ToolContext) -> Result<Value, ProtocolError> {
         let path = get_required_string(args, "path", "core.agent.python.mkdir.path_missing")?;
         let target = resolve_sandbox_path(context.sandbox_root, path.as_str())?;
         fs::create_dir_all(&target).map_err(|err| {
@@ -269,11 +248,7 @@ impl AgentTool for StatTool {
         "获取文件或目录的基础元数据。参数：{\"path\": \"相对路径\"}"
     }
 
-    fn execute(
-        &self,
-        args: &Value,
-        context: ToolContext,
-    ) -> Result<Value, ProtocolError> {
+    fn execute(&self, args: &Value, context: ToolContext) -> Result<Value, ProtocolError> {
         let path = get_required_string(args, "path", "core.agent.python.stat.path_missing")?;
         let target = resolve_sandbox_path(context.sandbox_root, path.as_str())?;
         let meta = fs::metadata(&target).map_err(|err| {
@@ -303,12 +278,9 @@ impl AgentTool for GlobTool {
         "按 glob 模式匹配沙盒内文件/目录。参数：{\"pattern\": \"匹配模式，如 src/**/*.rs\", \"max_results\": 100}"
     }
 
-    fn execute(
-        &self,
-        args: &Value,
-        context: ToolContext,
-    ) -> Result<Value, ProtocolError> {
-        let pattern = get_required_string(args, "pattern", "core.agent.python.glob.pattern_missing")?;
+    fn execute(&self, args: &Value, context: ToolContext) -> Result<Value, ProtocolError> {
+        let pattern =
+            get_required_string(args, "pattern", "core.agent.python.glob.pattern_missing")?;
         let max_results = parse_positive_usize_arg(args, "max_results", 100, 2_000)?;
 
         let matches = match resolve_executable_binary("rg", "--version") {
@@ -340,11 +312,7 @@ impl AgentTool for SearchFilesTool {
         "在项目中执行全文检索，支持 glob 过滤。参数：{\"query\": \"检索关键词\", \"glob\": \"可选的文件匹配模式，如 *.rs\"}"
     }
 
-    fn execute(
-        &self,
-        args: &Value,
-        context: ToolContext,
-    ) -> Result<Value, ProtocolError> {
+    fn execute(&self, args: &Value, context: ToolContext) -> Result<Value, ProtocolError> {
         let query = get_required_string(
             args,
             "query",
@@ -366,7 +334,12 @@ impl AgentTool for SearchFilesTool {
                 glob.as_str(),
                 max_results,
             )?,
-            None => run_grep_search(context.sandbox_root, query.as_str(), glob.as_str(), max_results)?,
+            None => run_grep_search(
+                context.sandbox_root,
+                query.as_str(),
+                glob.as_str(),
+                max_results,
+            )?,
         };
         Ok(json!({
             "query": query,
@@ -410,11 +383,13 @@ fn run_rg_glob(
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
-        .map(|line| json!({
-            "path": line,
-            "is_file": true,
-            "is_dir": false,
-        }))
+        .map(|line| {
+            json!({
+                "path": line,
+                "is_file": true,
+                "is_dir": false,
+            })
+        })
         .collect();
     if matches.len() > max_results {
         matches.truncate(max_results);

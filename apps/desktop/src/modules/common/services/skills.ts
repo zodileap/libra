@@ -52,7 +52,7 @@ const SKILL_CATALOG: SkillCatalogItem[] = [
   {
     id: "apifox_model_designer",
     name: "Apifox 数据模型",
-    description: "根据需求构建前后端交互数据模型并同步 Apifox。",
+    description: "根据需求构建前后端交互数据模型，并通过 Apifox 官方 MCP Server 同步。",
     icon: "dataset",
     versions: ["1.0.0"],
   },

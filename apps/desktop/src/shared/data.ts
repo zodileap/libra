@@ -72,6 +72,11 @@ const SESSION_RUN_STATE_STORAGE_KEY = "zodileap.desktop.session.run.state";
 
 // 描述:
 //
+//   - 会话调试资产本地存储键，用于恢复 AI 原始收发、全链路调试与 Trace 记录。
+const SESSION_DEBUG_ARTIFACT_STORAGE_KEY = "zodileap.desktop.session.debug.artifacts";
+
+// 描述:
+//
 //   - 代码目录分组本地存储键。
 const CODE_WORKSPACE_GROUP_STORAGE_KEY = "zodileap.desktop.code.workspace.groups";
 
@@ -164,6 +169,7 @@ export interface SessionRunSegment {
   intro: string;
   step: string;
   status: "running" | "finished" | "failed";
+  detail?: string;
 }
 
 // 描述:
@@ -194,6 +200,47 @@ export interface SessionRunStateSnapshot {
 //
 //   - 会话运行态存储结构。
 interface StoredSessionRunState extends SessionRunStateSnapshot {}
+
+// 描述:
+//
+//   - 会话 Trace 记录结构，供复制排查内容与会话恢复复用。
+export interface SessionTraceRecordSnapshot {
+  traceId: string;
+  source: string;
+  code?: string;
+  message: string;
+}
+
+// 描述:
+//
+//   - 会话调试流记录结构，供复制排查内容与会话恢复复用。
+export interface SessionDebugFlowRecordSnapshot {
+  id: string;
+  source: "ui" | "backend";
+  stage: string;
+  title: string;
+  detail: string;
+  timestamp: number;
+}
+
+// 描述:
+//
+//   - 会话调试资产快照结构。
+export interface SessionDebugArtifactSnapshot {
+  agentKey: "code" | "model";
+  sessionId: string;
+  traceRecords: SessionTraceRecordSnapshot[];
+  debugFlowRecords: SessionDebugFlowRecordSnapshot[];
+  aiPromptRaw: string;
+  aiResponseRaw: string;
+  aiRawByMessage?: Record<string, { promptRaw: string; responseRaw: string }>;
+  updatedAt: number;
+}
+
+// 描述:
+//
+//   - 会话调试资产存储结构。
+interface StoredSessionDebugArtifact extends SessionDebugArtifactSnapshot {}
 
 // 描述:
 //
@@ -236,6 +283,39 @@ export interface CodeWorkspaceProjectFrontendCodeStructure {
 
 // 描述:
 //
+//   - 定义结构化项目信息“分类-条目”中的细分维度，支持一个分类下维护多组语义条目。
+export interface CodeWorkspaceProjectKnowledgeFacet {
+  key: string;
+  label: string;
+  entries: string[];
+}
+
+// 描述:
+//
+//   - 定义结构化项目信息通用分类，后续可在不改动存储协议的前提下扩展更多分类。
+export interface CodeWorkspaceProjectKnowledgeSection {
+  key: string;
+  title: string;
+  description: string;
+  facets: CodeWorkspaceProjectKnowledgeFacet[];
+}
+
+// 描述:
+//
+//   - 定义结构化项目信息分类更新入参。
+export interface CodeWorkspaceProjectKnowledgeSectionInput {
+  key?: string;
+  title?: string;
+  description?: string;
+  facets?: Array<{
+    key?: string;
+    label?: string;
+    entries?: string[];
+  }>;
+}
+
+// 描述:
+//
 //   - 定义代码项目结构化信息（项目级共享资产）。
 export interface CodeWorkspaceProjectProfile {
   schemaVersion: number;
@@ -246,6 +326,7 @@ export interface CodeWorkspaceProjectProfile {
   updatedAt: string;
   updatedBy: string;
   summary: string;
+  knowledgeSections: CodeWorkspaceProjectKnowledgeSection[];
   apiDataModel: CodeWorkspaceProjectApiDataModel;
   frontendPageLayout: CodeWorkspaceProjectFrontendPageLayout;
   frontendCodeStructure: CodeWorkspaceProjectFrontendCodeStructure;
@@ -257,6 +338,7 @@ export interface CodeWorkspaceProjectProfile {
 //   - 定义代码项目结构化信息更新入参。
 export interface CodeWorkspaceProjectProfileInput {
   summary?: string;
+  knowledgeSections?: CodeWorkspaceProjectKnowledgeSectionInput[];
   apiDataModel?: Partial<CodeWorkspaceProjectApiDataModel>;
   frontendPageLayout?: Partial<CodeWorkspaceProjectFrontendPageLayout>;
   frontendCodeStructure?: Partial<CodeWorkspaceProjectFrontendCodeStructure>;
@@ -554,6 +636,99 @@ function writeSessionRunStates(states: StoredSessionRunState[]) {
   window.localStorage.setItem(SESSION_RUN_STATE_STORAGE_KEY, JSON.stringify(states));
 }
 
+// 描述：读取会话调试资产列表。
+//
+// Returns:
+//
+//   - 会话调试资产数组。
+function readSessionDebugArtifacts(): StoredSessionDebugArtifact[] {
+  if (!IS_BROWSER) {
+    return [];
+  }
+  const raw = window.localStorage.getItem(SESSION_DEBUG_ARTIFACT_STORAGE_KEY);
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .filter((item) => item?.sessionId && (item?.agentKey === "code" || item?.agentKey === "model"))
+      .map((item) => {
+        const traceRecords = Array.isArray(item.traceRecords)
+          ? item.traceRecords
+            .filter((record) => record && typeof record === "object")
+            .map((record) => ({
+              traceId: String(record.traceId || "").trim(),
+              source: String(record.source || "").trim(),
+              code: String(record.code || "").trim() || undefined,
+              message: String(record.message || "").trim(),
+            }))
+            .filter((record) => record.traceId || record.message)
+            .slice(0, 100)
+          : [];
+        const debugFlowRecords = Array.isArray(item.debugFlowRecords)
+          ? item.debugFlowRecords
+            .filter((record) => record && typeof record === "object")
+            .map((record, index) => ({
+              id: String(record.id || "").trim() || `debug-${index + 1}`,
+              source: record.source === "backend" ? "backend" : "ui",
+              stage: String(record.stage || "").trim(),
+              title: String(record.title || "").trim(),
+              detail: String(record.detail || "").trim(),
+              timestamp: Number(record.timestamp || 0),
+            }))
+            .slice(0, 200)
+          : [];
+        const aiRawByMessage = item.aiRawByMessage && typeof item.aiRawByMessage === "object"
+          ? Object.entries(item.aiRawByMessage as Record<string, unknown>)
+            .map(([messageId, rawItem]) => {
+              const normalizedMessageId = String(messageId || "").trim();
+              if (!normalizedMessageId || !rawItem || typeof rawItem !== "object") {
+                return null;
+              }
+              const rawRecord = rawItem as Record<string, unknown>;
+              return [
+                normalizedMessageId,
+                {
+                  promptRaw: String(rawRecord.promptRaw || ""),
+                  responseRaw: String(rawRecord.responseRaw || ""),
+                },
+              ] as const;
+            })
+            .filter((item): item is readonly [string, { promptRaw: string; responseRaw: string }] => Boolean(item))
+            .slice(0, 200)
+          : [];
+        return {
+          sessionId: String(item.sessionId).trim(),
+          agentKey: item.agentKey === "model" ? "model" : "code",
+          traceRecords,
+          debugFlowRecords,
+          aiPromptRaw: String(item.aiPromptRaw || ""),
+          aiResponseRaw: String(item.aiResponseRaw || ""),
+          aiRawByMessage: Object.fromEntries(aiRawByMessage),
+          updatedAt: Number(item.updatedAt || Date.now()),
+        } as StoredSessionDebugArtifact;
+      });
+  } catch (_err) {
+    return [];
+  }
+}
+
+// 描述：写入会话调试资产列表。
+//
+// Params:
+//
+//   - items: 会话调试资产数组。
+function writeSessionDebugArtifacts(items: StoredSessionDebugArtifact[]) {
+  if (!IS_BROWSER) {
+    return;
+  }
+  window.localStorage.setItem(SESSION_DEBUG_ARTIFACT_STORAGE_KEY, JSON.stringify(items));
+}
+
 // 描述：提取路径最后一级目录名称，作为代码工作目录分组默认标题。
 //
 // Params:
@@ -608,7 +783,82 @@ function normalizeWorkspaceDependencyRules(rules: unknown): string[] {
 // 描述:
 //
 //   - 结构化项目信息 schema 版本，后续字段扩展时用于迁移判断。
-const CODE_WORKSPACE_PROFILE_SCHEMA_VERSION = 2;
+const CODE_WORKSPACE_PROFILE_SCHEMA_VERSION = 3;
+
+// 描述:
+//
+//   - 结构化项目信息的内置分类键，覆盖“业务语义 -> 接口契约 -> 页面信息架构 -> 前端实现架构 -> 工程约束”主链路。
+const PROJECT_PROFILE_SECTION_KEYS = {
+  businessContext: "business_context",
+  interactionContracts: "interaction_contracts",
+  uiInformationArchitecture: "ui_information_architecture",
+  frontendImplementationArchitecture: "frontend_implementation_architecture",
+  engineeringGuardrails: "engineering_guardrails",
+} as const;
+
+// 描述:
+//
+//   - 默认分类模板。若后续需要新增分类，可在此扩展而不破坏既有数据。
+const PROJECT_PROFILE_SECTION_TEMPLATES: Array<{
+  key: string;
+  title: string;
+  description: string;
+  facets: Array<{ key: string; label: string }>;
+}> = [
+  {
+    key: PROJECT_PROFILE_SECTION_KEYS.businessContext,
+    title: "业务语义",
+    description: "描述项目要解决的问题、用户角色与关键业务流程。",
+    facets: [
+      { key: "coreObjects", label: "核心对象" },
+      { key: "rolesAndScenarios", label: "角色与场景" },
+      { key: "acceptanceCriteria", label: "验收标准" },
+    ],
+  },
+  {
+    key: PROJECT_PROFILE_SECTION_KEYS.interactionContracts,
+    title: "交互契约",
+    description: "描述前后端交互所依赖的数据模型、请求响应与 Mock 场景。",
+    facets: [
+      { key: "entities", label: "API 数据实体" },
+      { key: "requestModels", label: "API 请求模型" },
+      { key: "responseModels", label: "API 响应模型" },
+      { key: "mockCases", label: "API Mock 场景" },
+    ],
+  },
+  {
+    key: PROJECT_PROFILE_SECTION_KEYS.uiInformationArchitecture,
+    title: "界面信息架构",
+    description: "描述页面层级、导航菜单与页面元素区块。",
+    facets: [
+      { key: "pages", label: "页面清单" },
+      { key: "navigation", label: "导航与菜单项" },
+      { key: "pageElements", label: "页面元素结构" },
+    ],
+  },
+  {
+    key: PROJECT_PROFILE_SECTION_KEYS.frontendImplementationArchitecture,
+    title: "前端实现架构",
+    description: "描述代码目录、模块边界与实现约束。",
+    facets: [
+      { key: "directories", label: "前端目录结构" },
+      { key: "moduleBoundaries", label: "前端模块边界" },
+      { key: "implementationConstraints", label: "前端实现约束" },
+    ],
+  },
+  {
+    key: PROJECT_PROFILE_SECTION_KEYS.engineeringGuardrails,
+    title: "工程约束",
+    description: "描述测试、编码规范与交付约束。",
+    facets: [
+      { key: "codingConventions", label: "编码约定" },
+    ],
+  },
+];
+
+const PROJECT_PROFILE_KNOWN_SECTION_KEY_SET = new Set(
+  PROJECT_PROFILE_SECTION_TEMPLATES.map((item) => item.key),
+);
 
 // 描述:
 //
@@ -671,38 +921,366 @@ function normalizeStringList(value: unknown): string[] {
 
 // 描述:
 //
-//   - 规范化结构化 API 数据模型字段，保证固定字段完整存在。
-function normalizeProjectApiDataModel(source: unknown): CodeWorkspaceProjectApiDataModel {
-  const value = (source || {}) as Partial<CodeWorkspaceProjectApiDataModel>;
+//   - 规范化结构化分类中的单个细分维度，保证 key/label/entries 均可读。
+//
+// Params:
+//
+//   - source: 原始 facet 数据。
+//   - fallback: 兜底模板。
+//
+// Returns:
+//
+//   - 规范化后的 facet。
+function normalizeProjectKnowledgeFacet(
+  source: unknown,
+  fallback: { key: string; label: string; entries?: string[] },
+): CodeWorkspaceProjectKnowledgeFacet {
+  const value = (source || {}) as Partial<CodeWorkspaceProjectKnowledgeFacet>;
+  const key = String(value.key || "").trim() || fallback.key;
+  const label = String(value.label || "").trim() || fallback.label;
   return {
-    entities: normalizeStringList(value.entities),
-    requestModels: normalizeStringList(value.requestModels),
-    responseModels: normalizeStringList(value.responseModels),
-    mockCases: normalizeStringList(value.mockCases),
+    key,
+    label,
+    entries: value.entries === undefined
+      ? normalizeStringList(fallback.entries)
+      : normalizeStringList(value.entries),
   };
 }
 
 // 描述:
 //
-//   - 规范化结构化前端页面布局字段，保证固定字段完整存在。
-function normalizeProjectFrontendPageLayout(source: unknown): CodeWorkspaceProjectFrontendPageLayout {
-  const value = (source || {}) as Partial<CodeWorkspaceProjectFrontendPageLayout>;
-  return {
-    pages: normalizeStringList(value.pages),
-    navigation: normalizeStringList(value.navigation),
-    pageElements: normalizeStringList(value.pageElements),
-  };
+//   - 根据默认模板创建可编辑分类骨架，便于后续按 key 回填数据。
+//
+// Returns:
+//
+//   - 分类模板数组。
+function buildProjectProfileSectionTemplateDraft(): CodeWorkspaceProjectKnowledgeSection[] {
+  return PROJECT_PROFILE_SECTION_TEMPLATES.map((section) => ({
+    key: section.key,
+    title: section.title,
+    description: section.description,
+    facets: section.facets.map((facet) => ({
+      key: facet.key,
+      label: facet.label,
+      entries: [],
+    })),
+  }));
 }
 
 // 描述:
 //
-//   - 规范化结构化前端代码结构字段，保证固定字段完整存在。
-function normalizeProjectFrontendCodeStructure(source: unknown): CodeWorkspaceProjectFrontendCodeStructure {
-  const value = (source || {}) as Partial<CodeWorkspaceProjectFrontendCodeStructure>;
+//   - 将旧字段结构映射为通用分类结构，作为迁移与默认值来源。
+//
+// Params:
+//
+//   - summary: 项目摘要。
+//   - apiDataModel: API 数据模型。
+//   - frontendPageLayout: 前端页面布局。
+//   - frontendCodeStructure: 前端代码结构。
+//   - codingConventions: 编码约定。
+//
+// Returns:
+//
+//   - 通用分类数组。
+function buildProjectKnowledgeSectionsFromLegacyFields(
+  summary: string,
+  apiDataModel: CodeWorkspaceProjectApiDataModel,
+  frontendPageLayout: CodeWorkspaceProjectFrontendPageLayout,
+  frontendCodeStructure: CodeWorkspaceProjectFrontendCodeStructure,
+  codingConventions: string[],
+): CodeWorkspaceProjectKnowledgeSection[] {
+  const sections = buildProjectProfileSectionTemplateDraft();
+  const summaryLines = normalizeStringList(
+    String(summary || "")
+      .split(/[。；;\n]/g)
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0),
+  );
+
+  const assignFacetEntries = (sectionKey: string, facetKey: string, entries: string[]) => {
+    const section = sections.find((item) => item.key === sectionKey);
+    const facet = section?.facets.find((item) => item.key === facetKey);
+    if (!facet) {
+      return;
+    }
+    facet.entries = normalizeStringList(entries);
+  };
+
+  assignFacetEntries(PROJECT_PROFILE_SECTION_KEYS.businessContext, "coreObjects", summaryLines.slice(0, 4));
+  assignFacetEntries(
+    PROJECT_PROFILE_SECTION_KEYS.businessContext,
+    "rolesAndScenarios",
+    frontendPageLayout.pages.slice(0, 6),
+  );
+  assignFacetEntries(
+    PROJECT_PROFILE_SECTION_KEYS.businessContext,
+    "acceptanceCriteria",
+    codingConventions.slice(0, 6),
+  );
+
+  assignFacetEntries(PROJECT_PROFILE_SECTION_KEYS.interactionContracts, "entities", apiDataModel.entities);
+  assignFacetEntries(PROJECT_PROFILE_SECTION_KEYS.interactionContracts, "requestModels", apiDataModel.requestModels);
+  assignFacetEntries(PROJECT_PROFILE_SECTION_KEYS.interactionContracts, "responseModels", apiDataModel.responseModels);
+  assignFacetEntries(PROJECT_PROFILE_SECTION_KEYS.interactionContracts, "mockCases", apiDataModel.mockCases);
+
+  assignFacetEntries(PROJECT_PROFILE_SECTION_KEYS.uiInformationArchitecture, "pages", frontendPageLayout.pages);
+  assignFacetEntries(PROJECT_PROFILE_SECTION_KEYS.uiInformationArchitecture, "navigation", frontendPageLayout.navigation);
+  assignFacetEntries(
+    PROJECT_PROFILE_SECTION_KEYS.uiInformationArchitecture,
+    "pageElements",
+    frontendPageLayout.pageElements,
+  );
+
+  assignFacetEntries(
+    PROJECT_PROFILE_SECTION_KEYS.frontendImplementationArchitecture,
+    "directories",
+    frontendCodeStructure.directories,
+  );
+  assignFacetEntries(
+    PROJECT_PROFILE_SECTION_KEYS.frontendImplementationArchitecture,
+    "moduleBoundaries",
+    frontendCodeStructure.moduleBoundaries,
+  );
+  assignFacetEntries(
+    PROJECT_PROFILE_SECTION_KEYS.frontendImplementationArchitecture,
+    "implementationConstraints",
+    frontendCodeStructure.implementationConstraints,
+  );
+  assignFacetEntries(
+    PROJECT_PROFILE_SECTION_KEYS.engineeringGuardrails,
+    "codingConventions",
+    codingConventions,
+  );
+  return sections;
+}
+
+// 描述:
+//
+//   - 规范化结构化分类列表；优先使用输入值，缺失时回填模板与 fallback。
+//
+// Params:
+//
+//   - source: 原始分类列表。
+//   - fallback: 兜底分类。
+//
+// Returns:
+//
+//   - 规范化后的分类列表。
+function normalizeProjectKnowledgeSections(
+  source: unknown,
+  fallback: CodeWorkspaceProjectKnowledgeSection[],
+): CodeWorkspaceProjectKnowledgeSection[] {
+  const sourceList = Array.isArray(source) ? source : [];
+  const normalizedKnown = fallback.map((fallbackSection) => {
+    const hit = sourceList.find((item) => {
+      const value = item as Partial<CodeWorkspaceProjectKnowledgeSection>;
+      return String(value?.key || "").trim() === fallbackSection.key;
+    }) as Partial<CodeWorkspaceProjectKnowledgeSection> | undefined;
+    const sourceFacets = Array.isArray(hit?.facets) ? hit?.facets : [];
+    return {
+      key: fallbackSection.key,
+      title: String(hit?.title || "").trim() || fallbackSection.title,
+      description: String(hit?.description || "").trim() || fallbackSection.description,
+      facets: fallbackSection.facets.map((fallbackFacet) => {
+        const facetHit = sourceFacets.find((item) => {
+          const value = item as Partial<CodeWorkspaceProjectKnowledgeFacet>;
+          return String(value?.key || "").trim() === fallbackFacet.key;
+        });
+        return normalizeProjectKnowledgeFacet(facetHit, fallbackFacet);
+      }),
+    };
+  });
+
+  const normalizedCustom = sourceList
+    .map((item) => {
+      const value = (item || {}) as Partial<CodeWorkspaceProjectKnowledgeSection>;
+      const key = String(value.key || "").trim();
+      if (!key || PROJECT_PROFILE_KNOWN_SECTION_KEY_SET.has(key)) {
+        return null;
+      }
+      const rawFacets = Array.isArray(value.facets) ? value.facets : [];
+      const facets = rawFacets
+        .map((facetItem, index) => {
+          const facetValue = (facetItem || {}) as Partial<CodeWorkspaceProjectKnowledgeFacet>;
+          const facetKey = String(facetValue.key || "").trim() || `facet_${index + 1}`;
+          const facetLabel = String(facetValue.label || "").trim() || `字段 ${index + 1}`;
+          return normalizeProjectKnowledgeFacet(facetValue, {
+            key: facetKey,
+            label: facetLabel,
+          });
+        })
+        .filter((facet) => Boolean(facet.key));
+      if (facets.length === 0) {
+        return null;
+      }
+      return {
+        key,
+        title: String(value.title || "").trim() || key,
+        description: String(value.description || "").trim(),
+        facets,
+      } as CodeWorkspaceProjectKnowledgeSection;
+    })
+    .filter((item): item is CodeWorkspaceProjectKnowledgeSection => Boolean(item));
+
+  return [...normalizedKnown, ...normalizedCustom];
+}
+
+// 描述:
+//
+//   - 合并“已知分类默认值”与“当前自定义分类”，用于旧字段写入时保持扩展分类不丢失。
+//
+// Params:
+//
+//   - knownDefaults: 已知分类默认值。
+//   - currentSections: 当前分类列表。
+//
+// Returns:
+//
+//   - 合并后的分类列表。
+function mergeProjectKnowledgeSectionsWithCustom(
+  knownDefaults: CodeWorkspaceProjectKnowledgeSection[],
+  currentSections: CodeWorkspaceProjectKnowledgeSection[],
+): CodeWorkspaceProjectKnowledgeSection[] {
+  const normalizedCurrent = normalizeProjectKnowledgeSections(currentSections, knownDefaults);
+  const customSections = normalizedCurrent.filter((item) => !PROJECT_PROFILE_KNOWN_SECTION_KEY_SET.has(item.key));
+  const knownSections = knownDefaults.map((section) => {
+    const hit = normalizedCurrent.find((item) => item.key === section.key);
+    if (!hit) {
+      return section;
+    }
+    return {
+      ...section,
+      title: hit.title,
+      description: hit.description,
+    };
+  });
+  return [...knownSections, ...customSections];
+}
+
+// 描述:
+//
+//   - 读取分类中的指定 facet 条目；若未命中则返回 fallback。
+//
+// Params:
+//
+//   - sections: 分类列表。
+//   - sectionKey: 分类键。
+//   - facetKey: 细分维度键。
+//   - fallback: 兜底值。
+//
+// Returns:
+//
+//   - 条目数组。
+function readProjectSectionFacetEntries(
+  sections: CodeWorkspaceProjectKnowledgeSection[],
+  sectionKey: string,
+  facetKey: string,
+  fallback: string[],
+): string[] {
+  const section = sections.find((item) => item.key === sectionKey);
+  const facet = section?.facets.find((item) => item.key === facetKey);
+  return facet ? normalizeStringList(facet.entries) : normalizeStringList(fallback);
+}
+
+// 描述:
+//
+//   - 基于通用分类反向生成旧字段结构，确保旧链路和新链路数据一致。
+//
+// Params:
+//
+//   - sections: 分类列表。
+//   - fallback: 旧字段兜底值。
+//
+// Returns:
+//
+//   - 旧字段结构。
+function buildLegacyFieldsFromProjectKnowledgeSections(
+  sections: CodeWorkspaceProjectKnowledgeSection[],
+  fallback: {
+    apiDataModel: CodeWorkspaceProjectApiDataModel;
+    frontendPageLayout: CodeWorkspaceProjectFrontendPageLayout;
+    frontendCodeStructure: CodeWorkspaceProjectFrontendCodeStructure;
+    codingConventions: string[];
+  },
+): {
+  apiDataModel: CodeWorkspaceProjectApiDataModel;
+  frontendPageLayout: CodeWorkspaceProjectFrontendPageLayout;
+  frontendCodeStructure: CodeWorkspaceProjectFrontendCodeStructure;
+  codingConventions: string[];
+} {
   return {
-    directories: normalizeStringList(value.directories),
-    moduleBoundaries: normalizeStringList(value.moduleBoundaries),
-    implementationConstraints: normalizeStringList(value.implementationConstraints),
+    apiDataModel: {
+      entities: readProjectSectionFacetEntries(
+        sections,
+        PROJECT_PROFILE_SECTION_KEYS.interactionContracts,
+        "entities",
+        fallback.apiDataModel.entities,
+      ),
+      requestModels: readProjectSectionFacetEntries(
+        sections,
+        PROJECT_PROFILE_SECTION_KEYS.interactionContracts,
+        "requestModels",
+        fallback.apiDataModel.requestModels,
+      ),
+      responseModels: readProjectSectionFacetEntries(
+        sections,
+        PROJECT_PROFILE_SECTION_KEYS.interactionContracts,
+        "responseModels",
+        fallback.apiDataModel.responseModels,
+      ),
+      mockCases: readProjectSectionFacetEntries(
+        sections,
+        PROJECT_PROFILE_SECTION_KEYS.interactionContracts,
+        "mockCases",
+        fallback.apiDataModel.mockCases,
+      ),
+    },
+    frontendPageLayout: {
+      pages: readProjectSectionFacetEntries(
+        sections,
+        PROJECT_PROFILE_SECTION_KEYS.uiInformationArchitecture,
+        "pages",
+        fallback.frontendPageLayout.pages,
+      ),
+      navigation: readProjectSectionFacetEntries(
+        sections,
+        PROJECT_PROFILE_SECTION_KEYS.uiInformationArchitecture,
+        "navigation",
+        fallback.frontendPageLayout.navigation,
+      ),
+      pageElements: readProjectSectionFacetEntries(
+        sections,
+        PROJECT_PROFILE_SECTION_KEYS.uiInformationArchitecture,
+        "pageElements",
+        fallback.frontendPageLayout.pageElements,
+      ),
+    },
+    frontendCodeStructure: {
+      directories: readProjectSectionFacetEntries(
+        sections,
+        PROJECT_PROFILE_SECTION_KEYS.frontendImplementationArchitecture,
+        "directories",
+        fallback.frontendCodeStructure.directories,
+      ),
+      moduleBoundaries: readProjectSectionFacetEntries(
+        sections,
+        PROJECT_PROFILE_SECTION_KEYS.frontendImplementationArchitecture,
+        "moduleBoundaries",
+        fallback.frontendCodeStructure.moduleBoundaries,
+      ),
+      implementationConstraints: readProjectSectionFacetEntries(
+        sections,
+        PROJECT_PROFILE_SECTION_KEYS.frontendImplementationArchitecture,
+        "implementationConstraints",
+        fallback.frontendCodeStructure.implementationConstraints,
+      ),
+    },
+    codingConventions: readProjectSectionFacetEntries(
+      sections,
+      PROJECT_PROFILE_SECTION_KEYS.engineeringGuardrails,
+      "codingConventions",
+      fallback.codingConventions,
+    ),
   };
 }
 
@@ -719,6 +1297,59 @@ function buildDefaultCodeWorkspaceProjectProfile(
     .slice(0, 20);
   const moduleName = String(workspace.name || "").trim() || resolveWorkspaceNameFromPath(workspace.path || "");
   const summary = `项目「${moduleName || "未命名项目"}」结构化语义基线，供代码智能体跨话题复用。`;
+  const apiDataModel: CodeWorkspaceProjectApiDataModel = {
+    entities: [
+      "核心业务实体（待补充字段）",
+    ],
+    requestModels: [
+      "关键交互请求模型（待补充）",
+    ],
+    responseModels: [
+      "关键交互响应模型（待补充）",
+    ],
+    mockCases: [
+      "核心接口 mock 场景（成功/失败/边界）",
+    ],
+  };
+  const frontendPageLayout: CodeWorkspaceProjectFrontendPageLayout = {
+    pages: [
+      "页面清单（首页/列表/详情等）",
+    ],
+    navigation: [
+      "导航结构（顶部栏/侧边栏/菜单项）",
+    ],
+    pageElements: [
+      "页面元素（筛选区/列表区/详情区/操作区）",
+    ],
+  };
+  const frontendCodeStructure: CodeWorkspaceProjectFrontendCodeStructure = {
+    directories: [
+      "src/pages",
+      "src/components",
+      "src/modules",
+      "src/services",
+    ],
+    moduleBoundaries: [
+      "页面层负责布局编排，组件层负责复用 UI 单元",
+      "服务层负责 API 调用与数据转换，避免页面直接拼装接口细节",
+    ],
+    implementationConstraints: [
+      ...dependencyConstraintLines,
+      "优先依据结构化项目信息生成与重构代码",
+      "前端实现应保持页面结构语义稳定",
+    ],
+  };
+  const codingConventions = [
+    "新增功能需补充对应单元测试",
+    "优先复用现有组件与工具函数，避免重复实现",
+  ];
+  const knowledgeSections = buildProjectKnowledgeSectionsFromLegacyFields(
+    summary,
+    apiDataModel,
+    frontendPageLayout,
+    frontendCodeStructure,
+    codingConventions,
+  );
 
   return {
     schemaVersion: CODE_WORKSPACE_PROFILE_SCHEMA_VERSION,
@@ -729,52 +1360,11 @@ function buildDefaultCodeWorkspaceProjectProfile(
     updatedAt: now,
     updatedBy,
     summary,
-    apiDataModel: {
-      entities: [
-        "核心业务实体（待补充字段）",
-      ],
-      requestModels: [
-        "关键交互请求模型（待补充）",
-      ],
-      responseModels: [
-        "关键交互响应模型（待补充）",
-      ],
-      mockCases: [
-        "核心接口 mock 场景（成功/失败/边界）",
-      ],
-    },
-    frontendPageLayout: {
-      pages: [
-        "页面清单（首页/列表/详情等）",
-      ],
-      navigation: [
-        "导航结构（顶部栏/侧边栏/菜单项）",
-      ],
-      pageElements: [
-        "页面元素（筛选区/列表区/详情区/操作区）",
-      ],
-    },
-    frontendCodeStructure: {
-      directories: [
-        "src/pages",
-        "src/components",
-        "src/modules",
-        "src/services",
-      ],
-      moduleBoundaries: [
-        "页面层负责布局编排，组件层负责复用 UI 单元",
-        "服务层负责 API 调用与数据转换，避免页面直接拼装接口细节",
-      ],
-      implementationConstraints: [
-        ...dependencyConstraintLines,
-        "优先依据结构化项目信息生成与重构代码",
-        "前端实现应保持页面结构语义稳定",
-      ],
-    },
-    codingConventions: [
-      "新增功能需补充对应单元测试",
-      "优先复用现有组件与工具函数，避免重复实现",
-    ],
+    knowledgeSections,
+    apiDataModel,
+    frontendPageLayout,
+    frontendCodeStructure,
+    codingConventions,
   };
 }
 
@@ -803,6 +1393,39 @@ function normalizeCodeWorkspaceProjectProfile(
     : fallback.revision;
   const workspacePathHash = buildWorkspacePathHash(workspace.path);
   const workspaceSignature = buildWorkspaceProfileSignature(workspace, normalizedSchemaVersion);
+  const normalizedApiDataModel = {
+    entities: normalizeStringList(apiDataModel.entities ?? legacyApiSpec.services),
+    requestModels: normalizeStringList(apiDataModel.requestModels),
+    responseModels: normalizeStringList(apiDataModel.responseModels ?? legacyApiSpec.contracts),
+    mockCases: normalizeStringList(apiDataModel.mockCases ?? legacyApiSpec.errorConventions ?? value.domainRules),
+  };
+  const normalizedFrontendPageLayout = {
+    pages: normalizeStringList(frontendPageLayout.pages ?? legacyUiSpec.pages),
+    navigation: normalizeStringList(frontendPageLayout.navigation ?? legacyUiSpec.layoutPrinciples),
+    pageElements: normalizeStringList(frontendPageLayout.pageElements ?? legacyUiSpec.interactionPrinciples),
+  };
+  const normalizedFrontendCodeStructure = {
+    directories: normalizeStringList(frontendCodeStructure.directories ?? legacyArchitecture.modules),
+    moduleBoundaries: normalizeStringList(frontendCodeStructure.moduleBoundaries ?? legacyArchitecture.boundaries),
+    implementationConstraints: normalizeStringList(
+      frontendCodeStructure.implementationConstraints ?? legacyArchitecture.constraints,
+    ),
+  };
+  const normalizedCodingConventions = normalizeStringList(value.codingConventions ?? value.domainRules);
+  const fallbackSections = buildProjectKnowledgeSectionsFromLegacyFields(
+    summary,
+    normalizedApiDataModel,
+    normalizedFrontendPageLayout,
+    normalizedFrontendCodeStructure,
+    normalizedCodingConventions,
+  );
+  const normalizedKnowledgeSections = normalizeProjectKnowledgeSections(value.knowledgeSections, fallbackSections);
+  const normalizedLegacyFields = buildLegacyFieldsFromProjectKnowledgeSections(normalizedKnowledgeSections, {
+    apiDataModel: normalizedApiDataModel,
+    frontendPageLayout: normalizedFrontendPageLayout,
+    frontendCodeStructure: normalizedFrontendCodeStructure,
+    codingConventions: normalizedCodingConventions,
+  });
 
   return {
     schemaVersion: normalizedSchemaVersion,
@@ -813,25 +1436,11 @@ function normalizeCodeWorkspaceProjectProfile(
     updatedAt: String(value.updatedAt || "").trim() || fallback.updatedAt,
     updatedBy: String(value.updatedBy || "").trim() || fallback.updatedBy,
     summary,
-    apiDataModel: {
-      entities: normalizeStringList(apiDataModel.entities ?? legacyApiSpec.services),
-      requestModels: normalizeStringList(apiDataModel.requestModels),
-      responseModels: normalizeStringList(apiDataModel.responseModels ?? legacyApiSpec.contracts),
-      mockCases: normalizeStringList(apiDataModel.mockCases ?? legacyApiSpec.errorConventions ?? value.domainRules),
-    },
-    frontendPageLayout: {
-      pages: normalizeStringList(frontendPageLayout.pages ?? legacyUiSpec.pages),
-      navigation: normalizeStringList(frontendPageLayout.navigation ?? legacyUiSpec.layoutPrinciples),
-      pageElements: normalizeStringList(frontendPageLayout.pageElements ?? legacyUiSpec.interactionPrinciples),
-    },
-    frontendCodeStructure: {
-      directories: normalizeStringList(frontendCodeStructure.directories ?? legacyArchitecture.modules),
-      moduleBoundaries: normalizeStringList(frontendCodeStructure.moduleBoundaries ?? legacyArchitecture.boundaries),
-      implementationConstraints: normalizeStringList(
-        frontendCodeStructure.implementationConstraints ?? legacyArchitecture.constraints,
-      ),
-    },
-    codingConventions: normalizeStringList(value.codingConventions ?? value.domainRules),
+    knowledgeSections: normalizedKnowledgeSections,
+    apiDataModel: normalizedLegacyFields.apiDataModel,
+    frontendPageLayout: normalizedLegacyFields.frontendPageLayout,
+    frontendCodeStructure: normalizedLegacyFields.frontendCodeStructure,
+    codingConventions: normalizedLegacyFields.codingConventions,
   };
 }
 
@@ -1107,6 +1716,7 @@ export function removeAgentSession(agentKey: "code" | "model", sessionId: string
     groups.filter((item) => !(item.agentKey === agentKey && item.sessionId === sessionId)),
   );
   removeSessionRunState(agentKey, sessionId);
+  removeSessionDebugArtifact(agentKey, sessionId);
 
   if (agentKey === "code") {
 // 描述：按会话维度读取本地消息列表。
@@ -1164,6 +1774,109 @@ export function upsertSessionRunState(input: SessionRunStateSnapshot) {
     agentKey: input.agentKey,
     sessionId: input.sessionId,
   });
+}
+
+// 描述：写入会话调试资产快照，供复制与会话恢复使用。
+//
+// Params:
+//
+//   - input: 会话调试资产快照。
+export function upsertSessionDebugArtifact(input: SessionDebugArtifactSnapshot) {
+  const items = readSessionDebugArtifacts();
+  const nextArtifact: StoredSessionDebugArtifact = {
+    agentKey: input.agentKey === "model" ? "model" : "code",
+    sessionId: String(input.sessionId || "").trim(),
+    traceRecords: (input.traceRecords || [])
+      .map((record) => ({
+        traceId: String(record.traceId || "").trim(),
+        source: String(record.source || "").trim(),
+        code: String(record.code || "").trim() || undefined,
+        message: String(record.message || "").trim(),
+      }))
+      .filter((record) => record.traceId || record.message)
+      .slice(0, 100),
+    debugFlowRecords: (input.debugFlowRecords || [])
+      .map((record, index) => ({
+        id: String(record.id || "").trim() || `debug-${index + 1}`,
+        source: record.source === "backend" ? "backend" : "ui",
+        stage: String(record.stage || "").trim(),
+        title: String(record.title || "").trim(),
+        detail: String(record.detail || "").trim(),
+        timestamp: Number(record.timestamp || 0),
+      }))
+      .slice(0, 200),
+    aiPromptRaw: String(input.aiPromptRaw || ""),
+    aiResponseRaw: String(input.aiResponseRaw || ""),
+    aiRawByMessage: Object.fromEntries(
+      Object.entries(input.aiRawByMessage || {})
+        .map(([messageId, rawItem]) => {
+          const normalizedMessageId = String(messageId || "").trim();
+          if (!normalizedMessageId || !rawItem || typeof rawItem !== "object") {
+            return null;
+          }
+          return [
+            normalizedMessageId,
+            {
+              promptRaw: String(rawItem.promptRaw || ""),
+              responseRaw: String(rawItem.responseRaw || ""),
+            },
+          ] as const;
+        })
+        .filter((item): item is readonly [string, { promptRaw: string; responseRaw: string }] => Boolean(item))
+        .slice(0, 200),
+    ),
+    updatedAt: Number(input.updatedAt || Date.now()),
+  };
+  if (!nextArtifact.sessionId) {
+    return;
+  }
+  const next = [
+    nextArtifact,
+    ...items.filter((item) => !(item.agentKey === nextArtifact.agentKey && item.sessionId === nextArtifact.sessionId)),
+  ].slice(0, 200);
+  writeSessionDebugArtifacts(next);
+}
+
+// 描述：读取指定会话调试资产快照。
+//
+// Params:
+//
+//   - agentKey: 智能体类型。
+//   - sessionId: 会话 ID。
+//
+// Returns:
+//
+//   - 调试资产快照；未命中返回 null。
+export function getSessionDebugArtifact(
+  agentKey: "code" | "model",
+  sessionId: string,
+): SessionDebugArtifactSnapshot | null {
+  const normalizedSessionId = String(sessionId || "").trim();
+  if (!normalizedSessionId) {
+    return null;
+  }
+  const hit = readSessionDebugArtifacts().find(
+    (item) => item.agentKey === agentKey && item.sessionId === normalizedSessionId,
+  );
+  return hit || null;
+}
+
+// 描述：删除指定会话调试资产快照。
+//
+// Params:
+//
+//   - agentKey: 智能体类型。
+//   - sessionId: 会话 ID。
+export function removeSessionDebugArtifact(agentKey: "code" | "model", sessionId: string) {
+  const normalizedSessionId = String(sessionId || "").trim();
+  if (!normalizedSessionId) {
+    return;
+  }
+  const items = readSessionDebugArtifacts();
+  const next = items.filter(
+    (item) => !(item.agentKey === agentKey && item.sessionId === normalizedSessionId),
+  );
+  writeSessionDebugArtifacts(next);
 }
 
 // 描述：读取指定会话运行态快照。
@@ -1602,18 +2315,10 @@ export function saveCodeWorkspaceProjectProfile(
     }
   }
 
-  const next: CodeWorkspaceProjectProfile = {
-    ...current,
-    workspaceId,
-    schemaVersion: CODE_WORKSPACE_PROFILE_SCHEMA_VERSION,
-    workspacePathHash: buildWorkspacePathHash(workspace.path),
-    workspaceSignature: buildWorkspaceProfileSignature(workspace, CODE_WORKSPACE_PROFILE_SCHEMA_VERSION),
-    revision: hasCurrent ? current.revision + 1 : 1,
-    updatedAt: new Date().toISOString(),
-    updatedBy: String(options?.updatedBy || "").trim() || "manual_update",
-    summary: input.summary === undefined
-      ? current.summary
-      : String(input.summary || "").trim() || current.summary,
+  const nextSummary = input.summary === undefined
+    ? current.summary
+    : String(input.summary || "").trim() || current.summary;
+  const nextLegacyFields = {
     apiDataModel: {
       entities: input.apiDataModel?.entities === undefined
         ? current.apiDataModel.entities
@@ -1653,6 +2358,33 @@ export function saveCodeWorkspaceProjectProfile(
     codingConventions: input.codingConventions === undefined
       ? current.codingConventions
       : normalizeStringList(input.codingConventions),
+  };
+  const knownDefaultSections = buildProjectKnowledgeSectionsFromLegacyFields(
+    nextSummary,
+    nextLegacyFields.apiDataModel,
+    nextLegacyFields.frontendPageLayout,
+    nextLegacyFields.frontendCodeStructure,
+    nextLegacyFields.codingConventions,
+  );
+  const nextKnowledgeSections = input.knowledgeSections === undefined
+    ? mergeProjectKnowledgeSectionsWithCustom(knownDefaultSections, current.knowledgeSections || [])
+    : normalizeProjectKnowledgeSections(input.knowledgeSections, knownDefaultSections);
+  const mergedLegacyFields = buildLegacyFieldsFromProjectKnowledgeSections(nextKnowledgeSections, nextLegacyFields);
+  const next: CodeWorkspaceProjectProfile = {
+    ...current,
+    workspaceId,
+    schemaVersion: CODE_WORKSPACE_PROFILE_SCHEMA_VERSION,
+    workspacePathHash: buildWorkspacePathHash(workspace.path),
+    workspaceSignature: buildWorkspaceProfileSignature(workspace, CODE_WORKSPACE_PROFILE_SCHEMA_VERSION),
+    revision: hasCurrent ? current.revision + 1 : 1,
+    updatedAt: new Date().toISOString(),
+    updatedBy: String(options?.updatedBy || "").trim() || "manual_update",
+    summary: nextSummary,
+    knowledgeSections: nextKnowledgeSections,
+    apiDataModel: mergedLegacyFields.apiDataModel,
+    frontendPageLayout: mergedLegacyFields.frontendPageLayout,
+    frontendCodeStructure: mergedLegacyFields.frontendCodeStructure,
+    codingConventions: mergedLegacyFields.codingConventions,
   };
 
   profiles[workspaceId] = normalizeCodeWorkspaceProjectProfile(next, workspace);

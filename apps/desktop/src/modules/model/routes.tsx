@@ -1,4 +1,5 @@
 import { lazy, type ComponentType } from "react";
+import { resolveWorkflowEditorPath, WORKFLOW_PAGE_PATH } from "../common/routes";
 import { ModelAgentPage } from "./pages/model-agent-page";
 import { ModelSessionPage } from "./pages/model-session-page";
 import { ModelAgentSettingsPage } from "./pages/model-agent-settings-page";
@@ -6,7 +7,7 @@ import { ModelWorkflowPage } from "./pages/model-workflow-page";
 
 export const MODEL_AGENT_ROOT_PATH = "/agents/model" as const;
 export const MODEL_AGENT_SETTINGS_PATH = "/agents/model/settings" as const;
-export const MODEL_WORKFLOW_PATH = "/agents/model/workflows" as const;
+export const MODEL_WORKFLOW_PATH = WORKFLOW_PAGE_PATH;
 
 // 描述：模型智能体入口页懒加载。
 export const ModelAgentPageLazy = lazy(async () => {
@@ -36,8 +37,5 @@ export const MODEL_SIDEBAR_QUICK_ACTIONS = [
 
 // 描述：构建模型智能体工作流页跳转地址，保持 workflowId 查询参数一致。
 export function resolveModelWorkflowPath(workflowId: string): string {
-  if (!workflowId) {
-    return MODEL_WORKFLOW_PATH;
-  }
-  return `${MODEL_WORKFLOW_PATH}?workflowId=${encodeURIComponent(workflowId)}`;
+  return resolveWorkflowEditorPath("model", workflowId);
 }

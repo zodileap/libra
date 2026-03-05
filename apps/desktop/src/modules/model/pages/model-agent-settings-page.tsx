@@ -104,7 +104,7 @@ export function ModelAgentSettingsPage(props: ModelAgentSettingsPageProps) {
             <AriButton
               color="primary"
               label="进入工作流设置"
-              onClick={() => navigate("/agents/model/workflows")}
+              onClick={() => navigate("/workflows")}
             />
           )}
         />
@@ -165,7 +165,7 @@ export function ModelAgentSettingsPage(props: ModelAgentSettingsPageProps) {
             <AriButton
               color="primary"
               label="打开工作流设置"
-              onClick={() => navigate("/agents/model/workflows")}
+              onClick={() => navigate("/workflows")}
             />
           </DeskSettingsRow>
         </AriContainer>

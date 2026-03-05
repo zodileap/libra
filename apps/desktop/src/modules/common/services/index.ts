@@ -2,3 +2,5 @@
 export * from "./backend-api";
 // 描述：导出技能目录与安装管理服务。
 export * from "./skills";
+// 描述：导出 MCP 目录与安装管理服务。
+export * from "./mcps";

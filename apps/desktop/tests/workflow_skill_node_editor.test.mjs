@@ -73,11 +73,12 @@ test("TestCodeFrontendWorkflowShouldUseSkillDrivenGraph", () => {
   assert.match(templateSource, /id: "wf-code-full-delivery-v1"/);
   assert.match(templateSource, /name: "完整项目开发（结构化信息）"/);
   assert.match(templateSource, /title: "理解项目需求"/);
-  assert.match(templateSource, /title: "构建 API 数据模型"/);
+  assert.match(templateSource, /title: "构建交互契约"/);
   assert.match(templateSource, /title: "构建 API 与 Mock"/);
   assert.match(templateSource, /title: "设计前端框架"/);
   assert.match(templateSource, /title: "实现页面布局"/);
   assert.match(templateSource, /title: "项目测试"/);
+  assert.match(templateSource, /apifox-mcp-server@latest/);
   assert.match(templateSource, /skillId: "apifox_model_designer"/);
   assert.match(templateSource, /skillId: "frontend_architect"/);
   assert.match(templateSource, /skillId: "frontend_page_builder"/);

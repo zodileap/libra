@@ -91,12 +91,12 @@ export const DEFAULT_CODE_WORKFLOWS: CodeWorkflowDefinition[] = [
   {
     id: "wf-code-full-delivery-v1",
     name: "完整项目开发（结构化信息）",
-    description: "需求理解 -> API 数据模型（Apifox） -> API + Mock + 用例 -> 前端框架 -> 页面实现 -> 测试",
+    description: "需求理解 -> 结构化项目语义 -> 交互契约（Apifox） -> API + Mock + 用例 -> 前端架构 -> 页面实现 -> 测试",
     version: 1,
     shared: false,
     agentKey: "code",
     promptPrefix:
-      "你正在执行“完整项目开发（结构化信息）”工作流：必须先输出结构化项目信息（API 数据模型、前端页面布局、前端代码结构），再按步骤实现并补齐测试。",
+      "你正在执行“完整项目开发（结构化信息）”工作流：必须先输出结构化项目信息（业务语义、交互契约、界面信息架构、前端实现架构、工程约束），再按步骤实现并补齐测试。",
     graph: {
       nodes: [
         {
@@ -121,9 +121,9 @@ export const DEFAULT_CODE_WORKFLOWS: CodeWorkflowDefinition[] = [
         },
         {
           id: "wf-code-full-delivery-apifox-model",
-          title: "构建 API 数据模型",
+          title: "构建交互契约",
           description: "整理前后端交互模型并同步 Apifox",
-          instruction: "先定义实体、请求模型、响应模型，再同步到 Apifox（优先 MCP/Skill）。",
+          instruction: "先定义实体、请求模型、响应模型，再通过 Apifox 官方 MCP Server（npx -y apifox-mcp-server@latest）同步到 Apifox。",
           type: "skill",
           skillId: "apifox_model_designer",
           skillVersion: "1.0.0",

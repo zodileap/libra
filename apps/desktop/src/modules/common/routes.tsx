@@ -1,5 +1,6 @@
 import { lazy } from "react";
 import { AGENTS } from "../../shared/data";
+import type { AgentKey } from "../../shared/types";
 import type { AuthAvailableAgentItem } from "../../shared/types";
 import type { RouteAccess } from "../../router/types";
 
@@ -13,8 +14,20 @@ export const SETTINGS_MODULE_KEY = "settings" as const;
 export const SKILL_MODULE_KEY = "skill" as const;
 // 描述:
 //
+//   - MCP 模块开关键。
+export const MCP_MODULE_KEY = "mcp" as const;
+// 描述:
+//
 //   - 技能页路由路径。
 export const SKILL_PAGE_PATH = "/skills" as const;
+// 描述:
+//
+//   - MCP 页路由路径。
+export const MCP_PAGE_PATH = "/mcps" as const;
+// 描述:
+//
+//   - 全局工作流页路由路径。
+export const WORKFLOW_PAGE_PATH = "/workflows" as const;
 
 // 描述：通用模块中的登录页懒加载入口，属于所有构建和所有用户可见基础页面。
 export const CommonLoginPageLazy = lazy(async () => {
@@ -45,6 +58,41 @@ export const CommonSkillsPageLazy = lazy(async () => {
   const module = await import("./pages/skills-page");
   return { default: module.SkillsPage };
 });
+
+// 描述：通用模块中的 MCP 页懒加载入口，承载 MCP 安装与推荐列表。
+export const CommonMcpPageLazy = lazy(async () => {
+  const module = await import("./pages/mcp-page");
+  return { default: module.McpPage };
+});
+
+// 描述：通用模块中的全局工作流页懒加载入口，统一承载工作流编辑能力。
+export const CommonWorkflowsPageLazy = lazy(async () => {
+  const module = await import("./pages/workflows-page");
+  return { default: module.WorkflowsPage };
+});
+
+// 描述：构建全局工作流编辑页地址，统一使用 workflowType + workflowId 查询参数。
+//
+// Params:
+//
+//   - workflowType: 工作流类型（model/code）。
+//   - workflowId: 工作流 ID。
+//
+// Returns:
+//
+//   - 全局工作流编辑页地址。
+export function resolveWorkflowEditorPath(
+  workflowType: AgentKey,
+  workflowId: string,
+): string {
+  const params = new URLSearchParams();
+  params.set("workflowType", workflowType);
+  if (workflowId) {
+    params.set("workflowId", workflowId);
+  }
+  const query = params.toString();
+  return query ? `${WORKFLOW_PAGE_PATH}?${query}` : WORKFLOW_PAGE_PATH;
+}
 
 // 描述:
 //
