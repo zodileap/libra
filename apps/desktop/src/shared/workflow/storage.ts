@@ -1,4 +1,5 @@
 import { DEFAULT_CODE_WORKFLOWS, DEFAULT_MODEL_WORKFLOWS } from "./templates";
+import { CODE_AGENT_TOOLSET_LINES, resolveCodeSkillPromptGuide } from "./prompt-guidance";
 import { IS_BROWSER, STORAGE_KEYS } from "../constants";
 import type {
   CodeWorkflowDefinition,
@@ -808,31 +809,39 @@ export function buildCodeWorkflowPrompt(
     .filter((node) => node.type === "skill")
     .map((node) => {
       const skillId = String(node.skillId || "").trim();
-      const skillVersion = String(node.skillVersion || "").trim();
       const normalizedSkill = skillId
-        ? `${skillId}${skillVersion ? `@${skillVersion}` : ""}`
+        ? resolveCodeSkillPromptGuide(skillId)
         : "";
       const normalizedInstruction = String(node.instruction || "").trim();
       const label = String(node.title || "技能节点").trim() || "技能节点";
       if (normalizedSkill && normalizedInstruction) {
-        return `- ${label}: ${normalizedSkill}（${normalizedInstruction}）`;
+        return `- ${label}：${normalizedSkill.name}；能力：${normalizedSkill.objective}；产出：${normalizedSkill.deliverable}；本节点要求：${normalizedInstruction}`;
       }
       if (normalizedSkill) {
-        return `- ${label}: ${normalizedSkill}`;
+        return `- ${label}：${normalizedSkill.name}；能力：${normalizedSkill.objective}；产出：${normalizedSkill.deliverable}`;
       }
       if (normalizedInstruction) {
-        return `- ${label}: ${normalizedInstruction}`;
+        return skillId
+          ? `- ${label}：技能编码 ${skillId}；本节点要求：${normalizedInstruction}`
+          : `- ${label}：${normalizedInstruction}`;
       }
       return "";
     })
     .filter((line) => line.length > 0);
+  const toolsetBlock = ["", ...CODE_AGENT_TOOLSET_LINES];
   if (!prefix) {
     if (skillChainLines.length === 0) {
-      return normalizedPrompt;
+      return [
+        ...CODE_AGENT_TOOLSET_LINES,
+        "",
+        "【用户需求】",
+        normalizedPrompt,
+      ].join("\n");
     }
     return [
       "【技能链路】",
       ...skillChainLines,
+      ...toolsetBlock,
       "",
       "【用户需求】",
       normalizedPrompt,
@@ -845,6 +854,7 @@ export function buildCodeWorkflowPrompt(
     `【工作流：${workflow?.name || "代码工作流"}】`,
     prefix,
     ...skillChainBlock,
+    ...toolsetBlock,
     "",
     "【用户需求】",
     normalizedPrompt,

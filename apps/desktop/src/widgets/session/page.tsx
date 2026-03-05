@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import {
   AriButton,
@@ -24,13 +24,16 @@ import {
   getCodeWorkspaceProjectProfile,
   getCodeWorkspaceGroupById,
   getCodeWorkspaceIdBySessionId,
+  getSessionDebugArtifact,
   getSessionRunState,
   getSessionMessages,
+  removeSessionDebugArtifact,
   resolveAgentSessionTitle,
   removeSessionRunState,
   SESSION_TITLE_UPDATED_EVENT,
   upsertModelProject,
   upsertSessionRunState,
+  upsertSessionDebugArtifact,
   upsertSessionMessages,
   getAgentSessionMetaSnapshot,
   removeAgentSession,
@@ -77,7 +80,6 @@ import { useDesktopHeaderSlot } from "../app-header/header-slot-context";
 import type {
   CodeWorkflowDefinition,
   WorkflowDefinition,
-  WorkflowStepRecord,
   WorkflowUiHint,
 } from "../../shared/workflow";
 import { resolveSessionUiConfig, type SessionAgentUiConfig } from "./config";
@@ -270,6 +272,7 @@ interface AssistantRunSegment {
   step: string;
   status: AssistantRunSegmentStatus;
   data?: Record<string, unknown>;
+  detail?: string;
 }
 
 // 描述:
@@ -325,6 +328,14 @@ interface SessionDebugFlowRecord {
   timestamp: number;
 }
 
+// 描述:
+//
+//   - 定义助手消息维度的 AI 原始收发记录结构。
+interface SessionAiRawByMessageItem {
+  promptRaw: string;
+  responseRaw: string;
+}
+
 // 描述：格式化任务耗时文案，统一用于完成分割线展示。
 //
 // Params:
@@ -376,25 +387,25 @@ function mapModelStreamToRunSegment(
         ? "finished"
         : "running";
 
-  let intro = status === "running" ? "正在处理当前步骤" : "当前步骤已完成";
+  let intro = status === "running" ? "执行步骤推进中" : "步骤执行完成";
   if (code) {
     if (status === "running") {
-      intro = `正在执行「${code}」`;
+      intro = `执行步骤：${code}`;
     } else if (status === "failed") {
-      intro = `「${code}」执行失败，准备恢复`;
+      intro = `步骤失败：${code}`;
     } else {
-      intro = `已完成「${code}」`;
+      intro = `步骤完成：${code}`;
     }
   } else if (eventName === "step_started") {
-    intro = "开始执行步骤";
+    intro = "步骤开始执行";
   } else if (eventName === "branch_selected") {
     intro = "已选择执行分支";
   } else if (eventName === "operation_transaction_started") {
-    intro = "开始创建执行事务";
+    intro = "事务开始执行";
   } else if (eventName === "operation_transaction_committed") {
-    intro = "事务执行完成并提交";
+    intro = "事务已提交";
   } else if (status === "failed") {
-    intro = "执行中断，正在处理";
+    intro = "执行失败";
   }
 
   return {
@@ -481,8 +492,8 @@ function mapAgentTextStreamToRunSegment(
   if (payload.kind === STREAM_KINDS.LLM_STARTED) {
     return {
       key: segmentKey,
-      intro: "正在处理当前步骤",
-      step: eventMessage || "模型会话已开始，正在生成执行计划…",
+      intro: "模型会话已开始，等待返回首段结果…",
+      step: eventMessage || "provider 已启动，正在生成编排脚本。",
       status: "running",
     };
   }
@@ -490,8 +501,8 @@ function mapAgentTextStreamToRunSegment(
   if (payload.kind === STREAM_KINDS.LLM_FINISHED) {
     return {
       key: segmentKey,
-      intro: "当前步骤已完成",
-      step: eventMessage || "模型生成阶段已完成，正在整理执行结果…",
+      intro: "模型返回完成，开始执行脚本…",
+      step: eventMessage || "已收到完整脚本，准备进入沙盒执行。",
       status: "finished",
     };
   }
@@ -499,7 +510,7 @@ function mapAgentTextStreamToRunSegment(
   if (payload.kind === STREAM_KINDS.FINISHED || payload.kind === STREAM_KINDS.FINAL) {
     return {
       key: segmentKey,
-      intro: "当前步骤已完成",
+      intro: "执行完成",
       step: eventMessage || "执行结束，正在输出最终结果…",
       status: "finished",
     };
@@ -537,26 +548,31 @@ function mapAgentTextStreamToRunSegment(
     const suffix = detail ? ` [${detail}]` : "";
     return {
       key: segmentKey,
-      intro: "正在执行工具",
+      intro: `执行工具：${data.name || "unknown"}`,
       step: eventMessage ? `${eventMessage}${suffix}` : `正在调用系统工具…`,
       status: "running",
     };
   }
 
   if (payload.kind === STREAM_KINDS.TOOL_CALL_FINISHED) {
+    const data = resolveToolCallEventData(payload);
     return {
       key: segmentKey,
-      intro: "工具执行结果",
+      intro: `工具完成：${data.name || "unknown"}`,
       step: eventMessage || "任务步骤执行完成",
       status: "finished",
     };
   }
 
   if (payload.kind === STREAM_KINDS.HEARTBEAT) {
+    const heartbeatText = eventMessage || "等待执行结果回传…";
+    const intro = heartbeatText.includes("（")
+      ? heartbeatText.split("（")[0]
+      : heartbeatText;
     return {
       key: segmentKey,
-      intro: "任务处理中",
-      step: eventMessage || "操作较长，请耐心等待…",
+      intro: intro || "等待执行结果回传…",
+      step: heartbeatText,
       status: "running",
     };
   }
@@ -575,7 +591,7 @@ function mapAgentTextStreamToRunSegment(
   if (payload.kind === STREAM_KINDS.ERROR) {
     return {
       key: segmentKey,
-      intro: "执行中断，正在处理",
+      intro: "执行失败",
       step: eventMessage || "执行失败，请检查错误详情后重试。",
       status: "failed",
     };
@@ -668,44 +684,52 @@ function buildAssistantHeartbeatSegment(
   segmentKey: string,
   agentKind: "model" | "code",
 ): AssistantRunSegment {
-  let step = "正在同步执行状态，请稍候…";
+  let intro = "等待执行状态回传…";
+  let step = "执行仍在进行中，正在同步最新状态。";
   if (stage === "planning") {
     if (agentKind === "model") {
-      step = heartbeatCount <= 1
+      intro = heartbeatCount <= 1
         ? "正在解析需求并规划执行步骤…"
-        : "规划中：正在确认本次操作所需的 Blender 指令…";
+        : "正在确认本次操作所需的 Blender 指令…";
+      step = "等待模型返回可执行步骤与工具链配置。";
     } else {
-      step = heartbeatCount <= 1
+      intro = heartbeatCount <= 1
         ? "正在解析需求并规划执行步骤…"
-        : "规划中：正在确认本次操作所需的工具链与任务顺序…";
+        : "正在确认本次操作所需的工具链与任务顺序…";
+      step = "等待模型返回可执行编排脚本。";
     }
   } else if (stage === "bridge") {
     if (agentKind === "model") {
-      step = heartbeatCount <= 1
-        ? "正在检查 Blender Bridge 与当前会话连接状态…"
-        : "已发出环境检查请求，等待 Blender 返回状态…";
+      intro = heartbeatCount <= 1
+        ? "正在检查 Blender Bridge 连接状态…"
+        : "等待 Blender 返回环境检查结果…";
+      step = "环境检查完成后将继续执行当前步骤。";
     } else {
-      step = heartbeatCount <= 1
-        ? "正在检查当前执行环境与权限状态…"
-        : "已发出环境检查请求，等待工具返回状态…";
+      intro = heartbeatCount <= 1
+        ? "正在检查执行环境与权限状态…"
+        : "等待工具返回环境检查结果…";
+      step = "环境检查完成后将继续执行当前步骤。";
     }
   } else if (stage === "executing") {
     if (agentKind === "model") {
-      step = heartbeatCount <= 1
-        ? "步骤正在执行中，等待 Blender 返回本步结果…"
-        : "仍在执行当前步骤，正在持续收集事件回传…";
+      intro = heartbeatCount <= 1
+        ? "等待 Blender 返回本步结果…"
+        : "持续收集 Blender 事件回传…";
+      step = "当前步骤仍在执行，请稍候。";
     } else {
-      step = heartbeatCount <= 1
-        ? "步骤正在执行中，等待工具返回本步结果…"
-        : "仍在执行当前步骤，正在持续收集事件回传…";
+      intro = heartbeatCount <= 1
+        ? "等待工具返回本步结果…"
+        : "持续收集工具执行回传…";
+      step = "当前步骤仍在执行，请稍候。";
     }
   } else if (stage === "finalizing") {
-    step = "正在整理执行结果并生成最终总结…";
+    intro = "正在整理执行结果并生成最终总结…";
+    step = "即将输出最终结果。";
   }
 
   return {
     key: segmentKey,
-    intro: "正在处理当前步骤",
+    intro,
     step,
     status: "running",
   };
@@ -742,6 +766,75 @@ function buildAssistantFailureSummary(rawSummary: string): { detail: string; hin
     detail,
     hint: "请重试，或切换执行策略后再试。",
   };
+}
+
+// 描述：
+//
+//   - 从代码智能体步骤记录中提取“编排脚本”详情，供会话消息内展开查看。
+//
+// Params:
+//
+//   - steps: 本轮执行返回的步骤列表。
+//
+// Returns:
+//
+//   - 可展示的脚本详情文本；未命中时返回空字符串。
+function resolveCodegenScriptSegmentDetail(steps: ModelStepRecord[]): string {
+  const codegenStep = steps.find((item) => item.code === "llm_python_codegen" && item.data && typeof item.data === "object");
+  if (!codegenStep || !codegenStep.data) {
+    return "";
+  }
+  const payload = codegenStep.data as Record<string, unknown>;
+  const extracted = typeof payload.llm_script_extracted === "string"
+    ? payload.llm_script_extracted
+    : "";
+  return normalizeCodeSegmentDetail(extracted);
+}
+
+// 描述：
+//
+//   - 规范化可展示代码片段内容，统一做 trim 与长度裁剪。
+//
+// Params:
+//
+//   - raw: 原始代码片段文本。
+//
+// Returns:
+//
+//   - 可用于 UI 展示的代码文本。
+function normalizeCodeSegmentDetail(raw: string): string {
+  const normalized = String(raw || "").trim();
+  if (!normalized) {
+    return "";
+  }
+  const maxChars = 16000;
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxChars)}\n\n# ... script truncated ...`;
+}
+
+// 描述：
+//
+//   - 从 LLM 原始返回中提取可展示代码片段，优先取 fenced block，未命中时回退原文。
+//
+// Params:
+//
+//   - rawResponse: LLM 原始返回文本。
+//
+// Returns:
+//
+//   - 可展示的代码片段文本。
+function resolveCodeSegmentDetailFromRawResponse(rawResponse: string): string {
+  const source = String(rawResponse || "").trim();
+  if (!source) {
+    return "";
+  }
+  const fencedMatch = source.match(/```(?:python|py)?\s*([\s\S]*?)```/i);
+  if (fencedMatch && fencedMatch[1]) {
+    return normalizeCodeSegmentDetail(fencedMatch[1]);
+  }
+  return normalizeCodeSegmentDetail(source);
 }
 
 // 描述：
@@ -905,6 +998,26 @@ const CODE_PROFILE_CONTEXT_ITEM_LIMIT = 4;
 
 // 描述：
 //
+//   - 结构化项目信息“按需注入”触发关键词；仅在模型明确需要项目语义基线时注入，避免首轮提示词冗长。
+const CODE_PROFILE_ON_DEMAND_KEYWORDS = [
+  "结构化项目信息",
+  "结构化信息",
+  "项目结构",
+  "代码结构",
+  "页面布局",
+  "信息架构",
+  "交互契约",
+  "数据模型",
+  "api 模型",
+  "框架替换",
+  "框架迁移",
+  "重构",
+  "迁移",
+  "按项目规范",
+];
+
+// 描述：
+//
 //   - 识别“框架替换/迁移”需求的关键词，命中后会注入结构不变约束。
 const CODE_FRAMEWORK_REPLACEMENT_KEYWORDS = [
   "框架替换",
@@ -974,19 +1087,60 @@ function buildCodeProjectProfileContextLines(
     lines.push(`${label}：${normalized.join("；")}`);
   };
 
-  pushList("API 数据实体", profile.apiDataModel.entities || []);
-  pushList("API 请求模型", profile.apiDataModel.requestModels || []);
-  pushList("API 响应模型", profile.apiDataModel.responseModels || []);
-  pushList("API Mock 场景", profile.apiDataModel.mockCases || []);
-  pushList("前端页面清单", profile.frontendPageLayout.pages || []);
-  pushList("导航与菜单项", profile.frontendPageLayout.navigation || []);
-  pushList("页面元素结构", profile.frontendPageLayout.pageElements || []);
-  pushList("前端目录结构", profile.frontendCodeStructure.directories || []);
-  pushList("前端模块边界", profile.frontendCodeStructure.moduleBoundaries || []);
-  pushList("前端实现约束", profile.frontendCodeStructure.implementationConstraints || []);
-  pushList("编码约定", profile.codingConventions || []);
+  const knowledgeSections = Array.isArray(profile.knowledgeSections)
+    ? profile.knowledgeSections
+    : [];
+  if (knowledgeSections.length > 0) {
+    knowledgeSections.forEach((section) => {
+      const sectionTitle = String(section.title || "").trim() || String(section.key || "").trim() || "未命名分类";
+      (section.facets || []).forEach((facet) => {
+        const facetLabel = String(facet.label || "").trim() || String(facet.key || "").trim() || "未命名字段";
+        pushList(`${sectionTitle} · ${facetLabel}`, facet.entries || []);
+      });
+    });
+  } else {
+    pushList("API 数据实体", profile.apiDataModel.entities || []);
+    pushList("API 请求模型", profile.apiDataModel.requestModels || []);
+    pushList("API 响应模型", profile.apiDataModel.responseModels || []);
+    pushList("API Mock 场景", profile.apiDataModel.mockCases || []);
+    pushList("前端页面清单", profile.frontendPageLayout.pages || []);
+    pushList("导航与菜单项", profile.frontendPageLayout.navigation || []);
+    pushList("页面元素结构", profile.frontendPageLayout.pageElements || []);
+    pushList("前端目录结构", profile.frontendCodeStructure.directories || []);
+    pushList("前端模块边界", profile.frontendCodeStructure.moduleBoundaries || []);
+    pushList("前端实现约束", profile.frontendCodeStructure.implementationConstraints || []);
+    pushList("编码约定", profile.codingConventions || []);
+  }
   lines.push("");
   return lines;
+}
+
+// 描述：
+//
+//   - 从结构化分类中读取指定 facet 条目；若分类不存在则回退到兼容字段。
+//
+// Params:
+//
+//   - profile: 项目结构化信息。
+//   - sectionKey: 分类键。
+//   - facetKey: 字段键。
+//   - fallback: 兼容字段兜底值。
+//
+// Returns:
+//
+//   - 条目数组。
+function readProjectProfileFacetEntries(
+  profile: CodeWorkspaceProjectProfile,
+  sectionKey: string,
+  facetKey: string,
+  fallback: string[],
+): string[] {
+  const section = (profile.knowledgeSections || []).find((item) => item.key === sectionKey);
+  const facet = section?.facets.find((item) => item.key === facetKey);
+  const source = facet?.entries || fallback;
+  return source
+    .map((item) => String(item || "").trim())
+    .filter((item, index, list) => item.length > 0 && list.indexOf(item) === index);
 }
 
 // 描述：
@@ -1037,22 +1191,54 @@ function buildFrameworkReplacementContextLines(
   if (!profile || !isFrameworkReplacementPrompt(prompt)) {
     return [];
   }
-  const pageBaseline = (profile.frontendPageLayout.pages || [])
+  const uiSectionKey = "ui_information_architecture";
+  const frontendArchitectureSectionKey = "frontend_implementation_architecture";
+  const pageBaseline = readProjectProfileFacetEntries(
+    profile,
+    uiSectionKey,
+    "pages",
+    profile.frontendPageLayout.pages || [],
+  )
     .map((item) => String(item || "").trim())
     .filter((item) => item.length > 0)
     .slice(0, CODE_PROFILE_CONTEXT_ITEM_LIMIT);
   const moduleBaseline = [
-    ...(profile.frontendCodeStructure.directories || []),
-    ...(profile.frontendCodeStructure.moduleBoundaries || []),
+    ...readProjectProfileFacetEntries(
+      profile,
+      frontendArchitectureSectionKey,
+      "directories",
+      profile.frontendCodeStructure.directories || [],
+    ),
+    ...readProjectProfileFacetEntries(
+      profile,
+      frontendArchitectureSectionKey,
+      "moduleBoundaries",
+      profile.frontendCodeStructure.moduleBoundaries || [],
+    ),
   ]
     .map((item) => String(item || "").trim())
     .filter((item) => item.length > 0)
     .slice(0, CODE_PROFILE_CONTEXT_ITEM_LIMIT);
   const hasUiBaseline = pageBaseline.length > 0
-    || (profile.frontendPageLayout.navigation || []).length > 0
-    || (profile.frontendPageLayout.pageElements || []).length > 0;
+    || readProjectProfileFacetEntries(
+      profile,
+      uiSectionKey,
+      "navigation",
+      profile.frontendPageLayout.navigation || [],
+    ).length > 0
+    || readProjectProfileFacetEntries(
+      profile,
+      uiSectionKey,
+      "pageElements",
+      profile.frontendPageLayout.pageElements || [],
+    ).length > 0;
   const hasArchitectureBaseline = moduleBaseline.length > 0
-    || (profile.frontendCodeStructure.implementationConstraints || []).length > 0;
+    || readProjectProfileFacetEntries(
+      profile,
+      frontendArchitectureSectionKey,
+      "implementationConstraints",
+      profile.frontendCodeStructure.implementationConstraints || [],
+    ).length > 0;
   if (!hasUiBaseline && !hasArchitectureBaseline) {
     return [];
   }
@@ -1134,7 +1320,14 @@ function buildCodeSessionContextPrompt(
     return "";
   }
   const normalizedWorkspacePath = String(workspacePath || "").trim();
-  const profileContextLines = buildCodeProjectProfileContextLines(projectProfile);
+  // 描述：
+  //
+  //   - 仅在“重试继续”或当前请求明确依赖项目语义基线时注入结构化项目信息，避免首轮全量灌入。
+  const shouldAttachProfileContext = isRetryOnlyPrompt(normalizedCurrentPrompt)
+    || CODE_PROFILE_ON_DEMAND_KEYWORDS.some((keyword) => normalizedCurrentPrompt.toLowerCase().includes(keyword.toLowerCase()));
+  const profileContextLines = shouldAttachProfileContext
+    ? buildCodeProjectProfileContextLines(projectProfile)
+    : [];
   const frameworkReplacementContextLines = buildFrameworkReplacementContextLines(
     normalizedCurrentPrompt,
     projectProfile,
@@ -1481,6 +1674,7 @@ function normalizePersistedRunMeta(input: PersistedSessionRunMeta): AssistantRun
             : item.status === "finished"
               ? "finished"
               : "running",
+        detail: typeof item.detail === "string" ? item.detail : undefined,
       }))
       .filter((item) => item.intro || item.step)
       .slice(-160)
@@ -1550,8 +1744,6 @@ export function SessionPage({
   const [sending, setSending] = useState(false);
   const [stepRecords, setStepRecords] = useState<ModelStepRecord[]>([]);
   const [eventRecords, setEventRecords] = useState<ModelEventRecord[]>([]);
-  const [assetRecords, setAssetRecords] = useState<ModelAssetRecord[]>([]);
-  const [workflowStepRecords, setWorkflowStepRecords] = useState<WorkflowStepRecord[]>([]);
   const [uiHint, setUiHint] = useState<WorkflowUiHint | null>(null);
   const [traceRecords, setTraceRecords] = useState<TraceRecord[]>([]);
   const [debugFlowRecords, setDebugFlowRecords] = useState<SessionDebugFlowRecord[]>([]);
@@ -1562,6 +1754,7 @@ export function SessionPage({
   const [sessionMenuVersion, setSessionMenuVersion] = useState(0);
   const [messagesHydrated, setMessagesHydrated] = useState(false);
   const [hydratedSessionKey, setHydratedSessionKey] = useState("");
+  const [hoveredRetryTooltipMessageId, setHoveredRetryTooltipMessageId] = useState("");
   const [dependencyRuleConfirmState, setDependencyRuleConfirmState] = useState<DependencyRuleConfirmState | null>(null);
   const [dependencyRuleUpgrading, setDependencyRuleUpgrading] = useState(false);
   const headerSlotElement = useDesktopHeaderSlot();
@@ -1652,10 +1845,6 @@ export function SessionPage({
         label: isSessionPinned ? "取消固定会话" : "固定会话",
       },
       {
-        key: "copy_session",
-        label: "复制会话内容",
-      },
-      {
         key: "rename",
         label: "重命名会话",
       },
@@ -1668,6 +1857,10 @@ export function SessionPage({
   );
   const [messages, setMessages] = useState<MessageItem[]>([]);
   const [assistantRunMetaMap, setAssistantRunMetaMap] = useState<Record<string, AssistantRunMeta>>({});
+  const [expandedRunSegmentDetailMap, setExpandedRunSegmentDetailMap] = useState<Record<string, boolean>>({});
+  const [sessionAiPromptRaw, setSessionAiPromptRaw] = useState("");
+  const [sessionAiResponseRaw, setSessionAiResponseRaw] = useState("");
+  const [sessionAiRawByMessage, setSessionAiRawByMessage] = useState<Record<string, SessionAiRawByMessageItem>>({});
   // 描述：过滤可用 AI Provider 列表，保留已启用项或已配置 key 的项。
   const availableAiKeys = useMemo(
     () =>
@@ -1800,6 +1993,9 @@ export function SessionPage({
   const assistantRunAgentKindRef = useRef<"model" | "code">("code");
   const assistantRunStageRef = useRef<AssistantRunStage>("planning");
   const assistantRunStatusRef = useRef<AssistantRunMeta["status"] | "idle">("idle");
+  const codeAgentPromptRawRef = useRef("");
+  const codeAgentLlmDeltaBufferRef = useRef("");
+  const codeAgentLlmResponseRawRef = useRef("");
   const autoPromptDispatchedRef = useRef(false);
 
   // 描述：停止当前会话流式渲染调度，避免会话切换后残留异步刷新。
@@ -1965,7 +2161,8 @@ export function SessionPage({
         last
         && last.intro === segment.intro
         && last.step === segment.step
-        && last.status === segment.status,
+        && last.status === segment.status
+        && String(last.detail || "") === String(segment.detail || ""),
       );
       if (isDuplicate) {
         return prev;
@@ -2079,6 +2276,21 @@ export function SessionPage({
     });
   };
 
+  // 描述：切换运行片段详情展开态，供“脚本详情”查看按钮复用。
+  //
+  // Params:
+  //
+  //   - detailKey: 详情键（messageId + segmentKey）。
+  const toggleRunSegmentDetailExpanded = (detailKey: string) => {
+    if (!detailKey) {
+      return;
+    }
+    setExpandedRunSegmentDetailMap((prev) => ({
+      ...prev,
+      [detailKey]: !prev[detailKey],
+    }));
+  };
+
   const appendTraceRecord = (input: TraceRecord) => {
     setTraceRecords((prev) => [input, ...prev].slice(0, 50));
   };
@@ -2164,11 +2376,18 @@ export function SessionPage({
     assistantRunAgentKindRef.current = "code";
     assistantRunStageRef.current = "planning";
     assistantRunStatusRef.current = "idle";
+    codeAgentPromptRawRef.current = "";
+    codeAgentLlmDeltaBufferRef.current = "";
+    codeAgentLlmResponseRawRef.current = "";
     autoPromptDispatchedRef.current = false;
     setUiHint(null);
     setTraceRecords([]);
     setDebugFlowRecords([]);
     setAssistantRunMetaMap({});
+    setExpandedRunSegmentDetailMap({});
+    setSessionAiPromptRaw("");
+    setSessionAiResponseRaw("");
+    setSessionAiRawByMessage({});
     setSending(false);
     setPendingDangerousPrompt("");
     setPendingDangerousToken("");
@@ -2180,8 +2399,49 @@ export function SessionPage({
       return;
     }
     const stored = getSessionMessages(normalizedAgentKey, sessionId);
+    const debugArtifact = getSessionDebugArtifact(normalizedAgentKey, sessionId);
     const runSnapshot = getSessionRunState(normalizedAgentKey, sessionId);
     let nextMessages: MessageItem[] = stored.length > 0 ? stored : [];
+    if (debugArtifact) {
+      setTraceRecords((debugArtifact.traceRecords || []).map((item) => ({
+        traceId: String(item.traceId || "").trim(),
+        source: String(item.source || "").trim(),
+        code: String(item.code || "").trim() || undefined,
+        message: String(item.message || "").trim(),
+      })));
+      setDebugFlowRecords((debugArtifact.debugFlowRecords || []).map((item) => ({
+        id: String(item.id || "").trim(),
+        source: item.source === "backend" ? "backend" : "ui",
+        stage: String(item.stage || "").trim(),
+        title: String(item.title || "").trim(),
+        detail: String(item.detail || "").trim(),
+        timestamp: Number(item.timestamp || 0),
+      })));
+      const artifactPromptRaw = String(debugArtifact.aiPromptRaw || "");
+      const artifactResponseRaw = String(debugArtifact.aiResponseRaw || "");
+      setSessionAiPromptRaw(artifactPromptRaw);
+      setSessionAiResponseRaw(artifactResponseRaw);
+      const artifactAiRawByMessage = Object.fromEntries(
+        Object.entries(debugArtifact.aiRawByMessage || {})
+          .map(([messageId, rawItem]) => {
+            const normalizedMessageId = String(messageId || "").trim();
+            if (!normalizedMessageId || !rawItem || typeof rawItem !== "object") {
+              return null;
+            }
+            return [
+              normalizedMessageId,
+              {
+                promptRaw: String(rawItem.promptRaw || ""),
+                responseRaw: String(rawItem.responseRaw || ""),
+              },
+            ] as const;
+          })
+          .filter((item): item is readonly [string, SessionAiRawByMessageItem] => Boolean(item)),
+      );
+      setSessionAiRawByMessage(artifactAiRawByMessage);
+      codeAgentPromptRawRef.current = artifactPromptRaw;
+      codeAgentLlmResponseRawRef.current = artifactResponseRaw;
+    }
     if (runSnapshot && runSnapshot.runMetaMap && Object.keys(runSnapshot.runMetaMap).length > 0) {
       const normalizedRunMetaMap = Object.fromEntries(
         Object.entries(runSnapshot.runMetaMap).map(([messageId, meta]) => [messageId, normalizePersistedRunMeta(meta)]),
@@ -2195,7 +2455,7 @@ export function SessionPage({
         const recoveredText = String(
           recoveredMeta?.summary
           || recoveredMeta?.segments.slice(-1)[0]?.step
-          || "正在处理当前步骤…",
+          || "等待工具返回本步结果…",
         ).trim();
         nextMessages = upsertAssistantMessageById(nextMessages, recoveredMessageId, recoveredText);
         streamMessageIdRef.current = recoveredMessageId;
@@ -2246,6 +2506,14 @@ export function SessionPage({
     };
   }, [messages, messagesHydrated, hydratedSessionKey, normalizedAgentKey, sending, sessionId, sessionStorageKey]);
 
+  // 描述：进入发送态时关闭“重试”按钮 tooltip，避免点击后 tooltip 残留悬浮。
+  useEffect(() => {
+    if (!sending) {
+      return;
+    }
+    setHoveredRetryTooltipMessageId("");
+  }, [sending]);
+
   useEffect(() => {
     if (!sessionId || !messagesHydrated || hydratedSessionKey !== sessionStorageKey) {
       return;
@@ -2272,6 +2540,80 @@ export function SessionPage({
     sessionStorageKey,
   ]);
 
+  // 描述：持久化会话调试资产，保证未打开 Dev 调试窗口时也能恢复 AI 原始收发与排查轨迹。
+  useEffect(() => {
+    if (!sessionId || !messagesHydrated || hydratedSessionKey !== sessionStorageKey) {
+      return;
+    }
+    const promptRaw = String(sessionAiPromptRaw || codeAgentPromptRawRef.current || "").trim();
+    const responseRaw = String(
+      sessionAiResponseRaw
+      || codeAgentLlmResponseRawRef.current
+      || codeAgentLlmDeltaBufferRef.current
+      || "",
+    ).trim();
+    if (
+      traceRecords.length === 0
+      && debugFlowRecords.length === 0
+      && !promptRaw
+      && !responseRaw
+      && Object.keys(sessionAiRawByMessage).length === 0
+    ) {
+      removeSessionDebugArtifact(normalizedAgentKey, sessionId);
+      return;
+    }
+    upsertSessionDebugArtifact({
+      agentKey: normalizedAgentKey,
+      sessionId,
+      traceRecords,
+      debugFlowRecords,
+      aiPromptRaw: promptRaw,
+      aiResponseRaw: responseRaw,
+      aiRawByMessage: sessionAiRawByMessage,
+      updatedAt: Date.now(),
+    });
+  }, [
+    debugFlowRecords,
+    hydratedSessionKey,
+    messagesHydrated,
+    normalizedAgentKey,
+    sessionAiPromptRaw,
+    sessionAiResponseRaw,
+    sessionAiRawByMessage,
+    sessionId,
+    sessionStorageKey,
+    traceRecords,
+  ]);
+
+  // 描述：向 Dev 调试窗口发送当前会话快照，供复制与排查入口复用。
+  const emitSessionDebugSnapshot = useCallback(() => {
+    if (!import.meta.env.DEV) {
+      return;
+    }
+    window.dispatchEvent(
+      new CustomEvent("zodileap:session-debug", {
+        detail: {
+          sessionId,
+          agentKey: normalizedAgentKey,
+          title,
+          status,
+          traceRecords: traceRecords.slice(0, 20),
+          debugFlowRecords: debugFlowRecords.slice(0, 120),
+          messageCount: messages.length,
+          timestamp: Date.now(),
+        },
+      }),
+    );
+  }, [
+    debugFlowRecords,
+    messages.length,
+    normalizedAgentKey,
+    sessionId,
+    status,
+    title,
+    traceRecords,
+  ]);
+
   useEffect(() => {
     if (!import.meta.env.DEV) {
       return;
@@ -2280,42 +2622,46 @@ export function SessionPage({
     const dispatchDelay = sending ? 360 : 120;
     debugSnapshotTimerRef.current = window.setTimeout(() => {
       debugSnapshotTimerRef.current = null;
-      window.dispatchEvent(
-        new CustomEvent("zodileap:session-debug", {
-          detail: {
-            sessionId,
-            agentKey: normalizedAgentKey,
-            title,
-            status,
-            workflowStepRecords: workflowStepRecords.slice(-20),
-            stepRecords: stepRecords.slice(-20),
-            eventRecords: eventRecords.slice(-20),
-            assetRecords: assetRecords.slice(-20),
-            traceRecords: traceRecords.slice(0, 20),
-            debugFlowRecords: debugFlowRecords.slice(0, 120),
-            messageCount: messages.length,
-            timestamp: Date.now(),
-          },
-        }),
-      );
+      emitSessionDebugSnapshot();
     }, dispatchDelay);
     return () => {
       clearDebugSnapshotTimer();
     };
   }, [
-    assetRecords,
-    debugFlowRecords,
-    eventRecords,
-    messages.length,
-    normalizedAgentKey,
-    sessionId,
+    emitSessionDebugSnapshot,
     sending,
-    status,
-    stepRecords,
-    traceRecords,
-    title,
-    workflowStepRecords,
   ]);
+
+  // 描述：响应 Dev 调试窗口的快照请求，保证面板后开也能获取当前会话上下文。
+  useEffect(() => {
+    if (!import.meta.env.DEV) {
+      return;
+    }
+    const handleDebugSnapshotRequest = (event: Event) => {
+      const customEvent = event as CustomEvent<{ sessionId?: string }>;
+      const targetSessionId = String(customEvent.detail?.sessionId || "").trim();
+      if (targetSessionId && targetSessionId !== sessionId) {
+        return;
+      }
+      emitSessionDebugSnapshot();
+    };
+    window.addEventListener("zodileap:session-debug-request", handleDebugSnapshotRequest as EventListener);
+    return () => {
+      window.removeEventListener("zodileap:session-debug-request", handleDebugSnapshotRequest as EventListener);
+    };
+  }, [sessionId, emitSessionDebugSnapshot]);
+
+  // 描述：仅在会话页真正卸载时清空 Dev 调试快照，避免状态刷新触发“先清空后重绘”闪烁。
+  useEffect(() => () => {
+    if (!import.meta.env.DEV) {
+      return;
+    }
+    window.dispatchEvent(
+      new CustomEvent("zodileap:session-debug", {
+        detail: null,
+      }),
+    );
+  }, []);
 
   useEffect(() => {
     if (availableAiKeys.length === 0) {
@@ -2400,7 +2746,6 @@ export function SessionPage({
       .then((records) => {
         setStepRecords(records.steps || []);
         setEventRecords(records.events || []);
-        setAssetRecords(records.assets || []);
       })
       .catch(() => {
         // 会话首次打开或后端无记录时忽略
@@ -2570,14 +2915,36 @@ export function SessionPage({
         }
       }
       if (payload.kind === STREAM_KINDS.STARTED) {
+        codeAgentLlmDeltaBufferRef.current = "";
+        setSessionAiResponseRaw("");
         setStreamingAssistantTarget("正在准备执行...");
         return;
       }
       if (payload.kind === STREAM_KINDS.LLM_STARTED) {
+        codeAgentLlmDeltaBufferRef.current = "";
+        setSessionAiResponseRaw("");
         setStreamingAssistantTarget("模型会话已开始，正在执行策略…");
         return;
       }
       if (payload.kind === STREAM_KINDS.LLM_FINISHED) {
+        const normalizedRawResponse = String(codeAgentLlmDeltaBufferRef.current || "").trim();
+        if (normalizedRawResponse) {
+          codeAgentLlmResponseRawRef.current = normalizedRawResponse;
+          setSessionAiResponseRaw(normalizedRawResponse);
+          const currentMessageId = String(streamMessageIdRef.current || "").trim();
+          if (currentMessageId) {
+            setSessionAiRawByMessage((prev) => {
+              const current = prev[currentMessageId] || { promptRaw: "", responseRaw: "" };
+              return {
+                ...prev,
+                [currentMessageId]: {
+                  promptRaw: current.promptRaw,
+                  responseRaw: normalizedRawResponse,
+                },
+              };
+            });
+          }
+        }
         if (!agentStreamTextBufferRef.current.trim()) {
           setStreamingAssistantTarget("正在整理输出...");
         }
@@ -2621,6 +2988,7 @@ export function SessionPage({
         if (!delta) {
           return;
         }
+        codeAgentLlmDeltaBufferRef.current = `${codeAgentLlmDeltaBufferRef.current}${delta}`;
         agentStreamTextBufferRef.current = `${agentStreamTextBufferRef.current}${delta}`;
         setStreamingAssistantTarget(agentStreamTextBufferRef.current);
         return;
@@ -2879,10 +3247,8 @@ export function SessionPage({
             2,
           ),
         );
-        setWorkflowStepRecords(response.steps || []);
         setStepRecords(response.modelSession?.steps || []);
         setEventRecords(response.modelSession?.events || []);
-        setAssetRecords(response.modelSession?.assets || []);
         if (response.modelSession?.trace_id) {
           appendTraceRecord({
             traceId: response.modelSession.trace_id,
@@ -2988,6 +3354,18 @@ export function SessionPage({
         const codePrompt = skillExecutionPlan.planPrompt
           ? `${codeWorkflowPrompt}\n\n${skillExecutionPlan.planPrompt}${selectedSessionSkillPrompt ? `\n\n${selectedSessionSkillPrompt}` : ""}`
           : `${codeWorkflowPrompt}${selectedSessionSkillPrompt ? `\n\n${selectedSessionSkillPrompt}` : ""}`;
+        codeAgentPromptRawRef.current = codePrompt;
+        codeAgentLlmDeltaBufferRef.current = "";
+        codeAgentLlmResponseRawRef.current = "";
+        setSessionAiPromptRaw(codePrompt);
+        setSessionAiResponseRaw("");
+        setSessionAiRawByMessage((prev) => ({
+          ...prev,
+          [streamMessageId]: {
+            promptRaw: codePrompt,
+            responseRaw: "",
+          },
+        }));
         appendDebugFlowRecord(
           "ui",
           "skill_plan",
@@ -3025,9 +3403,35 @@ export function SessionPage({
           outputDir,
           workdir: String(activeCodeWorkspace?.path || "").trim() || undefined,
         });
-        setStepRecords(response.steps || []);
+        const responseSteps = response.steps || [];
+        setStepRecords(responseSteps);
         setEventRecords(response.events || []);
-        setAssetRecords(response.assets || []);
+        const codegenRawStep = [...responseSteps]
+          .reverse()
+          .find((item) => item.code === "llm_python_codegen" && item.data && typeof item.data === "object");
+        const codegenRawData = codegenRawStep?.data || {};
+        const responsePromptRaw = String(codegenRawData.llm_prompt_raw || "").trim() || codePrompt;
+        const responseRawText = String(codegenRawData.llm_response_raw || "").trim()
+          || String(codeAgentLlmResponseRawRef.current || codeAgentLlmDeltaBufferRef.current || "").trim();
+        if (responsePromptRaw || responseRawText) {
+          setSessionAiRawByMessage((prev) => ({
+            ...prev,
+            [streamMessageId]: {
+              promptRaw: responsePromptRaw,
+              responseRaw: responseRawText,
+            },
+          }));
+        }
+        const generatedCodeDetail = resolveCodegenScriptSegmentDetail(responseSteps);
+        if (generatedCodeDetail) {
+          appendAssistantRunSegment(streamMessageId, {
+            key: `codegen-script-${Date.now()}`,
+            intro: "编排脚本已生成",
+            step: "已生成可执行脚本，点击展开查看详细代码。",
+            status: "finished",
+            detail: generatedCodeDetail,
+          });
+        }
         appendTraceRecord({
           traceId: response.trace_id,
           source: "agent:run",
@@ -3093,6 +3497,32 @@ export function SessionPage({
         code: detail.code,
         message: reason,
       });
+      if (!isWorkflowSession && streamMessageIdRef.current) {
+        const failedMessageId = String(streamMessageIdRef.current || "").trim();
+        const failedPromptRaw = String(codeAgentPromptRawRef.current || "").trim();
+        const rawCodeResponse = String(
+          codeAgentLlmResponseRawRef.current || codeAgentLlmDeltaBufferRef.current || "",
+        ).trim();
+        if (failedMessageId && (failedPromptRaw || rawCodeResponse)) {
+          setSessionAiRawByMessage((prev) => ({
+            ...prev,
+            [failedMessageId]: {
+              promptRaw: failedPromptRaw,
+              responseRaw: rawCodeResponse,
+            },
+          }));
+        }
+        const fallbackCodeDetail = resolveCodeSegmentDetailFromRawResponse(rawCodeResponse);
+        if (fallbackCodeDetail) {
+          appendAssistantRunSegment(streamMessageIdRef.current, {
+            key: `codegen-script-failed-${Date.now()}`,
+            intro: "编排脚本（失败现场）",
+            step: "本轮执行失败，可展开查看本次 AI 返回脚本。",
+            status: "failed",
+            detail: fallbackCodeDetail,
+          });
+        }
+      }
       if (streamMessageIdRef.current) {
         setStreamingAssistantTarget(`执行失败：${reason}`);
         finishAssistantRunMessage(streamMessageIdRef.current, "failed", `执行失败：${reason}`);
@@ -3149,6 +3579,7 @@ export function SessionPage({
   //
   //   - assistantMessageIndex: 当前助手消息索引。
   const handleRetryAssistantMessage = async (assistantMessageIndex: number) => {
+    setHoveredRetryTooltipMessageId("");
     if (sending) {
       setStatus("当前仍在执行中，请稍后再试");
       return;
@@ -3566,7 +3997,6 @@ const handleConfirmWorkflowSkillModal = () => {
       });
       setStepRecords(response.steps || []);
       setEventRecords(response.events || []);
-      setAssetRecords(response.assets || []);
       if (response.trace_id) {
         appendTraceRecord({
           traceId: response.trace_id,
@@ -3643,7 +4073,25 @@ const handleConfirmWorkflowSkillModal = () => {
     }
   };
 
-  // 描述：构建可复制的完整会话文本，按消息顺序拼接“角色 + 内容”。
+  // 描述：把毫秒时间戳格式化为可读时间，供“复制会话内容（含过程）”输出复用。
+  //
+  // Params:
+  //
+  //   - value: 时间戳（毫秒）。
+  //
+  // Returns:
+  //
+  //   - 格式化后的时间文本；无效值返回占位符。
+  const formatSessionCopyTime = (value?: number) => {
+    if (!Number.isFinite(value)) {
+      return "--";
+    }
+    return new Date(Number(value)).toLocaleString("zh-CN", {
+      hour12: false,
+    });
+  };
+
+  // 描述：构建会话消息文本，按消息顺序拼接“角色 + 内容”，并在每条助手消息下附加对应的原始收发与运行片段。
   //
   // Params:
   //
@@ -3651,44 +4099,501 @@ const handleConfirmWorkflowSkillModal = () => {
   //
   // Returns:
   //
-  //   - 可直接写入剪贴板的完整会话文本。
-  const buildSessionConversationText = (items: MessageItem[]) => {
+  //   - 会话消息文本。
+  const buildSessionMessageText = (items: MessageItem[]) => {
     if (!items.length) {
-      return `会话：${title}\n\n（当前会话暂无消息）`;
+      return "（当前会话暂无消息）";
     }
-
-    const lines = items.map((item, index) => {
-      const roleLabel = item.role === "user" ? "用户" : "助手";
-      const content = String(item.text || "").trim() || "（空消息）";
-      return `${index + 1}. ${roleLabel}：\n${content}`;
-    });
-    return [`会话：${title}`, "", ...lines].join("\n\n");
+    const assistantMessageCount = items.filter((item) => item.role === "assistant").length;
+    let assistantMessageIndex = -1;
+    return items
+      .map((item, index) => {
+        const roleLabel = item.role === "user" ? "用户" : "助手";
+        const content = String(item.text || "").trim() || "（空消息）";
+        const blocks = [
+          `#### 消息 ${index + 1} · ${roleLabel}`,
+          wrapMarkdownCodeFence(content, "text"),
+        ];
+        if (item.role === "assistant") {
+          assistantMessageIndex += 1;
+          const assistantMessageId = String(item.id || "").trim();
+          const aiRawText = buildSessionAiRawExchangeText(
+            assistantMessageId,
+            assistantMessageIndex,
+            assistantMessageCount,
+          );
+          const runSnippetText = buildSessionRunSnippetText(assistantMessageId);
+          if (aiRawText) {
+            blocks.push(aiRawText);
+          }
+          if (runSnippetText) {
+            blocks.push(runSnippetText);
+          }
+        }
+        return blocks.join("\n\n");
+      })
+      .join("\n\n");
   };
 
-  // 描述：复制完整会话内容到系统剪贴板，成功或失败均反馈用户可读提示。
-  const handleCopySessionContentByHeaderMenu = async () => {
+  // 描述：构建会话运行过程文本，覆盖全链路调试与 Trace 信息。
+  //
+  // Returns:
+  //
+  //   - 会话运行过程文本。
+  const buildSessionProcessText = () => {
+    const debugFlowLines = debugFlowRecords.length > 0
+      ? debugFlowRecords.map((record, index) => {
+        const prefix = record.timestamp
+          ? `[${new Date(record.timestamp).toLocaleTimeString("zh-CN", { hour12: false })}]`
+          : "[--:--:--]";
+        const detail = String(record.detail || "").trim() || "（空详情）";
+        return `${index + 1}. ${prefix} [${record.source || "ui"}] [${record.stage || "-"}] ${record.title || "-"}\n${detail}`;
+      })
+      : ["（暂无全链路调试记录）"];
+    const traceLines = traceRecords.length > 0
+      ? traceRecords.map((item, index) => `${index + 1}. ${item.traceId || "-"} · ${item.source || "-"}${item.code ? ` · ${item.code}` : ""} · ${item.message || "-"}`)
+      : ["（暂无 trace 记录）"];
+    return [
+      "### 4.1 全链路调试",
+      wrapMarkdownCodeFence(debugFlowLines.join("\n"), "text"),
+      "",
+      "### 4.2 Trace 记录",
+      wrapMarkdownCodeFence(traceLines.join("\n"), "text"),
+    ].join("\n");
+  };
+
+  // 描述：格式化 Markdown 代码块文本，统一处理空值与围栏转义。
+  //
+  // Params:
+  //
+  //   - content: 代码块原始内容。
+  //   - language: 代码块语言标记。
+  //
+  // Returns:
+  //
+  //   - Markdown fenced code block 文本。
+  const wrapMarkdownCodeFence = (content: string, language = "text") => {
+    const normalizedContent = String(content || "").trim() || "（无）";
+    const escapedContent = normalizedContent.replace(/```/g, "``\\`");
+    return `\`\`\`${language}\n${escapedContent}\n\`\`\``;
+  };
+
+  // 描述：格式化复制内容中的字符串列表，统一输出“序号 + 文本”样式。
+  //
+  // Params:
+  //
+  //   - values: 原始字符串列表。
+  //   - fallback: 空列表时的兜底文案。
+  //   - limit: 最大输出条数，0 表示不限制。
+  //
+  // Returns:
+  //
+  //   - 格式化后的列表文本。
+  const formatSessionCopyList = (values: string[], fallback: string, limit = 0) => {
+    const cleaned = values
+      .map((item) => String(item || "").trim())
+      .filter((item) => Boolean(item));
+    const limited = limit > 0 ? cleaned.slice(0, limit) : cleaned;
+    if (limited.length === 0) {
+      return `- ${fallback}`;
+    }
+    return limited.map((item) => `- ${item}`).join("\n");
+  };
+
+  // 描述：构建会话执行配置文本，补充 AI、工作流与技能选择，便于定位执行上下文差异。
+  //
+  // Returns:
+  //
+  //   - 会话执行配置文本。
+  const buildSessionExecutionConfigText = () => {
+    const activeWorkflow = isWorkflowSession ? selectedModelWorkflow : selectedCodeWorkflow;
+    const configuredSkillItems = selectedSessionSkills.map((item) => {
+      const name = String(item.name || "").trim() || item.id;
+      return `${name} (${item.id})`;
+    });
+    const workflowSummary = activeWorkflow
+      ? `${activeWorkflow.name} (${activeWorkflow.id})`
+      : "（当前未选择工作流，可能已切换为技能执行）";
+    const providerName = String(selectedAi?.providerLabel || selectedAi?.provider || selectedProvider || "").trim() || "-";
+    const providerId = String(selectedAi?.provider || selectedProvider || "").trim() || "-";
+    return [
+      `- 会话类型：${isWorkflowSession ? "模型智能体" : "代码智能体"}`,
+      `- AI：${providerName} (${providerId})`,
+      `- 工作流：${workflowSummary}`,
+      "",
+      "#### 可使用技能列表",
+      formatSessionCopyList(configuredSkillItems, "（未配置会话技能，使用工作流默认技能链）"),
+    ].join("\n");
+  };
+
+  // 描述：构建项目设置文本，输出目录信息、依赖规范与结构化项目信息摘要，便于跨会话排查。
+  //
+  // Returns:
+  //
+  //   - 项目设置文本。
+  const buildSessionProjectSettingsText = () => {
+    if (normalizedAgentKey !== "code") {
+      return "- 当前会话不关联代码项目设置。";
+    }
+    const workspaceName = String(activeCodeWorkspace?.name || "").trim() || "-";
+    const workspacePath = String(activeCodeWorkspace?.path || "").trim() || "-";
+    const dependencyRules = activeCodeWorkspace?.dependencyRules || [];
+    const profile = activeCodeProjectProfile;
+    const profileSummary = String(profile?.summary || "").trim() || "（无）";
+    const sectionLines = (profile?.knowledgeSections || []).map((section) => {
+      const title = String(section.title || section.key || "").trim() || "未命名分类";
+      const entryCount = (section.facets || []).reduce(
+        (count, facet) => count + (facet.entries?.length || 0),
+        0,
+      );
+      return `${title}：${section.facets?.length || 0} 个维度 / ${entryCount} 条条目`;
+    });
+    const keyFactLines = [
+      ...((profile?.apiDataModel?.entities || []).map((item) => `API 实体：${item}`)),
+      ...((profile?.frontendPageLayout?.pages || []).map((item) => `页面：${item}`)),
+      ...((profile?.frontendCodeStructure?.directories || []).map((item) => `目录：${item}`)),
+    ];
+    return [
+      `- 项目名称：${workspaceName}`,
+      `- 项目路径：${workspacePath}`,
+      "",
+      "#### 依赖规范",
+      formatSessionCopyList(dependencyRules, "（未配置依赖规范）", 20),
+      "",
+      "#### 结构化项目信息",
+      `- revision：${profile?.revision || 0}`,
+      `- updatedAt：${profile?.updatedAt || "-"}`,
+      `- updatedBy：${profile?.updatedBy || "-"}`,
+      `- summary：${profileSummary}`,
+      "",
+      "##### 分类摘要",
+      formatSessionCopyList(sectionLines, "（暂无分类）", 20),
+      "",
+      "##### 关键条目（采样）",
+      formatSessionCopyList(keyFactLines, "（暂无关键条目）", 20),
+    ].join("\n");
+  };
+
+  // 描述：构建指定助手消息对应的“AI 原始收发”文本，优先读取 messageId 对应的原始数据。
+  //
+  // Returns:
+  //
+  //   - AI 原始收发文本。
+  const buildSessionAiRawExchangeText = (
+    messageId: string,
+    assistantIndex: number,
+    assistantCount: number,
+  ) => {
+    const rawByMessage = messageId ? sessionAiRawByMessage[messageId] : undefined;
+    const mappedPromptRaw = String(rawByMessage?.promptRaw || "").trim();
+    const mappedResponseRaw = String(rawByMessage?.responseRaw || "").trim();
+    if (mappedPromptRaw || mappedResponseRaw) {
+      return [
+        "##### AI 原始收发",
+        "###### 请求（Prompt，原始）",
+        wrapMarkdownCodeFence(mappedPromptRaw || "（无）", "text"),
+        "",
+        "###### 响应（Raw）",
+        wrapMarkdownCodeFence(mappedResponseRaw || "（无）", "text"),
+      ].join("\n");
+    }
+    // 描述：兼容历史会话（仅存会话级原始收发）时，仅在“单助手消息”场景回退，避免多消息错配。
+    if (assistantCount !== 1 || assistantIndex !== 0) {
+      return "";
+    }
+    const latestCodegenStep = [...stepRecords]
+      .reverse()
+      .find((item) => item.code === "llm_python_codegen" && item.data && typeof item.data === "object");
+    const latestCodegenData = latestCodegenStep?.data || {};
+    const codePromptRaw = String(latestCodegenData.llm_prompt_raw || "").trim();
+    const codeResponseRaw = String(latestCodegenData.llm_response_raw || "").trim();
+    const findDebugFlowDetail = (
+      stageCandidates: string[],
+      titleKeywords: string[],
+    ) => {
+      const record = debugFlowRecords.find((item) => {
+        const stage = String(item.stage || "").trim().toLowerCase();
+        const titleText = String(item.title || "").trim();
+        return stageCandidates.includes(stage)
+          || titleKeywords.some((keyword) => titleText.includes(keyword));
+      });
+      return String(record?.detail || "").trim();
+    };
+    const fallbackPromptRaw = findDebugFlowDetail(
+      ["llm_plan_prompt", "ai_summary_prompt"],
+      ["Prompt", "提示词"],
+    );
+    const fallbackResponseRaw = findDebugFlowDetail(
+      ["llm_plan_raw_response", "ai_summary_raw"],
+      ["原始返回", "raw"],
+    );
+    const promptRaw = codePromptRaw || fallbackPromptRaw;
+    const fallbackPrompt = String(sessionAiPromptRaw || codeAgentPromptRawRef.current || "").trim();
+    const fallbackResponse = String(
+      sessionAiResponseRaw || codeAgentLlmResponseRawRef.current || codeAgentLlmDeltaBufferRef.current || "",
+    ).trim();
+    const responseRaw = codeResponseRaw || fallbackResponseRaw || fallbackResponse;
+    const rawPromptForCopy = promptRaw || fallbackPrompt;
+    if (!rawPromptForCopy && !responseRaw) {
+      return "";
+    }
+    return [
+      "##### AI 原始收发",
+      "###### 请求（Prompt，原始）",
+      wrapMarkdownCodeFence(rawPromptForCopy || "（无）", "text"),
+      "",
+      "###### 响应（Raw）",
+      wrapMarkdownCodeFence(responseRaw || "（无）", "text"),
+    ].join("\n");
+  };
+
+  // 描述：规范化运行片段标题，兼容历史“泛化标题”并输出更具体的排查语义。
+  //
+  // Params:
+  //
+  //   - intro: 原始片段标题。
+  //   - step: 原始片段步骤描述。
+  //
+  // Returns:
+  //
+  //   - 规范化后的片段标题。
+  const normalizeRunSegmentIntroForCopy = (intro: string, step: string) => {
+    const normalizedIntro = String(intro || "").trim();
+    const normalizedStep = String(step || "").trim();
+    if (!normalizedIntro) {
+      return "执行片段";
+    }
+    if (normalizedIntro === "正在处理当前步骤") {
+      if (normalizedStep.includes("provider=") && normalizedStep.includes("started")) {
+        return "模型开始生成脚本";
+      }
+      if (normalizedStep.includes("provider=") && normalizedStep.includes("finished")) {
+        return "模型脚本生成完成";
+      }
+      return "步骤处理中";
+    }
+    if (normalizedIntro === "当前步骤已完成") {
+      if (normalizedStep.includes("provider=") && normalizedStep.includes("finished")) {
+        return "模型脚本生成完成";
+      }
+      return "步骤执行完成";
+    }
+    if (normalizedIntro === "智能体正在思考") {
+      return "规划执行策略";
+    }
+    return normalizedIntro;
+  };
+
+  // 描述：判断运行片段是否属于排查价值较低的噪声信息，复制时自动过滤。
+  //
+  // Params:
+  //
+  //   - intro: 片段标题。
+  //   - step: 片段详情。
+  //   - status: 片段状态。
+  //
+  // Returns:
+  //
+  //   - true 表示该片段应在复制内容中隐藏。
+  const shouldHideRunSegmentInCopy = (
+    intro: string,
+    step: string,
+    status: AssistantRunSegmentStatus,
+  ) => {
+    if (status === "failed") {
+      return false;
+    }
+    const normalizedIntro = String(intro || "").trim();
+    const normalizedStep = String(step || "").trim();
+    if (!normalizedIntro && !normalizedStep) {
+      return true;
+    }
+    if (
+      normalizedStep === "当前步骤仍在执行，请稍候。"
+      || normalizedStep === "执行仍在进行中，正在同步最新状态。"
+      || normalizedStep.includes("规划中：正在确认本次操作所需的工具链与任务顺序")
+      || normalizedStep.includes("规划中：正在确认本次操作所需的工具链")
+    ) {
+      return true;
+    }
+    return false;
+  };
+
+  // 描述：构建指定助手消息对应的运行片段文本，仅按 messageId 命中，避免跨消息错配。
+  //
+  // Params:
+  //
+  //   - messageId: 助手消息 ID。
+  //
+  // Returns:
+  //
+  //   - 运行片段文本。
+  const buildSessionRunSnippetText = (messageId: string) => {
+    if (!messageId) {
+      return "";
+    }
+    const runMetaEntries = Object.entries(assistantRunMetaMap)
+      .map(([entryMessageId, runMeta]) => ({ messageId: entryMessageId, runMeta }))
+      .sort((a, b) => a.runMeta.startedAt - b.runMeta.startedAt);
+    if (runMetaEntries.length === 0) {
+      return "";
+    }
+    const matchedEntry = runMetaEntries.find((entry) => entry.messageId === messageId);
+    if (!matchedEntry) {
+      return "";
+    }
+    const scopedEntries = [matchedEntry];
+    const runMetaLines = scopedEntries.flatMap((entry, runIndex) => {
+      const runHeader = `${runIndex + 1}. message=${entry.messageId || "-"} · status=${entry.runMeta.status || "-"} · started=${formatSessionCopyTime(entry.runMeta.startedAt)} · finished=${formatSessionCopyTime(entry.runMeta.finishedAt)}`;
+      const summary = String(entry.runMeta.summary || "").trim();
+      const filteredSegments = entry.runMeta.segments
+        .map((segment) => {
+          const intro = normalizeRunSegmentIntroForCopy(segment.intro, segment.step);
+          const step = String(segment.step || "").trim() || "（空步骤）";
+          return {
+            status: segment.status,
+            intro,
+            step,
+          };
+        })
+        .filter((segment) => !shouldHideRunSegmentInCopy(segment.intro, segment.step, segment.status));
+      const segmentLines = (filteredSegments.length > 0 ? filteredSegments : [{
+        status: entry.runMeta.status === "failed" ? "failed" : "finished",
+        intro: "执行过程摘要",
+        step: summary || "（本轮未记录可展示的执行片段）",
+      }]).map((segment, segmentIndex) => (
+        `   ${segmentIndex + 1}. [${segment.status}] ${segment.intro}\n      ${segment.step}`
+      ));
+      return [
+        runHeader,
+        summary ? `   总结：${summary}` : "",
+        ...segmentLines,
+      ].filter(Boolean);
+    });
+    return [
+      "##### 运行片段",
+      wrapMarkdownCodeFence(runMetaLines.join("\n"), "text"),
+    ].join("\n");
+  };
+
+  // 描述：构建可复制的完整会话文本，包含会话消息、执行配置、项目设置、AI 原始收发与运行过程。
+  //
+  // Returns:
+  //
+  //   - 可直接写入剪贴板的完整会话文本。
+  const buildSessionFullCopyText = () => {
+    return [
+      "# 会话排查记录",
+      "",
+      "## 一、会话概览",
+      `- 标题：${title}`,
+      `- 会话ID：${sessionId || "-"}`,
+      `- 智能体：${normalizedAgentKey || "-"}`,
+      `- 状态：${status || "-"}`,
+      "",
+      "## 二、环境与配置",
+      "### 2.1 会话配置",
+      buildSessionExecutionConfigText(),
+      "",
+      "### 2.2 项目信息（含结构化项目信息）",
+      buildSessionProjectSettingsText(),
+      "",
+      "## 三、会话内容",
+      "### 3.1 会话消息",
+      buildSessionMessageText(messages),
+      "",
+      "## 四、执行过程",
+      buildSessionProcessText(),
+    ].join("\n");
+  };
+
+  // 描述：向 Dev 调试窗口广播复制结果，便于在调试面板反馈复制成功/失败状态。
+  //
+  // Params:
+  //
+  //   - ok: 复制是否成功。
+  //   - message: 反馈文案。
+  const emitSessionCopyResult = useCallback((ok: boolean, message: string) => {
+    if (!IS_BROWSER) {
+      return;
+    }
+    window.dispatchEvent(
+      new CustomEvent("zodileap:session-copy-result", {
+        detail: {
+          sessionId,
+          ok,
+          message,
+          timestamp: Date.now(),
+        },
+      }),
+    );
+  }, [sessionId]);
+
+  // 描述：复制完整会话内容（含过程）到系统剪贴板，供 Dev 调试窗口触发。
+  const handleCopySessionContent = useCallback(async () => {
     try {
       if (!navigator?.clipboard?.writeText) {
-        setStatus("复制失败，请检查系统剪贴板权限");
+        const failedMessage = "复制失败，请检查系统剪贴板权限";
+        setStatus(failedMessage);
+        emitSessionCopyResult(false, failedMessage);
         return;
       }
-      const fullConversationText = buildSessionConversationText(messages);
+      const fullConversationText = buildSessionFullCopyText();
       await navigator.clipboard.writeText(fullConversationText);
-      setStatus("会话内容已复制");
+      const successMessage = "会话内容（含过程）已复制";
+      setStatus(successMessage);
+      emitSessionCopyResult(true, successMessage);
     } catch {
-      setStatus("复制失败，请检查系统剪贴板权限");
+      const failedMessage = "复制失败，请检查系统剪贴板权限";
+      setStatus(failedMessage);
+      emitSessionCopyResult(false, failedMessage);
     }
-  };
+  }, [
+    activeCodeProjectProfile,
+    activeCodeWorkspace,
+    activeSelectedSkillIds,
+    assistantRunMetaMap,
+    debugFlowRecords,
+    emitSessionCopyResult,
+    isWorkflowSession,
+    messages,
+    normalizedAgentKey,
+    selectedAi,
+    selectedCodeWorkflow,
+    selectedModelWorkflow,
+    selectedProvider,
+    selectedSessionSkills,
+    sessionId,
+    status,
+    stepRecords,
+    title,
+    traceRecords,
+  ]);
+
+  // 描述：监听 Dev 调试窗口的“复制会话内容”请求，只在当前会话匹配时执行复制。
+  useEffect(() => {
+    if (!IS_BROWSER) {
+      return;
+    }
+    const handleCopyRequest = (event: Event) => {
+      const customEvent = event as CustomEvent<{ sessionId?: string }>;
+      const targetSessionId = String(customEvent.detail?.sessionId || "").trim();
+      if (targetSessionId && targetSessionId !== sessionId) {
+        return;
+      }
+      void handleCopySessionContent();
+    };
+    window.addEventListener("zodileap:session-copy-request", handleCopyRequest as EventListener);
+    return () => {
+      window.removeEventListener("zodileap:session-copy-request", handleCopyRequest as EventListener);
+    };
+  }, [handleCopySessionContent, sessionId]);
 
   // 描述：处理 Header 更多菜单动作，复用侧边栏右键会话菜单同款能力。
   const handleSelectSessionHeadMenu = (key: string) => {
     if (key === "pin") {
       togglePinnedAgentSession(sessionId);
       setSessionMenuVersion((current) => current + 1);
-      return;
-    }
-    if (key === "copy_session") {
-      void handleCopySessionContentByHeaderMenu();
       return;
     }
     if (key === "rename") {
@@ -3966,6 +4871,7 @@ const handleConfirmWorkflowSkillModal = () => {
               const isUserMessage = message.role === "user";
               const useRunLayout =
                 message.role === "assistant" && Boolean(runMeta);
+              const messageKey = String(message.id || `message-${index}`);
               const dividerTitle = runMeta
                 ? runMeta.status === "failed"
                   ? `执行中断，用时 ${formatElapsedDuration(runMeta.startedAt, runMeta.finishedAt)}`
@@ -3974,28 +4880,91 @@ const handleConfirmWorkflowSkillModal = () => {
               const failureSummary = runMeta?.status === "failed"
                 ? buildAssistantFailureSummary(runMeta.summary || message.text)
                 : null;
+              const runSegmentsForRender: AssistantRunSegment[] = runMeta
+                ? (() => {
+                  const normalizedSegments = runMeta.segments
+                    .map((segment) => {
+                      const intro = normalizeRunSegmentIntroForCopy(segment.intro, segment.step);
+                      const step = String(segment.step || "").trim() || "（空步骤）";
+                      return {
+                        ...segment,
+                        intro,
+                        step,
+                      };
+                    })
+                    .filter((segment) => !shouldHideRunSegmentInCopy(segment.intro, segment.step, segment.status));
+                  if (normalizedSegments.length > 0) {
+                    return normalizedSegments;
+                  }
+                  if (runMeta.status === "running") {
+                    return [{
+                      key: `fallback-running-${messageKey}`,
+                      intro: "执行进行中",
+                      step: "等待执行状态回传…",
+                      status: "running",
+                    }];
+                  }
+                  const fallbackStep = String(runMeta.summary || message.text || "").trim()
+                    || "（本轮未记录可展示的执行片段）";
+                  return [{
+                    key: `fallback-summary-${messageKey}`,
+                    intro: "执行过程摘要",
+                    step: fallbackStep,
+                    status: runMeta.status === "failed" ? "failed" : "finished",
+                  }];
+                })()
+                : [];
+              const renderRunSegment = (segment: AssistantRunSegment, segmentKeyPrefix = "") => {
+                const segmentDomKey = `${segmentKeyPrefix}${segment.key}`;
+                const detailText = String(segment.detail || "").trim();
+                const hasDetail = detailText.length > 0;
+                const detailKey = `${messageKey}:${segmentDomKey}`;
+                const detailExpanded = hasDetail && Boolean(expandedRunSegmentDetailMap[detailKey]);
+                return (
+                  <AriContainer
+                    key={segmentDomKey}
+                    className="desk-run-segment"
+                    padding={0}
+                  >
+                    <AriTypography
+                      className="desk-run-intro"
+                      variant="caption"
+                      value={segment.intro}
+                    />
+                    <AriTypography
+                      className={`desk-run-step ${segment.status === "running" ? "desk-run-step-running" : ""}`}
+                      variant="caption"
+                      value={segment.step}
+                    />
+                    {hasDetail ? (
+                      <button
+                        type="button"
+                        className="desk-run-segment-detail-toggle"
+                        onClick={() => {
+                          toggleRunSegmentDetailExpanded(detailKey);
+                        }}
+                      >
+                        <span className="desk-run-segment-detail-label">
+                          {detailExpanded ? "收起代码详情" : "查看代码详情"}
+                        </span>
+                        <span className={`desk-run-segment-detail-arrow ${detailExpanded ? "open" : ""}`}>
+                          ▾
+                        </span>
+                      </button>
+                    ) : null}
+                    {hasDetail && detailExpanded ? (
+                      <pre className="desk-run-segment-detail-code">
+                        {detailText}
+                      </pre>
+                    ) : null}
+                  </AriContainer>
+                );
+              };
               const messageContent = useRunLayout && runMeta ? (
                 <AriContainer className="desk-run-flow" padding={0}>
                   {runMeta.status === "running" ? (
                     <AriContainer className="desk-run-segments" padding={0}>
-                      {runMeta.segments.map((segment) => (
-                        <AriContainer
-                          key={segment.key}
-                          className="desk-run-segment"
-                          padding={0}
-                        >
-                          <AriTypography
-                            className="desk-run-intro"
-                            variant="caption"
-                            value={segment.intro}
-                          />
-                          <AriTypography
-                            className={`desk-run-step ${segment.status === "running" ? "desk-run-step-running" : ""}`}
-                            variant="caption"
-                            value={segment.step}
-                          />
-                        </AriContainer>
-                      ))}
+                      {runSegmentsForRender.map((segment) => renderRunSegment(segment))}
                     </AriContainer>
                   ) : (
                     <>
@@ -4021,24 +4990,7 @@ const handleConfirmWorkflowSkillModal = () => {
                       </button>
                       {!runMeta.collapsed ? (
                         <AriContainer className="desk-run-segments desk-run-segments-collapsed" padding={0}>
-                          {runMeta.segments.map((segment) => (
-                            <AriContainer
-                              key={`collapsed-${segment.key}`}
-                              className="desk-run-segment"
-                              padding={0}
-                            >
-                              <AriTypography
-                                className="desk-run-intro"
-                                variant="caption"
-                                value={segment.intro}
-                              />
-                              <AriTypography
-                                className="desk-run-step"
-                                variant="caption"
-                                value={segment.step}
-                              />
-                            </AriContainer>
-                          ))}
+                          {runSegmentsForRender.map((segment) => renderRunSegment(segment, "collapsed-"))}
                         </AriContainer>
                       ) : null}
                       <AriContainer className={`desk-run-summary ${runMeta.status === "failed" ? "desk-run-summary-failed" : ""}`} padding={0}>
@@ -4091,7 +5043,7 @@ const handleConfirmWorkflowSkillModal = () => {
               );
               return (
                 <AriContainer
-                  key={message.id || `message-${index}`}
+                  key={messageKey}
                   className={`desk-msg ${roleClass}`}
                   padding={0}
                 >
@@ -4124,14 +5076,28 @@ const handleConfirmWorkflowSkillModal = () => {
                         />
                       </AriTooltip>
                     ) : (
-                      <AriTooltip content="重试" position="top" minWidth={0} matchTriggerWidth={false}>
+                      <AriTooltip
+                        content="重试"
+                        position="top"
+                        trigger="manual"
+                        visible={!sending && hoveredRetryTooltipMessageId === messageKey}
+                        minWidth={0}
+                        matchTriggerWidth={false}
+                      >
                         <AriButton
                           ghost
                           size="sm"
                           icon="refresh"
                           aria-label="重试消息"
                           disabled={sending}
+                          onMouseEnter={() => {
+                            setHoveredRetryTooltipMessageId(messageKey);
+                          }}
+                          onMouseLeave={() => {
+                            setHoveredRetryTooltipMessageId((current) => (current === messageKey ? "" : current));
+                          }}
                           onClick={() => {
+                            setHoveredRetryTooltipMessageId("");
                             void handleRetryAssistantMessage(index);
                           }}
                         />

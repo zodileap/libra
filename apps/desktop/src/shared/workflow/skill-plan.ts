@@ -1,5 +1,6 @@
 import type { CodeWorkflowDefinition } from "./types";
 import { readInstalledSkillIdsFromStorage } from "../../modules/common/services/skills";
+import { resolveCodeSkillPromptGuide } from "./prompt-guidance";
 
 // 描述：
 //
@@ -37,24 +38,6 @@ export interface CodeWorkflowSkillExecutionPlan {
 //   - 已安装技能 ID 集合。
 function readInstalledSkillIdSet(): Set<string> {
   return new Set(readInstalledSkillIdsFromStorage());
-}
-
-// 描述：
-//
-//   - 构建技能引用文本，格式为 skillId@version。
-//
-// Params:
-//
-//   - item: 技能计划项。
-//
-// Returns:
-//
-//   - 技能引用文本。
-function buildSkillReference(item: Pick<CodeWorkflowSkillPlanItem, "skillId" | "skillVersion">): string {
-  if (!item.skillVersion) {
-    return item.skillId;
-  }
-  return `${item.skillId}@${item.skillVersion}`;
 }
 
 // 描述：
@@ -135,11 +118,14 @@ export function buildCodeWorkflowSkillExecutionPlan(
     ? [
         "【Skill 执行计划】",
         ...readyItems.map((item, index) => {
-          const skillRef = buildSkillReference(item);
+          const skillGuide = resolveCodeSkillPromptGuide(item.skillId);
           const instructionText = item.instruction
             ? `；节点指令：${item.instruction}`
             : "";
-          return `${index + 1}. ${item.nodeTitle} -> ${skillRef}${instructionText}`;
+          if (skillGuide) {
+            return `${index + 1}. ${item.nodeTitle}：${skillGuide.name}；能力：${skillGuide.objective}；产出：${skillGuide.deliverable}${instructionText}`;
+          }
+          return `${index + 1}. ${item.nodeTitle}：技能编码 ${item.skillId}${instructionText}`;
         }),
         "执行约束：按顺序执行技能；若任一步骤失败，先输出阻塞原因与修复建议，再决定是否继续。",
       ].join("\n")

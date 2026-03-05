@@ -21,6 +21,8 @@ function readDesktopSource(relativePath) {
 
 test("TestWorkflowSkillExecutionPlanShouldValidateInstallStateAndBuildPrompt", () => {
   const skillPlanSource = readDesktopSource("src/shared/workflow/skill-plan.ts");
+  const workflowStorageSource = readDesktopSource("src/shared/workflow/storage.ts");
+  const promptGuidanceSource = readDesktopSource("src/shared/workflow/prompt-guidance.ts");
   const workflowIndexSource = readDesktopSource("src/shared/workflow/index.ts");
   const sessionPageSource = readDesktopSource("src/widgets/session/page.tsx");
 
@@ -32,7 +34,21 @@ test("TestWorkflowSkillExecutionPlanShouldValidateInstallStateAndBuildPrompt", (
   assert.match(skillPlanSource, /status: "not_installed"/);
   assert.match(skillPlanSource, /blockingIssues/);
   assert.match(skillPlanSource, /"【Skill 执行计划】"/);
+  assert.match(skillPlanSource, /resolveCodeSkillPromptGuide/);
+  assert.match(skillPlanSource, /能力：/);
+  assert.match(skillPlanSource, /产出：/);
   assert.match(skillPlanSource, /buildCodeWorkflowSkillExecutionPlan/);
+
+  // 描述：
+  //
+  //   - 工作流 Prompt 构建应拼接“可用工具集”，并通过技能语义引导替代纯版本号链路。
+  assert.match(promptGuidanceSource, /CODE_AGENT_TOOLSET_LINES/);
+  assert.match(promptGuidanceSource, /禁止 import 第三方工具模块/);
+  assert.match(promptGuidanceSource, /resolveCodeSkillPromptGuide/);
+  assert.match(workflowStorageSource, /CODE_AGENT_TOOLSET_LINES/);
+  assert.match(workflowStorageSource, /const toolsetBlock = \["", \.\.\.CODE_AGENT_TOOLSET_LINES\];/);
+  assert.match(workflowStorageSource, /能力：\$\{normalizedSkill\.objective\}/);
+  assert.match(workflowStorageSource, /产出：\$\{normalizedSkill\.deliverable\}/);
 
   // 描述：
   //
@@ -51,4 +67,11 @@ test("TestWorkflowSkillExecutionPlanShouldValidateInstallStateAndBuildPrompt", (
   assert.match(sessionPageSource, /const codePrompt = skillExecutionPlan\.planPrompt/);
   assert.match(sessionPageSource, /source: "workflow:skill_plan"/);
   assert.match(sessionPageSource, /prompt: codePrompt/);
+
+  // 描述：
+  //
+  //   - 结构化项目信息应按需注入，避免首轮请求默认拼接全量项目语义基线。
+  assert.match(sessionPageSource, /const CODE_PROFILE_ON_DEMAND_KEYWORDS = \[/);
+  assert.match(sessionPageSource, /const shouldAttachProfileContext = isRetryOnlyPrompt\(normalizedCurrentPrompt\)/);
+  assert.match(sessionPageSource, /CODE_PROFILE_ON_DEMAND_KEYWORDS\.some\(\(keyword\) => normalizedCurrentPrompt\.toLowerCase\(\)\.includes\(keyword\.toLowerCase\(\)\)\)/);
 });
