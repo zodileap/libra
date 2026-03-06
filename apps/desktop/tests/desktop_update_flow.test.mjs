@@ -41,6 +41,7 @@ test("TestDesktopUpdateFlowShouldConnectApiDownloadAndInstall", () => {
   const backendApiSource = readDesktopSource("src/shared/services/backend-api.ts");
   const sidebarSource = readDesktopSource("src/sidebar/index.tsx");
   const userMenuSource = readDesktopSource("src/sidebar/widgets/user-hover-menu.tsx");
+  const appHeaderSource = readDesktopSource("src/widgets/app-header/index.tsx");
   const routerTypesSource = readDesktopSource("src/router/types.ts");
   const layoutSource = readDesktopSource("src/shell/layout.tsx");
   const tauriSource = readDesktopSource("src-tauri/src/main.rs");
@@ -75,15 +76,17 @@ test("TestDesktopUpdateFlowShouldConnectApiDownloadAndInstall", () => {
 
   // 描述：
   //
-  //   - 侧边栏与用户菜单应接收更新状态并在下载完成后展示更新按钮。
+  //   - 路由与布局层应透传更新状态，标题栏左侧在下载完成后展示更新按钮。
   assert.match(routerTypesSource, /desktopUpdateState: DesktopUpdateState;/);
   assert.match(layoutSource, /desktopUpdateState: DesktopUpdateState;/);
   assert.match(layoutSource, /onCheckDesktopUpdate: \(\) => Promise<void>;/);
   assert.match(layoutSource, /onInstallDesktopUpdate: \(\) => Promise<void>;/);
   assert.match(sidebarSource, /desktopUpdateState: DesktopUpdateState;/);
-  assert.match(userMenuSource, /const showUpdateButton = desktopUpdateState\.status === "ready";/);
-  assert.match(userMenuSource, /icon="system_update_alt"/);
-  assert.match(userMenuSource, /await onInstallDesktopUpdate\(\);/);
+  assert.doesNotMatch(userMenuSource, /const showUpdateButton = desktopUpdateState\.status === "ready";/);
+  assert.match(appHeaderSource, /className="desk-app-header-leading-actions"/);
+  assert.match(appHeaderSource, /const showUpdateButton = desktopUpdateState\.status === "ready";/);
+  assert.match(appHeaderSource, /icon="system_update_alt"/);
+  assert.match(appHeaderSource, /await onInstallDesktopUpdate\(\);/);
 
   // 描述：
   //

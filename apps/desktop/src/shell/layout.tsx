@@ -48,6 +48,8 @@ export function DesktopLayout({
           onToggleSidebar={() => {
             setSidebarCollapsed((current) => !current);
           }}
+          desktopUpdateState={desktopUpdateState}
+          onInstallDesktopUpdate={onInstallDesktopUpdate}
           debugFloatVisible={debugFloatVisible}
           onToggleDebugFloat={() => {
             setDebugFloatVisible((current) => !current);

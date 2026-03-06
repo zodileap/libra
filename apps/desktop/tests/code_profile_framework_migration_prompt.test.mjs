@@ -20,7 +20,10 @@ function readDesktopSource(relativePath) {
 }
 
 test("TestCodeSessionPromptShouldInjectFrameworkReplacementGuards", () => {
-  const source = readDesktopSource("src/widgets/session/page.tsx");
+  const source = [
+    readDesktopSource("src/widgets/session/page.tsx"),
+    readDesktopSource("src/widgets/session/prompt-utils.ts"),
+  ].join("\n");
 
   // 描述：
   //

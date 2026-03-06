@@ -24,7 +24,10 @@ test("TestWorkflowSkillExecutionPlanShouldValidateInstallStateAndBuildPrompt", (
   const workflowStorageSource = readDesktopSource("src/shared/workflow/storage.ts");
   const promptGuidanceSource = readDesktopSource("src/shared/workflow/prompt-guidance.ts");
   const workflowIndexSource = readDesktopSource("src/shared/workflow/index.ts");
-  const sessionPageSource = readDesktopSource("src/widgets/session/page.tsx");
+  const sessionPageSource = [
+    readDesktopSource("src/widgets/session/page.tsx"),
+    readDesktopSource("src/widgets/session/prompt-utils.ts"),
+  ].join("\n");
 
   // 描述：
   //
@@ -44,6 +47,10 @@ test("TestWorkflowSkillExecutionPlanShouldValidateInstallStateAndBuildPrompt", (
   //   - 工作流 Prompt 构建应拼接“可用工具集”，并通过技能语义引导替代纯版本号链路。
   assert.match(promptGuidanceSource, /CODE_AGENT_TOOLSET_LINES/);
   assert.match(promptGuidanceSource, /禁止 import 第三方工具模块/);
+  assert.match(promptGuidanceSource, /工具调用签名与示例/);
+  assert.match(promptGuidanceSource, /todo_write\(items\)/);
+  assert.match(promptGuidanceSource, /错误示例（禁止）：todo_write\(\\"NEXT_STEP\\", \\"设计前端框架\\"\)/);
+  assert.match(promptGuidanceSource, /tool_search\(\\"todo_write\\", 1\)/);
   assert.match(promptGuidanceSource, /resolveCodeSkillPromptGuide/);
   assert.match(workflowStorageSource, /CODE_AGENT_TOOLSET_LINES/);
   assert.match(workflowStorageSource, /const toolsetBlock = \["", \.\.\.CODE_AGENT_TOOLSET_LINES\];/);

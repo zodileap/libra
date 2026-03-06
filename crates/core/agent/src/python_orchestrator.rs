@@ -1,5 +1,5 @@
 use crate::flow::build_system_prompt;
-use crate::llm::parse_provider;
+use crate::llm::{parse_provider, LlmUsage};
 use crate::sandbox::{
     BATCH_SIZE_PREFIX, FINAL_RESULT_PREFIX, SANDBOX_ERROR_PREFIX, TOOL_CALL_PREFIX, TURN_END_MARKER,
 };
@@ -35,6 +35,32 @@ pub(crate) struct PythonScriptExecutionRequest<'a> {
     pub session_id: String,
 }
 
+#[derive(Debug, Clone)]
+struct CodeAgentTurnRecord {
+    turn_index: usize,
+    summary: String,
+    next: String,
+    actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TurnControl {
+    Continue,
+    Done,
+}
+
+#[derive(Debug, Clone)]
+struct TurnResultEnvelope {
+    control: TurnControl,
+    summary: String,
+    next: String,
+}
+
+const TOOL_ARGS_STREAM_PREVIEW_MAX_CHARS: usize = 1200;
+const TOOL_ARGS_CONTENT_PREVIEW_MAX_CHARS: usize = 240;
+const PLANNING_META_PREFIX: &str = "__zodileap_planning__:";
+const STREAM_TEXT_MAX_CHARS: usize = 4000;
+
 /// 描述：执行代码智能体 Python 编排主流程，包含脚本生成与沙盒执行。
 pub(crate) fn run_code_agent_with_python_workflow(
     request: AgentRunRequest,
@@ -44,137 +70,528 @@ pub(crate) fn run_code_agent_with_python_workflow(
 ) -> Result<AgentRunResult, ProtocolError> {
     let provider = parse_provider(&request.provider);
     let trace_id = request.trace_id.clone();
-
-    on_stream_event(AgentStreamEvent::Planning {
-        message: "正在规划代码执行策略".to_string(),
-    });
-    on_stream_event(AgentStreamEvent::LlmStarted {
-        provider: request.provider.clone(),
-    });
-
-    let prompt = build_python_workflow_prompt(&request.prompt, request.project_name.as_deref());
-    let started_at = now_millis();
+    let max_turns = resolve_code_agent_max_turns();
     let llm_policy = crate::llm::LlmGatewayPolicy {
         timeout_secs: policy.llm_timeout_secs,
         retry_policy: policy.llm_retry_policy,
     };
+    let mut usage_total = LlmUsage::default();
+    let mut steps: Vec<ProtocolStepRecord> = Vec::new();
+    let mut events: Vec<ProtocolEventRecord> = Vec::new();
+    let mut assets: Vec<ProtocolAssetRecord> = Vec::new();
+    let mut actions: Vec<String> = Vec::new();
+    let mut turn_records: Vec<CodeAgentTurnRecord> = Vec::new();
+    let mut final_message = String::new();
+    let mut completed = false;
 
-    let mut stream_observer = |chunk: &str| {
-        on_stream_event(AgentStreamEvent::LlmDelta {
-            content: chunk.to_string(),
-        });
-    };
-
-    let run_result = crate::llm::call_model_with_policy_and_stream(
-        provider,
-        &prompt,
-        request.workdir.as_deref(),
-        llm_policy,
-        Some(&mut stream_observer),
-    )
-    .map_err(|err| err.to_protocol_error())?;
-
-    on_stream_event(AgentStreamEvent::LlmFinished {
-        provider: request.provider.clone(),
-    });
-
-    let llm_raw_response = run_result.content.clone();
-    let generated_script = extract_python_script(&llm_raw_response);
-    if generated_script.trim().is_empty() {
-        return Err(ProtocolError::new(
-            "core.agent.python.empty_script",
-            "模型未返回可执行 Python 脚本",
+    for turn_index in 1..=max_turns {
+        let round_description_prompt = build_round_description_prompt(
+            &request.prompt,
+            request.project_name.as_deref(),
+            turn_index,
+            max_turns,
+            &turn_records,
+        );
+        let round_description_started_at = now_millis();
+        let round_description_result = crate::llm::call_model_with_policy_and_stream(
+            provider,
+            &round_description_prompt,
+            request.workdir.as_deref(),
+            llm_policy.clone(),
+            None,
         )
-        .with_suggestion("请重试，或调整提示词让模型只输出 Python 代码。"));
-    }
-    let generated_script = repair_missing_python_block_body(&generated_script);
-    let generated_script = ensure_script_has_finish(&generated_script);
+        .map_err(|err| err.to_protocol_error())?;
+        let round_description_finished_at = now_millis();
+        usage_total.prompt_tokens = usage_total
+            .prompt_tokens
+            .saturating_add(round_description_result.usage.prompt_tokens);
+        usage_total.completion_tokens = usage_total
+            .completion_tokens
+            .saturating_add(round_description_result.usage.completion_tokens);
+        usage_total.total_tokens = usage_total
+            .total_tokens
+            .saturating_add(round_description_result.usage.total_tokens);
+        let round_description =
+            normalize_round_description(round_description_result.content.as_str(), turn_index);
+        on_stream_event(AgentStreamEvent::Planning {
+            message: build_planning_meta_message(json!({
+                "type": "round_description",
+                "turn_index": turn_index,
+                "text": round_description,
+            })),
+        });
 
-    on_stream_event(AgentStreamEvent::Planning {
-        message: "脚本已生成，开始执行沙盒任务".to_string(),
-    });
+        on_stream_event(AgentStreamEvent::LlmStarted {
+            provider: request.provider.clone(),
+        });
+        let prompt = build_python_workflow_prompt(
+            &request.prompt,
+            request.project_name.as_deref(),
+            turn_index,
+            max_turns,
+            &turn_records,
+        );
+        let llm_started_at = now_millis();
+        let mut stream_observer = |chunk: &str| {
+            on_stream_event(AgentStreamEvent::LlmDelta {
+                content: chunk.to_string(),
+            });
+        };
+        let run_result = crate::llm::call_model_with_policy_and_stream(
+            provider,
+            &prompt,
+            request.workdir.as_deref(),
+            llm_policy.clone(),
+            Some(&mut stream_observer),
+        )
+        .map_err(|err| err.to_protocol_error())?;
+        let llm_finished_at = now_millis();
+        usage_total.prompt_tokens = usage_total
+            .prompt_tokens
+            .saturating_add(run_result.usage.prompt_tokens);
+        usage_total.completion_tokens = usage_total
+            .completion_tokens
+            .saturating_add(run_result.usage.completion_tokens);
+        usage_total.total_tokens = usage_total
+            .total_tokens
+            .saturating_add(run_result.usage.total_tokens);
+        on_stream_event(AgentStreamEvent::LlmFinished {
+            provider: request.provider.clone(),
+        });
 
-    let execution = execute_python_script(
-        PythonScriptExecutionRequest {
-            user_script: &generated_script,
-            workdir: request.workdir.as_deref(),
-            blender_bridge_addr: request.blender_bridge_addr.as_deref(),
-            policy: &policy,
-            trace_id: trace_id.clone(),
-            session_id: request.session_id.clone(),
-        },
-        on_stream_event,
-    )?;
+        let llm_raw_response = run_result.content.clone();
+        let generated_script = extract_python_script(&llm_raw_response);
+        if generated_script.trim().is_empty() {
+            return Err(ProtocolError::new(
+                "core.agent.python.empty_script",
+                "模型未返回可执行 Python 脚本",
+            )
+            .with_suggestion("请重试，或调整提示词让模型只输出 Python 代码。"));
+        }
+        let generated_script = repair_missing_python_block_body(&generated_script);
+        let generated_script = ensure_script_has_finish(&generated_script);
+        let generated_script = truncate_script_after_first_top_level_finish(&generated_script);
+        let exec_started_at = now_millis();
+        let execution = execute_python_script(
+            PythonScriptExecutionRequest {
+                user_script: &generated_script,
+                workdir: request.workdir.as_deref(),
+                blender_bridge_addr: request.blender_bridge_addr.as_deref(),
+                policy: &policy,
+                trace_id: trace_id.clone(),
+                session_id: request.session_id.clone(),
+            },
+            on_stream_event,
+        )?;
+        let exec_finished_at = now_millis();
 
-    on_stream_event(AgentStreamEvent::Final {
-        message: execution.message.clone(),
-    });
+        let turn_result = parse_turn_result_envelope(
+            &execution.message,
+            &execution.actions,
+            turn_index,
+            max_turns,
+        );
+        final_message = turn_result.summary.clone();
+        turn_records.push(CodeAgentTurnRecord {
+            turn_index,
+            summary: turn_result.summary.clone(),
+            next: turn_result.next.clone(),
+            actions: execution.actions.clone(),
+        });
 
-    let finished_at = now_millis();
-    let steps = vec![
-        ProtocolStepRecord {
-            index: 0,
-            code: "llm_python_codegen".to_string(),
+        let step_index_base = steps.len();
+        steps.push(ProtocolStepRecord {
+            index: step_index_base,
+            code: "llm_round_description".to_string(),
             status: ProtocolStepStatus::Success,
-            elapsed_ms: finished_at.saturating_sub(started_at),
-            summary: format!("provider={} 已生成 Python 编排脚本", request.provider),
+            elapsed_ms: round_description_finished_at.saturating_sub(round_description_started_at),
+            summary: format!("第 {} 轮：已生成本轮任务描述", turn_index),
             error: None,
             data: Some(json!({
+                "turn_index": turn_index,
+                "usage": round_description_result.usage,
+                "llm_prompt_raw": round_description_prompt,
+                "llm_response_raw": round_description_result.content,
+                "round_description": round_description,
+            })),
+        });
+        steps.push(ProtocolStepRecord {
+            index: step_index_base + 1,
+            code: "llm_python_codegen".to_string(),
+            status: ProtocolStepStatus::Success,
+            elapsed_ms: llm_finished_at.saturating_sub(llm_started_at),
+            summary: format!(
+                "第 {} 轮：provider={} 已生成 Python 编排脚本",
+                turn_index, request.provider
+            ),
+            error: None,
+            data: Some(json!({
+                "turn_index": turn_index,
                 "script_length": generated_script.chars().count(),
                 "usage": run_result.usage,
                 "llm_prompt_raw": prompt,
                 "llm_response_raw": llm_raw_response,
                 "llm_script_extracted": generated_script,
             })),
-        },
-        ProtocolStepRecord {
-            index: 1,
+        });
+        steps.push(ProtocolStepRecord {
+            index: step_index_base + 2,
             code: "python_workflow_execute".to_string(),
             status: ProtocolStepStatus::Success,
-            elapsed_ms: 0,
-            summary: "Python 沙盒执行完成".to_string(),
+            elapsed_ms: exec_finished_at.saturating_sub(exec_started_at),
+            summary: format!("第 {} 轮：Python 沙盒执行完成", turn_index),
             error: None,
             data: Some(json!({
+                "turn_index": turn_index,
                 "actions": execution.actions,
+                "turn_control": if turn_result.control == TurnControl::Done { "done" } else { "continue" },
+                "turn_summary": turn_result.summary,
+                "next": turn_result.next,
             })),
-        },
-    ];
+        });
+
+        events.push(ProtocolEventRecord {
+            event: "turn_completed".to_string(),
+            step_index: Some(step_index_base + 2),
+            timestamp_ms: now_millis(),
+            message: format!(
+                "turn={} control={}",
+                turn_index,
+                if turn_result.control == TurnControl::Done {
+                    "done"
+                } else {
+                    "continue"
+                }
+            ),
+        });
+        events.extend(execution.events);
+        assets.extend(execution.assets);
+        actions.extend(execution.actions);
+
+        if turn_result.control == TurnControl::Done {
+            completed = true;
+            break;
+        }
+    }
+
+    if !completed {
+        let fallback_message = if final_message.trim().is_empty() {
+            "已达到本轮最大执行次数，当前进展已保存，请继续发起下一轮。".to_string()
+        } else {
+            format!(
+                "已达到本轮最大执行次数（{} 轮），当前进展：{}",
+                max_turns, final_message
+            )
+        };
+        final_message = fallback_message;
+    }
+
+    if final_message.trim().is_empty() {
+        final_message = "执行完成（未返回总结，已自动收尾）".to_string();
+    }
+    on_stream_event(AgentStreamEvent::Final {
+        message: final_message.clone(),
+    });
 
     Ok(AgentRunResult {
         trace_id,
-        message: execution.message,
-        usage: Some(run_result.usage),
-        actions: execution.actions,
+        message: final_message,
+        usage: Some(usage_total),
+        actions,
         exported_file: None,
         steps,
-        events: execution.events,
-        assets: execution.assets,
+        events,
+        assets,
         ui_hint: None,
     })
 }
 
-/// 描述：构建 Python 编排提示词。
-fn build_python_workflow_prompt(user_prompt: &str, project_name: Option<&str>) -> String {
+/// 描述：构建“本轮任务描述”提示词，要求模型只返回一段口语化中文描述。
+fn build_round_description_prompt(
+    user_prompt: &str,
+    project_name: Option<&str>,
+    turn_index: usize,
+    max_turns: usize,
+    turn_records: &[CodeAgentTurnRecord],
+) -> String {
     let project_name_text = project_name
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("未命名项目");
     let system_prompt = build_system_prompt(crate::flow::AgentKind::Code);
+    let turn_context = build_turn_context(turn_records);
 
     format!(
         "{system_prompt}\n\
-你必须严格遵守以下输出协议：\n\
-1. 仅输出可执行 Python3 代码，禁止输出 Markdown 围栏与任何自然语言说明。\n\
-2. 第一行必须是 Python 代码（如 import/from/def/class/# 注释），不能是英文句子。\n\
-3. 必须调用可用工具（例如 read_text/write_text/apply_patch/run_shell）完成任务落地。\n\
-4. 脚本末尾必须调用 finish(\"...\") 返回执行结果摘要。\n\
-5. 禁止输出“我将会...”等计划性句子，计划应写成代码注释。\n\
-6. 禁止导入 `gemini_cli_native_tools` / `codex_tools` / `openai_tools` 等外部工具模块，直接调用内置函数（如 list_directory/write_file/run_shell_command）。\n\
-7. 可用内置工具：read_text/read_json/write_text/write_json/list_dir/list_directory/mkdir/stat/glob/search_files/run_shell/run_shell_command/git_status/git_diff/git_log/apply_patch/todo_read/todo_write/web_search/fetch_url/mcp_model_tool/tool_search。\n\
+你正在执行“多轮代码智能体流程”，当前为第 {turn_index} 轮（最多 {max_turns} 轮）。\n\
+本次仅输出“本轮任务描述”，禁止输出代码、列表、序号、Markdown 围栏。\n\
+输出要求：\n\
+1. 仅输出一段中文自然语言，偏口语化，面向用户可读；\n\
+2. 必须说明“本轮会做什么”与“为什么先做这一步”；\n\
+3. 长度控制在 30-120 字；\n\
+4. 不要出现 PLAN_TITLE、PLAN_STEP、STATUS、SUMMARY、NEXT 等协议词。\n\
 当前项目：{project_name_text}\n\
+历史执行摘要（最近轮次）：\n\
+{turn_context}\n\
 用户需求：\n\
 {user_prompt}"
     )
+}
+
+/// 描述：构建 Python 编排提示词。
+fn build_python_workflow_prompt(
+    user_prompt: &str,
+    project_name: Option<&str>,
+    turn_index: usize,
+    max_turns: usize,
+    turn_records: &[CodeAgentTurnRecord],
+) -> String {
+    let project_name_text = project_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("未命名项目");
+    let system_prompt = build_system_prompt(crate::flow::AgentKind::Code);
+    let turn_context = build_turn_context(turn_records);
+
+    format!(
+        "{system_prompt}\n\
+你正在执行“多轮代码智能体流程”，当前为第 {turn_index} 轮（最多 {max_turns} 轮）。\n\
+你必须严格遵守以下输出协议：\n\
+1. 仅输出可执行 Python3 代码，禁止输出 Markdown 围栏与任何自然语言说明。\n\
+2. 第一行必须是 Python 代码（如 import/from/def/class/# 注释），不能是英文句子。\n\
+3. 每一轮必须完成“一个可验证子任务”，并优先调用可用工具（例如 read_text/write_text/apply_patch/run_shell）完成落地。\n\
+4. 脚本末尾必须调用 finish(\"...\")，且内容必须按以下文本协议返回：\n\
+   STATUS: CONTINUE 或 DONE\n\
+   SUMMARY: 本轮已完成的具体结果（必须是已执行事实，不是计划）\n\
+   NEXT: 下一步要做什么（若 STATUS=DONE 则写“无”）\n\
+5. 禁止输出“我将会...”等计划性句子，计划应写成代码注释。\n\
+6. 禁止导入 `gemini_cli_native_tools` / `codex_tools` / `openai_tools` 等外部工具模块，直接调用内置函数（如 list_directory/write_file/run_shell_command）。\n\
+7. 可用内置工具：read_text/read_json/write_text/write_json/list_dir/list_directory/mkdir/stat/glob/search_files/run_shell/run_shell_command/git_status/git_diff/git_log/apply_patch/todo_read/todo_write/web_search/fetch_url/mcp_model_tool/tool_search。\n\
+8. 工具调用前若不确定参数，必须先执行 `tool_search(\"工具名\", 1)` 查看签名与示例，再落地调用。\n\
+9. 关键签名示例：\n\
+   - read_text(path)\n\
+   - write_text(path, content)\n\
+   - apply_patch(patch, check_only=False)\n\
+   - run_shell(command, timeout_secs=30)\n\
+   - todo_read()\n\
+   - todo_write(items)  # 仅允许一个参数 items（数组）；禁止 todo_write(\"A\", \"B\")\n\
+10. 只要需求尚未完全落地（代码/配置/测试未完成），必须返回 STATUS: CONTINUE，禁止提前 DONE。\n\
+11. 严禁“只写文档就结束”；必须持续执行，直到需求完成并给出 DONE。\n\
+12. 严格只允许一个顶层 finish(...) 调用；完成本轮子任务后必须立即 finish 结束脚本。\n\
+13. 禁止在同一脚本里拼接第二轮任务或多个 STATUS/SUMMARY/NEXT 区块。\n\
+当前项目：{project_name_text}\n\
+历史执行摘要（最近轮次）：\n\
+{turn_context}\n\
+用户需求：\n\
+{user_prompt}"
+    )
+}
+
+/// 描述：将结构化 planning 事件编码为前端可识别的统一文本协议。
+fn build_planning_meta_message(payload: Value) -> String {
+    format!("{}{}", PLANNING_META_PREFIX, payload)
+}
+
+/// 描述：规范化“本轮任务描述”文本，兼容模型偶发返回 JSON/前后缀噪声。
+fn normalize_round_description(raw: &str, turn_index: usize) -> String {
+    let source = raw.trim();
+    if source.is_empty() {
+        return format!(
+            "第 {} 轮开始：我会先梳理本轮可执行入口，再推进具体改动。",
+            turn_index
+        );
+    }
+    if let Ok(parsed) = serde_json::from_str::<Value>(source) {
+        if let Some(text) = parsed
+            .get("description")
+            .or_else(|| parsed.get("text"))
+            .and_then(|value| value.as_str())
+        {
+            let normalized = normalize_round_description_candidate(text, turn_index);
+            if !normalized.is_empty() {
+                return normalized;
+            }
+        }
+    }
+    if let Some(text) = source.lines().map(str::trim).find(|line| {
+        !line.is_empty()
+            && !line.starts_with('#')
+            && !line.starts_with("STATUS:")
+            && !line.starts_with("SUMMARY:")
+            && !line.starts_with("NEXT:")
+            && !line.starts_with("PLAN_")
+    }) {
+        let normalized = normalize_round_description_candidate(text, turn_index);
+        if !normalized.is_empty() {
+            return normalized;
+        }
+    }
+    format!(
+        "第 {} 轮开始：我会先梳理本轮可执行入口，再推进具体改动。",
+        turn_index
+    )
+}
+
+/// 描述：规范化“本轮任务描述”候选文本，过滤协议/代码噪声并兜底为口语化描述句。
+fn normalize_round_description_candidate(raw: &str, turn_index: usize) -> String {
+    let normalized = truncate_stream_text(raw, STREAM_TEXT_MAX_CHARS);
+    let text = normalized.trim();
+    if text.is_empty() {
+        return String::new();
+    }
+    let lower = text.to_lowercase();
+    if lower.starts_with("status:")
+        || lower.starts_with("summary:")
+        || lower.starts_with("next:")
+        || lower.contains("finish(")
+        || lower.starts_with("import ")
+        || lower.starts_with("from ")
+        || lower.starts_with("def ")
+        || lower.starts_with("class ")
+    {
+        return format!(
+            "第 {} 轮开始：我会先梳理本轮可执行入口，再推进具体改动。",
+            turn_index
+        );
+    }
+    let sentence_like = text.contains('，') || text.contains('。') || text.contains(',');
+    if text.chars().count() < 16 || !sentence_like {
+        return format!(
+            "我会先围绕“{}”梳理本轮可执行项，先拿到必要上下文，再推进落地修改。",
+            text.trim_matches(|ch| ch == '"' || ch == '\'' || ch == '#' || ch == ':')
+        );
+    }
+    text.to_string()
+}
+
+/// 描述：解析代码智能体多轮上限配置，未配置时默认 6 轮。
+fn resolve_code_agent_max_turns() -> usize {
+    env::var("ZODILEAP_CODE_AGENT_MAX_TURNS")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .map(|value| value.min(12))
+        .unwrap_or(6)
+}
+
+/// 描述：构建回合上下文摘要，供后续轮次提示词注入，避免模型丢失执行连续性。
+fn build_turn_context(turn_records: &[CodeAgentTurnRecord]) -> String {
+    if turn_records.is_empty() {
+        return "（首轮执行，无历史上下文）".to_string();
+    }
+    let start = turn_records.len().saturating_sub(6);
+    turn_records[start..]
+        .iter()
+        .map(|item| {
+            let actions = if item.actions.is_empty() {
+                "无".to_string()
+            } else {
+                item.actions.join(", ")
+            };
+            let next = if item.next.trim().is_empty() {
+                "无".to_string()
+            } else {
+                item.next.trim().to_string()
+            };
+            format!(
+                "- 第 {} 轮：SUMMARY={}；NEXT={}；ACTIONS={}",
+                item.turn_index,
+                item.summary.trim(),
+                next,
+                actions
+            )
+        })
+        .collect::<Vec<String>>()
+        .join("\n")
+}
+
+/// 描述：解析每轮执行结果中的控制信号（DONE/CONTINUE）与总结，供编排器判断是否继续下一轮。
+fn parse_turn_result_envelope(
+    raw_message: &str,
+    actions: &[String],
+    turn_index: usize,
+    max_turns: usize,
+) -> TurnResultEnvelope {
+    let normalized = raw_message.trim();
+    let status_line = normalized
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("STATUS:").map(str::trim))
+        .unwrap_or("");
+    let summary_line = normalized
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("SUMMARY:").map(str::trim))
+        .unwrap_or("");
+    let next_line = normalized
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("NEXT:").map(str::trim))
+        .unwrap_or("");
+    let normalized_summary = if summary_line.is_empty() {
+        normalized
+            .lines()
+            .filter(|line| {
+                let trimmed = line.trim();
+                !trimmed.starts_with("STATUS:")
+                    && !trimmed.starts_with("SUMMARY:")
+                    && !trimmed.starts_with("NEXT:")
+            })
+            .collect::<Vec<&str>>()
+            .join("\n")
+            .trim()
+            .to_string()
+    } else {
+        summary_line.to_string()
+    };
+    let summary = if normalized_summary.is_empty() {
+        "本轮已执行，等待下一步".to_string()
+    } else {
+        normalized_summary
+    };
+    let summary = if summary.contains("系统自动补全 finish") {
+        if actions.is_empty() {
+            "本轮脚本由系统自动收尾，准备继续下一轮。".to_string()
+        } else {
+            format!(
+                "本轮已执行 {} 个工具动作，脚本由系统自动收尾，准备继续下一轮。",
+                actions.len()
+            )
+        }
+    } else {
+        summary
+    };
+    let next = next_line.to_string();
+    let lower_message = normalized.to_lowercase();
+    let has_continue_signal = status_line.eq_ignore_ascii_case("continue")
+        || lower_message.contains("[continue]")
+        || lower_message.contains("status: continue")
+        || normalized.contains("下一步")
+        || normalized.contains("继续")
+        || normalized.contains("待完成")
+        || normalized.contains("未完成");
+    let has_done_signal = status_line.eq_ignore_ascii_case("done")
+        || lower_message.contains("[done]")
+        || lower_message.contains("status: done")
+        || normalized.contains("全部完成")
+        || normalized.contains("已完成全部");
+
+    let mut control = if has_continue_signal {
+        TurnControl::Continue
+    } else if has_done_signal {
+        TurnControl::Done
+    } else if turn_index < max_turns {
+        // 描述：未出现明确 DONE 信号时默认继续，避免“只写文档/只跑一轮”后提前结束。
+        TurnControl::Continue
+    } else {
+        TurnControl::Done
+    };
+    if turn_index >= max_turns {
+        control = TurnControl::Done;
+    }
+
+    TurnResultEnvelope {
+        control,
+        summary,
+        next,
+    }
 }
 
 /// 描述：从模型返回结果中提取 Python 脚本正文，兼容 fenced block 与前置自然语言。
@@ -209,6 +626,181 @@ fn ensure_script_has_finish(script: &str) -> String {
     format!(
         "{normalized}\n\n# 描述：模型未显式调用 finish(...) 时由系统自动补全，避免返回空结果。\nfinish(\"执行完成（系统自动补全 finish）\")"
     )
+}
+
+/// 描述：仅保留脚本中首个“顶层 finish(...)”之前的内容，避免单轮脚本串联多轮任务。
+///
+/// Params:
+///
+///   - script: 已补全 finish 的脚本文本。
+///
+/// Returns:
+///
+///   - 截断后的单轮脚本。
+fn truncate_script_after_first_top_level_finish(script: &str) -> String {
+    let normalized = script.trim();
+    if normalized.is_empty() {
+        return String::new();
+    }
+    let mut retained: Vec<String> = Vec::new();
+    let mut found_finish_start = false;
+    let mut finish_call_state: Option<FinishCallParseState> = None;
+
+    for line in normalized.lines() {
+        retained.push(line.to_string());
+
+        if let Some(state) = finish_call_state.as_mut() {
+            update_finish_call_parse_state(line, state);
+            if is_finish_call_parse_completed(state) {
+                break;
+            }
+            continue;
+        }
+
+        if is_top_level_finish_call_start(line) {
+            found_finish_start = true;
+            let mut state = FinishCallParseState::default();
+            update_finish_call_parse_state(line, &mut state);
+            if is_finish_call_parse_completed(&state) {
+                break;
+            }
+            finish_call_state = Some(state);
+        }
+    }
+
+    if !found_finish_start {
+        return normalized.to_string();
+    }
+    retained.join("\n").trim().to_string()
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct FinishCallParseState {
+    paren_balance: usize,
+    in_single_quote: bool,
+    in_double_quote: bool,
+    in_triple_single_quote: bool,
+    in_triple_double_quote: bool,
+    escaped: bool,
+}
+
+/// 描述：判断一行是否是顶层 finish(...) 调用起始行。
+fn is_top_level_finish_call_start(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let indent_chars = line.len().saturating_sub(trimmed.len());
+    !trimmed.starts_with('#') && indent_chars == 0 && trimmed.starts_with("finish(")
+}
+
+/// 描述：更新 finish(...) 解析状态，支持跨行三引号字符串与括号平衡计数。
+fn update_finish_call_parse_state(line: &str, state: &mut FinishCallParseState) {
+    let bytes = line.as_bytes();
+    let mut index = 0usize;
+
+    while index < bytes.len() {
+        let current = bytes[index] as char;
+
+        if state.in_triple_single_quote {
+            if starts_with_bytes(bytes, index, b"'''") {
+                state.in_triple_single_quote = false;
+                index += 3;
+                continue;
+            }
+            index += 1;
+            continue;
+        }
+        if state.in_triple_double_quote {
+            if starts_with_bytes(bytes, index, b"\"\"\"") {
+                state.in_triple_double_quote = false;
+                index += 3;
+                continue;
+            }
+            index += 1;
+            continue;
+        }
+        if state.in_single_quote {
+            if state.escaped {
+                state.escaped = false;
+                index += 1;
+                continue;
+            }
+            if current == '\\' {
+                state.escaped = true;
+                index += 1;
+                continue;
+            }
+            if current == '\'' {
+                state.in_single_quote = false;
+            }
+            index += 1;
+            continue;
+        }
+        if state.in_double_quote {
+            if state.escaped {
+                state.escaped = false;
+                index += 1;
+                continue;
+            }
+            if current == '\\' {
+                state.escaped = true;
+                index += 1;
+                continue;
+            }
+            if current == '"' {
+                state.in_double_quote = false;
+            }
+            index += 1;
+            continue;
+        }
+        if current == '#' {
+            break;
+        }
+        if starts_with_bytes(bytes, index, b"'''") {
+            state.in_triple_single_quote = true;
+            index += 3;
+            continue;
+        }
+        if starts_with_bytes(bytes, index, b"\"\"\"") {
+            state.in_triple_double_quote = true;
+            index += 3;
+            continue;
+        }
+        if current == '\'' {
+            state.in_single_quote = true;
+            index += 1;
+            continue;
+        }
+        if current == '"' {
+            state.in_double_quote = true;
+            index += 1;
+            continue;
+        }
+        if current == '(' {
+            state.paren_balance = state.paren_balance.saturating_add(1);
+            index += 1;
+            continue;
+        }
+        if current == ')' {
+            state.paren_balance = state.paren_balance.saturating_sub(1);
+            index += 1;
+            continue;
+        }
+        index += 1;
+    }
+}
+
+/// 描述：判断 finish(...) 是否已完整闭合（括号归零且未处于字符串上下文）。
+fn is_finish_call_parse_completed(state: &FinishCallParseState) -> bool {
+    state.paren_balance == 0
+        && !state.in_single_quote
+        && !state.in_double_quote
+        && !state.in_triple_single_quote
+        && !state.in_triple_double_quote
+}
+
+/// 描述：按索引判断字节切片是否匹配目标字面量。
+fn starts_with_bytes(source: &[u8], index: usize, target: &[u8]) -> bool {
+    let end = index.saturating_add(target.len());
+    end <= source.len() && &source[index..end] == target
 }
 
 /// 描述：判断脚本是否显式调用了顶层 finish(...)，用于执行前的兼容补全。
@@ -491,6 +1083,267 @@ fn is_probable_python_assignment(line: &str) -> bool {
     })
 }
 
+/// 描述：对外发流式事件前构建工具参数预览，避免把超长正文（如 write_text content）直接推送到前端。
+///
+/// Params:
+///
+///   - args: 工具参数 JSON。
+///   - max_chars: 输出最大字符数。
+///
+/// Returns:
+///
+///   - 适合执行流展示的参数预览字符串。
+fn build_tool_args_stream_preview(args: &Value, max_chars: usize) -> String {
+    let Some(object) = args.as_object() else {
+        return truncate_stream_text(&args.to_string(), max_chars);
+    };
+    let mut preview = serde_json::Map::new();
+    for key in ["path", "command", "pattern", "query", "url", "glob", "name"] {
+        let Some(value) = object.get(key) else {
+            continue;
+        };
+        let rendered = if let Some(text) = value.as_str() {
+            Value::String(truncate_stream_text(
+                text,
+                TOOL_ARGS_CONTENT_PREVIEW_MAX_CHARS,
+            ))
+        } else {
+            value.clone()
+        };
+        preview.insert(key.to_string(), rendered);
+    }
+    if let Some(content) = object.get("content").and_then(|value| value.as_str()) {
+        preview.insert(
+            "content_preview".to_string(),
+            Value::String(truncate_stream_text(
+                content,
+                TOOL_ARGS_CONTENT_PREVIEW_MAX_CHARS,
+            )),
+        );
+        preview.insert("content_length".to_string(), json!(content.chars().count()));
+    }
+    if let Some(data) = object.get("data") {
+        let data_summary = if data.is_object() {
+            "object"
+        } else if data.is_array() {
+            "array"
+        } else {
+            "scalar"
+        };
+        preview.insert(
+            "data_type".to_string(),
+            Value::String(data_summary.to_string()),
+        );
+    }
+    if preview.is_empty() {
+        preview.insert(
+            "keys".to_string(),
+            Value::Array(
+                object
+                    .keys()
+                    .take(10)
+                    .map(|key| Value::String(key.clone()))
+                    .collect::<Vec<Value>>(),
+            ),
+        );
+    }
+    truncate_stream_text(&Value::Object(preview).to_string(), max_chars)
+}
+
+/// 描述：按字符数裁剪文本，避免超长事件数据导致前端阻塞。
+fn truncate_stream_text(value: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    let count = value.chars().count();
+    if count <= max_chars {
+        return value.to_string();
+    }
+    let mut text = value.chars().take(max_chars).collect::<String>();
+    text.push('…');
+    text
+}
+
+/// 描述：构建工具调用的结构化参数数据，供前端执行流按“浏览/编辑/终端”分类渲染。
+fn build_tool_args_stream_data(tool_name: &str, args: &Value) -> Value {
+    let mut payload = serde_json::Map::new();
+    payload.insert("tool".to_string(), Value::String(tool_name.to_string()));
+    if let Some(object) = args.as_object() {
+        for key in ["path", "command", "pattern", "query", "glob", "url"] {
+            if let Some(value) = object.get(key).and_then(|item| item.as_str()) {
+                payload.insert(
+                    key.to_string(),
+                    Value::String(truncate_stream_text(value, STREAM_TEXT_MAX_CHARS)),
+                );
+            }
+        }
+        if let Some(content) = object.get("content").and_then(|item| item.as_str()) {
+            payload.insert("content_length".to_string(), json!(content.chars().count()));
+        }
+        if let Some(patch_text) = object.get("patch").and_then(|item| item.as_str()) {
+            let patch_preview = patch_text
+                .lines()
+                .take(160)
+                .collect::<Vec<&str>>()
+                .join("\n");
+            payload.insert(
+                "patch_preview".to_string(),
+                Value::String(truncate_stream_text(
+                    patch_preview.as_str(),
+                    STREAM_TEXT_MAX_CHARS,
+                )),
+            );
+            payload.insert(
+                "patch_files".to_string(),
+                json!(crate::tools::patch::collect_patch_paths(patch_text)),
+            );
+        }
+    }
+    Value::Object(payload)
+}
+
+/// 描述：构建工具执行结果的结构化数据，避免前端只能消费“固定摘要文案”。
+fn build_tool_result_stream_data(
+    tool_name: &str,
+    ok: bool,
+    result_data: &Value,
+    tool_args: &Value,
+    error_detail: Option<&ProtocolError>,
+) -> Value {
+    if !ok {
+        return json!({
+            "ok": false,
+            "error": error_detail.map(|item| item.message.clone()).unwrap_or_default(),
+            "code": error_detail.map(|item| item.code.clone()).unwrap_or_default(),
+        });
+    }
+    match tool_name {
+        "run_shell" => json!({
+            "ok": true,
+            "status": result_data.get("status").cloned().unwrap_or(Value::Null),
+            "timed_out": result_data.get("timed_out").and_then(|item| item.as_bool()).unwrap_or(false),
+            "timeout_secs": result_data.get("timeout_secs").and_then(|item| item.as_u64()).unwrap_or(0),
+            "elapsed_ms": result_data.get("elapsed_ms").and_then(|item| item.as_u64()).unwrap_or(0),
+            "commands": result_data.get("commands").cloned().unwrap_or_else(|| json!([])),
+            "stdout": truncate_stream_text(
+                result_data.get("stdout").and_then(|item| item.as_str()).unwrap_or(""),
+                STREAM_TEXT_MAX_CHARS,
+            ),
+            "stderr": truncate_stream_text(
+                result_data.get("stderr").and_then(|item| item.as_str()).unwrap_or(""),
+                STREAM_TEXT_MAX_CHARS,
+            ),
+            "command": tool_args.get("command").and_then(|item| item.as_str()).unwrap_or(""),
+        }),
+        "write_text" | "write_json" => json!({
+            "ok": true,
+            "path": result_data.get("path").and_then(|item| item.as_str()).unwrap_or(""),
+            "bytes": result_data.get("bytes").and_then(|item| item.as_u64()).unwrap_or(0),
+            "added_lines": result_data.get("added_lines").and_then(|item| item.as_u64()).unwrap_or(0),
+            "removed_lines": result_data.get("removed_lines").and_then(|item| item.as_u64()).unwrap_or(0),
+            "diff_preview": truncate_stream_text(
+                result_data.get("diff_preview").and_then(|item| item.as_str()).unwrap_or(""),
+                STREAM_TEXT_MAX_CHARS * 4,
+            ),
+        }),
+        "apply_patch" => {
+            let patch_preview = tool_args
+                .get("patch")
+                .and_then(|item| item.as_str())
+                .map(|item| item.lines().take(200).collect::<Vec<&str>>().join("\n"))
+                .unwrap_or_default();
+            let (added_lines, removed_lines) =
+                patch_preview
+                    .lines()
+                    .fold((0u64, 0u64), |(add, remove), line| {
+                        if line.starts_with("+++ ") || line.starts_with("--- ") {
+                            return (add, remove);
+                        }
+                        if line.starts_with('+') {
+                            return (add.saturating_add(1), remove);
+                        }
+                        if line.starts_with('-') {
+                            return (add, remove.saturating_add(1));
+                        }
+                        (add, remove)
+                    });
+            json!({
+                "ok": true,
+                "files": result_data.get("files").cloned().unwrap_or_else(|| json!([])),
+                "patch_bytes": result_data.get("patch_bytes").and_then(|item| item.as_u64()).unwrap_or(0),
+                "added_lines": added_lines,
+                "removed_lines": removed_lines,
+                "diff_preview": truncate_stream_text(patch_preview.as_str(), STREAM_TEXT_MAX_CHARS * 4),
+            })
+        }
+        "read_text" | "read_json" => json!({
+            "ok": true,
+            "path": result_data.get("path").and_then(|item| item.as_str()).unwrap_or(""),
+        }),
+        "search_files" => json!({
+            "ok": true,
+            "query": result_data.get("query").and_then(|item| item.as_str()).unwrap_or(""),
+            "glob": result_data.get("glob").and_then(|item| item.as_str()).unwrap_or(""),
+            "count": result_data.get("count").and_then(|item| item.as_u64()).unwrap_or(0),
+            "matches": result_data
+                .get("matches")
+                .and_then(|item| item.as_array())
+                .map(|items| items.iter().take(24).cloned().collect::<Vec<Value>>())
+                .unwrap_or_default(),
+        }),
+        "list_dir" => json!({
+            "ok": true,
+            "path": result_data.get("path").and_then(|item| item.as_str()).unwrap_or(""),
+            "count": result_data
+                .get("entries")
+                .and_then(|item| item.as_array())
+                .map(|items| items.len())
+                .unwrap_or(0),
+            "entries": result_data
+                .get("entries")
+                .and_then(|item| item.as_array())
+                .map(|items| items.iter().take(60).cloned().collect::<Vec<Value>>())
+                .unwrap_or_default(),
+        }),
+        "glob" => json!({
+            "ok": true,
+            "pattern": result_data.get("pattern").and_then(|item| item.as_str()).unwrap_or(""),
+            "count": result_data.get("count").and_then(|item| item.as_u64()).unwrap_or(0),
+            "matches": result_data
+                .get("matches")
+                .and_then(|item| item.as_array())
+                .map(|items| items.iter().take(60).cloned().collect::<Vec<Value>>())
+                .unwrap_or_default(),
+        }),
+        _ => json!({
+            "ok": true,
+            "raw": truncate_stream_text(result_data.to_string().as_str(), STREAM_TEXT_MAX_CHARS),
+        }),
+    }
+}
+
+/// 描述：解析 finish(...) 的最终结果载荷，兼容历史纯文本格式与当前 JSON 包装格式。
+///
+/// Params:
+///
+///   - raw: 去掉 `FINAL_RESULT_PREFIX` 后的原始字符串。
+///
+/// Returns:
+///
+///   - 归一化后的结果文本。
+fn parse_final_result_message(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        if let Some(message) = value.get("message").and_then(|item| item.as_str()) {
+            return message.trim().to_string();
+        }
+    }
+    trimmed.to_string()
+}
+
 /// 描述：从脚本标准输出中提炼兜底结果文案，兼容脚本未显式调用 finish 的场景。
 ///
 /// Params:
@@ -606,28 +1459,6 @@ where
     let registry = build_default_tool_registry(blender_bridge_addr);
 
     loop {
-        if execution_started_at.elapsed() >= Duration::from_secs(policy.orchestration_timeout_secs)
-        {
-            let timeout_message = format!(
-                "编排执行超时（{}s），任务已自动终止",
-                policy.orchestration_timeout_secs
-            );
-            on_stream_event(AgentStreamEvent::Cancelled {
-                message: timeout_message.clone(),
-            });
-            events.push(ProtocolEventRecord {
-                event: "orchestration_timeout".to_string(),
-                step_index: None,
-                timestamp_ms: now_millis(),
-                message: timeout_message.clone(),
-            });
-            return Err(ProtocolError::new(
-                "core.agent.python.orchestration_timeout",
-                timeout_message,
-            )
-            .with_suggestion("请缩小任务范围，或调大 ZODILEAP_ORCHESTRATION_TIMEOUT_SECS。"));
-        }
-
         let now = Instant::now();
         if now.duration_since(last_event_at) > Duration::from_secs(5) {
             on_stream_event(AgentStreamEvent::Heartbeat {
@@ -663,10 +1494,16 @@ where
                         .unwrap_or("unknown")
                         .to_string();
                     let tool_args = parsed.get("args").cloned().unwrap_or_else(|| json!({}));
+                    let tool_args_preview = build_tool_args_stream_preview(
+                        &tool_args,
+                        TOOL_ARGS_STREAM_PREVIEW_MAX_CHARS,
+                    );
+                    let tool_args_data = build_tool_args_stream_data(&tool_name, &tool_args);
 
                     on_stream_event(AgentStreamEvent::ToolCallStarted {
                         name: tool_name.clone(),
-                        args: tool_args.to_string(),
+                        args: tool_args_preview.clone(),
+                        args_data: tool_args_data,
                     });
                     events.push(ProtocolEventRecord {
                         event: "tool_call_started".to_string(),
@@ -682,7 +1519,7 @@ where
                             on_stream_event(AgentStreamEvent::RequireApproval {
                                 approval_id: approval_id.clone(),
                                 tool_name: tool_name.clone(),
-                                tool_args: tool_args.to_string(),
+                                tool_args: tool_args_preview,
                             });
                             events.push(ProtocolEventRecord {
                                 event: "approval_requested".to_string(),
@@ -695,9 +1532,6 @@ where
                             });
 
                             let signal = crate::APPROVAL_REGISTRY.create_request(&approval_id);
-                            let wait_started_at = Instant::now();
-                            let mut last_wait_heartbeat = Instant::now();
-                            let mut approval_timed_out = false;
                             let outcome = loop {
                                 let decision = match signal.lock() {
                                     Ok(guard) => *guard,
@@ -706,28 +1540,12 @@ where
                                 if let Some(o) = decision {
                                     break o;
                                 }
-                                if wait_started_at.elapsed()
-                                    >= Duration::from_secs(policy.approval_timeout_secs)
-                                {
-                                    approval_timed_out = true;
-                                    let _ = crate::APPROVAL_REGISTRY.remove_request(&approval_id);
-                                    break crate::ApprovalOutcome::Rejected;
-                                }
-                                if last_wait_heartbeat.elapsed() >= Duration::from_secs(5) {
-                                    on_stream_event(AgentStreamEvent::Heartbeat {
-                                        message: format!(
-                                            "等待人工授权中（{}s 超时）",
-                                            policy.approval_timeout_secs
-                                        ),
-                                    });
-                                    last_wait_heartbeat = Instant::now();
-                                }
                                 thread::sleep(Duration::from_millis(200));
                             };
 
                             if matches!(outcome, crate::ApprovalOutcome::Rejected) {
                                 let (event_name, reject_message, reject_code) =
-                                    resolve_approval_reject_payload(approval_timed_out);
+                                    resolve_approval_reject_payload();
                                 events.push(ProtocolEventRecord {
                                     event: event_name.to_string(),
                                     step_index: None,
@@ -778,11 +1596,19 @@ where
                     } else {
                         &failure_summary_payload
                     };
+                    let stream_result_data = build_tool_result_stream_data(
+                        &tool_name,
+                        ok,
+                        &result_data,
+                        &tool_args,
+                        error_detail.as_ref(),
+                    );
 
                     on_stream_event(AgentStreamEvent::ToolCallFinished {
                         name: tool_name.clone(),
                         ok,
                         result: summarize_tool_result(&tool_name, ok, summary_source),
+                        result_data: stream_result_data,
                     });
                     events.push(ProtocolEventRecord {
                         event: if ok {
@@ -814,7 +1640,13 @@ where
                 }
 
                 if let Some(msg) = line.strip_prefix(FINAL_RESULT_PREFIX) {
-                    final_message = msg.to_string();
+                    let incoming = parse_final_result_message(msg);
+                    let current = final_message.trim();
+                    let incoming_is_auto = incoming.contains("系统自动补全 finish");
+                    let current_is_auto = current.contains("系统自动补全 finish");
+                    if current.is_empty() || (current_is_auto && !incoming_is_auto) {
+                        final_message = incoming;
+                    }
                 } else if line.starts_with(SANDBOX_ERROR_PREFIX) {
                     // 描述：沙盒异常为多行 traceback，首行只包含前缀与标题；需继续读取直到 TURN_END，
                     // 否则前端只能看到 “Traceback (most recent call last):” 而丢失关键错误位置与异常类型。
@@ -944,23 +1776,13 @@ where
     })
 }
 
-/// 描述：根据是否超时解析人工授权拒绝分支的事件名、用户提示与错误码。
-fn resolve_approval_reject_payload(
-    approval_timed_out: bool,
-) -> (&'static str, &'static str, &'static str) {
-    if approval_timed_out {
-        (
-            "approval_timeout",
-            "授权等待超时，操作已取消",
-            "core.agent.human_approval_timeout",
-        )
-    } else {
-        (
-            "approval_rejected",
-            "操作已被用户拒绝",
-            "core.agent.human_refused",
-        )
-    }
+/// 描述：解析人工授权拒绝分支的事件名、用户提示与错误码。
+fn resolve_approval_reject_payload() -> (&'static str, &'static str, &'static str) {
+    (
+        "approval_rejected",
+        "操作已被用户拒绝",
+        "core.agent.human_refused",
+    )
 }
 
 use crate::tools::file::{
@@ -1126,8 +1948,10 @@ fn summarize_tool_result(name: &str, ok: bool, data: &Value) -> String {
         }
         _ => {
             let s = data.to_string();
-            if s.len() > 200 {
-                format!("{}...", &s[..200])
+            let mut chars = s.chars();
+            let preview = chars.by_ref().take(200).collect::<String>();
+            if chars.next().is_some() {
+                format!("{}...", preview)
             } else {
                 s
             }
@@ -1697,6 +2521,108 @@ print(f"alias items count: {len(items)}")
         assert!(result.actions.iter().any(|item| item == "list_dir"));
     }
 
+    /// 描述：验证 `write_text(file_path=..., text=...)` 关键字参数写法可被兼容层正确映射，不再触发 TypeError。
+    #[test]
+    fn should_support_write_text_keyword_alias_arguments() {
+        if resolve_python_binary().is_err() {
+            return;
+        }
+        let root = env::temp_dir().join(format!("zodileap-agent-python-test-{}", now_millis()));
+        fs::create_dir_all(&root).expect("create temp root");
+        let script = r##"
+result = write_text(file_path="requirements.md", text="# alias write ok\n")
+if not isinstance(result, dict) or not result.get("ok"):
+    raise RuntimeError(f"write_text alias failed: {result}")
+finish("write_text keyword alias ok")
+"##;
+        let result = execute_python_script(
+            PythonScriptExecutionRequest {
+                user_script: script,
+                workdir: root.to_str(),
+                blender_bridge_addr: None,
+                policy: &crate::policy::AgentPolicy::default(),
+                trace_id: "test-trace".to_string(),
+                session_id: "test-session-write-text-alias".to_string(),
+            },
+            &mut |event| {
+                if let AgentStreamEvent::RequireApproval { approval_id, .. } = event {
+                    thread::spawn(move || {
+                        thread::sleep(Duration::from_millis(20));
+                        let _ = crate::APPROVAL_REGISTRY
+                            .submit_decision(&approval_id, crate::ApprovalOutcome::Approved);
+                    });
+                }
+            },
+        )
+        .expect("write_text alias script should execute successfully");
+        assert_eq!(result.message, "write_text keyword alias ok");
+        let written_content = fs::read_to_string(root.join("requirements.md"))
+            .expect("write_text alias should create requirements.md");
+        assert_eq!(written_content, "# alias write ok\n");
+        assert!(result.actions.iter().any(|item| item == "write_text"));
+    }
+
+    /// 描述：验证 `todo_write("KEY", "VALUE")` 历史两参数写法可被兼容层映射，不再触发参数个数错误。
+    #[test]
+    fn should_support_todo_write_legacy_two_positional_arguments() {
+        if resolve_python_binary().is_err() {
+            return;
+        }
+        let root = env::temp_dir().join(format!("zodileap-agent-python-test-{}", now_millis()));
+        fs::create_dir_all(&root).expect("create temp root");
+        let script = r##"
+result = todo_write("NEXT_STEP", "设计前端框架")
+if not isinstance(result, dict) or not result.get("ok"):
+    raise RuntimeError(f"todo_write legacy style failed: {result}")
+finish("todo_write legacy positional alias ok")
+"##;
+        let result = execute_python_script(
+            PythonScriptExecutionRequest {
+                user_script: script,
+                workdir: root.to_str(),
+                blender_bridge_addr: None,
+                policy: &crate::policy::AgentPolicy::default(),
+                trace_id: "test-trace".to_string(),
+                session_id: "test-session-todo-write-legacy-alias".to_string(),
+            },
+            &mut |event| {
+                if let AgentStreamEvent::RequireApproval { approval_id, .. } = event {
+                    thread::spawn(move || {
+                        thread::sleep(Duration::from_millis(20));
+                        let _ = crate::APPROVAL_REGISTRY
+                            .submit_decision(&approval_id, crate::ApprovalOutcome::Approved);
+                    });
+                }
+            },
+        )
+        .expect("todo_write legacy alias script should execute successfully");
+        assert_eq!(result.message, "todo_write legacy positional alias ok");
+        let todo_path = root.join(".zodileap_agent_todo.json");
+        let todo_content =
+            fs::read_to_string(todo_path).expect("todo_write should create todo snapshot file");
+        let parsed: serde_json::Value =
+            serde_json::from_str(todo_content.as_str()).expect("todo snapshot should be valid json");
+        let items = parsed
+            .get("items")
+            .and_then(|value| value.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(items.len(), 1);
+        let first = items.first().expect("todo item should exist");
+        assert_eq!(
+            first
+                .get("content")
+                .and_then(|value| value.as_str())
+                .unwrap_or(""),
+            "设计前端框架"
+        );
+        assert_eq!(
+            first.get("status").and_then(|value| value.as_str()).unwrap_or(""),
+            "pending"
+        );
+        assert!(result.actions.iter().any(|item| item == "todo_write"));
+    }
+
     /// 描述：验证当脚本既未输出 finish 结果也未执行工具调用时，会触发“源码摘要兜底”而非直接失败。
     #[test]
     fn should_fallback_when_script_has_no_result_and_no_actions() {
@@ -1759,6 +2685,43 @@ if __name__ == "__main__":
             result.message.contains("执行完成（系统自动补全 finish）")
                 || result.message.contains("自动补全结果")
         );
+    }
+
+    /// 描述：验证脚本出现多个 finish(...) 时，优先保留模型显式返回的业务结果，避免被自动补全文案覆盖。
+    #[test]
+    fn should_prefer_explicit_finish_message_over_auto_finish_message() {
+        if resolve_python_binary().is_err() {
+            return;
+        }
+        let root = env::temp_dir().join(format!("zodileap-agent-python-test-{}", now_millis()));
+        fs::create_dir_all(&root).expect("create temp root");
+        let script = r##"
+def run():
+    finish("STATUS: CONTINUE\nSUMMARY: 已完成需求分析\nNEXT: 进入 API 模型设计")
+
+if __name__ == "__main__":
+    run()
+
+finish("执行完成（系统自动补全 finish）")
+"##;
+        let result = execute_python_script(
+            PythonScriptExecutionRequest {
+                user_script: script,
+                workdir: root.to_str(),
+                blender_bridge_addr: None,
+                policy: &crate::policy::AgentPolicy::default(),
+                trace_id: "test-trace".to_string(),
+                session_id: "test-session-multi-finish-priority".to_string(),
+            },
+            &mut |_| {},
+        )
+        .expect("script with multiple finish messages should execute");
+        assert!(
+            result.message.starts_with("STATUS: CONTINUE"),
+            "expected explicit finish payload, got: {}",
+            result.message
+        );
+        assert!(result.message.contains("SUMMARY: 已完成需求分析"));
     }
 
     /// 描述：验证脚本仅使用普通 print（未显式 flush）时，仍可通过 stdout 自动补全最终结果，避免误报 empty_result。
@@ -2090,6 +3053,20 @@ diff --git a/src/a.txt b/src/a.txt
         assert!(!summary.contains("退出码"));
     }
 
+    /// 描述：验证未知工具摘要分支在包含中文且超长 JSON 时不会因字节切片触发 panic。
+    #[test]
+    fn should_summarize_unknown_tool_payload_with_unicode_without_panicking() {
+        let summary = summarize_tool_result(
+            "unknown_tool",
+            true,
+            &json!({
+                "diff_preview": format!("{}{}", "用户管理系统需求分析".repeat(40), "END")
+            }),
+        );
+        assert!(summary.ends_with("..."));
+        assert!(summary.contains("用户管理系统"));
+    }
+
     /// 描述：验证批量脚本载荷长度字段按字符数计算，避免非 ASCII 脚本在沙盒读取时卡住。
     #[test]
     fn should_build_batch_payload_with_unicode_char_length() {
@@ -2199,21 +3176,157 @@ diff --git a/src/a.txt b/src/a.txt
         assert_eq!(error.code, "core.agent.python.git_diff.failed");
     }
 
-    /// 描述：验证人工授权超时分支会产出 timeout 事件与专用错误码，避免与主动拒绝混淆。
-    #[test]
-    fn should_map_approval_timeout_to_timeout_payload() {
-        let (event_name, reject_message, reject_code) = resolve_approval_reject_payload(true);
-        assert_eq!(event_name, "approval_timeout");
-        assert_eq!(reject_message, "授权等待超时，操作已取消");
-        assert_eq!(reject_code, "core.agent.human_approval_timeout");
-    }
-
     /// 描述：验证人工授权主动拒绝分支会产出 rejected 事件与拒绝错误码。
     #[test]
     fn should_map_approval_reject_to_rejected_payload() {
-        let (event_name, reject_message, reject_code) = resolve_approval_reject_payload(false);
+        let (event_name, reject_message, reject_code) = resolve_approval_reject_payload();
         assert_eq!(event_name, "approval_rejected");
         assert_eq!(reject_message, "操作已被用户拒绝");
         assert_eq!(reject_code, "core.agent.human_refused");
+    }
+
+    /// 描述：验证多轮结果解析可识别 STATUS: CONTINUE，并正确提取 SUMMARY/NEXT 字段。
+    #[test]
+    fn should_parse_continue_turn_result_envelope() {
+        let message =
+            "STATUS: CONTINUE\nSUMMARY: 已完成需求拆解并写入文档\nNEXT: 开始实现 API 接口";
+        let envelope = parse_turn_result_envelope(message, &["write_text".to_string()], 1, 6);
+        assert_eq!(envelope.control, TurnControl::Continue);
+        assert_eq!(envelope.summary, "已完成需求拆解并写入文档");
+        assert_eq!(envelope.next, "开始实现 API 接口");
+    }
+
+    /// 描述：验证当未提供 DONE/CONTINUE 显式标记且无工具动作时，默认继续下一轮避免“只计划即结束”。
+    #[test]
+    fn should_default_continue_when_no_actions_and_no_status_marker() {
+        let message = "已完成方案规划";
+        let envelope = parse_turn_result_envelope(message, &[], 1, 6);
+        assert_eq!(envelope.control, TurnControl::Continue);
+    }
+
+    /// 描述：验证未显式返回 DONE/CONTINUE 且已有工具动作时，仍默认继续下一轮，避免“首轮写文档后提前结束”。
+    #[test]
+    fn should_continue_with_actions_when_status_marker_missing() {
+        let message = "本轮已写入需求文档";
+        let envelope = parse_turn_result_envelope(message, &["write_text".to_string()], 1, 6);
+        assert_eq!(envelope.control, TurnControl::Continue);
+        assert_eq!(envelope.summary, "本轮已写入需求文档");
+    }
+
+    /// 描述：验证多轮结果解析可识别 STATUS: DONE，并收敛到完成态。
+    #[test]
+    fn should_parse_done_turn_result_envelope() {
+        let message = "STATUS: DONE\nSUMMARY: 代码与测试均已完成\nNEXT: 无";
+        let envelope = parse_turn_result_envelope(message, &["apply_patch".to_string()], 3, 6);
+        assert_eq!(envelope.control, TurnControl::Done);
+        assert_eq!(envelope.summary, "代码与测试均已完成");
+        assert_eq!(envelope.next, "无");
+    }
+
+    /// 描述：验证最终结果载荷可从 JSON 包装格式正确解析出多行消息，保障 STATUS/SUMMARY/NEXT 协议完整透传。
+    #[test]
+    fn should_parse_json_wrapped_final_result_message() {
+        let raw = r#"{"message":"STATUS: CONTINUE\nSUMMARY: 已完成需求分析\nNEXT: 进入 API 设计"}"#;
+        let parsed = parse_final_result_message(raw);
+        assert!(parsed.contains("STATUS: CONTINUE"));
+        assert!(parsed.contains("SUMMARY: 已完成需求分析"));
+        assert!(parsed.contains("NEXT: 进入 API 设计"));
+    }
+
+    /// 描述：验证最终结果载荷仍兼容历史纯文本格式，避免老数据解析回归。
+    #[test]
+    fn should_parse_legacy_plain_text_final_result_message() {
+        let parsed = parse_final_result_message("执行完成（系统自动补全 finish）");
+        assert_eq!(parsed, "执行完成（系统自动补全 finish）");
+    }
+
+    /// 描述：验证自动补全 finish 文案会被转换为可读总结，避免“执行完成（系统自动补全 finish）”污染执行流结果。
+    #[test]
+    fn should_normalize_auto_finish_summary_for_turn_result() {
+        let message = "执行完成（系统自动补全 finish）";
+        let envelope = parse_turn_result_envelope(message, &["write_text".to_string()], 2, 6);
+        assert_eq!(envelope.control, TurnControl::Continue);
+        assert!(envelope.summary.contains("本轮已执行 1 个工具动作"));
+        assert!(envelope.summary.contains("系统自动收尾"));
+    }
+
+    /// 描述：验证多轮编排脚本提示词不再强制 PLAN 注释协议，避免前端展示固定模板化步骤。
+    #[test]
+    fn should_not_require_plan_comment_protocol_in_prompt() {
+        let prompt = build_python_workflow_prompt("实现登录页面", Some("demo"), 1, 6, &[]);
+        assert!(!prompt.contains("# PLAN_TITLE:"));
+        assert!(!prompt.contains("# PLAN_STEP_1:"));
+        assert!(prompt.contains("STATUS: CONTINUE 或 DONE"));
+        assert!(prompt.contains("严格只允许一个顶层 finish"));
+        assert!(prompt.contains("tool_search(\"工具名\", 1)"));
+        assert!(prompt.contains("todo_write(items)"));
+        assert!(prompt.contains("禁止 todo_write(\"A\", \"B\")"));
+    }
+
+    /// 描述：验证本轮描述提示词包含“仅返回口语化描述”约束，确保执行流先显示任务意图再执行步骤。
+    #[test]
+    fn should_build_round_description_prompt_with_natural_language_constraints() {
+        let prompt = build_round_description_prompt("实现登录页面", Some("demo"), 1, 6, &[]);
+        assert!(prompt.contains("本次仅输出“本轮任务描述”"));
+        assert!(prompt.contains("禁止输出代码"));
+    }
+
+    /// 描述：验证脚本出现多个顶层 finish(...) 时，仅保留第一个 finish 之前的内容，确保单轮只执行一个子任务。
+    #[test]
+    fn should_truncate_script_after_first_top_level_finish() {
+        let script = r#"
+print("round-1")
+finish("STATUS: CONTINUE\nSUMMARY: 第一轮完成\nNEXT: 第二轮")
+print("round-2")
+finish("STATUS: DONE\nSUMMARY: 第二轮完成\nNEXT: 无")
+"#;
+        let normalized = truncate_script_after_first_top_level_finish(script);
+        assert!(normalized.contains("round-1"));
+        assert!(normalized.contains("第一轮完成"));
+        assert!(!normalized.contains("round-2"));
+        assert!(!normalized.contains("第二轮完成"));
+        assert_eq!(normalized.matches("finish(").count(), 1);
+    }
+
+    /// 描述：验证首个 finish(...) 为跨行三引号字符串时仍会完整保留，避免被截断导致 SyntaxError。
+    #[test]
+    fn should_keep_multiline_finish_call_without_truncating_string_body() {
+        let script = r#"
+print("round-1")
+finish(f"""STATUS: CONTINUE
+SUMMARY: 第一轮完成
+NEXT: 第二轮""")
+print("round-2")
+finish("STATUS: DONE\nSUMMARY: 第二轮完成\nNEXT: 无")
+"#;
+        let normalized = truncate_script_after_first_top_level_finish(script);
+        assert!(normalized.contains("round-1"));
+        assert!(normalized.contains("STATUS: CONTINUE"));
+        assert!(normalized.contains("SUMMARY: 第一轮完成"));
+        assert!(normalized.contains("NEXT: 第二轮\"\"\")"));
+        assert!(!normalized.contains("round-2"));
+        assert!(!normalized.contains("第二轮完成"));
+        assert_eq!(normalized.matches("finish(").count(), 1);
+    }
+
+    /// 描述：验证短标题式 round 描述会自动扩展为口语化句子，避免展示“需求分析与定义”这类生硬标题。
+    #[test]
+    fn should_expand_short_round_description_into_conversational_sentence() {
+        let description = normalize_round_description("需求分析与定义", 2);
+        assert!(description.contains("我会先围绕"));
+        assert!(description.contains("需求分析与定义"));
+    }
+
+    /// 描述：验证工具参数预览会裁剪超长 content，避免把大文本直接推给前端流事件。
+    #[test]
+    fn should_truncate_large_tool_args_preview() {
+        let args = json!({
+            "path": "docs/design/requirements.md",
+            "content": "A".repeat(5000),
+        });
+        let preview = build_tool_args_stream_preview(&args, 800);
+        assert!(preview.contains("content_preview"));
+        assert!(preview.contains("content_length"));
+        assert!(preview.chars().count() <= 801);
     }
 }

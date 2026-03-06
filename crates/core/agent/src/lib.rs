@@ -72,7 +72,7 @@ use flow::{compose_prompt, AgentKind};
 use llm::{parse_provider, LlmUsage};
 use policy::AgentPolicy;
 use profile::AgentProfile;
-use serde_json::json;
+use serde_json::{json, Value};
 use tracing::{info, info_span};
 use zodileap_mcp_common::{
     now_millis, ProtocolAssetRecord, ProtocolError, ProtocolEventRecord, ProtocolStepRecord,
@@ -142,12 +142,14 @@ pub enum AgentStreamEvent {
     ToolCallStarted {
         name: String,
         args: String,
+        args_data: Value,
     },
     /// 描述：工具调用完成（成功或失败）。
     ToolCallFinished {
         name: String,
         ok: bool,
         result: String,
+        result_data: Value,
     },
     /// 描述：长任务期间的周期性心跳。
     Heartbeat {
@@ -442,6 +444,9 @@ where
         on_stream_event(AgentStreamEvent::ToolCallStarted {
             name: tool_name.clone(),
             args: format!("project_name={}", project_name),
+            args_data: json!({
+                "project_name": project_name,
+            }),
         });
 
         let export_result = mcp_model::export_model(mcp_model::ExportModelRequest {
@@ -469,6 +474,9 @@ where
             name: tool_name,
             ok: true,
             result: format!("exported_file={}", export_result.exported_file),
+            result_data: json!({
+                "exported_file": export_result.exported_file,
+            }),
         });
 
         return Ok(ToolExecutionOutcome {

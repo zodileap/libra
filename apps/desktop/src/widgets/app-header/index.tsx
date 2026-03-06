@@ -1,5 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { AriButton, AriContainer, AriFlex } from "aries_react";
+import type { DesktopUpdateState } from "../../shell/types";
 
 // 描述:
 //
@@ -7,6 +8,8 @@ import { AriButton, AriContainer, AriFlex } from "aries_react";
 interface DesktopAppHeaderProps {
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
+  desktopUpdateState: DesktopUpdateState;
+  onInstallDesktopUpdate: () => Promise<void>;
   debugFloatVisible: boolean;
   onToggleDebugFloat: () => void;
   onHeaderSlotElementChange: (element: HTMLElement | null) => void;
@@ -18,11 +21,18 @@ interface DesktopAppHeaderProps {
 export function DesktopAppHeader({
   sidebarCollapsed,
   onToggleSidebar,
+  desktopUpdateState,
+  onInstallDesktopUpdate,
   debugFloatVisible,
   onToggleDebugFloat,
   onHeaderSlotElementChange,
 }: DesktopAppHeaderProps) {
   const sidebarToggleLabel = sidebarCollapsed ? "展开侧边栏" : "收起侧边栏";
+  const [updateButtonLoading, setUpdateButtonLoading] = useState(false);
+  const showUpdateButton = desktopUpdateState.status === "ready";
+  const updateButtonLabel = desktopUpdateState.targetVersion
+    ? `更新 ${desktopUpdateState.targetVersion}`
+    : "更新";
 
   // 描述：同步标题栏 slot DOM 节点到布局层上下文，供页面通过 hook 复用。
   useEffect(() => {
@@ -53,12 +63,31 @@ export function DesktopAppHeader({
           className={`desk-app-header-leading${sidebarCollapsed ? " is-collapsed" : " is-expanded"}`}
           padding={0}
         >
-          <AriButton
-            type="text"
-            icon={sidebarCollapsed ? "menu_open" : "menu"}
-            aria-label={sidebarToggleLabel}
-            onClick={onToggleSidebar}
-          />
+          <AriFlex className="desk-app-header-leading-actions" align="center" space={8}>
+            <AriButton
+              type="text"
+              icon={sidebarCollapsed ? "menu_open" : "menu"}
+              aria-label={sidebarToggleLabel}
+              onClick={onToggleSidebar}
+            />
+            {showUpdateButton ? (
+              <AriButton
+                type="text"
+                icon="system_update_alt"
+                color="brand"
+                label={updateButtonLabel}
+                disabled={updateButtonLoading}
+                onClick={async () => {
+                  setUpdateButtonLoading(true);
+                  try {
+                    await onInstallDesktopUpdate();
+                  } finally {
+                    setUpdateButtonLoading(false);
+                  }
+                }}
+              />
+            ) : null}
+          </AriFlex>
         </AriContainer>
         <AriContainer
           className="desk-app-header-slot"

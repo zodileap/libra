@@ -20,7 +20,11 @@ function readDesktopSource(relativePath) {
 }
 
 test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
-  const sessionSource = readDesktopSource("src/widgets/session/page.tsx");
+  const sessionSource = [
+    readDesktopSource("src/widgets/session/page.tsx"),
+    readDesktopSource("src/widgets/session/prompt-utils.ts"),
+    readDesktopSource("src/widgets/session/run-segment.tsx"),
+  ].join("\n");
   const styleSource = readDesktopSource("src/styles.css");
 
   // 描述：
@@ -68,15 +72,27 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(sessionSource, /等待工具返回本步结果…/);
   assert.match(sessionSource, /setAssistantRunMetaMap\(normalizedRunMetaMap\);/);
   assert.match(sessionSource, /const \[expandedRunSegmentDetailMap, setExpandedRunSegmentDetailMap\] = useState<Record<string, boolean>>\(\{\}\);/);
+  assert.match(sessionSource, /function isApprovalPendingSegment\(/);
   assert.match(sessionSource, /const runSnapshot = getSessionRunState\(normalizedAgentKey, sessionId\);/);
+  assert.match(sessionSource, /data: item\.data && typeof item\.data === "object"/);
   assert.match(sessionSource, /upsertSessionRunState\(\{/);
   assert.match(sessionSource, /removeSessionRunState\(normalizedAgentKey, sessionId\);/);
+  assert.match(sessionSource, /const shouldResolveApprovalPending = incomingSegmentKind === STREAM_KINDS\.TOOL_CALL_FINISHED/);
+  assert.match(sessionSource, /if \(!isApprovalPendingSegment\(item\)\) \{\s*return \{ \.\.\.item, status: "finished" as const \};\s*\}/s);
+  assert.match(sessionSource, /if \(!shouldResolveApprovalPending\) \{\s*return item;\s*\}/s);
+  assert.match(sessionSource, /const runningMessageIds = Object\.entries\(assistantRunMetaMap\)/);
+  assert.match(sessionSource, /const orderedMessageIds = preferredMessageId && runningMessageIds\.includes\(preferredMessageId\)/);
+  assert.match(sessionSource, /const pendingApproval = Boolean\(/);
+  assert.match(sessionSource, /currentMeta\.segments\.some\(\(item\) => item\.status === "running" && isApprovalPendingSegment\(item\)\)/);
+  assert.doesNotMatch(sessionSource, /ASSISTANT_RUN_HEARTBEAT_STALE_LIMIT/);
+  assert.doesNotMatch(sessionSource, /执行超时：长时间未收到/);
   assert.match(sessionSource, /const agentStreamSeenKeysRef = useRef<Set<string>>\(new Set\(\)\);/);
   assert.match(sessionSource, /finishAssistantRunMessage\(streamMessageId, "finished", response\.message\);/);
   assert.match(sessionSource, /if \(streamMessageIdRef\.current\) \{\s*setStreamingAssistantTarget\(`执行失败：\$\{reason\}`\);\s*finishAssistantRunMessage\(streamMessageIdRef\.current, "failed", `执行失败：\$\{reason\}`\);/s);
   assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.STARTED\) \{\s*(?:codeAgentLlmDeltaBufferRef\.current = "";\s*)?(?:setSessionAiResponseRaw\(""\);\s*)?setStreamingAssistantTarget\("正在准备执行\.\.\."\);/s);
   assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.LLM_STARTED\) \{\s*(?:codeAgentLlmDeltaBufferRef\.current = "";\s*)?(?:setSessionAiResponseRaw\(""\);\s*)?setStreamingAssistantTarget\("模型会话已开始，正在执行策略…"\);/s);
   assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.LLM_FINISHED\) \{/);
+  assert.match(sessionSource, /if \(\s*payload\.kind === STREAM_KINDS\.DELTA[\s\S]*payload\.kind === STREAM_KINDS\.STARTED[\s\S]*payload\.kind === STREAM_KINDS\.LLM_STARTED[\s\S]*payload\.kind === STREAM_KINDS\.LLM_FINISHED[\s\S]*return null;\s*\}/s);
   assert.match(sessionSource, /buildCodeSessionContextPrompt\(/);
   assert.match(sessionSource, /if \(normalizedSkillIds\.length > 0\) \{\s*setDraftWorkflowId\(""\);\s*setDraftSkillIds\(normalizedSkillIds\);/s);
   assert.match(sessionSource, /setDraftWorkflowId\(item\.key\);\s*setDraftSkillIds\(\[\]\);/s);
@@ -102,13 +118,60 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(sessionSource, /getCodeWorkspaceProjectProfile\(activeCodeWorkspace\.id\)/);
   assert.match(sessionSource, /workdir: String\(activeCodeWorkspace\?\.path \|\| ""\)\.trim\(\) \|\| undefined,/);
   assert.match(sessionSource, /function pruneAssistantRetryTail\(/);
-  assert.match(sessionSource, /function resolveCodegenScriptSegmentDetail\(/);
-  assert.match(sessionSource, /function resolveCodeSegmentDetailFromRawResponse\(/);
-  assert.match(sessionSource, /llm_script_extracted/);
-  assert.match(sessionSource, /intro: "编排脚本已生成"/);
-  assert.match(sessionSource, /intro: "编排脚本（失败现场）"/);
+  assert.match(sessionSource, /const PLANNING_META_PREFIX = "__zodileap_planning__:";/);
+  assert.match(sessionSource, /const INITIAL_THINKING_SEGMENT_ROLE = "initial_thinking";/);
+  assert.match(sessionSource, /function normalizeApprovalToolName\(/);
+  assert.match(sessionSource, /function resolvePlanningMeta\(/);
+  assert.match(sessionSource, /function isInitialThinkingSegment\(/);
+  assert.match(sessionSource, /isInitialThinkingSegment\(current\.segments\[0\]\)\s*&& !isInitialThinkingSegment\(segment\)/);
+  assert.match(sessionSource, /if \(segmentRole === "round_description"\)/);
+  assert.match(sessionSource, /if \(segmentRole === INITIAL_THINKING_SEGMENT_ROLE\)/);
+  assert.match(sessionSource, /const \[sessionApprovedToolNames, setSessionApprovedToolNames\] = useState<string\[\]>\(\[\]\);/);
+  assert.match(sessionSource, /const sessionApprovedToolNameSetRef = useRef<Set<string>>\(new Set\(\)\);/);
+  assert.match(sessionSource, /sessionApprovedToolNames: normalizedSessionApprovedToolNames,/);
+  assert.match(sessionSource, /payload\.kind === STREAM_KINDS\.REQUIRE_APPROVAL/);
+  assert.match(sessionSource, /const approvalToolName = String\(data\?\.tool_name \|\| ""\)\.trim\(\) \|\| "高危操作";/);
+  assert.match(sessionSource, /step: `正在请求执行 \$\{approvalToolName\}`/);
+  assert.match(sessionSource, /const incomingErrorCode = segment\.data && typeof segment\.data\.__error_code === "string"/);
+  assert.match(sessionSource, /const isHumanRefusedError = incomingSegmentKind === STREAM_KINDS\.ERROR/);
+  assert.match(sessionSource, /step: `已拒绝 \$\{toolName \|\| "该工具"\} 的执行请求。`/);
+  assert.match(sessionSource, /__step_type: "approval_decision"/);
+  assert.match(sessionSource, /approval_decision: "rejected"/);
+  assert.match(sessionSource, /approval_decision: options\?\.decision \|\| \(status === "failed" \? "rejected" : "approved"\)/);
+  assert.match(sessionSource, /sessionApprovedToolNameSetRef\.current\.has\(toolName\)/);
+  assert.match(sessionSource, /AriMessage\.success\(`已批准 \$\{normalizedToolName \|\| "该工具"\}`\);/);
+  assert.match(sessionSource, /step: "正在思考…"/);
+  assert.match(sessionSource, /__segment_role: INITIAL_THINKING_SEGMENT_ROLE/);
+  assert.match(sessionSource, /__segment_role: "round_description"/);
+  assert.match(sessionSource, /className="desk-run-thinking-indicator"/);
+  assert.match(sessionSource, /value="正在思考…"/);
+  assert.match(sessionSource, /label="本次批准"/);
+  assert.match(sessionSource, /label="会话内批准"/);
+  assert.match(sessionSource, /label="拒绝"/);
+  assert.match(sessionSource, /String\(group\.title \|\| ""\)\.trim\(\) \? \(/);
+  assert.match(sessionSource, /function isTerminalTool\(/);
+  assert.match(sessionSource, /function isEditTool\(/);
+  assert.match(sessionSource, /toolName === "todo_write"/);
+  assert.match(sessionSource, /function isBrowseTool\(/);
+  assert.match(sessionSource, /function parseJsonRecord\(/);
+  assert.match(sessionSource, /const todoWriteCount = Math\.max\(/);
+  assert.match(sessionSource, /后台终端已完成以及/);
+  assert.match(sessionSource, /已编辑 .* \+\$\{added\} -\$\{removed\}/);
+  assert.match(sessionSource, /正在浏览 0 个文件,0 个搜索/);
+  assert.match(sessionSource, /已浏览 0 个文件,0 个搜索/);
+  assert.match(sessionSource, /step: "未定义步骤"/);
   assert.match(sessionSource, /className="desk-run-segment-detail-toggle"/);
+  assert.match(sessionSource, /className="desk-run-segment-detail-toggle-content"/);
+  assert.match(sessionSource, /className="desk-run-segment-detail-panel"/);
   assert.match(sessionSource, /className="desk-run-segment-detail-code"/);
+  assert.match(sessionSource, /<AriCode/);
+  assert.match(sessionSource, /type: "approval"/);
+  assert.match(sessionSource, /desk-run-step-approval-label/);
+  assert.match(sessionSource, /desk-run-step-approval-label-rejected/);
+  assert.match(sessionSource, /buildRunSegmentGroups/);
+  assert.match(sessionSource, /className="desk-run-group"/);
+  assert.match(sessionSource, /className="desk-run-group-steps"/);
+  assert.match(sessionSource, /className="desk-run-segment-static-step"/);
   assert.match(sessionSource, /const prunedRetryTail = pruneAssistantRetryTail\(messages, assistantMessageIndex\);/);
   assert.match(sessionSource, /setMessages\(prunedRetryTail\.messages\);/);
   assert.match(sessionSource, /isGeminiProviderNotImplementedError/);
@@ -149,5 +212,14 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(styleSource, /\.desk-run-failure-card/);
   assert.match(styleSource, /\.desk-run-summary-failed/);
   assert.match(styleSource, /\.desk-run-segment-detail-toggle/);
+  assert.match(styleSource, /\.desk-run-segment-detail-toggle-content/);
+  assert.match(styleSource, /\.desk-run-segment-detail-panel/);
+  assert.match(styleSource, /\.desk-run-segment-detail-toggle:hover \.desk-run-segment-detail-arrow/);
+  assert.match(styleSource, /\.desk-run-group/);
+  assert.match(styleSource, /\.desk-run-group-steps/);
+  assert.match(styleSource, /\.desk-run-thinking-indicator/);
+  assert.match(styleSource, /\.desk-run-segment-static-step/);
   assert.match(styleSource, /\.desk-run-segment-detail-code/);
+  assert.match(styleSource, /\.desk-run-step-approval-label/);
+  assert.match(styleSource, /\.desk-run-step-approval-label-rejected/);
 });

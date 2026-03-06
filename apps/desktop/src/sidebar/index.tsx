@@ -695,10 +695,11 @@ function AgentSidebar({
     }
     if (payload.kind === STREAM_KINDS.REQUIRE_APPROVAL) {
       const data = resolveApprovalEventData(payload);
+      const approvalToolName = String(data.tool_name || "").trim() || "高危操作";
       return {
         key,
         intro: "需要人工授权",
-        step: text || `正在请求执行 ${data.tool_name || "高危操作"}`,
+        step: `正在请求执行 ${approvalToolName}`,
         status: "running" as const,
         data: buildApprovalSegmentData(payload),
       };
@@ -713,6 +714,7 @@ function AgentSidebar({
           status: "finished" as const,
           data: {
             __segment_kind: payload.kind,
+            __error_code: errorCode || undefined,
           },
         };
       }
@@ -723,6 +725,7 @@ function AgentSidebar({
         status: "failed" as const,
         data: {
           __segment_kind: payload.kind,
+          __error_code: errorCode || undefined,
         },
       };
     }
@@ -781,14 +784,66 @@ function AgentSidebar({
       || incomingSegmentKind === STREAM_KINDS.CANCELLED
       || incomingSegmentKind === STREAM_KINDS.FINISHED
       || incomingSegmentKind === STREAM_KINDS.FINAL;
+    const incomingStepText = String(segment.step || "").trim();
+    const incomingErrorCode = segment.data && typeof segment.data.__error_code === "string"
+      ? String(segment.data.__error_code || "").trim()
+      : "";
+    const isHumanRefusedError = incomingSegmentKind === STREAM_KINDS.ERROR
+      && (
+        incomingErrorCode === "core.agent.human_refused"
+        || incomingStepText.includes("拒绝")
+      );
     const normalizedSegments = (current.segments || []).map((item) => {
       if (item.status !== "running") {
         return item;
       }
-      if (isApprovalPendingSegment(item) && !shouldResolveApprovalPending) {
+      if (!isApprovalPendingSegment(item)) {
+        return { ...item, status: "finished" as const };
+      }
+      if (!shouldResolveApprovalPending) {
         return item;
       }
-      return { ...item, status: "finished" as const };
+      const toolName = String(
+        item.data && typeof item.data.tool_name === "string" ? item.data.tool_name : "",
+      ).trim();
+      const stepData = item.data && typeof item.data === "object" ? item.data : {};
+      if (isHumanRefusedError) {
+        return {
+          ...item,
+          status: "failed" as const,
+          step: `已拒绝 ${toolName || "该工具"} 的执行请求。`,
+          data: {
+            ...stepData,
+            __step_type: "approval_decision",
+            approval_decision: "rejected",
+            approval_tool_name: toolName || "该工具",
+          },
+        };
+      }
+      if (incomingSegmentKind === STREAM_KINDS.CANCELLED) {
+        return {
+          ...item,
+          status: "finished" as const,
+          step: `授权流程已取消，未执行 ${toolName || "该工具"}。`,
+          data: {
+            ...stepData,
+            __step_type: "approval_decision",
+            approval_decision: "cancelled",
+            approval_tool_name: toolName || "该工具",
+          },
+        };
+      }
+      return {
+        ...item,
+        status: "finished" as const,
+        step: `已处理 ${toolName || "该工具"} 的授权请求。`,
+        data: {
+          ...stepData,
+          __step_type: "approval_decision",
+          approval_decision: "handled",
+          approval_tool_name: toolName || "该工具",
+        },
+      };
     });
     return {
       ...current,

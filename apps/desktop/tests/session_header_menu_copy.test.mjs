@@ -55,8 +55,10 @@ test("TestSessionCopyShouldBeMovedToDevDebugPanel", () => {
   assert.match(sessionSource, /normalizeRunSegmentIntroForCopy\(segment\.intro, segment\.step\)/);
   assert.match(sessionSource, /shouldHideRunSegmentInCopy\(segment\.intro, segment\.step, segment\.status\)/);
   assert.match(sessionSource, /const runSegmentsForRender: AssistantRunSegment\[] = runMeta/);
-  assert.match(sessionSource, /runSegmentsForRender\.map\(\(segment\) => renderRunSegment\(segment\)\)/);
-  assert.match(sessionSource, /runSegmentsForRender\.map\(\(segment\) => renderRunSegment\(segment, "collapsed-"\)\)/);
+  assert.match(sessionSource, /const runSegmentGroups = buildRunSegmentGroups\(runSegmentsForRender\);/);
+  assert.match(sessionSource, /runSegmentGroups\.map\(\(group\) =>/);
+  assert.match(sessionSource, /group\.steps\.map\(\(step\) => renderRunSegment\(step\)\)/);
+  assert.match(sessionSource, /group\.steps\.map\(\(step\) => renderRunSegment\(step, "collapsed-"\)\)/);
   assert.match(sessionSource, /const wrapMarkdownCodeFence = \(content: string, language = "text"\) =>/);
   assert.match(sessionSource, /wrapMarkdownCodeFence\(rawPromptForCopy \|\| "（无）", "text"\)/);
   assert.match(sessionSource, /wrapMarkdownCodeFence\(responseRaw \|\| "（无）", "text"\)/);

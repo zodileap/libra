@@ -84,13 +84,32 @@ import type {
 } from "../../shared/workflow";
 import { resolveSessionUiConfig, type SessionAgentUiConfig } from "./config";
 import {
+  buildCodeSessionContextPrompt,
+  buildSessionSkillPrompt,
+  buildUserReadableModelSummary,
+  CODE_SKILL_SELECTED_KEY,
+  CODE_WORKFLOW_SELECTED_KEY,
+  extractOutputDirFromPrompt,
+  mergeModelEventRecords,
+  mergeModelStepRecords,
+  MODEL_SKILL_SELECTED_KEY,
+  MODEL_WORKFLOW_SELECTED_KEY,
+  pruneAssistantRetryTail,
+  readSelectedSkillIds,
+  readSelectedWorkflowId,
+  type MessageItem,
+  type RetryTailPruneResult,
+  type TraceRecord,
+  upsertAssistantMessageById,
+} from "./prompt-utils";
+import { SessionRunSegmentItem } from "./run-segment";
+import {
   IS_BROWSER,
   COMMANDS,
   EVENT_AGENT_TEXT_STREAM,
   EVENT_MODEL_DEBUG_TRACE,
   EVENT_MODEL_SESSION_STREAM,
   isCancelErrorCode,
-  STORAGE_KEYS,
   STREAM_KINDS,
 } from "../../shared/constants";
 import type {
@@ -159,6 +178,11 @@ interface AgentSandboxMetrics {
 //   - 定义文本流工具调用事件 data 的最小字段结构。
 interface AgentToolCallEventData {
   name?: string;
+  ok?: boolean;
+  result?: string;
+  args_preview?: string;
+  args_data?: Record<string, unknown>;
+  result_data?: Record<string, unknown>;
   args?: {
     command?: string;
     path?: string;
@@ -169,7 +193,19 @@ interface AgentToolCallEventData {
 //
 //   - 定义文本流人工审批事件 data 的最小字段结构。
 interface AgentRequireApprovalEventData {
+  approval_id?: string;
   tool_name?: string;
+}
+
+const APPROVAL_TOOL_ARGS_PREVIEW_MAX_CHARS = 2000;
+const PLANNING_META_PREFIX = "__zodileap_planning__:";
+const INITIAL_THINKING_SEGMENT_ROLE = "initial_thinking";
+
+// 描述：
+//
+//   - 规范化审批工具名，统一转为小写并去除首尾空白，供“会话内批准”命中比较。
+function normalizeApprovalToolName(toolName: string): string {
+  return String(toolName || "").trim().toLowerCase();
 }
 
 // 描述：
@@ -243,23 +279,6 @@ interface ModelSessionRunResponse {
 
 // 描述:
 //
-//   - 定义会话消息结构，统一管理角色与文本内容。
-interface MessageItem {
-  id?: string;
-  role: "user" | "assistant";
-  text: string;
-}
-
-// 描述：
-//
-//   - 定义“按助手消息重试”清理结果，包含裁剪后的消息列表与被移除的助手消息 ID。
-interface RetryTailPruneResult {
-  messages: MessageItem[];
-  removedAssistantMessageIds: string[];
-}
-
-// 描述:
-//
 //   - 定义运行片段状态枚举。
 type AssistantRunSegmentStatus = "running" | "finished" | "failed";
 
@@ -273,6 +292,26 @@ interface AssistantRunSegment {
   status: AssistantRunSegmentStatus;
   data?: Record<string, unknown>;
   detail?: string;
+}
+
+// 描述：
+//
+//   - 定义执行流标题分组内的单步展示结构。
+interface AssistantRunSegmentStep {
+  key: string;
+  status: AssistantRunSegmentStatus;
+  text: string;
+  detail: string;
+  data?: Record<string, unknown>;
+}
+
+// 描述：
+//
+//   - 定义执行流标题分组结构（一个标题下多个步骤）。
+interface AssistantRunSegmentGroup {
+  key: string;
+  title: string;
+  steps: AssistantRunSegmentStep[];
 }
 
 // 描述:
@@ -424,17 +463,190 @@ function resolveToolCallEventData(payload: AgentTextStreamEvent): AgentToolCallE
     return {};
   }
   const data = payload.data as Record<string, unknown>;
-  const rawArgs = data.args;
-  const args = rawArgs && typeof rawArgs === "object"
+  const rawArgs = data.args_data ?? data.args;
+  const argsPreview = typeof data.args === "string"
+    ? data.args
+    : (typeof rawArgs === "string" ? rawArgs : "");
+  const argsData = rawArgs && typeof rawArgs === "object"
     ? (rawArgs as Record<string, unknown>)
+    : undefined;
+  const rawResult = data.result_data;
+  const resultData = rawResult && typeof rawResult === "object"
+    ? (rawResult as Record<string, unknown>)
     : undefined;
   return {
     name: typeof data.name === "string" ? data.name : undefined,
+    ok: typeof data.ok === "boolean" ? data.ok : undefined,
+    result: typeof data.result === "string" ? data.result : undefined,
+    args_preview: truncateRunText(argsPreview, 1200),
+    args_data: argsData,
+    result_data: resultData,
     args: {
-      command: typeof args?.command === "string" ? args.command : undefined,
-      path: typeof args?.path === "string" ? args.path : undefined,
+      command: typeof argsData?.command === "string" ? argsData.command : undefined,
+      path: typeof argsData?.path === "string" ? argsData.path : undefined,
     },
   };
+}
+
+// 描述：
+//
+//   - 判断工具是否属于“后台终端”步骤类型。
+//
+// Params:
+//
+//   - toolName: 工具名。
+//
+// Returns:
+//
+//   - true: 终端类工具。
+function isTerminalTool(toolName: string): boolean {
+  return toolName === "run_shell" || toolName === "run_shell_command";
+}
+
+// 描述：
+//
+//   - 判断工具是否属于“文件编辑”步骤类型。
+//
+// Params:
+//
+//   - toolName: 工具名。
+//
+// Returns:
+//
+//   - true: 编辑类工具。
+function isEditTool(toolName: string): boolean {
+  return toolName === "write_text"
+    || toolName === "write_json"
+    || toolName === "apply_patch"
+    || toolName === "apply_patch_file"
+    || toolName === "todo_write";
+}
+
+// 描述：
+//
+//   - 判断工具是否属于“浏览/检索”步骤类型。
+//
+// Params:
+//
+//   - toolName: 工具名。
+//
+// Returns:
+//
+//   - true: 浏览类工具。
+function isBrowseTool(toolName: string): boolean {
+  return toolName === "read_text"
+    || toolName === "read_json"
+    || toolName === "list_dir"
+    || toolName === "list_directory"
+    || toolName === "glob"
+    || toolName === "search_files"
+    || toolName === "web_search"
+    || toolName === "stat"
+    || toolName === "git_diff"
+    || toolName === "git_status"
+    || toolName === "git_log";
+}
+
+// 描述：
+//
+//   - 根据浏览类工具名称与参数，生成统一可读的浏览明细文案。
+//
+// Params:
+//
+//   - toolName: 工具名。
+//   - input: 浏览类参数集合（query/glob/path/pattern）。
+//
+// Returns:
+//
+//   - 统一明细文案（如 Searched for ... / Read ...）。
+function buildBrowseDetail(
+  toolName: string,
+  input: {
+    query?: string;
+    glob?: string;
+    path?: string;
+    pattern?: string;
+  },
+): string {
+  const query = String(input.query || "").trim();
+  const glob = String(input.glob || "").trim();
+  const path = String(input.path || "").trim();
+  const pattern = String(input.pattern || "").trim();
+
+  if (toolName === "search_files" || toolName === "web_search") {
+    if (query) {
+      return `Searched for ${query}${glob ? ` in ${glob}` : ""}`;
+    }
+    return "Searched via tool";
+  }
+  if (toolName === "glob") {
+    const token = pattern || glob;
+    if (token) {
+      return `Searched for ${token}${path ? ` in ${path}` : ""}`;
+    }
+    return "Searched via glob";
+  }
+  if (toolName === "list_dir" || toolName === "list_directory") {
+    return `Listed files in ${path || "."}`;
+  }
+  if (toolName === "read_text" || toolName === "read_json" || toolName === "stat") {
+    return `Read ${path || "(unknown)"}`;
+  }
+  if (toolName === "git_diff") {
+    return path ? `Read diff in ${path}` : "Read git diff";
+  }
+  if (toolName === "git_status") {
+    return "Read git status";
+  }
+  if (toolName === "git_log") {
+    return "Read git log";
+  }
+  if (path) {
+    return `Read ${path}`;
+  }
+  return `Browsed via ${toolName}`;
+}
+
+// 描述：
+//
+//   - 解析浏览类工具对应的“文件/搜索”计数增量，统一执行流聚合口径。
+//
+// Params:
+//
+//   - toolName: 工具名。
+//
+// Returns:
+//
+//   - fileDelta/searchDelta：聚合增量。
+function resolveBrowseCountDelta(toolName: string): {
+  fileDelta: number;
+  searchDelta: number;
+} {
+  const isSearchStep = toolName === "search_files" || toolName === "web_search" || toolName === "glob";
+  if (isSearchStep) {
+    return { fileDelta: 0, searchDelta: 1 };
+  }
+  return { fileDelta: 1, searchDelta: 0 };
+}
+
+// 描述：
+//
+//   - 解析 planning 事件中的结构化 payload；仅识别统一前缀协议。
+function resolvePlanningMeta(payloadMessage: string): Record<string, unknown> | null {
+  const raw = String(payloadMessage || "").trim();
+  if (!raw.startsWith(PLANNING_META_PREFIX)) {
+    return null;
+  }
+  const jsonPart = raw.slice(PLANNING_META_PREFIX.length).trim();
+  if (!jsonPart) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(jsonPart) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+  } catch (_error) {
+    return null;
+  }
 }
 
 // 描述:
@@ -446,8 +658,72 @@ function resolveApprovalEventData(payload: AgentTextStreamEvent): AgentRequireAp
   }
   const data = payload.data as Record<string, unknown>;
   return {
+    approval_id: typeof data.approval_id === "string" ? data.approval_id : undefined,
     tool_name: typeof data.tool_name === "string" ? data.tool_name : undefined,
   };
+}
+
+// 描述：
+//
+//   - 裁剪长文本，避免执行流/授权卡片渲染超长字符串导致主线程卡顿。
+function truncateRunText(value: string, maxChars: number): string {
+  const normalized = String(value || "").trim();
+  if (!normalized || maxChars <= 0) {
+    return "";
+  }
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxChars)}…`;
+}
+
+// 描述：
+//
+//   - 尝试把 JSON 字符串解析为对象记录，用于兼容工具把结构化结果塞进 result/raw 文本字段。
+//
+// Params:
+//
+//   - value: 待解析值。
+//
+// Returns:
+//
+//   - 解析成功返回对象；失败返回 null。
+function parseJsonRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(normalized) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+// 描述：
+//
+//   - 构建授权步骤透传数据，仅保留恢复授权所需关键字段，并对长参数做裁剪。
+function buildApprovalSegmentData(payload: AgentTextStreamEvent): Record<string, unknown> {
+  const rawData = payload.data && typeof payload.data === "object"
+    ? (payload.data as Record<string, unknown>)
+    : {};
+  const data: Record<string, unknown> = {
+    __segment_kind: payload.kind,
+  };
+  if (typeof rawData.approval_id === "string") {
+    data.approval_id = truncateRunText(rawData.approval_id, 120);
+  }
+  if (typeof rawData.tool_name === "string") {
+    data.tool_name = truncateRunText(rawData.tool_name, 120);
+  }
+  if (typeof rawData.tool_args === "string") {
+    data.tool_args = truncateRunText(rawData.tool_args, APPROVAL_TOOL_ARGS_PREVIEW_MAX_CHARS);
+  }
+  return data;
 }
 
 // 描述:
@@ -476,44 +752,198 @@ function mapAgentTextStreamToRunSegment(
   segmentKey: string,
 ): AssistantRunSegment | null {
   const eventMessage = String(payload.message || "").trim();
-  if (payload.kind === STREAM_KINDS.DELTA) {
+  if (
+    payload.kind === STREAM_KINDS.DELTA
+    || payload.kind === STREAM_KINDS.STARTED
+    || payload.kind === STREAM_KINDS.LLM_STARTED
+    || payload.kind === STREAM_KINDS.LLM_FINISHED
+    || payload.kind === STREAM_KINDS.FINISHED
+    || payload.kind === STREAM_KINDS.HEARTBEAT
+  ) {
     return null;
   }
 
-  if (payload.kind === STREAM_KINDS.STARTED) {
+  if (payload.kind === STREAM_KINDS.PLANNING) {
+    const meta = resolvePlanningMeta(eventMessage);
+    const metaType = typeof meta?.type === "string" ? meta.type : "";
+    if (metaType !== "round_description") {
+      return null;
+    }
+    const description = truncateRunText(String(meta?.text || "").trim(), 300);
+    if (!description) {
+      return null;
+    }
     return {
       key: segmentKey,
-      intro: "已接收需求，开始规划执行",
-      step: eventMessage || "正在准备执行本次任务…",
+      intro: description,
+      step: "正在思考…",
       status: "running",
+      data: {
+        __segment_kind: payload.kind,
+        __segment_role: "round_description",
+      },
     };
   }
 
-  if (payload.kind === STREAM_KINDS.LLM_STARTED) {
+  if (payload.kind === STREAM_KINDS.TOOL_CALL_STARTED) {
+    const data = resolveToolCallEventData(payload);
+    const toolName = String(data.name || "").trim();
+    if (!isBrowseTool(toolName)) {
+      return null;
+    }
+    const argsData = data.args_data || {};
+    const browseDetail = buildBrowseDetail(toolName, {
+      query: String(argsData.query || "").trim(),
+      glob: String(argsData.glob || "").trim(),
+      path: String(argsData.path || "").trim(),
+      pattern: String(argsData.pattern || "").trim(),
+    });
     return {
       key: segmentKey,
-      intro: "模型会话已开始，等待返回首段结果…",
-      step: eventMessage || "provider 已启动，正在生成编排脚本。",
+      intro: "浏览代码上下文",
+      step: "正在浏览 0 个文件,0 个搜索",
       status: "running",
+      detail: browseDetail,
+      data: {
+        __segment_kind: payload.kind,
+        __step_type: "browse",
+        browse_file_delta: 0,
+        browse_search_delta: 0,
+        browse_detail: browseDetail,
+      },
     };
   }
 
-  if (payload.kind === STREAM_KINDS.LLM_FINISHED) {
+  if (payload.kind === STREAM_KINDS.TOOL_CALL_FINISHED) {
+    const data = resolveToolCallEventData(payload);
+    const toolName = String(data.name || "").trim();
+    const runOk = data.ok !== false;
+    const argsData = data.args_data || {};
+    const resultData = data.result_data || {};
+
+    if (isBrowseTool(toolName)) {
+      const detailText = buildBrowseDetail(toolName, {
+        query: String(resultData.query || argsData.query || "").trim(),
+        glob: String(resultData.glob || argsData.glob || "").trim(),
+        path: String(resultData.path || argsData.path || "").trim(),
+        pattern: String(resultData.pattern || argsData.pattern || "").trim(),
+      });
+      const browseDelta = resolveBrowseCountDelta(toolName);
+      return {
+        key: segmentKey,
+        intro: "浏览代码上下文",
+        step: "已浏览 0 个文件,0 个搜索",
+        status: runOk ? "finished" : "failed",
+        detail: detailText,
+        data: {
+          __segment_kind: payload.kind,
+          __step_type: "browse",
+          browse_file_delta: browseDelta.fileDelta,
+          browse_search_delta: browseDelta.searchDelta,
+          browse_detail: detailText,
+        },
+      };
+    }
+
+    if (isTerminalTool(toolName)) {
+      const command = String(resultData.command || argsData.command || "").trim()
+        || String(data.args?.command || "").trim()
+        || String(eventMessage || "").trim();
+      const statusCode = String(resultData.status ?? "").trim();
+      const stdout = String(resultData.stdout || "").trim();
+      const stderr = String(resultData.stderr || "").trim();
+      const detail = [
+        `Command: ${command || "(unknown)"}`,
+        statusCode ? `Status: ${statusCode}` : "",
+        stdout ? `STDOUT:\n${stdout}` : "",
+        stderr ? `STDERR:\n${stderr}` : "",
+      ].filter(Boolean).join("\n\n");
+      return {
+        key: segmentKey,
+        intro: "后台终端",
+        step: `后台终端已完成以及 ${command || "(unknown)"}`,
+        status: runOk ? "finished" : "failed",
+        detail,
+        data: {
+          __segment_kind: payload.kind,
+          __step_type: "terminal",
+        },
+      };
+    }
+
+    if (isEditTool(toolName)) {
+      const parsedResultRecord = parseJsonRecord(data.result);
+      const parsedRawRecord = parseJsonRecord(resultData.raw);
+      const path = String(
+        resultData.path
+        || parsedResultRecord?.path
+        || parsedRawRecord?.path
+        || "",
+      ).trim();
+      const files = Array.isArray(resultData.files) ? resultData.files : [];
+      const firstFile = path || String(files[0] || "").trim();
+      const fileLabel = firstFile || "unknown";
+      const todoWriteCount = Math.max(
+        0,
+        Math.floor(Number(
+          resultData.count
+          ?? parsedResultRecord?.count
+          ?? parsedRawRecord?.count
+          ?? 0,
+        )),
+      );
+      const added = Math.max(
+        0,
+        Math.floor(Number(resultData.added_lines ?? (toolName === "todo_write" ? todoWriteCount : 0))),
+      );
+      const removed = Math.max(0, Math.floor(Number(resultData.removed_lines || 0)));
+      const diffPreview = truncateRunText(String(resultData.diff_preview || "").trim(), 64000);
+      const detail = diffPreview
+        || truncateRunText(String(resultData.raw || data.result || eventMessage || "").trim(), 4000);
+      return {
+        key: segmentKey,
+        intro: "文件修改",
+        step: `已编辑 ${fileLabel} +${added} -${removed}`,
+        status: runOk ? "finished" : "failed",
+        detail,
+        data: {
+          __segment_kind: payload.kind,
+          __step_type: "edit",
+          edit_file_path: fileLabel,
+          edit_added_lines: added,
+          edit_removed_lines: removed,
+        },
+      };
+    }
+
+    const fallbackDetail = truncateRunText(
+      JSON.stringify(
+        {
+          message: eventMessage,
+          result: data.result || "",
+          args: data.args_data || {},
+          result_data: data.result_data || {},
+        },
+        null,
+        2,
+      ),
+      64000,
+    );
     return {
       key: segmentKey,
-      intro: "模型返回完成，开始执行脚本…",
-      step: eventMessage || "已收到完整脚本，准备进入沙盒执行。",
-      status: "finished",
+      intro: "执行过程",
+      step: "未定义步骤",
+      status: runOk ? "finished" : "failed",
+      detail: fallbackDetail,
+      data: {
+        __segment_kind: payload.kind,
+        __step_type: "undefined",
+      },
     };
   }
 
-  if (payload.kind === STREAM_KINDS.FINISHED || payload.kind === STREAM_KINDS.FINAL) {
-    return {
-      key: segmentKey,
-      intro: "执行完成",
-      step: eventMessage || "执行结束，正在输出最终结果…",
-      status: "finished",
-    };
+  if (payload.kind === STREAM_KINDS.FINAL) {
+    return null;
   }
 
   if (payload.kind === STREAM_KINDS.CANCELLED) {
@@ -522,78 +952,35 @@ function mapAgentTextStreamToRunSegment(
       intro: "任务已取消",
       step: eventMessage || "当前任务已终止，不再继续执行。",
       status: "finished",
-    };
-  }
-
-  if (payload.kind === STREAM_KINDS.PLANNING) {
-    return {
-      key: segmentKey,
-      intro: "智能体正在思考",
-      step: eventMessage || "正在规划执行策略…",
-      status: "running",
-    };
-  }
-
-  if (payload.kind === STREAM_KINDS.TOOL_CALL_STARTED) {
-    const data = resolveToolCallEventData(payload);
-    let detail = "";
-    if (data.name) {
-      if (data.name === "run_shell" && data.args?.command) {
-        detail = data.args.command.substring(0, 30);
-        if (data.args.command.length > 30) detail += "...";
-      } else if (data.args?.path) {
-        detail = data.args.path;
-      }
-    }
-    const suffix = detail ? ` [${detail}]` : "";
-    return {
-      key: segmentKey,
-      intro: `执行工具：${data.name || "unknown"}`,
-      step: eventMessage ? `${eventMessage}${suffix}` : `正在调用系统工具…`,
-      status: "running",
-    };
-  }
-
-  if (payload.kind === STREAM_KINDS.TOOL_CALL_FINISHED) {
-    const data = resolveToolCallEventData(payload);
-    return {
-      key: segmentKey,
-      intro: `工具完成：${data.name || "unknown"}`,
-      step: eventMessage || "任务步骤执行完成",
-      status: "finished",
-    };
-  }
-
-  if (payload.kind === STREAM_KINDS.HEARTBEAT) {
-    const heartbeatText = eventMessage || "等待执行结果回传…";
-    const intro = heartbeatText.includes("（")
-      ? heartbeatText.split("（")[0]
-      : heartbeatText;
-    return {
-      key: segmentKey,
-      intro: intro || "等待执行结果回传…",
-      step: heartbeatText,
-      status: "running",
+      data: {
+        __segment_kind: payload.kind,
+      },
     };
   }
 
   if (payload.kind === STREAM_KINDS.REQUIRE_APPROVAL) {
     const data = resolveApprovalEventData(payload);
+    const approvalToolName = String(data?.tool_name || "").trim() || "高危操作";
     return {
       key: segmentKey,
       intro: "需要人工授权",
-      step: eventMessage || `正在请求执行 ${data?.tool_name || "高危操作"}`,
+      step: `正在请求执行 ${approvalToolName}`,
       status: "running",
-      data: payload.data, // 透传 approval_id 等
+      data: buildApprovalSegmentData(payload),
     };
   }
 
   if (payload.kind === STREAM_KINDS.ERROR) {
+    const errorCode = resolveStreamErrorCode(payload);
     return {
       key: segmentKey,
       intro: "执行失败",
       step: eventMessage || "执行失败，请检查错误详情后重试。",
       status: "failed",
+      data: {
+        __segment_kind: payload.kind,
+        __error_code: errorCode || undefined,
+      },
     };
   }
 
@@ -603,10 +990,278 @@ function mapAgentTextStreamToRunSegment(
 
   return {
     key: segmentKey,
-    intro: "执行进度更新",
-    step: eventMessage,
+    intro: "执行过程",
+    step: "未定义步骤",
     status: "running",
+    detail: eventMessage,
+    data: {
+      __segment_kind: payload.kind,
+      __step_type: "undefined",
+    },
   };
+}
+
+// 描述：
+//
+//   - 判断步骤文本是否属于“占位/低价值”文案，用于执行流收敛与总结提炼。
+//
+// Params:
+//
+//   - text: 步骤文本。
+//
+// Returns:
+//
+//   - true: 占位或低价值步骤。
+function isPlaceholderRunStep(text: string): boolean {
+  const normalized = String(text || "").trim();
+  if (!normalized) {
+    return true;
+  }
+  return normalized === "执行结束，正在输出最终结果…"
+    || normalized === "智能体执行完成";
+}
+
+// 描述：
+//
+//   - 从运行步骤中提炼最终摘要，优先选择非占位、可读且非“自动补全 finish”文案。
+//
+// Params:
+//
+//   - segments: 运行片段列表。
+//
+// Returns:
+//
+//   - 命中的高价值摘要；无命中返回空字符串。
+function resolveMeaningfulRunSummary(segments: AssistantRunSegment[]): string {
+  const candidate = [...segments]
+    .reverse()
+    .map((segment) => String(segment.step || "").trim())
+    .find((step) =>
+      step
+      && !isPlaceholderRunStep(step)
+      && !step.includes("系统自动补全 finish")
+      && !step.startsWith("查看本轮 AI 原始返回与可执行脚本详情")
+      && !step.startsWith("查看本轮 AI 原始返回与失败脚本详情"));
+  return candidate || "";
+}
+
+// 描述：
+//
+//   - 判断运行片段是否属于“待人工授权”片段。
+//
+// Params:
+//
+//   - segment: 运行片段。
+//
+// Returns:
+//
+//   - true: 授权片段。
+function isApprovalPendingSegment(segment: AssistantRunSegment): boolean {
+  const segmentKind = segment.data && typeof segment.data.__segment_kind === "string"
+    ? segment.data.__segment_kind
+    : "";
+  return segment.intro === "需要人工授权" || segmentKind === STREAM_KINDS.REQUIRE_APPROVAL;
+}
+
+// 描述：
+//
+//   - 判断运行片段是否属于“初始化思考占位”片段；该片段仅用于首屏反馈，会在真实进度到达后被替换。
+//
+// Params:
+//
+//   - segment: 运行片段。
+//
+// Returns:
+//
+//   - true: 初始化思考占位片段。
+function isInitialThinkingSegment(segment: AssistantRunSegment): boolean {
+  const segmentRole = segment.data && typeof segment.data.__segment_role === "string"
+    ? segment.data.__segment_role
+    : "";
+  return segmentRole === INITIAL_THINKING_SEGMENT_ROLE;
+}
+
+// 描述：
+//
+//   - 构建执行流步骤详情文本；仅在存在“额外内容”时返回，避免展开后重复展示同一句话。
+//
+// Params:
+//
+//   - segment: 运行片段。
+//   - normalizedStep: 步骤文本（已标准化）。
+//
+// Returns:
+//
+//   - 可展开详情文本；无额外内容返回空字符串。
+function resolveRunSegmentStepDetail(
+  segment: AssistantRunSegment,
+  normalizedStep: string,
+): string {
+  const detailText = String(segment.detail || "").trim();
+  if (detailText && detailText !== normalizedStep) {
+    return detailText;
+  }
+  return "";
+}
+
+// 描述：
+//
+//   - 将线性运行片段按标题聚合，输出“一标题多步骤”的展示结构。
+//
+// Params:
+//
+//   - segments: 线性运行片段列表。
+//
+// Returns:
+//
+//   - 标题分组后的步骤结构。
+function buildRunSegmentGroups(segments: AssistantRunSegment[]): AssistantRunSegmentGroup[] {
+  interface InternalGroup extends AssistantRunSegmentGroup {
+    browseState?: {
+      stepIndex: number;
+      fileCount: number;
+      searchCount: number;
+      details: string[];
+      detailSet: Set<string>;
+      running: boolean;
+    };
+  }
+
+  const groups: InternalGroup[] = [];
+  let activeGroupIndex = -1;
+  const ensureActiveGroup = (): number => {
+    if (activeGroupIndex >= 0 && groups[activeGroupIndex]) {
+      return activeGroupIndex;
+    }
+    groups.push({
+      key: `run-group-${groups.length}-执行过程`,
+      title: "执行过程",
+      steps: [],
+    });
+    activeGroupIndex = groups.length - 1;
+    return activeGroupIndex;
+  };
+  const appendStepToGroup = (groupIndex: number, stepItem: AssistantRunSegmentStep) => {
+    const targetGroup = groups[groupIndex];
+    const lastStep = targetGroup.steps[targetGroup.steps.length - 1];
+    if (
+      lastStep
+      && lastStep.text === stepItem.text
+      && lastStep.status === stepItem.status
+      && lastStep.detail === stepItem.detail
+    ) {
+      return;
+    }
+    targetGroup.steps.push(stepItem);
+  };
+
+  segments.forEach((segment, index) => {
+    const segmentData = segment.data || {};
+    const segmentRole = typeof segmentData.__segment_role === "string" ? segmentData.__segment_role : "";
+    const stepType = typeof segmentData.__step_type === "string" ? segmentData.__step_type : "";
+
+    if (segmentRole === INITIAL_THINKING_SEGMENT_ROLE) {
+      // 描述：
+      //
+      //   - 初始化思考占位由统一底部指示器承载，不在分组内重复渲染步骤。
+      return;
+    }
+
+    if (segmentRole === "round_description") {
+      const title = String(segment.intro || "").trim();
+      if (!title) {
+        return;
+      }
+      groups.push({
+        key: `run-group-${groups.length}-${title}`,
+        title,
+        steps: [],
+      });
+      activeGroupIndex = groups.length - 1;
+      return;
+    }
+
+    const groupIndex = ensureActiveGroup();
+    const currentGroup = groups[groupIndex];
+    const normalizedStep = String(segment.step || "").trim();
+    const detail = resolveRunSegmentStepDetail(segment, normalizedStep);
+    if (stepType === "browse") {
+      const fileDelta = Math.max(
+        0,
+        Math.floor(Number(segmentData.browse_file_delta || 0)),
+      );
+      const searchDelta = Math.max(
+        0,
+        Math.floor(Number(segmentData.browse_search_delta || 0)),
+      );
+      const browseDetail = String(segmentData.browse_detail || segment.detail || "").trim();
+      if (!currentGroup.browseState) {
+        currentGroup.browseState = {
+          stepIndex: currentGroup.steps.length,
+          fileCount: 0,
+          searchCount: 0,
+          details: [],
+          detailSet: new Set<string>(),
+          running: segment.status === "running",
+        };
+        currentGroup.steps.push({
+          key: `browse-${segment.key}-${index}`,
+          status: "running",
+          text: "正在浏览 0 个文件,0 个搜索",
+          detail: "",
+          data: {
+            __step_type: "browse",
+            browse_prefix: "正在浏览",
+            browse_file_count: 0,
+            browse_search_count: 0,
+          },
+        });
+      }
+      const browseState = currentGroup.browseState;
+      browseState.fileCount += fileDelta;
+      browseState.searchCount += searchDelta;
+      browseState.running = segment.status === "running";
+      if (browseDetail && !browseState.detailSet.has(browseDetail)) {
+        browseState.detailSet.add(browseDetail);
+        browseState.details.push(browseDetail);
+      }
+      const stepText = `${browseState.running ? "正在浏览" : "已浏览"} ${browseState.fileCount} 个文件,${browseState.searchCount} 个搜索`;
+      const browseStep = currentGroup.steps[browseState.stepIndex];
+      if (browseStep) {
+        browseStep.status = browseState.running ? "running" : "finished";
+        browseStep.text = stepText;
+        browseStep.detail = browseState.details.join("\n");
+        browseStep.data = {
+          __step_type: "browse",
+          browse_prefix: browseState.running ? "正在浏览" : "已浏览",
+          browse_file_count: browseState.fileCount,
+          browse_search_count: browseState.searchCount,
+        };
+      }
+      return;
+    }
+
+    if (!normalizedStep) {
+      return;
+    }
+    appendStepToGroup(groupIndex, {
+      key: `${segment.key}-${index}`,
+      status: segment.status,
+      text: normalizedStep,
+      detail,
+      data: segmentData && typeof segmentData === "object"
+        ? { ...segmentData }
+        : undefined,
+    });
+  });
+
+  return groups
+    .map((group) => ({
+      key: group.key,
+      title: group.title,
+      steps: group.steps.filter((step) => String(step.text || "").trim()),
+    }))
+    .filter((group) => group.title || group.steps.length > 0);
 }
 
 // 描述：根据模型流式事件判断当前执行阶段，用于无事件时的“心跳提示”文案。
@@ -770,75 +1425,6 @@ function buildAssistantFailureSummary(rawSummary: string): { detail: string; hin
 
 // 描述：
 //
-//   - 从代码智能体步骤记录中提取“编排脚本”详情，供会话消息内展开查看。
-//
-// Params:
-//
-//   - steps: 本轮执行返回的步骤列表。
-//
-// Returns:
-//
-//   - 可展示的脚本详情文本；未命中时返回空字符串。
-function resolveCodegenScriptSegmentDetail(steps: ModelStepRecord[]): string {
-  const codegenStep = steps.find((item) => item.code === "llm_python_codegen" && item.data && typeof item.data === "object");
-  if (!codegenStep || !codegenStep.data) {
-    return "";
-  }
-  const payload = codegenStep.data as Record<string, unknown>;
-  const extracted = typeof payload.llm_script_extracted === "string"
-    ? payload.llm_script_extracted
-    : "";
-  return normalizeCodeSegmentDetail(extracted);
-}
-
-// 描述：
-//
-//   - 规范化可展示代码片段内容，统一做 trim 与长度裁剪。
-//
-// Params:
-//
-//   - raw: 原始代码片段文本。
-//
-// Returns:
-//
-//   - 可用于 UI 展示的代码文本。
-function normalizeCodeSegmentDetail(raw: string): string {
-  const normalized = String(raw || "").trim();
-  if (!normalized) {
-    return "";
-  }
-  const maxChars = 16000;
-  if (normalized.length <= maxChars) {
-    return normalized;
-  }
-  return `${normalized.slice(0, maxChars)}\n\n# ... script truncated ...`;
-}
-
-// 描述：
-//
-//   - 从 LLM 原始返回中提取可展示代码片段，优先取 fenced block，未命中时回退原文。
-//
-// Params:
-//
-//   - rawResponse: LLM 原始返回文本。
-//
-// Returns:
-//
-//   - 可展示的代码片段文本。
-function resolveCodeSegmentDetailFromRawResponse(rawResponse: string): string {
-  const source = String(rawResponse || "").trim();
-  if (!source) {
-    return "";
-  }
-  const fencedMatch = source.match(/```(?:python|py)?\s*([\s\S]*?)```/i);
-  if (fencedMatch && fencedMatch[1]) {
-    return normalizeCodeSegmentDetail(fencedMatch[1]);
-  }
-  return normalizeCodeSegmentDetail(source);
-}
-
-// 描述：
-//
 //   - 判断失败文本是否属于“Gemini Provider 未实现”场景，用于重试时自动回退到 Codex。
 //
 // Params:
@@ -857,799 +1443,6 @@ function isGeminiProviderNotImplementedError(raw: string): boolean {
     || normalized.includes("core.agent.llm.provider_not_implemented");
 }
 
-// 描述:
-//
-//   - 匹配引号包裹的导出目录表达。
-const OUTPUT_DIR_QUOTED_REGEX =
-  /(?:导出到|导出至|输出到|保存到|export\s+to|save\s+to)\s*[“"']([^"”']+)[”"']/i;
-
-// 描述:
-//
-//   - 匹配未使用引号包裹的导出目录表达。
-const OUTPUT_DIR_PLAIN_REGEX =
-  /(?:导出到|导出至|输出到|保存到|export\s+to|save\s+to)\s*(\/[^\s`"'，。；！？]+|[a-zA-Z]:\\[^\s`"'，。；！？]+)/i;
-
-// 描述:
-//
-//   - 匹配提示词中的纹理图片路径。
-const IMAGE_PATH_REGEX = /((?:\/|[a-zA-Z]:\\)[^\s`"'，。；！？]+?\.(?:png|jpe?g|webp|bmp|gif|tiff?))/i;
-
-// 描述:
-//
-//   - 模型工作流当前选择项本地存储键。
-const MODEL_WORKFLOW_SELECTED_KEY = "zodileap.desktop.model.selectedWorkflowId";
-
-// 描述:
-//
-//   - 代码工作流当前选择项本地存储键。
-const CODE_WORKFLOW_SELECTED_KEY = "zodileap.desktop.code.selectedWorkflowId";
-
-// 描述:
-//
-//   - 技能选中状态存储键，统一引用全局常量避免硬编码。
-const MODEL_SKILL_SELECTED_KEY = STORAGE_KEYS.MODEL_SKILL_SELECTED_IDS;
-const CODE_SKILL_SELECTED_KEY = STORAGE_KEYS.CODE_SKILL_SELECTED_IDS;
-
-// 描述:
-//
-//   - 连续心跳无新增事件的最大次数，超过后自动终止本轮执行，避免“永远进行中”。
-const ASSISTANT_RUN_HEARTBEAT_STALE_LIMIT = 240;
-
-// 描述：
-//
-//   - 从本地存储读取当前智能体最近一次选择的工作流 ID，未命中时返回空字符串。
-//
-// Params:
-//
-//   - storageKey: 本地存储键。
-//
-// Returns:
-//
-//   - 工作流 ID。
-function readSelectedWorkflowId(storageKey: string): string {
-  if (!IS_BROWSER) {
-    return "";
-  }
-  const value = window.localStorage.getItem(storageKey);
-  return String(value || "").trim();
-}
-
-// 描述：
-//
-//   - 从本地存储读取当前智能体最近一次选择的技能 ID 列表，未命中时返回空列表。
-//   - 当前执行策略约束为“技能仅允许单选”，因此读取时会自动裁剪为 1 项。
-//
-// Params:
-//
-//   - storageKey: 本地存储键。
-//
-// Returns:
-//
-//   - 技能 ID 列表。
-function readSelectedSkillIds(storageKey: string): string[] {
-  if (!IS_BROWSER) {
-    return [];
-  }
-  const rawValue = window.localStorage.getItem(storageKey);
-  if (!rawValue) {
-    return [];
-  }
-  try {
-    const parsed = JSON.parse(rawValue) as unknown;
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    const normalized = parsed
-      .filter((item): item is string => typeof item === "string")
-      .map((item) => item.trim())
-      .filter((item) => item.length > 0);
-    return Array.from(new Set(normalized)).slice(0, 1);
-  } catch (_err) {
-    return [];
-  }
-}
-
-// 描述：
-//
-//   - 构建“会话已选择技能”提示词片段，向代码智能体明确当前会话需优先遵循的技能上下文。
-//
-// Params:
-//
-//   - selectedSkills: 当前会话选择的技能列表。
-//
-// Returns:
-//
-//   - 可拼接到主提示词的技能片段；未选择技能时返回空字符串。
-function buildSessionSkillPrompt(selectedSkills: SkillCatalogItem[]): string {
-  if (selectedSkills.length === 0) {
-    return "";
-  }
-  const lines = selectedSkills.map((item) => {
-    const version = String(item.versions?.[0] || "").trim();
-    const versionLabel = version ? `@${version}` : "";
-    const description = String(item.description || "").trim();
-    if (description) {
-      return `- ${item.name}（${item.id}${versionLabel}）：${description}`;
-    }
-    return `- ${item.name}（${item.id}${versionLabel}）`;
-  });
-  return ["【会话技能】", ...lines].join("\n");
-}
-
-// 描述：
-//
-//   - 会话上下文拼接时保留的历史消息条数上限，避免提示词无限膨胀。
-const CODE_CONTEXT_HISTORY_LIMIT = 8;
-
-// 描述：
-//
-//   - 会话上下文中单条消息的最大字符数，超长时进行截断。
-const CODE_CONTEXT_MESSAGE_CHAR_LIMIT = 600;
-
-// 描述：
-//
-//   - “重试/继续”类短指令关键词；命中后会改写为可执行请求，避免模型误判“缺少需求”。
-const CODE_RETRY_HINT_KEYWORDS = ["重试", "再试", "retry", "继续", "继续执行", "继续处理"];
-
-// 描述：
-//
-//   - 结构化项目信息上下文每个分类最多注入条数，避免提示词过长。
-const CODE_PROFILE_CONTEXT_ITEM_LIMIT = 4;
-
-// 描述：
-//
-//   - 结构化项目信息“按需注入”触发关键词；仅在模型明确需要项目语义基线时注入，避免首轮提示词冗长。
-const CODE_PROFILE_ON_DEMAND_KEYWORDS = [
-  "结构化项目信息",
-  "结构化信息",
-  "项目结构",
-  "代码结构",
-  "页面布局",
-  "信息架构",
-  "交互契约",
-  "数据模型",
-  "api 模型",
-  "框架替换",
-  "框架迁移",
-  "重构",
-  "迁移",
-  "按项目规范",
-];
-
-// 描述：
-//
-//   - 识别“框架替换/迁移”需求的关键词，命中后会注入结构不变约束。
-const CODE_FRAMEWORK_REPLACEMENT_KEYWORDS = [
-  "框架替换",
-  "替换框架",
-  "切换框架",
-  "框架迁移",
-  "迁移框架",
-  "ui框架替换",
-  "switch framework",
-  "replace framework",
-  "migrate framework",
-];
-
-// 描述：
-//
-//   - 常见 UI/前端框架词表，用于降低框架替换意图识别误判。
-const CODE_FRAMEWORK_HINT_KEYWORDS = [
-  "react",
-  "vue",
-  "angular",
-  "svelte",
-  "next",
-  "nuxt",
-  "solid",
-  "aries_react",
-  "antd",
-  "ant design",
-  "mui",
-  "element-plus",
-  "chakra",
-  "bootstrap",
-  "tailwind",
-];
-
-// 描述：
-//
-//   - 将结构化项目信息转换为会话提示词上下文片段。
-//
-// Params:
-//
-//   - profile: 当前项目结构化信息。
-//
-// Returns:
-//
-//   - 可拼接到提示词的行数组。
-function buildCodeProjectProfileContextLines(
-  profile?: CodeWorkspaceProjectProfile | null,
-): string[] {
-  if (!profile) {
-    return [];
-  }
-
-  const lines: string[] = ["【项目结构化信息】"];
-  const summary = String(profile.summary || "").trim();
-  if (summary) {
-    lines.push(`摘要：${summary}`);
-  }
-
-  const pushList = (label: string, items: string[]) => {
-    const normalized = items
-      .map((item) => String(item || "").trim())
-      .filter((item) => item.length > 0)
-      .slice(0, CODE_PROFILE_CONTEXT_ITEM_LIMIT);
-    if (normalized.length === 0) {
-      return;
-    }
-    lines.push(`${label}：${normalized.join("；")}`);
-  };
-
-  const knowledgeSections = Array.isArray(profile.knowledgeSections)
-    ? profile.knowledgeSections
-    : [];
-  if (knowledgeSections.length > 0) {
-    knowledgeSections.forEach((section) => {
-      const sectionTitle = String(section.title || "").trim() || String(section.key || "").trim() || "未命名分类";
-      (section.facets || []).forEach((facet) => {
-        const facetLabel = String(facet.label || "").trim() || String(facet.key || "").trim() || "未命名字段";
-        pushList(`${sectionTitle} · ${facetLabel}`, facet.entries || []);
-      });
-    });
-  } else {
-    pushList("API 数据实体", profile.apiDataModel.entities || []);
-    pushList("API 请求模型", profile.apiDataModel.requestModels || []);
-    pushList("API 响应模型", profile.apiDataModel.responseModels || []);
-    pushList("API Mock 场景", profile.apiDataModel.mockCases || []);
-    pushList("前端页面清单", profile.frontendPageLayout.pages || []);
-    pushList("导航与菜单项", profile.frontendPageLayout.navigation || []);
-    pushList("页面元素结构", profile.frontendPageLayout.pageElements || []);
-    pushList("前端目录结构", profile.frontendCodeStructure.directories || []);
-    pushList("前端模块边界", profile.frontendCodeStructure.moduleBoundaries || []);
-    pushList("前端实现约束", profile.frontendCodeStructure.implementationConstraints || []);
-    pushList("编码约定", profile.codingConventions || []);
-  }
-  lines.push("");
-  return lines;
-}
-
-// 描述：
-//
-//   - 从结构化分类中读取指定 facet 条目；若分类不存在则回退到兼容字段。
-//
-// Params:
-//
-//   - profile: 项目结构化信息。
-//   - sectionKey: 分类键。
-//   - facetKey: 字段键。
-//   - fallback: 兼容字段兜底值。
-//
-// Returns:
-//
-//   - 条目数组。
-function readProjectProfileFacetEntries(
-  profile: CodeWorkspaceProjectProfile,
-  sectionKey: string,
-  facetKey: string,
-  fallback: string[],
-): string[] {
-  const section = (profile.knowledgeSections || []).find((item) => item.key === sectionKey);
-  const facet = section?.facets.find((item) => item.key === facetKey);
-  const source = facet?.entries || fallback;
-  return source
-    .map((item) => String(item || "").trim())
-    .filter((item, index, list) => item.length > 0 && list.indexOf(item) === index);
-}
-
-// 描述：
-//
-//   - 判断当前请求是否为“框架替换但保留页面结构”的迁移类任务。
-//
-// Params:
-//
-//   - prompt: 当前用户输入。
-//
-// Returns:
-//
-//   - true 表示命中框架替换语义。
-function isFrameworkReplacementPrompt(prompt: string): boolean {
-  const normalized = String(prompt || "").trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  if (CODE_FRAMEWORK_REPLACEMENT_KEYWORDS.some((keyword) => normalized.includes(keyword))) {
-    return true;
-  }
-  const hasFrameworkWord = normalized.includes("框架");
-  const hasReplacementVerb = /(替换|切换|迁移|改用|重写|升级)/.test(normalized);
-  if (hasFrameworkWord && hasReplacementVerb) {
-    return true;
-  }
-  const hasFrameworkHint = CODE_FRAMEWORK_HINT_KEYWORDS.some((keyword) => normalized.includes(keyword));
-  const hasSwitchIntent = /(replace|switch|migrate|rewrite|refactor|迁移|替换|切换)/.test(normalized);
-  return hasFrameworkHint && hasSwitchIntent;
-}
-
-// 描述：
-//
-//   - 为“框架替换”场景构建结构保持约束，优先要求沿用页面布局与前端代码结构语义。
-//
-// Params:
-//
-//   - prompt: 当前用户输入。
-//   - profile: 当前项目结构化信息。
-//
-// Returns:
-//
-//   - 可拼接到提示词的附加约束行数组。
-function buildFrameworkReplacementContextLines(
-  prompt: string,
-  profile?: CodeWorkspaceProjectProfile | null,
-): string[] {
-  if (!profile || !isFrameworkReplacementPrompt(prompt)) {
-    return [];
-  }
-  const uiSectionKey = "ui_information_architecture";
-  const frontendArchitectureSectionKey = "frontend_implementation_architecture";
-  const pageBaseline = readProjectProfileFacetEntries(
-    profile,
-    uiSectionKey,
-    "pages",
-    profile.frontendPageLayout.pages || [],
-  )
-    .map((item) => String(item || "").trim())
-    .filter((item) => item.length > 0)
-    .slice(0, CODE_PROFILE_CONTEXT_ITEM_LIMIT);
-  const moduleBaseline = [
-    ...readProjectProfileFacetEntries(
-      profile,
-      frontendArchitectureSectionKey,
-      "directories",
-      profile.frontendCodeStructure.directories || [],
-    ),
-    ...readProjectProfileFacetEntries(
-      profile,
-      frontendArchitectureSectionKey,
-      "moduleBoundaries",
-      profile.frontendCodeStructure.moduleBoundaries || [],
-    ),
-  ]
-    .map((item) => String(item || "").trim())
-    .filter((item) => item.length > 0)
-    .slice(0, CODE_PROFILE_CONTEXT_ITEM_LIMIT);
-  const hasUiBaseline = pageBaseline.length > 0
-    || readProjectProfileFacetEntries(
-      profile,
-      uiSectionKey,
-      "navigation",
-      profile.frontendPageLayout.navigation || [],
-    ).length > 0
-    || readProjectProfileFacetEntries(
-      profile,
-      uiSectionKey,
-      "pageElements",
-      profile.frontendPageLayout.pageElements || [],
-    ).length > 0;
-  const hasArchitectureBaseline = moduleBaseline.length > 0
-    || readProjectProfileFacetEntries(
-      profile,
-      frontendArchitectureSectionKey,
-      "implementationConstraints",
-      profile.frontendCodeStructure.implementationConstraints || [],
-    ).length > 0;
-  if (!hasUiBaseline && !hasArchitectureBaseline) {
-    return [];
-  }
-  const lines: string[] = [
-    "【框架替换执行约束】",
-    "保持页面结构语义、信息架构和交互目标不变，仅替换框架相关实现。",
-  ];
-  if (pageBaseline.length > 0) {
-    lines.push(`页面结构基线：${pageBaseline.join("；")}`);
-  }
-  if (moduleBaseline.length > 0) {
-    lines.push(`模块边界基线：${moduleBaseline.join("；")}`);
-  }
-  lines.push("优先复用既有 API 数据模型与页面布局定义，避免引入无关重构。");
-  lines.push("若新框架能力存在差异，先说明差异，再给出兼容实现。");
-  lines.push("");
-  return lines;
-}
-
-// 描述：
-//
-//   - 压缩并裁剪单条会话消息文本，减少上下文噪声并控制 token 体积。
-//
-// Params:
-//
-//   - text: 原始消息文本。
-//
-// Returns:
-//
-//   - 规范化后的消息文本。
-function normalizeCodeContextMessageText(text: string): string {
-  const normalized = String(text || "").replace(/\s+/g, " ").trim();
-  if (!normalized) {
-    return "";
-  }
-  if (normalized.length <= CODE_CONTEXT_MESSAGE_CHAR_LIMIT) {
-    return normalized;
-  }
-  return `${normalized.slice(0, CODE_CONTEXT_MESSAGE_CHAR_LIMIT)}...(已截断)`;
-}
-
-// 描述：
-//
-//   - 判断当前输入是否为“仅重试提示”类短句。
-//
-// Params:
-//
-//   - prompt: 当前输入文本。
-//
-// Returns:
-//
-//   - true 表示当前输入不含明确任务细节，仅表达“重试/继续”意图。
-function isRetryOnlyPrompt(prompt: string): boolean {
-  const normalized = String(prompt || "").trim().toLowerCase();
-  return CODE_RETRY_HINT_KEYWORDS.includes(normalized);
-}
-
-// 描述：
-//
-//   - 为代码智能体构建“历史上下文 + 当前请求”的提示词，确保“重试”场景不会丢失前文语义。
-//
-// Params:
-//
-//   - historyMessages: 当前会话已存在的历史消息。
-//   - currentPrompt: 当前用户输入。
-//   - workspacePath: 当前会话绑定的项目目录路径。
-//
-// Returns:
-//
-//   - 拼接后的上下文提示词。
-function buildCodeSessionContextPrompt(
-  historyMessages: MessageItem[],
-  currentPrompt: string,
-  workspacePath?: string,
-  projectProfile?: CodeWorkspaceProjectProfile | null,
-): string {
-  const normalizedCurrentPrompt = String(currentPrompt || "").trim();
-  if (!normalizedCurrentPrompt) {
-    return "";
-  }
-  const normalizedWorkspacePath = String(workspacePath || "").trim();
-  // 描述：
-  //
-  //   - 仅在“重试继续”或当前请求明确依赖项目语义基线时注入结构化项目信息，避免首轮全量灌入。
-  const shouldAttachProfileContext = isRetryOnlyPrompt(normalizedCurrentPrompt)
-    || CODE_PROFILE_ON_DEMAND_KEYWORDS.some((keyword) => normalizedCurrentPrompt.toLowerCase().includes(keyword.toLowerCase()));
-  const profileContextLines = shouldAttachProfileContext
-    ? buildCodeProjectProfileContextLines(projectProfile)
-    : [];
-  const frameworkReplacementContextLines = buildFrameworkReplacementContextLines(
-    normalizedCurrentPrompt,
-    projectProfile,
-  );
-  const historyLines = historyMessages
-    .filter((item) => item.role === "user" || item.role === "assistant")
-    .map((item) => ({
-      role: item.role === "user" ? "用户" : "助手",
-      text: normalizeCodeContextMessageText(item.text),
-    }))
-    .filter((item) => item.text.length > 0)
-    .slice(-CODE_CONTEXT_HISTORY_LIMIT)
-    .map((item, index) => `${index + 1}. ${item.role}：${item.text}`);
-
-  if (historyLines.length === 0) {
-    if (normalizedWorkspacePath) {
-      return [
-        "【当前项目】",
-        `路径：${normalizedWorkspacePath}`,
-        "约束：仅基于该目录进行分析与修改，不要切换到其它工程。",
-        "",
-        ...profileContextLines,
-        ...frameworkReplacementContextLines,
-        "【当前请求】",
-        normalizedCurrentPrompt,
-      ].join("\n");
-    }
-    if (profileContextLines.length > 0) {
-      return [
-        ...profileContextLines,
-        ...frameworkReplacementContextLines,
-        "【当前请求】",
-        normalizedCurrentPrompt,
-      ].join("\n");
-    }
-    return normalizedCurrentPrompt;
-  }
-  const normalizedRequest = isRetryOnlyPrompt(normalizedCurrentPrompt)
-    ? "请基于以上会话上下文继续上一轮任务并直接给出可执行结果，不要要求我重复需求。"
-    : normalizedCurrentPrompt;
-  const workspaceLines = normalizedWorkspacePath
-    ? [
-      "【当前项目】",
-      `路径：${normalizedWorkspacePath}`,
-      "约束：仅基于该目录进行分析与修改，不要切换到其它工程。",
-      "",
-    ]
-    : [];
-  return [
-    ...workspaceLines,
-    ...profileContextLines,
-    ...frameworkReplacementContextLines,
-    "【会话上下文】",
-    ...historyLines,
-    "",
-    "【当前请求】",
-    normalizedRequest,
-  ].join("\n");
-}
-
-// 描述:
-//
-//   - 清理导出路径尾部噪声字符，提升路径解析命中率。
-//
-// Params:
-//
-//   - path: 原始路径文本。
-//
-// Returns:
-//
-//   - 清理后的路径文本。
-function trimOutputSuffix(path: string): string {
-  let result = path.trim().replace(/[，。；！？、]+$/u, "");
-  result = result.replace(/[)"'`”]+$/u, "");
-  if ((result.startsWith("/") || /^[a-zA-Z]:\\/.test(result)) && /[中里]$/.test(result)) {
-    result = result.slice(0, -1);
-  }
-  return result;
-}
-
-// 描述:
-//
-//   - 从提示词中提取导出目录路径。
-//
-// Params:
-//
-//   - prompt: 用户提示词。
-//
-// Returns:
-//
-//   - 导出目录；未命中返回 undefined。
-function extractOutputDirFromPrompt(prompt: string): string | undefined {
-  const quotedMatch = prompt.match(OUTPUT_DIR_QUOTED_REGEX);
-  if (quotedMatch?.[1]) {
-    const normalized = trimOutputSuffix(quotedMatch[1]);
-    return normalized || undefined;
-  }
-
-  const plainMatch = prompt.match(OUTPUT_DIR_PLAIN_REGEX);
-  if (plainMatch?.[1]) {
-    const normalized = trimOutputSuffix(plainMatch[1]);
-    return normalized || undefined;
-  }
-
-  return undefined;
-}
-
-// 描述：从用户输入中提取首个贴图路径，供完成总结文案引用。
-//
-// Params:
-//
-//   - prompt: 用户输入原文。
-//
-// Returns:
-//
-//   - 贴图路径；未命中时返回 undefined。
-function extractTexturePathFromPrompt(prompt: string): string | undefined {
-  const match = prompt.match(IMAGE_PATH_REGEX);
-  if (!match?.[1]) {
-    return undefined;
-  }
-  return trimOutputSuffix(match[1]) || undefined;
-}
-
-// 描述：把模型步骤记录转换为用户可读的动作文案，避免暴露内部术语。
-//
-// Params:
-//
-//   - step: 模型步骤记录。
-//   - texturePath: 用户输入中提取的贴图路径。
-//
-// Returns:
-//
-//   - 面向用户的单步总结文案。
-function buildUserReadableStepLine(step: ModelStepRecord, texturePath?: string): string {
-  const code = step.code || "unknown";
-  const summary = (step.summary || "").trim();
-
-  if (code === "new_file") {
-    return "已新建 Blender 场景文件。";
-  }
-  if (code === "add_cube") {
-    const name = summary.match(/`([^`]+)`/)?.[1];
-    if (name) {
-      return `已创建正方体对象「${name}」。`;
-    }
-    return "已创建一个正方体对象。";
-  }
-  if (code === "apply_texture_image") {
-    if (texturePath) {
-      return `已将贴图「${texturePath}」应用到目标对象材质。`;
-    }
-    return "已为目标对象应用贴图材质。";
-  }
-
-  if (summary) {
-    return `已完成「${code}」：${summary}`;
-  }
-  return `已完成「${code}」步骤。`;
-}
-
-// 描述：构建模型执行的用户可读总结，突出“做了什么”和“最终结果”。
-//
-// Params:
-//
-//   - requestPrompt: 用户原始指令。
-//   - steps: 模型步骤记录。
-//   - exportedFile: 导出文件路径。
-//   - bridgeRecovered: 是否发生过 Bridge 预检失败但已恢复。
-//
-// Returns:
-//
-//   - 可直接展示给用户的总结文本。
-function buildUserReadableModelSummary(
-  requestPrompt: string,
-  steps: ModelStepRecord[],
-  exportedFile?: string,
-  bridgeRecovered = false,
-): string {
-  const successSteps = steps.filter((item) => item.status === "success");
-  const failedSteps = steps.filter((item) => item.status === "failed");
-  const texturePath = extractTexturePathFromPrompt(requestPrompt);
-  const lines: string[] = ["已按你的需求完成本次模型操作。"];
-
-  if (successSteps.length > 0) {
-    lines.push("", "本次执行内容：");
-    successSteps.forEach((step, index) => {
-      lines.push(`${index + 1}. ${buildUserReadableStepLine(step, texturePath)}`);
-    });
-  } else {
-    lines.push("", "本次未获取到可确认的成功步骤记录。");
-  }
-
-  if (failedSteps.length > 0) {
-    lines.push("", `注意：仍有 ${failedSteps.length} 个步骤执行失败，请根据日志继续重试。`);
-  }
-
-  if (exportedFile) {
-    lines.push("", `导出结果：${exportedFile}`);
-  }
-
-  if (bridgeRecovered) {
-    lines.push("", "环境说明：执行前检测到 Bridge 短暂不可用，系统已自动恢复后继续执行。");
-  }
-
-  lines.push(
-    "",
-    `执行结果：成功 ${successSteps.length} 步${failedSteps.length > 0 ? `，失败 ${failedSteps.length} 步` : ""}。`,
-  );
-  return lines.join("\n").trim();
-}
-  // 描述：渲染通用会话页，统一承载 code/model 会话交互、流式渲染与工作流执行。
-
-interface TraceRecord {
-  traceId: string;
-  source: string;
-  code?: string;
-  message: string;
-}
-
-// 描述：将单条步骤记录合并到现有步骤列表，按 index 覆盖同编号项，避免流式重复追加。
-function mergeModelStepRecords(records: ModelStepRecord[], incoming?: ModelStepRecord): ModelStepRecord[] {
-  if (!incoming) {
-    return records;
-  }
-  const next = [...records];
-  const hit = next.findIndex((item) => item.index === incoming.index);
-  if (hit >= 0) {
-    next[hit] = incoming;
-    return next;
-  }
-  next.push(incoming);
-  next.sort((a, b) => a.index - b.index);
-  return next;
-}
-
-// 描述：将单条事件记录合并到现有事件列表，按 event+step_index+timestamp 去重，避免流式抖动。
-function mergeModelEventRecords(records: ModelEventRecord[], incoming?: ModelEventRecord): ModelEventRecord[] {
-  if (!incoming) {
-    return records;
-  }
-  const exists = records.some((item) =>
-    item.event === incoming.event
-    && item.step_index === incoming.step_index
-    && item.timestamp_ms === incoming.timestamp_ms);
-  if (exists) {
-    return records;
-  }
-  return [...records, incoming];
-}
-
-// 描述：按消息 ID 替换现有消息文本，若未命中则追加到末尾。
-function upsertAssistantMessageById(messages: MessageItem[], messageId: string, text: string): MessageItem[] {
-  if (!messageId) {
-    return [...messages, { role: "assistant", text }];
-  }
-  const hit = messages.findIndex((item) => item.id === messageId);
-  if (hit < 0) {
-    return [...messages, { id: messageId, role: "assistant", text }];
-  }
-  const next = [...messages];
-  next[hit] = {
-    ...next[hit],
-    role: "assistant",
-    text,
-  };
-  return next;
-}
-
-// 描述：按目标助手消息索引清理其后的“同轮助手尾部消息”，用于重试时覆盖旧结果。
-//
-// Params:
-//
-//   - messages: 当前会话消息列表。
-//   - assistantMessageIndex: 触发重试的助手消息索引。
-//
-// Returns:
-//
-//   - 清理后的消息列表与被移除消息 ID。
-function pruneAssistantRetryTail(
-  messages: MessageItem[],
-  assistantMessageIndex: number,
-): RetryTailPruneResult {
-  if (assistantMessageIndex < 0 || assistantMessageIndex >= messages.length) {
-    return {
-      messages: [...messages],
-      removedAssistantMessageIds: [],
-    };
-  }
-  let rangeEnd = messages.length;
-  for (let cursor = assistantMessageIndex + 1; cursor < messages.length; cursor += 1) {
-    if (messages[cursor]?.role === "user") {
-      rangeEnd = cursor;
-      break;
-    }
-  }
-  if (rangeEnd <= assistantMessageIndex + 1) {
-    return {
-      messages: [...messages],
-      removedAssistantMessageIds: [],
-    };
-  }
-
-  const removedAssistantMessageIds: string[] = [];
-  const nextMessages: MessageItem[] = [];
-  messages.forEach((item, index) => {
-    const inPruneRange = index > assistantMessageIndex && index < rangeEnd;
-    if (inPruneRange && item.role === "assistant") {
-      const messageId = String(item.id || "").trim();
-      if (messageId) {
-        removedAssistantMessageIds.push(messageId);
-      }
-      return;
-    }
-    nextMessages.push(item);
-  });
-
-  return {
-    messages: nextMessages,
-    removedAssistantMessageIds,
-  };
-}
 
 // 描述：把持久化运行态转换为页面运行态结构，过滤非法片段并补齐默认值。
 //
@@ -1674,6 +1467,13 @@ function normalizePersistedRunMeta(input: PersistedSessionRunMeta): AssistantRun
             : item.status === "finished"
               ? "finished"
               : "running",
+        // 描述：
+        //
+        //   - 持久化恢复时保留 data 透传字段（如 approval_id、tool_args、segment kind），
+        //     避免离开页面后返回会话无法继续人工授权。
+        data: item.data && typeof item.data === "object"
+          ? (item.data as Record<string, unknown>)
+          : undefined,
         detail: typeof item.detail === "string" ? item.detail : undefined,
       }))
       .filter((item) => item.intro || item.step)
@@ -1857,6 +1657,7 @@ export function SessionPage({
   );
   const [messages, setMessages] = useState<MessageItem[]>([]);
   const [assistantRunMetaMap, setAssistantRunMetaMap] = useState<Record<string, AssistantRunMeta>>({});
+  const [sessionApprovedToolNames, setSessionApprovedToolNames] = useState<string[]>([]);
   const [expandedRunSegmentDetailMap, setExpandedRunSegmentDetailMap] = useState<Record<string, boolean>>({});
   const [sessionAiPromptRaw, setSessionAiPromptRaw] = useState("");
   const [sessionAiResponseRaw, setSessionAiResponseRaw] = useState("");
@@ -1980,6 +1781,7 @@ export function SessionPage({
   const streamRenderPendingRef = useRef(false);
   const streamRenderFrameRef = useRef<number | null>(null);
   const sessionMessagePersistTimerRef = useRef<number | null>(null);
+  const sessionRunStatePersistTimerRef = useRef<number | null>(null);
   const debugSnapshotTimerRef = useRef<number | null>(null);
   const modelStreamRecordFlushTimerRef = useRef<number | null>(null);
   const activeAgentStreamTraceRef = useRef("");
@@ -1997,6 +1799,8 @@ export function SessionPage({
   const codeAgentLlmDeltaBufferRef = useRef("");
   const codeAgentLlmResponseRawRef = useRef("");
   const autoPromptDispatchedRef = useRef(false);
+  const assistantRunMetaMapRef = useRef<Record<string, AssistantRunMeta>>({});
+  const sessionApprovedToolNameSetRef = useRef<Set<string>>(new Set());
 
   // 描述：停止当前会话流式渲染调度，避免会话切换后残留异步刷新。
   const stopStreamTypingTimer = () => {
@@ -2012,6 +1816,14 @@ export function SessionPage({
     if (sessionMessagePersistTimerRef.current !== null) {
       window.clearTimeout(sessionMessagePersistTimerRef.current);
       sessionMessagePersistTimerRef.current = null;
+    }
+  };
+
+  // 描述：清理会话运行态持久化定时器，避免执行流高频事件触发同步写入卡顿。
+  const clearSessionRunStatePersistTimer = () => {
+    if (sessionRunStatePersistTimerRef.current !== null) {
+      window.clearTimeout(sessionRunStatePersistTimerRef.current);
+      sessionRunStatePersistTimerRef.current = null;
     }
   };
 
@@ -2156,7 +1968,13 @@ export function SessionPage({
       if (!current) {
         return prev;
       }
-      const last = current.segments[current.segments.length - 1];
+      // 描述：初始化阶段仅保留一条“正在思考”占位；一旦收到真实片段，立即替换，避免出现“用户原文闪烁”。
+      const baseSegments = current.segments.length === 1
+        && isInitialThinkingSegment(current.segments[0])
+        && !isInitialThinkingSegment(segment)
+        ? []
+        : current.segments;
+      const last = baseSegments[baseSegments.length - 1];
       const isDuplicate = Boolean(
         last
         && last.intro === segment.intro
@@ -2168,8 +1986,75 @@ export function SessionPage({
         return prev;
       }
       // 描述：保证同一时刻仅有一个 running 段，避免出现多个“同时闪烁”的进行中步骤。
-      const normalizedSegments = current.segments.map((item) =>
-        item.status === "running" ? { ...item, status: "finished" as const } : item);
+      // 例外：人工授权片段在收到“工具完成/终态”前必须保持 running，防止授权卡片提前消失。
+      const incomingSegmentKind = segment.data && typeof segment.data.__segment_kind === "string"
+        ? segment.data.__segment_kind
+        : "";
+      const shouldResolveApprovalPending = incomingSegmentKind === STREAM_KINDS.TOOL_CALL_FINISHED
+        || incomingSegmentKind === STREAM_KINDS.ERROR
+        || incomingSegmentKind === STREAM_KINDS.CANCELLED
+        || incomingSegmentKind === STREAM_KINDS.FINISHED
+        || incomingSegmentKind === STREAM_KINDS.FINAL;
+      const incomingStepText = String(segment.step || "").trim();
+      const incomingErrorCode = segment.data && typeof segment.data.__error_code === "string"
+        ? String(segment.data.__error_code || "").trim()
+        : "";
+      const isHumanRefusedError = incomingSegmentKind === STREAM_KINDS.ERROR
+        && (
+          incomingErrorCode === "core.agent.human_refused"
+          || incomingStepText.includes("拒绝")
+        );
+      const normalizedSegments = baseSegments.map((item) => {
+        if (item.status !== "running") {
+          return item;
+        }
+        if (!isApprovalPendingSegment(item)) {
+          return { ...item, status: "finished" as const };
+        }
+        if (!shouldResolveApprovalPending) {
+          return item;
+        }
+        const toolName = String(
+          item.data && typeof item.data.tool_name === "string" ? item.data.tool_name : "",
+        ).trim();
+        if (isHumanRefusedError) {
+          return {
+            ...item,
+            status: "failed" as const,
+            step: `已拒绝 ${toolName || "该工具"} 的执行请求。`,
+            data: {
+              ...(item.data && typeof item.data === "object" ? item.data : {}),
+              __step_type: "approval_decision",
+              approval_decision: "rejected",
+              approval_tool_name: toolName || "该工具",
+            },
+          };
+        }
+        if (incomingSegmentKind === STREAM_KINDS.CANCELLED) {
+          return {
+            ...item,
+            status: "finished" as const,
+            step: `授权流程已取消，未执行 ${toolName || "该工具"}。`,
+            data: {
+              ...(item.data && typeof item.data === "object" ? item.data : {}),
+              __step_type: "approval_decision",
+              approval_decision: "cancelled",
+              approval_tool_name: toolName || "该工具",
+            },
+          };
+        }
+        return {
+          ...item,
+          status: "finished" as const,
+          step: `已处理 ${toolName || "该工具"} 的授权请求。`,
+          data: {
+            ...(item.data && typeof item.data === "object" ? item.data : {}),
+            __step_type: "approval_decision",
+            approval_decision: "handled",
+            approval_tool_name: toolName || "该工具",
+          },
+        };
+      });
       return {
         ...prev,
         [messageId]: {
@@ -2179,6 +2064,24 @@ export function SessionPage({
       };
     });
   };
+
+  // 描述：
+  //
+  //   - 同步运行态 ref，供心跳等异步回调读取最新授权状态，避免闭包读取旧值。
+  useEffect(() => {
+    assistantRunMetaMapRef.current = assistantRunMetaMap;
+  }, [assistantRunMetaMap]);
+
+  // 描述：
+  //
+  //   - 同步“会话内已批准工具”集合到 ref，供流式事件回调快速判定是否自动放行授权。
+  useEffect(() => {
+    sessionApprovedToolNameSetRef.current = new Set(
+      (sessionApprovedToolNames || [])
+        .map((toolName) => normalizeApprovalToolName(toolName))
+        .filter((toolName) => Boolean(toolName)),
+    );
+  }, [sessionApprovedToolNames]);
 
   // 描述：启动智能体执行心跳，在长时间无流式事件时持续补充用户可见进度。
   //
@@ -2195,32 +2098,25 @@ export function SessionPage({
         return;
       }
 
+      const currentMeta = assistantRunMetaMapRef.current[messageId];
+      const pendingApproval = Boolean(
+        currentMeta
+        && currentMeta.status === "running"
+        && currentMeta.segments.some((item) => item.status === "running" && isApprovalPendingSegment(item)),
+      );
       const idleMs = Date.now() - assistantRunLastActivityAtRef.current;
-      if (idleMs >= 1400) {
+      if (!pendingApproval && idleMs >= 1400) {
         assistantRunHeartbeatCountRef.current += 1;
-        if (assistantRunHeartbeatCountRef.current >= ASSISTANT_RUN_HEARTBEAT_STALE_LIMIT) {
-          const timeoutSummary = assistantRunAgentKindRef.current === "model"
-            ? "执行超时：长时间未收到模型执行结果，请重试。"
-            : "执行超时：长时间未收到工具执行结果，请重试。";
-          setStreamingAssistantTarget(timeoutSummary);
-          finishAssistantRunMessage(messageId, "failed", timeoutSummary);
-          setStatus(timeoutSummary);
-          setSending(false);
-          if (!isWorkflowSession) {
-            activeAgentStreamTraceRef.current = "";
-          }
-          clearAssistantRunHeartbeatTimer();
-          return;
-        }
-        appendAssistantRunSegment(
-          messageId,
-          buildAssistantHeartbeatSegment(
-            assistantRunStageRef.current,
-            assistantRunHeartbeatCountRef.current,
-            `heartbeat-${Date.now()}`,
-            assistantRunAgentKindRef.current,
-          ),
+        const heartbeatSegment = buildAssistantHeartbeatSegment(
+          assistantRunStageRef.current,
+          assistantRunHeartbeatCountRef.current,
+          `heartbeat-${Date.now()}`,
+          assistantRunAgentKindRef.current,
         );
+        // 描述：
+        //
+        //   - 心跳仅用于“正在思考”提示，不再写入执行步骤，避免产生无信息价值的噪声步骤。
+        setStreamingAssistantTarget(String(heartbeatSegment.intro || "").trim() || "智能体正在思考…");
         assistantRunLastActivityAtRef.current = Date.now();
       }
       assistantRunHeartbeatTimerRef.current = window.setTimeout(tick, 1200);
@@ -2358,6 +2254,7 @@ export function SessionPage({
   useEffect(() => {
     stopStreamTypingTimer();
     clearSessionMessagePersistTimer();
+    clearSessionRunStatePersistTimer();
     clearDebugSnapshotTimer();
     clearModelStreamRecordFlushTimer();
     clearAssistantRunHeartbeatTimer();
@@ -2384,6 +2281,7 @@ export function SessionPage({
     setTraceRecords([]);
     setDebugFlowRecords([]);
     setAssistantRunMetaMap({});
+    setSessionApprovedToolNames([]);
     setExpandedRunSegmentDetailMap({});
     setSessionAiPromptRaw("");
     setSessionAiResponseRaw("");
@@ -2401,6 +2299,12 @@ export function SessionPage({
     const stored = getSessionMessages(normalizedAgentKey, sessionId);
     const debugArtifact = getSessionDebugArtifact(normalizedAgentKey, sessionId);
     const runSnapshot = getSessionRunState(normalizedAgentKey, sessionId);
+    const restoredSessionApprovedToolNames = Array.isArray(runSnapshot?.sessionApprovedToolNames)
+      ? runSnapshot?.sessionApprovedToolNames
+        .map((toolName) => normalizeApprovalToolName(String(toolName || "")))
+        .filter((toolName) => Boolean(toolName))
+      : [];
+    setSessionApprovedToolNames(Array.from(new Set(restoredSessionApprovedToolNames)));
     let nextMessages: MessageItem[] = stored.length > 0 ? stored : [];
     if (debugArtifact) {
       setTraceRecords((debugArtifact.traceRecords || []).map((item) => ({
@@ -2480,6 +2384,7 @@ export function SessionPage({
   useEffect(() => () => {
     stopStreamTypingTimer();
     clearSessionMessagePersistTimer();
+    clearSessionRunStatePersistTimer();
     clearDebugSnapshotTimer();
     clearModelStreamRecordFlushTimer();
     clearAssistantRunHeartbeatTimer();
@@ -2516,26 +2421,45 @@ export function SessionPage({
 
   useEffect(() => {
     if (!sessionId || !messagesHydrated || hydratedSessionKey !== sessionStorageKey) {
+      clearSessionRunStatePersistTimer();
       return;
     }
-    if (Object.keys(assistantRunMetaMap).length === 0) {
+    clearSessionRunStatePersistTimer();
+    const normalizedSessionApprovedToolNames = Array.from(new Set(
+      (sessionApprovedToolNames || [])
+        .map((toolName) => normalizeApprovalToolName(toolName))
+        .filter((toolName) => Boolean(toolName)),
+    ));
+    if (Object.keys(assistantRunMetaMap).length === 0 && normalizedSessionApprovedToolNames.length === 0) {
       removeSessionRunState(normalizedAgentKey, sessionId);
       return;
     }
-    upsertSessionRunState({
-      agentKey: normalizedAgentKey,
-      sessionId,
-      activeMessageId: String(streamMessageIdRef.current || "").trim(),
-      sending,
-      runMetaMap: assistantRunMetaMap,
-      updatedAt: Date.now(),
-    });
+    // 描述：
+    //
+    //   - 执行中使用节流持久化，降低 localStorage 同步写入频率，避免授权阶段主线程阻塞。
+    const persistDelay = sending ? 900 : 180;
+    sessionRunStatePersistTimerRef.current = window.setTimeout(() => {
+      sessionRunStatePersistTimerRef.current = null;
+      upsertSessionRunState({
+        agentKey: normalizedAgentKey,
+        sessionId,
+        activeMessageId: String(streamMessageIdRef.current || "").trim(),
+        sending,
+        runMetaMap: assistantRunMetaMap,
+        sessionApprovedToolNames: normalizedSessionApprovedToolNames,
+        updatedAt: Date.now(),
+      });
+    }, persistDelay);
+    return () => {
+      clearSessionRunStatePersistTimer();
+    };
   }, [
     assistantRunMetaMap,
     hydratedSessionKey,
     messagesHydrated,
     normalizedAgentKey,
     sending,
+    sessionApprovedToolNames,
     sessionId,
     sessionStorageKey,
   ]);
@@ -2904,11 +2828,34 @@ export function SessionPage({
       }
       assistantRunLastActivityAtRef.current = Date.now();
       assistantRunStageRef.current = resolveAssistantRunStageByAgentTextStream(payload);
-      const segmentKey = `agent:${payload.kind}:${payload.message}:${payload.delta || ""}`;
+      const segmentDataText = payload.data && typeof payload.data === "object"
+        ? truncateRunText(JSON.stringify(payload.data), 600)
+        : "";
+      const segmentKey = `agent:${payload.kind}:${payload.message}:${payload.delta || ""}:${segmentDataText}`;
       if (!agentStreamSeenKeysRef.current.has(segmentKey)) {
         agentStreamSeenKeysRef.current.add(segmentKey);
         // 描述：收到真实文本流事件后重置心跳计数，避免误判为“无进展超时”。
         assistantRunHeartbeatCountRef.current = 0;
+        // 描述：
+        //
+        //   - 命中“会话内批准”策略时自动放行授权，不再重复弹出授权卡片。
+        if (payload.kind === STREAM_KINDS.REQUIRE_APPROVAL) {
+          const approvalData = resolveApprovalEventData(payload);
+          const approvalId = String(approvalData.approval_id || "").trim();
+          const toolName = normalizeApprovalToolName(String(approvalData.tool_name || ""));
+          if (
+            approvalId
+            && toolName
+            && sessionApprovedToolNameSetRef.current.has(toolName)
+          ) {
+            void handleApproveAgentAction(approvalId, true, {
+              scope: "session",
+              toolName,
+              silent: true,
+            });
+            return;
+          }
+        }
         const runSegment = mapAgentTextStreamToRunSegment(payload, segmentKey);
         if (runSegment) {
           appendAssistantRunSegment(streamMessageIdRef.current, runSegment);
@@ -2950,9 +2897,17 @@ export function SessionPage({
         }
         return;
       }
-      if (payload.kind === STREAM_KINDS.FINISHED || payload.kind === STREAM_KINDS.FINAL) {
-        const finalSummary = String(agentStreamTextBufferRef.current || "").trim()
-          || String(payload.message || "").trim()
+      if (payload.kind === STREAM_KINDS.FINISHED) {
+        return;
+      }
+      if (payload.kind === STREAM_KINDS.FINAL) {
+        const currentMessageId = String(streamMessageIdRef.current || "").trim();
+        const currentMeta = currentMessageId
+          ? assistantRunMetaMapRef.current[currentMessageId]
+          : undefined;
+        const fallbackSummary = resolveMeaningfulRunSummary(currentMeta?.segments || []);
+        const finalSummary = String(payload.message || "").trim()
+          || fallbackSummary
           || "执行完成";
         setStreamingAssistantTarget(finalSummary);
         finishAssistantRunMessage(streamMessageIdRef.current, "finished", finalSummary);
@@ -3186,9 +3141,12 @@ export function SessionPage({
         segments: [
           {
             key: `intro-${Date.now()}`,
-            intro: "已接收需求，开始规划执行",
-            step: normalizedContent,
+            intro: "",
+            step: "正在思考…",
             status: "running",
+            data: {
+              __segment_role: INITIAL_THINKING_SEGMENT_ROLE,
+            },
           },
         ],
       },
@@ -3422,16 +3380,6 @@ export function SessionPage({
             },
           }));
         }
-        const generatedCodeDetail = resolveCodegenScriptSegmentDetail(responseSteps);
-        if (generatedCodeDetail) {
-          appendAssistantRunSegment(streamMessageId, {
-            key: `codegen-script-${Date.now()}`,
-            intro: "编排脚本已生成",
-            step: "已生成可执行脚本，点击展开查看详细代码。",
-            status: "finished",
-            detail: generatedCodeDetail,
-          });
-        }
         appendTraceRecord({
           traceId: response.trace_id,
           source: "agent:run",
@@ -3511,16 +3459,6 @@ export function SessionPage({
               responseRaw: rawCodeResponse,
             },
           }));
-        }
-        const fallbackCodeDetail = resolveCodeSegmentDetailFromRawResponse(rawCodeResponse);
-        if (fallbackCodeDetail) {
-          appendAssistantRunSegment(streamMessageIdRef.current, {
-            key: `codegen-script-failed-${Date.now()}`,
-            intro: "编排脚本（失败现场）",
-            step: "本轮执行失败，可展开查看本次 AI 返回脚本。",
-            status: "failed",
-            detail: fallbackCodeDetail,
-          });
         }
       }
       if (streamMessageIdRef.current) {
@@ -3661,6 +3599,27 @@ export function SessionPage({
       setStatus("复制失败，请检查系统剪贴板权限");
     }
   };
+  // 描述：复制执行步骤中的文件路径，用于“已编辑”步骤文件名点击反馈。
+  //
+  // Params:
+  //
+  //   - filePath: 需要复制的绝对或相对路径。
+  const handleCopyRunStepFilePath = async (filePath: string) => {
+    const normalizedPath = String(filePath || "").trim();
+    if (!normalizedPath) {
+      return;
+    }
+    try {
+      if (!navigator?.clipboard?.writeText) {
+        setStatus("复制失败，请检查系统剪贴板权限");
+        return;
+      }
+      await navigator.clipboard.writeText(normalizedPath);
+      setStatus(`文件路径已复制：${normalizedPath}`);
+    } catch {
+      setStatus("复制失败，请检查系统剪贴板权限");
+    }
+  };
 
   // 描述：
   //
@@ -3701,6 +3660,15 @@ export function SessionPage({
     }
   };
 
+  // 描述：统一处理输入区主按钮动作，空闲时发送消息，执行中时触发取消。
+  const handlePromptPrimaryAction = () => {
+    if (sending) {
+      void handleCancelCurrentRun();
+      return;
+    }
+    void sendMessage();
+  };
+
   const handleChangeProvider = (value: string | number | (string | number)[] | undefined) => {
     if (Array.isArray(value)) {
       return;
@@ -3712,9 +3680,111 @@ export function SessionPage({
     setSelectedProvider(nextProvider);
   };
 
-  const handleApproveAgentAction = async (id: string, approved: boolean) => {
+  // 描述：根据审批结果更新本地运行片段状态，确保授权卡片在用户操作后即时收敛。
+  //
+  // Params:
+  //
+  //   - approvalId: 授权请求 ID。
+  //   - status: 目标片段状态。
+  //   - stepText: 更新后的步骤文案。
+  const markApprovalSegmentResolved = (
+    approvalId: string,
+    status: AssistantRunSegmentStatus,
+    stepText: string,
+    options?: {
+      decision?: "approved" | "rejected" | "cancelled" | "handled";
+      scope?: "once" | "session";
+      toolName?: string;
+    },
+  ) => {
+    const normalizedApprovalId = String(approvalId || "").trim();
+    if (!normalizedApprovalId) {
+      return;
+    }
+    setAssistantRunMetaMap((prev) =>
+      Object.fromEntries(
+        Object.entries(prev).map(([messageId, meta]) => {
+          const nextSegments = (meta.segments || []).map((segment) => {
+            const segmentApprovalId = segment.data && typeof segment.data.approval_id === "string"
+              ? String(segment.data.approval_id || "").trim()
+              : "";
+            if (!segmentApprovalId || segmentApprovalId !== normalizedApprovalId || !isApprovalPendingSegment(segment)) {
+              return segment;
+            }
+            const stepData = segment.data && typeof segment.data === "object" ? segment.data : {};
+            const toolName = String(options?.toolName || stepData.tool_name || "").trim() || "该工具";
+            return {
+              ...segment,
+              status,
+              step: stepText,
+              data: {
+                ...stepData,
+                __step_type: "approval_decision",
+                approval_decision: options?.decision || (status === "failed" ? "rejected" : "approved"),
+                approval_scope: options?.scope || undefined,
+                approval_tool_name: toolName,
+              },
+            };
+          });
+          return [
+            messageId,
+            {
+              ...meta,
+              segments: nextSegments,
+            },
+          ] as const;
+        }),
+      ),
+    );
+  };
+
+  // 描述：提交人工授权决策，支持“本次批准 / 会话内批准 / 拒绝”三种交互语义。
+  const handleApproveAgentAction = async (
+    id: string,
+    approved: boolean,
+    options?: {
+      scope?: "once" | "session";
+      toolName?: string;
+      silent?: boolean;
+    },
+  ) => {
+    const normalizedToolName = normalizeApprovalToolName(options?.toolName || "");
     try {
       await invoke(COMMANDS.APPROVE_AGENT_ACTION, { id, approved });
+      if (approved && options?.scope === "session" && normalizedToolName) {
+        setSessionApprovedToolNames((current) => {
+          if (current.includes(normalizedToolName)) {
+            return current;
+          }
+          return [...current, normalizedToolName];
+        });
+        if (!options?.silent) {
+          AriMessage.success(`已批准 ${normalizedToolName || "该工具"}`);
+        }
+      }
+      if (approved) {
+        markApprovalSegmentResolved(
+          id,
+          "finished",
+          `已批准 ${normalizedToolName || "该工具"}`,
+          {
+            decision: "approved",
+            scope: options?.scope === "session" ? "session" : "once",
+            toolName: normalizedToolName || "该工具",
+          },
+        );
+      } else {
+        markApprovalSegmentResolved(
+          id,
+          "failed",
+          `已拒绝 ${normalizedToolName || "该工具"} 的执行请求。`,
+          {
+            decision: "rejected",
+            scope: "once",
+            toolName: normalizedToolName || "该工具",
+          },
+        );
+      }
     } catch (err) {
       setStatus("授权操作失败，请重试");
     }
@@ -3722,10 +3792,29 @@ export function SessionPage({
 
   // 描述：获取当前最后一个待授权的任务。
   const activeApprovalSegment = (() => {
-    if (!sending || !streamMessageIdRef.current) return null;
-    const meta = assistantRunMetaMap[streamMessageIdRef.current];
-    if (!meta) return null;
-    return meta.segments.find(s => s.status === "running" && s.intro === "需要人工授权") || null;
+    const runningMessageIds = Object.entries(assistantRunMetaMap)
+      .filter(([, meta]) => meta.status === "running")
+      .map(([messageId]) => messageId);
+    if (runningMessageIds.length === 0) {
+      return null;
+    }
+    const preferredMessageId = String(streamMessageIdRef.current || "").trim();
+    const orderedMessageIds = preferredMessageId && runningMessageIds.includes(preferredMessageId)
+      ? [preferredMessageId, ...runningMessageIds.filter((id) => id !== preferredMessageId)]
+      : runningMessageIds;
+    for (const messageId of orderedMessageIds) {
+      const meta = assistantRunMetaMap[messageId];
+      if (!meta) {
+        continue;
+      }
+      const hit = [...meta.segments].reverse().find(
+        (segment) => segment.status === "running" && isApprovalPendingSegment(segment),
+      );
+      if (hit) {
+        return hit;
+      }
+    }
+    return null;
   })();
   const activeApprovalData = activeApprovalSegment?.data || {};
   const activeApprovalId =
@@ -3733,7 +3822,9 @@ export function SessionPage({
   const activeApprovalToolName =
     typeof activeApprovalData.tool_name === "string" ? activeApprovalData.tool_name : "工具";
   const activeApprovalToolArgs =
-    typeof activeApprovalData.tool_args === "string" ? activeApprovalData.tool_args : "";
+    typeof activeApprovalData.tool_args === "string"
+      ? truncateRunText(activeApprovalData.tool_args, APPROVAL_TOOL_ARGS_PREVIEW_MAX_CHARS)
+      : "";
 
   // 描述：
   //
@@ -4884,7 +4975,9 @@ const handleConfirmWorkflowSkillModal = () => {
                 ? (() => {
                   const normalizedSegments = runMeta.segments
                     .map((segment) => {
-                      const intro = normalizeRunSegmentIntroForCopy(segment.intro, segment.step);
+                      const intro = isInitialThinkingSegment(segment)
+                        ? ""
+                        : normalizeRunSegmentIntroForCopy(segment.intro, segment.step);
                       const step = String(segment.step || "").trim() || "（空步骤）";
                       return {
                         ...segment,
@@ -4914,57 +5007,56 @@ const handleConfirmWorkflowSkillModal = () => {
                   }];
                 })()
                 : [];
-              const renderRunSegment = (segment: AssistantRunSegment, segmentKeyPrefix = "") => {
+              const hasPendingApprovalInRender = runMeta?.status === "running"
+                && runSegmentsForRender.some(
+                  (segment) => segment.status === "running" && isApprovalPendingSegment(segment),
+                );
+              const runSegmentGroups = buildRunSegmentGroups(runSegmentsForRender);
+              const renderRunSegment = (segment: AssistantRunSegmentStep, segmentKeyPrefix = "") => {
                 const segmentDomKey = `${segmentKeyPrefix}${segment.key}`;
-                const detailText = String(segment.detail || "").trim();
-                const hasDetail = detailText.length > 0;
                 const detailKey = `${messageKey}:${segmentDomKey}`;
-                const detailExpanded = hasDetail && Boolean(expandedRunSegmentDetailMap[detailKey]);
+                const detailExpanded = Boolean(expandedRunSegmentDetailMap[detailKey]);
                 return (
-                  <AriContainer
+                  <SessionRunSegmentItem
                     key={segmentDomKey}
-                    className="desk-run-segment"
-                    padding={0}
-                  >
-                    <AriTypography
-                      className="desk-run-intro"
-                      variant="caption"
-                      value={segment.intro}
-                    />
-                    <AriTypography
-                      className={`desk-run-step ${segment.status === "running" ? "desk-run-step-running" : ""}`}
-                      variant="caption"
-                      value={segment.step}
-                    />
-                    {hasDetail ? (
-                      <button
-                        type="button"
-                        className="desk-run-segment-detail-toggle"
-                        onClick={() => {
-                          toggleRunSegmentDetailExpanded(detailKey);
-                        }}
-                      >
-                        <span className="desk-run-segment-detail-label">
-                          {detailExpanded ? "收起代码详情" : "查看代码详情"}
-                        </span>
-                        <span className={`desk-run-segment-detail-arrow ${detailExpanded ? "open" : ""}`}>
-                          ▾
-                        </span>
-                      </button>
-                    ) : null}
-                    {hasDetail && detailExpanded ? (
-                      <pre className="desk-run-segment-detail-code">
-                        {detailText}
-                      </pre>
-                    ) : null}
-                  </AriContainer>
+                    segment={segment}
+                    detailExpanded={detailExpanded}
+                    onToggleDetail={() => {
+                      toggleRunSegmentDetailExpanded(detailKey);
+                    }}
+                    onCopyFilePath={(filePath) => {
+                      void handleCopyRunStepFilePath(filePath);
+                    }}
+                  />
                 );
               };
               const messageContent = useRunLayout && runMeta ? (
                 <AriContainer className="desk-run-flow" padding={0}>
                   {runMeta.status === "running" ? (
                     <AriContainer className="desk-run-segments" padding={0}>
-                      {runSegmentsForRender.map((segment) => renderRunSegment(segment))}
+                      {runSegmentGroups.map((group) => (
+                        <AriContainer key={group.key} className="desk-run-group" padding={0}>
+                          {String(group.title || "").trim() ? (
+                            <AriTypography
+                              className="desk-run-intro"
+                              variant="body"
+                              value={group.title}
+                            />
+                          ) : null}
+                          <AriContainer className="desk-run-group-steps" padding={0}>
+                            {group.steps.map((step) => renderRunSegment(step))}
+                          </AriContainer>
+                        </AriContainer>
+                      ))}
+                      {!hasPendingApprovalInRender ? (
+                        <AriContainer className="desk-run-thinking-indicator" padding={0}>
+                          <AriTypography
+                            className="desk-run-step desk-run-step-running"
+                            variant="caption"
+                            value="正在思考…"
+                          />
+                        </AriContainer>
+                      ) : null}
                     </AriContainer>
                   ) : (
                     <>
@@ -4990,7 +5082,20 @@ const handleConfirmWorkflowSkillModal = () => {
                       </button>
                       {!runMeta.collapsed ? (
                         <AriContainer className="desk-run-segments desk-run-segments-collapsed" padding={0}>
-                          {runSegmentsForRender.map((segment) => renderRunSegment(segment, "collapsed-"))}
+                          {runSegmentGroups.map((group) => (
+                            <AriContainer key={`collapsed-${group.key}`} className="desk-run-group" padding={0}>
+                              {String(group.title || "").trim() ? (
+                                <AriTypography
+                                  className="desk-run-intro"
+                                  variant="body"
+                                  value={group.title}
+                                />
+                              ) : null}
+                              <AriContainer className="desk-run-group-steps" padding={0}>
+                                {group.steps.map((step) => renderRunSegment(step, "collapsed-"))}
+                              </AriContainer>
+                            </AriContainer>
+                          ))}
                         </AriContainer>
                       ) : null}
                       <AriContainer className={`desk-run-summary ${runMeta.status === "failed" ? "desk-run-summary-failed" : ""}`} padding={0}>
@@ -5138,22 +5243,44 @@ const handleConfirmWorkflowSkillModal = () => {
               <AriFlex align="center" space={8} className="desk-action-slot-actions">
                 <AriButton
                   color="primary"
-                  label="批准执行 (Approve)"
+                  label="本次批准"
                   disabled={!activeApprovalId}
                   onClick={() =>
                     handleApproveAgentAction(
                       activeApprovalId,
-                      true
+                      true,
+                      {
+                        scope: "once",
+                        toolName: activeApprovalToolName,
+                      },
                     )
                   }
                 />
                 <AriButton
-                  label="拒绝 (Reject)"
+                  label="会话内批准"
                   disabled={!activeApprovalId}
                   onClick={() =>
                     handleApproveAgentAction(
                       activeApprovalId,
-                      false
+                      true,
+                      {
+                        scope: "session",
+                        toolName: activeApprovalToolName,
+                      },
+                    )
+                  }
+                />
+                <AriButton
+                  label="拒绝"
+                  disabled={!activeApprovalId}
+                  onClick={() =>
+                    handleApproveAgentAction(
+                      activeApprovalId,
+                      false,
+                      {
+                        scope: "once",
+                        toolName: activeApprovalToolName,
+                      },
                     )
                   }
                 />
@@ -5258,25 +5385,14 @@ const handleConfirmWorkflowSkillModal = () => {
                 type="default"
                 color="brand"
                 shape="round"
-                icon={sending ? "hourglass_top" : "arrow_upward"}
+                icon={sending ? "pause" : "arrow_upward"}
                 className="desk-prompt-icon-btn"
-                onClick={sendMessage}
+                onClick={handlePromptPrimaryAction}
                 disabled={
-                  sending ||
+                  !sending &&
                   (isWorkflowSession && blenderBridgeRuntime.checking)
                 }
               />
-              {sending ? (
-                <AriButton
-                  type="default"
-                  shape="round"
-                  icon="stop"
-                  className="desk-prompt-icon-btn"
-                  onClick={() => {
-                    void handleCancelCurrentRun();
-                  }}
-                />
-              ) : null}
             </AriFlex>
           </AriCard>
         </AriContainer>

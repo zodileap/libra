@@ -169,6 +169,11 @@ export interface SessionRunSegment {
   intro: string;
   step: string;
   status: "running" | "finished" | "failed";
+  // 描述：
+  //
+  //   - 透传运行片段附加数据（如人工授权 approval_id / tool_args / segment kind），
+  //     用于跨页面恢复后继续执行交互，不丢失关键上下文。
+  data?: Record<string, unknown>;
   detail?: string;
 }
 
@@ -193,6 +198,7 @@ export interface SessionRunStateSnapshot {
   activeMessageId: string;
   sending: boolean;
   runMetaMap: Record<string, SessionRunMeta>;
+  sessionApprovedToolNames?: string[];
   updatedAt: number;
 }
 
@@ -617,6 +623,13 @@ function readSessionRunStates(): StoredSessionRunState[] {
         activeMessageId: String(item.activeMessageId || "").trim(),
         sending: Boolean(item.sending),
         runMetaMap: typeof item.runMetaMap === "object" && item.runMetaMap ? item.runMetaMap : {},
+        sessionApprovedToolNames: Array.isArray(item.sessionApprovedToolNames)
+          ? Array.from(new Set(
+            item.sessionApprovedToolNames
+              .map((toolName: unknown) => String(toolName || "").trim().toLowerCase())
+              .filter((toolName: string) => Boolean(toolName)),
+          ))
+          : [],
         updatedAt: Number(item.updatedAt || Date.now()),
       }));
   } catch (_err) {
@@ -1753,6 +1766,103 @@ export function upsertSessionMessages(input: {
   writeSessionMessages(next);
 }
 
+const RUN_STATE_TEXT_MAX_CHARS = 800;
+const RUN_STATE_DETAIL_MAX_CHARS = 8000;
+const RUN_STATE_SUMMARY_MAX_CHARS = 20000;
+const RUN_STATE_TOOL_ARGS_MAX_CHARS = 2000;
+
+// 描述：
+//
+//   - 裁剪运行态持久化文本，避免同步 localStorage 写入大对象导致主线程阻塞。
+function truncateRunStateText(value: string, maxChars: number): string {
+  const normalized = String(value || "").trim();
+  if (!normalized || maxChars <= 0) {
+    return "";
+  }
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxChars)}…`;
+}
+
+// 描述：
+//
+//   - 规范化运行片段 data，按白名单保留关键字段并裁剪超长文本。
+function sanitizeRunSegmentDataForStorage(
+  data: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!data || typeof data !== "object") {
+    return undefined;
+  }
+  const next: Record<string, unknown> = {};
+  if (typeof data.__segment_kind === "string") {
+    next.__segment_kind = truncateRunStateText(data.__segment_kind, 80);
+  }
+  if (typeof data.approval_id === "string") {
+    next.approval_id = truncateRunStateText(data.approval_id, 120);
+  }
+  if (typeof data.tool_name === "string") {
+    next.tool_name = truncateRunStateText(data.tool_name, 120);
+  }
+  if (typeof data.tool_args === "string") {
+    next.tool_args = truncateRunStateText(data.tool_args, RUN_STATE_TOOL_ARGS_MAX_CHARS);
+  }
+  if (typeof data.code === "string") {
+    next.code = truncateRunStateText(data.code, 160);
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+// 描述：
+//
+//   - 在写入本地会话运行态前做体积收敛，降低授权阶段高频写入对前端交互的影响。
+function sanitizeRunMetaMapForStorage(
+  runMetaMap: Record<string, SessionRunMeta>,
+): Record<string, SessionRunMeta> {
+  return Object.fromEntries(
+    Object.entries(runMetaMap || {})
+      .map(([messageId, meta]) => {
+        const normalizedMessageId = String(messageId || "").trim();
+        if (!normalizedMessageId || !meta) {
+          return null;
+        }
+        const segments = (Array.isArray(meta.segments) ? meta.segments : [])
+          .map((segment) => ({
+            key: truncateRunStateText(String(segment.key || ""), 120),
+            intro: truncateRunStateText(String(segment.intro || ""), RUN_STATE_TEXT_MAX_CHARS),
+            step: truncateRunStateText(String(segment.step || ""), RUN_STATE_TEXT_MAX_CHARS),
+            status: segment.status === "failed"
+              ? "failed"
+              : segment.status === "finished"
+                ? "finished"
+                : "running",
+            detail: segment.detail
+              ? truncateRunStateText(String(segment.detail || ""), RUN_STATE_DETAIL_MAX_CHARS)
+              : undefined,
+            data: sanitizeRunSegmentDataForStorage(
+              segment.data && typeof segment.data === "object"
+                ? (segment.data as Record<string, unknown>)
+                : undefined,
+            ),
+          }))
+          .filter((segment) => segment.key || segment.intro || segment.step)
+          .slice(-160);
+        return [
+          normalizedMessageId,
+          {
+            status: meta.status === "failed" ? "failed" : meta.status === "finished" ? "finished" : "running",
+            startedAt: Number(meta.startedAt || Date.now()),
+            finishedAt: meta.finishedAt ? Number(meta.finishedAt) : undefined,
+            collapsed: Boolean(meta.collapsed),
+            summary: truncateRunStateText(String(meta.summary || ""), RUN_STATE_SUMMARY_MAX_CHARS),
+            segments,
+          } as SessionRunMeta,
+        ] as const;
+      })
+      .filter((item): item is readonly [string, SessionRunMeta] => Boolean(item)),
+  );
+}
+
 // 描述：写入会话运行态快照，供会话页恢复执行中步骤与侧边栏运行标识。
 //
 // Params:
@@ -1763,6 +1873,12 @@ export function upsertSessionRunState(input: SessionRunStateSnapshot) {
   const nextState: StoredSessionRunState = {
     ...input,
     activeMessageId: String(input.activeMessageId || "").trim(),
+    runMetaMap: sanitizeRunMetaMapForStorage(input.runMetaMap || {}),
+    sessionApprovedToolNames: Array.from(new Set(
+      (input.sessionApprovedToolNames || [])
+        .map((toolName) => String(toolName || "").trim().toLowerCase())
+        .filter((toolName) => Boolean(toolName)),
+    )),
     updatedAt: Number(input.updatedAt || Date.now()),
   };
   const next = [

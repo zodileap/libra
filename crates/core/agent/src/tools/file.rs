@@ -94,6 +94,16 @@ impl AgentTool for WriteTextTool {
             "core.agent.python.write_text.content_missing",
         )?;
         let target = resolve_sandbox_path(context.sandbox_root, path.as_str())?;
+        let previous = fs::read_to_string(&target).ok();
+        let previous_line_count = count_text_lines(previous.as_deref().unwrap_or(""));
+        let next_line_count = count_text_lines(content.as_str());
+        let (added_lines, removed_lines) =
+            calculate_line_delta(previous_line_count, next_line_count);
+        let diff_preview = build_rewrite_diff_preview(
+            target.to_string_lossy().as_ref(),
+            previous.as_deref(),
+            content.as_str(),
+        );
         if let Some(parent) = target.parent() {
             let _ = fs::create_dir_all(parent);
         }
@@ -106,6 +116,9 @@ impl AgentTool for WriteTextTool {
         Ok(json!({
             "path": target.to_string_lossy().to_string(),
             "bytes": content.len(),
+            "added_lines": added_lines,
+            "removed_lines": removed_lines,
+            "diff_preview": diff_preview,
         }))
     }
 }
@@ -134,6 +147,7 @@ impl AgentTool for WriteJsonTool {
             )
         })?;
         let target = resolve_sandbox_path(context.sandbox_root, path.as_str())?;
+        let previous = fs::read_to_string(&target).ok();
         if let Some(parent) = target.parent() {
             let _ = fs::create_dir_all(parent);
         }
@@ -149,12 +163,67 @@ impl AgentTool for WriteJsonTool {
                 format!("写入 JSON 文件失败: {}", err),
             )
         })?;
+        let previous_line_count = count_text_lines(previous.as_deref().unwrap_or(""));
+        let next_line_count = count_text_lines(pretty.as_str());
+        let (added_lines, removed_lines) =
+            calculate_line_delta(previous_line_count, next_line_count);
+        let diff_preview = build_rewrite_diff_preview(
+            target.to_string_lossy().as_ref(),
+            previous.as_deref(),
+            pretty.as_str(),
+        );
         Ok(json!({
             "path": target.to_string_lossy().to_string(),
             "bytes": pretty.len(),
             "success": true,
+            "added_lines": added_lines,
+            "removed_lines": removed_lines,
+            "diff_preview": diff_preview,
         }))
     }
+}
+
+/// 描述：计算文本总行数，空文本返回 0，避免 `lines()` 对空串返回 1 的歧义。
+fn count_text_lines(text: &str) -> usize {
+    let normalized = text.trim_end_matches('\n');
+    if normalized.trim().is_empty() {
+        return 0;
+    }
+    normalized.lines().count()
+}
+
+/// 描述：根据前后行数估算新增/删除行数，用于前端展示 `+/-` 编辑摘要。
+fn calculate_line_delta(previous_lines: usize, next_lines: usize) -> (usize, usize) {
+    if next_lines >= previous_lines {
+        (next_lines - previous_lines, 0)
+    } else {
+        (0, previous_lines - next_lines)
+    }
+}
+
+/// 描述：构建“整文件重写”场景的差异预览，供执行流展开查看。
+fn build_rewrite_diff_preview(path: &str, previous: Option<&str>, next: &str) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(format!("--- {}", path));
+    lines.push(format!("+++ {}", path));
+    let previous_lines = previous
+        .unwrap_or("")
+        .lines()
+        .map(|line| format!("-{}", line))
+        .collect::<Vec<String>>();
+    let next_lines = next
+        .lines()
+        .map(|line| format!("+{}", line))
+        .collect::<Vec<String>>();
+    let preview_limit = 120usize;
+    let mut merged = previous_lines;
+    merged.extend(next_lines);
+    if merged.len() > preview_limit {
+        merged.truncate(preview_limit);
+        merged.push("...".to_string());
+    }
+    lines.extend(merged);
+    lines.join("\n")
 }
 
 pub struct ListDirTool;

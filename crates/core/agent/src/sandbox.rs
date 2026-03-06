@@ -99,29 +99,210 @@ def _invoke_tool(name, args):
     return {"ok": False, "error": "invalid_response"}
 
 def finish(message):
-    print(f"{_FINAL_RESULT_PREFIX}{message}", flush=True)
+    payload = json.dumps({"message": str(message)})
+    print(f"{_FINAL_RESULT_PREFIX}{payload}", flush=True)
 
-def run_shell(command, timeout_secs=30): return _invoke_tool("run_shell", {"command": command, "timeout_secs": timeout_secs})
+def _pick_first_non_none(values):
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+def _resolve_with_alias(primary, alias_value, default=None):
+    if alias_value is not None:
+        return alias_value
+    if primary is not None:
+        return primary
+    return default
+
+def _pop_alias(kwargs, aliases):
+    for alias in aliases:
+        if alias in kwargs:
+            value = kwargs.pop(alias)
+            if value is not None:
+                return value
+    return None
+
+def _require_arg(value, name):
+    if value is None:
+        raise TypeError(f"{name} is required")
+    return value
+
+def run_shell(command=None, timeout_secs=None, **kwargs):
+    resolved_command = _pick_first_non_none([command, _pop_alias(kwargs, ("cmd", "shell_command"))])
+    timeout_alias = _pop_alias(kwargs, ("timeout", "timeout_seconds"))
+    resolved_timeout = _resolve_with_alias(timeout_secs, timeout_alias, 30)
+    return _invoke_tool(
+        "run_shell",
+        {
+            "command": _require_arg(resolved_command, "command"),
+            "timeout_secs": resolved_timeout if resolved_timeout is not None else 30,
+        },
+    )
+
 def run_shell_command(command, timeout_secs=30): return run_shell(command=command, timeout_secs=timeout_secs)
-def read_text(path): return _invoke_tool("read_text", {"path": path})
-def read_json(path): return _invoke_tool("read_json", {"path": path})
-def write_text(path, content): return _invoke_tool("write_text", {"path": path, "content": content})
-def write_json(path, data): return _invoke_tool("write_json", {"path": path, "data": data})
-def list_dir(path="."): return _invoke_tool("list_dir", {"path": path})
-def mkdir(path): return _invoke_tool("mkdir", {"path": path})
-def stat(path): return _invoke_tool("stat", {"path": path})
-def glob(pattern, max_results=100): return _invoke_tool("glob", {"pattern": pattern, "max_results": max_results})
-def search_files(query, glob="", max_results=50): return _invoke_tool("search_files", {"query": query, "glob": glob, "max_results": max_results})
+def read_text(path=None, **kwargs):
+    resolved_path = _pick_first_non_none([path, _pop_alias(kwargs, ("file_path", "filename"))])
+    return _invoke_tool("read_text", {"path": _require_arg(resolved_path, "path")})
+
+def read_json(path=None, **kwargs):
+    resolved_path = _pick_first_non_none([path, _pop_alias(kwargs, ("file_path", "filename"))])
+    return _invoke_tool("read_json", {"path": _require_arg(resolved_path, "path")})
+
+def write_text(path=None, content=None, **kwargs):
+    resolved_path = _pick_first_non_none([path, _pop_alias(kwargs, ("file_path", "filename"))])
+    resolved_content = _pick_first_non_none([content, _pop_alias(kwargs, ("text", "value", "body"))])
+    return _invoke_tool(
+        "write_text",
+        {
+            "path": _require_arg(resolved_path, "path"),
+            "content": _require_arg(resolved_content, "content"),
+        },
+    )
+
+def write_json(path=None, data=None, **kwargs):
+    resolved_path = _pick_first_non_none([path, _pop_alias(kwargs, ("file_path", "filename"))])
+    resolved_data = _pick_first_non_none([data, _pop_alias(kwargs, ("value", "payload"))])
+    return _invoke_tool(
+        "write_json",
+        {
+            "path": _require_arg(resolved_path, "path"),
+            "data": _require_arg(resolved_data, "data"),
+        },
+    )
+
+def list_dir(path=".", **kwargs):
+    path_alias = _pop_alias(kwargs, ("dir_path", "file_path"))
+    resolved_path = _resolve_with_alias(path, path_alias, ".")
+    return _invoke_tool("list_dir", {"path": resolved_path})
+
+def mkdir(path=None, **kwargs):
+    resolved_path = _pick_first_non_none([path, _pop_alias(kwargs, ("dir_path", "file_path"))])
+    return _invoke_tool("mkdir", {"path": _require_arg(resolved_path, "path")})
+
+def stat(path=None, **kwargs):
+    resolved_path = _pick_first_non_none([path, _pop_alias(kwargs, ("file_path", "target_path"))])
+    return _invoke_tool("stat", {"path": _require_arg(resolved_path, "path")})
+
+def glob(pattern=None, max_results=100, **kwargs):
+    resolved_pattern = _pick_first_non_none([pattern, _pop_alias(kwargs, ("query", "glob_pattern"))])
+    max_results_alias = _pop_alias(kwargs, ("limit",))
+    resolved_max_results = _resolve_with_alias(max_results, max_results_alias, 100)
+    return _invoke_tool(
+        "glob",
+        {
+            "pattern": _require_arg(resolved_pattern, "pattern"),
+            "max_results": resolved_max_results if resolved_max_results is not None else 100,
+        },
+    )
+
+def search_files(query=None, glob="", max_results=50, **kwargs):
+    resolved_query = _pick_first_non_none([query, _pop_alias(kwargs, ("keyword", "q"))])
+    glob_alias = _pop_alias(kwargs, ("pattern", "glob_pattern"))
+    resolved_glob = _resolve_with_alias(glob, glob_alias, "")
+    max_results_alias = _pop_alias(kwargs, ("limit",))
+    resolved_max_results = _resolve_with_alias(max_results, max_results_alias, 50)
+    return _invoke_tool(
+        "search_files",
+        {
+            "query": _require_arg(resolved_query, "query"),
+            "glob": resolved_glob if resolved_glob is not None else "",
+            "max_results": resolved_max_results if resolved_max_results is not None else 50,
+        },
+    )
+
 def git_status(): return _invoke_tool("git_status", {})
-def git_diff(path=""): return _invoke_tool("git_diff", {"path": path})
-def git_log(limit=5): return _invoke_tool("git_log", {"limit": limit})
+def git_diff(path="", **kwargs):
+    path_alias = _pop_alias(kwargs, ("file_path", "target_path"))
+    resolved_path = _resolve_with_alias(path, path_alias, "")
+    return _invoke_tool("git_diff", {"path": resolved_path})
+
+def git_log(limit=5, **kwargs):
+    limit_alias = _pop_alias(kwargs, ("max_results", "count"))
+    resolved_limit = _resolve_with_alias(limit, limit_alias, 5)
+    return _invoke_tool("git_log", {"limit": resolved_limit})
+
 def todo_read(): return _invoke_tool("todo_read", {})
-def todo_write(items): return _invoke_tool("todo_write", {"items": items})
-def apply_patch(patch, check_only=False): return _invoke_tool("apply_patch", {"patch": patch, "check_only": check_only})
-def web_search(query, limit=5): return _invoke_tool("web_search", {"query": query, "limit": limit})
-def fetch_url(url, max_chars=8000): return _invoke_tool("fetch_url", {"url": url, "max_chars": max_chars})
-def mcp_model_tool(action, params=None): return _invoke_tool("mcp_model_tool", {"action": action, "params": params or {}})
-def tool_search(query="", limit=10): return _invoke_tool("tool_search", {"query": query, "limit": limit})
+def _normalize_todo_items(items, value=None):
+    if isinstance(items, list):
+        return items
+    if isinstance(items, dict):
+        return [items]
+    if isinstance(items, str) and value is not None:
+        return [{
+            "id": items,
+            "content": str(value),
+            "status": "pending",
+        }]
+    if items is None and isinstance(value, list):
+        return value
+    if items is None and isinstance(value, dict):
+        return [value]
+    if items is None and isinstance(value, str):
+        return [{
+            "content": value,
+            "status": "pending",
+        }]
+    return items
+
+def todo_write(items=None, value=None, **kwargs):
+    alias_items = _pop_alias(kwargs, ("todos", "tasks"))
+    alias_value = _pop_alias(kwargs, ("value", "content", "text", "task"))
+    resolved_items = _pick_first_non_none([items, alias_items])
+    resolved_value = _pick_first_non_none([value, alias_value])
+    normalized_items = _normalize_todo_items(resolved_items, resolved_value)
+    return _invoke_tool("todo_write", {"items": _require_arg(normalized_items, "items")})
+
+def apply_patch(patch=None, check_only=False, **kwargs):
+    resolved_patch = _pick_first_non_none([patch, _pop_alias(kwargs, ("content", "diff"))])
+    check_only_alias = _pop_alias(kwargs, ("dry_run",))
+    resolved_check_only = _resolve_with_alias(check_only, check_only_alias, False)
+    return _invoke_tool(
+        "apply_patch",
+        {
+            "patch": _require_arg(resolved_patch, "patch"),
+            "check_only": bool(resolved_check_only),
+        },
+    )
+
+def web_search(query=None, limit=5, **kwargs):
+    resolved_query = _pick_first_non_none([query, _pop_alias(kwargs, ("q", "keyword"))])
+    limit_alias = _pop_alias(kwargs, ("max_results",))
+    resolved_limit = _resolve_with_alias(limit, limit_alias, 5)
+    return _invoke_tool(
+        "web_search",
+        {"query": _require_arg(resolved_query, "query"), "limit": resolved_limit if resolved_limit is not None else 5},
+    )
+
+def fetch_url(url=None, max_chars=8000, **kwargs):
+    resolved_url = _pick_first_non_none([url, _pop_alias(kwargs, ("link",))])
+    max_chars_alias = _pop_alias(kwargs, ("limit",))
+    resolved_max_chars = _resolve_with_alias(max_chars, max_chars_alias, 8000)
+    return _invoke_tool(
+        "fetch_url",
+        {"url": _require_arg(resolved_url, "url"), "max_chars": resolved_max_chars if resolved_max_chars is not None else 8000},
+    )
+
+def mcp_model_tool(action=None, params=None, **kwargs):
+    resolved_action = _pick_first_non_none([action, _pop_alias(kwargs, ("name", "tool"))])
+    resolved_params = _pick_first_non_none([params, _pop_alias(kwargs, ("payload", "data"))])
+    return _invoke_tool(
+        "mcp_model_tool",
+        {"action": _require_arg(resolved_action, "action"), "params": resolved_params or {}},
+    )
+
+def tool_search(query="", limit=10, **kwargs):
+    query_alias = _pop_alias(kwargs, ("q", "keyword"))
+    resolved_query = _resolve_with_alias(query, query_alias, "")
+    limit_alias = _pop_alias(kwargs, ("max_results",))
+    resolved_limit = _resolve_with_alias(limit, limit_alias, 10)
+    return _invoke_tool(
+        "tool_search",
+        {
+            "query": resolved_query if resolved_query is not None else "",
+            "limit": resolved_limit if resolved_limit is not None else 10,
+        },
+    )
 
 def read_file(file_path):
     return read_text(file_path)
@@ -343,9 +524,12 @@ impl SandboxRegistry {
     }
 
     pub fn get_metrics(&self, session_id: &str) -> Option<SandboxMetrics> {
-        self.instances
-            .get(session_id)
-            .and_then(|r| r.value().lock().ok().map(|g| g.get_metrics()))
+        self.instances.get(session_id).and_then(|r| {
+            // 描述：
+            //
+            //   - 指标查询必须非阻塞，避免“等待人工授权”等长时占锁阶段把桌面端命令线程挂住。
+            r.value().try_lock().ok().map(|g| g.get_metrics())
+        })
     }
 
     pub fn remove(&self, session_id: &str) {
@@ -408,5 +592,27 @@ mod tests {
         //     兼容模型常见调用习惯并映射到 run_shell。
         assert!(PERSISTENT_PRELUDE.contains("def run_shell_command(command, timeout_secs=30): return run_shell(command=command, timeout_secs=timeout_secs)"));
         assert!(PERSISTENT_PRELUDE.contains("\"run_shell_command\": run_shell_command"));
+    }
+
+    #[test]
+    fn should_support_keyword_aliases_for_write_text_in_prelude() {
+        // 描述：
+        //
+        //   - 兼容层应支持模型常用的 `write_text(file_path=..., text=...)` 关键字参数写法，
+        //     避免触发 unexpected keyword argument 并导致整轮执行失败。
+        assert!(PERSISTENT_PRELUDE.contains("def write_text(path=None, content=None, **kwargs):"));
+        assert!(PERSISTENT_PRELUDE.contains("(\"file_path\", \"filename\")"));
+        assert!(PERSISTENT_PRELUDE.contains("(\"text\", \"value\", \"body\")"));
+    }
+
+    #[test]
+    fn should_support_todo_write_legacy_two_argument_style_in_prelude() {
+        // 描述：
+        //
+        //   - 兼容层应支持历史脚本中的 `todo_write(\"KEY\", \"VALUE\")` 写法，
+        //     避免因参数个数不匹配直接抛 TypeError 导致整轮执行失败。
+        assert!(PERSISTENT_PRELUDE.contains("def todo_write(items=None, value=None, **kwargs):"));
+        assert!(PERSISTENT_PRELUDE.contains("def _normalize_todo_items(items, value=None):"));
+        assert!(PERSISTENT_PRELUDE.contains("if isinstance(items, str) and value is not None:"));
     }
 }

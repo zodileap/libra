@@ -85,7 +85,10 @@ test("TestSessionPageShouldRenderCollapsibleRunDividerAndSummary", () => {
 });
 
 test("TestSessionPageShouldBuildUserReadableModelSummary", () => {
-  const source = readDesktopSource("src/widgets/session/page.tsx");
+  const source = [
+    readDesktopSource("src/widgets/session/page.tsx"),
+    readDesktopSource("src/widgets/session/prompt-utils.ts"),
+  ].join("\n");
 
   // 描述:
   //
@@ -193,11 +196,16 @@ test("TestSessionPageShouldSupportActiveCancelAndCancelledStream", () => {
   // 描述:
   //
   //   - 会话页在发送中应支持主动停止，并处理 cancelled 终态事件，避免误标记为失败。
+  //   - 输入区主按钮需复用“发送/取消”动作，发送中显示暂停图标，不再显示 loading 或独立停止按钮。
   assert.match(source, /const handleCancelCurrentRun = async \(\) =>/);
+  assert.match(source, /const handlePromptPrimaryAction = \(\) => \{/);
+  assert.match(source, /if \(sending\) \{\s*void handleCancelCurrentRun\(\);\s*return;\s*\}\s*void sendMessage\(\);/s);
   assert.match(source, /await invoke\(COMMANDS\.CANCEL_AGENT_SESSION, \{ sessionId \}\)/);
   assert.match(source, /STREAM_KINDS\.CANCELLED/);
   assert.match(source, /isCancelErrorCode/);
-  assert.match(source, /icon="stop"/);
+  assert.match(source, /icon=\{sending \? "pause" : "arrow_upward"\}/);
+  assert.doesNotMatch(source, /icon=\{sending \? "hourglass_top" : "arrow_upward"\}/);
+  assert.doesNotMatch(source, /icon="stop"/);
 });
 
 test("TestTauriShouldExposeModelSummaryCommandAndDebugTrace", () => {

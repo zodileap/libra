@@ -1,11 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::any::Any;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::io::{Read, Write};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -1382,19 +1384,32 @@ async fn run_agent_command(
     workdir: Option<String>,
 ) -> Result<AgentRunResponse, DesktopProtocolError> {
     tauri::async_runtime::spawn_blocking(move || {
-        run_agent_command_inner(
-            app,
-            agent_key,
-            session_id,
-            provider,
-            prompt,
-            trace_id,
-            project_name,
-            model_export_enabled,
-            blender_bridge_addr,
-            output_dir,
-            workdir,
-        )
+        match catch_unwind(AssertUnwindSafe(|| {
+            run_agent_command_inner(
+                app,
+                agent_key,
+                session_id,
+                provider,
+                prompt,
+                trace_id,
+                project_name,
+                model_export_enabled,
+                blender_bridge_addr,
+                output_dir,
+                workdir,
+            )
+        })) {
+            Ok(result) => result,
+            Err(panic_payload) => Err(DesktopProtocolError {
+                code: "core.desktop.agent.runtime_panic".to_string(),
+                message: format!(
+                    "agent command runtime panicked: {}",
+                    describe_panic_payload(panic_payload.as_ref())
+                ),
+                suggestion: Some("请重试一次；如仍失败请重启应用".to_string()),
+                retryable: true,
+            }),
+        }
     })
     .await
     .map_err(|err| DesktopProtocolError {
@@ -1403,6 +1418,17 @@ async fn run_agent_command(
         suggestion: Some("请重试一次；如仍失败请重启应用".to_string()),
         retryable: true,
     })?
+}
+
+/// 描述：提取 panic payload 的可读信息，优先返回字符串消息，避免显示 Any 类型噪声。
+fn describe_panic_payload(payload: &(dyn Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        return (*message).to_string();
+    }
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return message.clone();
+    }
+    "unknown panic payload".to_string()
 }
 
 fn run_agent_command_inner(
@@ -1614,7 +1640,11 @@ fn run_agent_command_inner(
                         },
                     );
                 }
-                AgentStreamEvent::ToolCallStarted { name, args } => {
+                AgentStreamEvent::ToolCallStarted {
+                    name,
+                    args,
+                    args_data,
+                } => {
                     let args_preview =
                         truncate_agent_stream_text(args.as_str(), AGENT_STREAM_ARGS_MAX_CHARS);
                     emit_agent_text_stream_event(
@@ -1625,11 +1655,20 @@ fn run_agent_command_inner(
                             kind,
                             message: format!("正在执行工具: {}", name),
                             delta: None,
-                            data: Some(json!({ "name": name, "args": args_preview })),
+                            data: Some(json!({
+                                "name": name,
+                                "args": args_preview,
+                                "args_data": args_data,
+                            })),
                         },
                     );
                 }
-                AgentStreamEvent::ToolCallFinished { name, ok, result } => {
+                AgentStreamEvent::ToolCallFinished {
+                    name,
+                    ok,
+                    result,
+                    result_data,
+                } => {
                     emit_agent_text_stream_event(
                         &app,
                         AgentTextStreamEvent {
@@ -1642,7 +1681,12 @@ fn run_agent_command_inner(
                                 if ok { "成功" } else { "失败" }
                             ),
                             delta: None,
-                            data: Some(json!({ "name": name, "ok": ok, "result": result })),
+                            data: Some(json!({
+                                "name": name,
+                                "ok": ok,
+                                "result": result,
+                                "result_data": result_data,
+                            })),
                         },
                     );
                 }
@@ -8791,7 +8835,7 @@ mod tests {
         protocol_error_from_text, required_selection_scope_for_step, selection_context_meets_scope,
         should_block_destructive_plan_for_empty_selection,
         should_create_file_recover_point_for_step, should_create_operation_transaction,
-        should_run_topology_check_after_step, split_error_code_and_message,
+        should_run_topology_check_after_step, split_error_code_and_message, describe_panic_payload,
         truncate_agent_stream_text,
         validate_llm_model_plan_steps, ModelMcpCapabilities, PlannedModelStep,
         SelectionContextSnapshot,
@@ -8809,6 +8853,20 @@ mod tests {
         let result = truncate_agent_stream_text(source.as_str(), 120);
         assert!(result.chars().count() <= 121);
         assert!(result.ends_with('…'));
+    }
+
+    #[test]
+    fn should_describe_panic_payload_for_str() {
+        let payload: &str = "panic-str";
+        let message = describe_panic_payload(&payload);
+        assert_eq!(message, "panic-str");
+    }
+
+    #[test]
+    fn should_describe_panic_payload_for_string() {
+        let payload = "panic-string".to_string();
+        let message = describe_panic_payload(&payload);
+        assert_eq!(message, "panic-string");
     }
 
     #[test]

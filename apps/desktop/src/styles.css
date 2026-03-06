@@ -165,6 +165,10 @@ body {
   flex-shrink: 0;
 }
 
+.desk-app-header-leading-actions {
+  min-width: 0;
+}
+
 .desk-platform-macos .desk-app-header-inner {
   --desk-app-header-padding-left: calc(calc(var(--z-inset) * 4.5) + var(--z-inset-sm));
 }
@@ -266,13 +270,6 @@ body {
   width: 100%;
   padding: 0;
   border-radius: var(--z-border-radius-lg);
-}
-
-.desk-user-entry-row {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: var(--z-inset-xs);
 }
 
 .desk-sidebar-quick-actions {
@@ -1377,7 +1374,7 @@ body {
 .desk-run-segment {
   display: grid;
   border: var(--desk-border-width) solid color-mix(in srgb, var(--z-color-border-glass) 72%, transparent);
-  border-radius: var(--z-border-radius);
+  border-radius: 0;
   background: color-mix(in srgb, var(--desk-container-bg) 92%, var(--z-color-bg-subtle));
   overflow: hidden;
 }
@@ -1388,6 +1385,53 @@ body {
 
 .desk-run-step {
   color: color-mix(in srgb, var(--z-color-text) 56%, var(--z-color-border-glass));
+}
+
+.desk-run-step-rich {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: calc(var(--z-inset-xs) * 0.5);
+}
+
+.desk-run-step-prefix {
+  font-weight: var(--z-font-weight-semibold, 600);
+  color: color-mix(in srgb, var(--z-color-text) 86%, var(--z-color-border-glass));
+}
+
+.desk-run-step-approval-label {
+  font-weight: var(--z-font-weight-semibold, 600);
+  color: color-mix(in srgb, var(--z-color-text) 86%, var(--z-color-border-glass));
+}
+
+.desk-run-step-approval-label-rejected {
+  color: var(--z-color-danger);
+}
+
+.desk-run-step-file-link {
+  display: inline-flex;
+  align-items: center;
+  color: var(--z-color-primary);
+  text-decoration: underline;
+  text-decoration-thickness: var(--desk-border-width);
+  text-underline-offset: calc(var(--z-inset-xs) * 0.3);
+  cursor: pointer;
+}
+
+.desk-run-step-file-link:focus-visible {
+  outline: calc(var(--desk-border-width) * 2) solid color-mix(in srgb, var(--z-color-primary) 55%, transparent);
+  outline-offset: calc(var(--z-inset-xs) * 0.2);
+  border-radius: calc(var(--z-border-radius) * 0.5);
+}
+
+.desk-run-step-count-add {
+  color: var(--z-color-success);
+  font-weight: var(--z-font-weight-medium, 500);
+}
+
+.desk-run-step-count-remove {
+  color: var(--z-color-danger);
+  font-weight: var(--z-font-weight-medium, 500);
 }
 
 .desk-run-segment-detail-toggle {
@@ -1419,6 +1463,11 @@ body {
 
 .desk-run-segment-static-step {
   padding: var(--z-inset-sm);
+}
+
+.desk-run-thinking-indicator {
+  padding: var(--z-inset-sm);
+  border-top: var(--desk-border-width) dashed color-mix(in srgb, var(--z-color-border-glass) 64%, transparent);
 }
 
 .desk-run-segment-detail-label {
