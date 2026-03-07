@@ -7,7 +7,7 @@ import { useConsoleContext } from "../context";
 export function ConsoleLoginPage() {
   const navigate = useNavigate();
   const { login } = useConsoleContext();
-  const [account, setAccount] = useState("test@zodileap.com");
+  const [account, setAccount] = useState("test@libra.com");
   const [password, setPassword] = useState("Test@123456");
   const [submitting, setSubmitting] = useState(false);
 

@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use std::env;
 use std::process::Command;
 use url::Url;
-use zodileap_mcp_common::ProtocolError;
+use libra_mcp_common::ProtocolError;
 
 const DEFAULT_WEB_MAX_BYTES: usize = 200_000;
 const MAX_WEB_MAX_BYTES: usize = 2_000_000;

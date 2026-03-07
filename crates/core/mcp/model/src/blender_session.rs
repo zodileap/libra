@@ -5,7 +5,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use zodileap_mcp_common::{
+use libra_mcp_common::{
     normalize_segment, now_millis, McpError, McpResult, ProtocolAssetRecord, ProtocolEventRecord,
     ProtocolStepRecord, ProtocolStepStatus,
 };
@@ -389,7 +389,7 @@ mod tests {
     /// 描述：验证导出路径包含项目名目录、时间戳目录和平台兼容文件名。
     #[test]
     fn TestShouldBuildOutputPathWithProjectTimestampAndPlatform() {
-        let output_dir = Path::new("/tmp/zodileap-exports");
+        let output_dir = Path::new("/tmp/libra-exports");
         let path = build_output_path(output_dir, "My Demo Project", ExportModelFormat::Glb);
         let path_text = path.to_string_lossy();
         assert!(path_text.contains("my-demo-project"));
@@ -409,7 +409,7 @@ mod tests {
     /// 描述：验证项目名归一化为空时回退为 untitled，确保目录结构稳定可写。
     #[test]
     fn TestShouldFallbackToUntitledWhenProjectNameIsInvalid() {
-        let output_dir = Path::new("/tmp/zodileap-exports");
+        let output_dir = Path::new("/tmp/libra-exports");
         let path = build_output_path(output_dir, "@@@", ExportModelFormat::Obj);
         let project_segment = path
             .parent()

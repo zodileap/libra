@@ -13,8 +13,8 @@ import type {
   ConsoleUserInfo
 } from "./types";
 
-const authStorageKey = "zodileap_web_console_auth_token";
-const selectedIdentityStorageKey = "zodileap_web_console_selected_identity";
+const authStorageKey = "libra_web_console_auth_token";
+const selectedIdentityStorageKey = "libra_web_console_selected_identity";
 
 interface ApiEnvelope<T> {
   code: number;

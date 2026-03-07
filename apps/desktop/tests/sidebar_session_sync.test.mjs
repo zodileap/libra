@@ -40,7 +40,7 @@ test("TestSidebarShouldSyncWorkspaceTreeWhenWorkspaceGroupsUpdated", () => {
   // 描述：
   //
   //   - 数据层写入代码目录分组后，需要广播统一事件给侧边栏监听。
-  assert.match(dataSource, /export const CODE_WORKSPACE_GROUPS_UPDATED_EVENT = "zodileap:code-workspace-groups-updated";/);
+  assert.match(dataSource, /export const CODE_WORKSPACE_GROUPS_UPDATED_EVENT = "libra:code-workspace-groups-updated";/);
   assert.match(dataSource, /new CustomEvent\(CODE_WORKSPACE_GROUPS_UPDATED_EVENT,/);
   assert.match(dataSource, /emitCodeWorkspaceGroupsUpdated\("upsert"\);/);
   assert.match(dataSource, /emitCodeWorkspaceGroupsUpdated\("settings"\);/);
@@ -57,7 +57,7 @@ test("TestSidebarShouldSyncWorkspaceTreeWhenWorkspaceGroupsUpdated", () => {
   // 描述：
   //
   //   - 数据层应提供项目结构化信息更新广播能力，用于同项目多话题共享同步。
-  assert.match(dataSource, /export const CODE_WORKSPACE_PROFILE_UPDATED_EVENT = "zodileap:code-workspace-profile-updated";/);
+  assert.match(dataSource, /export const CODE_WORKSPACE_PROFILE_UPDATED_EVENT = "libra:code-workspace-profile-updated";/);
   assert.match(dataSource, /new CustomEvent\(CODE_WORKSPACE_PROFILE_UPDATED_EVENT,/);
   assert.match(dataSource, /emitCodeWorkspaceProfileUpdated\(/);
 

@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use zodileap_mcp_common::ProtocolError;
+use libra_mcp_common::ProtocolError;
 
 const MAX_GLOB_WALK_DEPTH: usize = 64;
 

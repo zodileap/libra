@@ -333,7 +333,7 @@ fn build_output_file() -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .map(|value| value.as_millis())
         .unwrap_or(0);
-    env::temp_dir().join(format!("zodileap-agent-codex-{}.txt", now))
+    env::temp_dir().join(format!("libra-agent-codex-{}.txt", now))
 }
 
 #[cfg(test)]
@@ -343,7 +343,7 @@ mod tests {
     #[test]
     fn should_map_usage_limit_error_to_friendly_message() {
         let raw = r#"ERROR: You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Feb 27th, 2026 11:03 AM.
-Warning: no last agent message; wrote empty content to /tmp/zodileap-agent-codex-1.txt"#;
+Warning: no last agent message; wrote empty content to /tmp/libra-agent-codex-1.txt"#;
         let error = build_codex_failed_error(raw);
         assert_eq!(error.code, "core.agent.llm.codex_usage_limit");
         assert_eq!(error.message, "Codex CLI 当前额度已用尽，请稍后重试。");
@@ -359,7 +359,7 @@ Warning: no last agent message; wrote empty content to /tmp/zodileap-agent-codex
     fn should_use_primary_error_line_for_generic_failure() {
         let raw = r#"OpenAI Codex v0.104.0
 --------
-workdir: /Users/yoho/code/zodileap-agen/apps/desktop/src-tauri
+workdir: /Users/yoho/code/libra/apps/desktop/src-tauri
 model: gpt-5.3-codex
 ERROR: request timeout while waiting gateway
 Warning: no last agent message"#;

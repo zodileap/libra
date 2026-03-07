@@ -125,15 +125,15 @@ export const MODEL_EVENT_NAMES = {
 //
 //   - 应用级 localStorage 存储键集合，统一管理避免散布硬编码。
 export const STORAGE_KEYS = {
-  COLOR_THEME_MODE: "zodileap.desktop.colorThemeMode",
-  MODEL_MCP_CAPABILITIES: "zodileap.desktop.modelMcpCapabilities",
-  AI_KEYS: "zodileap.desktop.aiKeys",
-  SKILL_INSTALLED_IDS: "zodileap.desktop.skills.installed",
-  MCP_INSTALLED_IDS: "zodileap.desktop.mcps.installed",
-  MODEL_SKILL_SELECTED_IDS: "zodileap.desktop.model.selectedSkillIds",
-  CODE_SKILL_SELECTED_IDS: "zodileap.desktop.code.selectedSkillIds",
-  MODEL_WORKFLOWS: "zodileap.desktop.model.workflows",
-  CODE_WORKFLOWS: "zodileap.desktop.code.workflows",
+  COLOR_THEME_MODE: "libra.desktop.colorThemeMode",
+  MODEL_MCP_CAPABILITIES: "libra.desktop.modelMcpCapabilities",
+  AI_KEYS: "libra.desktop.aiKeys",
+  SKILL_INSTALLED_IDS: "libra.desktop.skills.installed",
+  MCP_INSTALLED_IDS: "libra.desktop.mcps.installed",
+  MODEL_SKILL_SELECTED_IDS: "libra.desktop.model.selectedSkillIds",
+  CODE_SKILL_SELECTED_IDS: "libra.desktop.code.selectedSkillIds",
+  MODEL_WORKFLOWS: "libra.desktop.model.workflows",
+  CODE_WORKFLOWS: "libra.desktop.code.workflows",
 } as const;
 
 // 描述:

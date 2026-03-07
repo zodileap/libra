@@ -10,7 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use sysinfo::{Pid, ProcessesToUpdate, System};
 use tracing::info;
-use zodileap_mcp_common::ProtocolError;
+use libra_mcp_common::ProtocolError;
 
 /// 描述：持久化沙盒的单次任务执行结果。
 pub struct SandboxExecutionResult {
@@ -116,6 +116,8 @@ def _resolve_with_alias(primary, alias_value, default=None):
     return default
 
 def _pop_alias(kwargs, aliases):
+    if not isinstance(kwargs, dict):
+        return None
     for alias in aliases:
         if alias in kwargs:
             value = kwargs.pop(alias)
@@ -141,13 +143,31 @@ def run_shell(command=None, timeout_secs=None, **kwargs):
     )
 
 def run_shell_command(command, timeout_secs=30): return run_shell(command=command, timeout_secs=timeout_secs)
-def read_text(path=None, **kwargs):
+def read_text(path=None, with_meta=False, **kwargs):
     resolved_path = _pick_first_non_none([path, _pop_alias(kwargs, ("file_path", "filename"))])
-    return _invoke_tool("read_text", {"path": _require_arg(resolved_path, "path")})
+    include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, ("include_meta", "raw")), False))
+    response = _invoke_tool("read_text", {"path": _require_arg(resolved_path, "path")})
+    if include_meta:
+        return response
+    if isinstance(response, dict):
+        data = response.get("data")
+        if isinstance(data, dict):
+            content = data.get("content")
+            if isinstance(content, str):
+                return content
+    return response
 
-def read_json(path=None, **kwargs):
+def read_json(path=None, with_meta=False, **kwargs):
     resolved_path = _pick_first_non_none([path, _pop_alias(kwargs, ("file_path", "filename"))])
-    return _invoke_tool("read_json", {"path": _require_arg(resolved_path, "path")})
+    include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, ("include_meta", "raw")), False))
+    response = _invoke_tool("read_json", {"path": _require_arg(resolved_path, "path")})
+    if include_meta:
+        return response
+    if isinstance(response, dict):
+        data = response.get("data")
+        if isinstance(data, dict) and "data" in data:
+            return data.get("data")
+    return response
 
 def write_text(path=None, content=None, **kwargs):
     resolved_path = _pick_first_non_none([path, _pop_alias(kwargs, ("file_path", "filename"))])
@@ -222,27 +242,74 @@ def git_log(limit=5, **kwargs):
     resolved_limit = _resolve_with_alias(limit, limit_alias, 5)
     return _invoke_tool("git_log", {"limit": resolved_limit})
 
-def todo_read(): return _invoke_tool("todo_read", {})
+def _normalize_todo_record(record, index):
+    default_id = f"todo_{index + 1}"
+    if isinstance(record, dict):
+        normalized = dict(record)
+        normalized_id = normalized.get("id")
+        if normalized_id is None or str(normalized_id).strip() == "":
+            normalized["id"] = default_id
+        else:
+            normalized["id"] = str(normalized_id)
+        normalized_content = normalized.get("content")
+        if normalized_content is None:
+            normalized_content = normalized.get("task")
+        if normalized_content is None:
+            normalized_content = normalized.get("text")
+        if normalized_content is None:
+            normalized_content = ""
+        normalized["content"] = str(normalized_content)
+        normalized_status = normalized.get("status")
+        if not isinstance(normalized_status, str) or normalized_status.strip() == "":
+            normalized["status"] = "pending"
+        return normalized
+    if isinstance(record, str):
+        return {"id": default_id, "content": record, "status": "pending"}
+    if record is None:
+        return {"id": default_id, "content": "", "status": "pending"}
+    return {"id": default_id, "content": str(record), "status": "pending"}
+
+def _normalize_todo_list(items):
+    if not isinstance(items, list):
+        return items
+    normalized_items = []
+    for index, item in enumerate(items):
+        normalized_items.append(_normalize_todo_record(item, index))
+    return normalized_items
+
+def todo_read(with_meta=False, **kwargs):
+    include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, ("include_meta", "raw")), False))
+    response = _invoke_tool("todo_read", {})
+    if include_meta:
+        return response
+    if isinstance(response, dict):
+        data = response.get("data")
+        if isinstance(data, dict):
+            items = data.get("items")
+            if isinstance(items, list):
+                return _normalize_todo_list(items)
+    return response
+
 def _normalize_todo_items(items, value=None):
     if isinstance(items, list):
-        return items
+        return _normalize_todo_list(items)
     if isinstance(items, dict):
-        return [items]
+        return _normalize_todo_list([items])
     if isinstance(items, str) and value is not None:
-        return [{
+        return _normalize_todo_list([{
             "id": items,
             "content": str(value),
             "status": "pending",
-        }]
+        }])
     if items is None and isinstance(value, list):
-        return value
+        return _normalize_todo_list(value)
     if items is None and isinstance(value, dict):
-        return [value]
+        return _normalize_todo_list([value])
     if items is None and isinstance(value, str):
-        return [{
+        return _normalize_todo_list([{
             "content": value,
             "status": "pending",
-        }]
+        }])
     return items
 
 def todo_write(items=None, value=None, **kwargs):
@@ -614,5 +681,32 @@ mod tests {
         assert!(PERSISTENT_PRELUDE.contains("def todo_write(items=None, value=None, **kwargs):"));
         assert!(PERSISTENT_PRELUDE.contains("def _normalize_todo_items(items, value=None):"));
         assert!(PERSISTENT_PRELUDE.contains("if isinstance(items, str) and value is not None:"));
+    }
+
+    #[test]
+    fn should_guard_alias_parser_and_unwrap_todo_read_items_in_prelude() {
+        // 描述：
+        //
+        //   - 兼容层应在 `_pop_alias` 中校验 kwargs 类型，避免异常脚本把字符串当 kwargs 传入时触发类型错误。
+        //   - todo_read 默认应返回 items 列表，且每项具备 id/content/status，减少脚本直接索引字段时的结构误判。
+        assert!(PERSISTENT_PRELUDE.contains("if not isinstance(kwargs, dict):"));
+        assert!(PERSISTENT_PRELUDE.contains("def todo_read(with_meta=False, **kwargs):"));
+        assert!(PERSISTENT_PRELUDE.contains("def _normalize_todo_record(record, index):"));
+        assert!(PERSISTENT_PRELUDE.contains("def _normalize_todo_list(items):"));
+        assert!(PERSISTENT_PRELUDE.contains("return _normalize_todo_list(items)"));
+    }
+
+    #[test]
+    fn should_unwrap_read_text_and_read_json_results_by_default_in_prelude() {
+        // 描述：
+        //
+        //   - read_text/read_json 默认应返回业务脚本最常用的数据主体，
+        //     分别是文本 content 与 JSON data，避免模型重复手写 data 解包逻辑。
+        //   - 当脚本需要完整元信息时，仍可通过 with_meta/include_meta/raw 获取原始响应。
+        assert!(PERSISTENT_PRELUDE.contains("def read_text(path=None, with_meta=False, **kwargs):"));
+        assert!(PERSISTENT_PRELUDE.contains("content = data.get(\"content\")"));
+        assert!(PERSISTENT_PRELUDE.contains("def read_json(path=None, with_meta=False, **kwargs):"));
+        assert!(PERSISTENT_PRELUDE.contains("if isinstance(data, dict) and \"data\" in data:"));
+        assert!(PERSISTENT_PRELUDE.contains("_pop_alias(kwargs, (\"include_meta\", \"raw\"))"));
     }
 }

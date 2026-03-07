@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "zodileap-agen-desktop",
+  "productName": "libra-desktop",
   "version": "0.1.0",
-  "identifier": "com.zodileap.agen.desktop",
+  "identifier": "com.libra.desktop",
   "build": {
     "beforeDevCommand": "pnpm dev:ui",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "macOSPrivateApi": true,
     "windows": [
       {
-        "title": "Zodileap Agen",
+        "title": "Libra",
         "label": "main",
         "width": 1440,
         "height": 920,

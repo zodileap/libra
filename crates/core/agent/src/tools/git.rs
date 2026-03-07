@@ -5,7 +5,7 @@ use super::{AgentTool, ToolContext};
 use serde_json::{json, Value};
 use std::process::Command;
 use std::time::Duration;
-use zodileap_mcp_common::ProtocolError;
+use libra_mcp_common::ProtocolError;
 
 pub struct GitStatusTool;
 

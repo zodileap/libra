@@ -53,67 +53,67 @@ export const AGENT_SESSIONS: AgentSession[] = [
 // 描述:
 //
 //   - 模型项目本地存储键。
-const MODEL_PROJECT_STORAGE_KEY = "zodileap.desktop.model.projects";
+const MODEL_PROJECT_STORAGE_KEY = "libra.desktop.model.projects";
 
 // 描述:
 //
 //   - 会话元数据本地存储键（重命名/固定/删除状态）。
-const SESSION_META_STORAGE_KEY = "zodileap.desktop.session.meta";
+const SESSION_META_STORAGE_KEY = "libra.desktop.session.meta";
 
 // 描述:
 //
 //   - 会话消息本地存储键。
-const SESSION_MESSAGES_STORAGE_KEY = "zodileap.desktop.session.messages";
+const SESSION_MESSAGES_STORAGE_KEY = "libra.desktop.session.messages";
 
 // 描述:
 //
 //   - 会话运行态本地存储键，用于恢复“执行中步骤流”与侧边栏运行标识。
-const SESSION_RUN_STATE_STORAGE_KEY = "zodileap.desktop.session.run.state";
+const SESSION_RUN_STATE_STORAGE_KEY = "libra.desktop.session.run.state";
 
 // 描述:
 //
 //   - 会话调试资产本地存储键，用于恢复 AI 原始收发、全链路调试与 Trace 记录。
-const SESSION_DEBUG_ARTIFACT_STORAGE_KEY = "zodileap.desktop.session.debug.artifacts";
+const SESSION_DEBUG_ARTIFACT_STORAGE_KEY = "libra.desktop.session.debug.artifacts";
 
 // 描述:
 //
 //   - 代码目录分组本地存储键。
-const CODE_WORKSPACE_GROUP_STORAGE_KEY = "zodileap.desktop.code.workspace.groups";
+const CODE_WORKSPACE_GROUP_STORAGE_KEY = "libra.desktop.code.workspace.groups";
 
 // 描述:
 //
 //   - 代码会话与目录映射本地存储键。
-const CODE_SESSION_WORKSPACE_MAP_STORAGE_KEY = "zodileap.desktop.code.session.workspace.map";
+const CODE_SESSION_WORKSPACE_MAP_STORAGE_KEY = "libra.desktop.code.session.workspace.map";
 
 // 描述:
 //
 //   - 最近使用代码目录 ID 本地存储键。
-const CODE_LAST_WORKSPACE_ID_STORAGE_KEY = "zodileap.desktop.code.workspace.last";
+const CODE_LAST_WORKSPACE_ID_STORAGE_KEY = "libra.desktop.code.workspace.last";
 
 // 描述:
 //
 //   - 代码项目结构化信息本地存储键（workspaceId -> profile）。
-const CODE_WORKSPACE_PROFILE_STORAGE_KEY = "zodileap.desktop.code.workspace.profiles";
+const CODE_WORKSPACE_PROFILE_STORAGE_KEY = "libra.desktop.code.workspace.profiles";
 
 // 描述:
 //
 //   - 会话标题更新广播事件名。
-export const SESSION_TITLE_UPDATED_EVENT = "zodileap:session-title-updated";
+export const SESSION_TITLE_UPDATED_EVENT = "libra:session-title-updated";
 
 // 描述:
 //
 //   - 会话运行态更新广播事件名。
-export const SESSION_RUN_STATE_UPDATED_EVENT = "zodileap:session-run-state-updated";
+export const SESSION_RUN_STATE_UPDATED_EVENT = "libra:session-run-state-updated";
 
 // 描述:
 //
 //   - 代码目录分组更新广播事件名。
-export const CODE_WORKSPACE_GROUPS_UPDATED_EVENT = "zodileap:code-workspace-groups-updated";
+export const CODE_WORKSPACE_GROUPS_UPDATED_EVENT = "libra:code-workspace-groups-updated";
 
 // 描述:
 //
 //   - 代码项目结构化信息更新广播事件名。
-export const CODE_WORKSPACE_PROFILE_UPDATED_EVENT = "zodileap:code-workspace-profile-updated";
+export const CODE_WORKSPACE_PROFILE_UPDATED_EVENT = "libra:code-workspace-profile-updated";
 
 // 描述:
 //

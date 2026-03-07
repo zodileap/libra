@@ -13,7 +13,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 use tracing::{info_span, warn};
-use zodileap_mcp_common::{
+use libra_mcp_common::{
     now_millis, ProtocolAssetRecord, ProtocolError, ProtocolEventRecord, ProtocolStepRecord,
     ProtocolStepStatus,
 };
@@ -58,7 +58,7 @@ struct TurnResultEnvelope {
 
 const TOOL_ARGS_STREAM_PREVIEW_MAX_CHARS: usize = 1200;
 const TOOL_ARGS_CONTENT_PREVIEW_MAX_CHARS: usize = 240;
-const PLANNING_META_PREFIX: &str = "__zodileap_planning__:";
+const PLANNING_META_PREFIX: &str = "__libra_planning__:";
 const STREAM_TEXT_MAX_CHARS: usize = 4000;
 
 /// 描述：执行代码智能体 Python 编排主流程，包含脚本生成与沙盒执行。
@@ -169,6 +169,7 @@ pub(crate) fn run_code_agent_with_python_workflow(
             .with_suggestion("请重试，或调整提示词让模型只输出 Python 代码。"));
         }
         let generated_script = repair_missing_python_block_body(&generated_script);
+        let generated_script = repair_unterminated_python_string_literals(&generated_script);
         let generated_script = ensure_script_has_finish(&generated_script);
         let generated_script = truncate_script_after_first_top_level_finish(&generated_script);
         let exec_started_at = now_millis();
@@ -369,11 +370,12 @@ fn build_python_workflow_prompt(
 7. 可用内置工具：read_text/read_json/write_text/write_json/list_dir/list_directory/mkdir/stat/glob/search_files/run_shell/run_shell_command/git_status/git_diff/git_log/apply_patch/todo_read/todo_write/web_search/fetch_url/mcp_model_tool/tool_search。\n\
 8. 工具调用前若不确定参数，必须先执行 `tool_search(\"工具名\", 1)` 查看签名与示例，再落地调用。\n\
 9. 关键签名示例：\n\
-   - read_text(path)\n\
+   - read_text(path)  # 默认返回文件 content 字符串（非原始响应对象）\n\
+   - read_json(path)  # 默认返回 JSON data 对象（非原始响应对象）\n\
    - write_text(path, content)\n\
    - apply_patch(patch, check_only=False)\n\
    - run_shell(command, timeout_secs=30)\n\
-   - todo_read()\n\
+   - todo_read()  # 默认返回 items 列表\n\
    - todo_write(items)  # 仅允许一个参数 items（数组）；禁止 todo_write(\"A\", \"B\")\n\
 10. 只要需求尚未完全落地（代码/配置/测试未完成），必须返回 STATUS: CONTINUE，禁止提前 DONE。\n\
 11. 严禁“只写文档就结束”；必须持续执行，直到需求完成并给出 DONE。\n\
@@ -886,6 +888,179 @@ fn repair_missing_python_block_body(script: &str) -> String {
     }
 }
 
+/// 描述：修复未闭合的 Python 字符串字面量，优先处理三引号字符串导致的 SyntaxError。
+///
+/// Params:
+///
+///   - script: 提取后的 Python 脚本。
+///
+/// Returns:
+///
+///   - 尝试补齐后的脚本；若未发现未闭合字符串则返回原脚本。
+fn repair_unterminated_python_string_literals(script: &str) -> String {
+    let normalized = script.trim();
+    if normalized.is_empty() {
+        return String::new();
+    }
+    let mut lines: Vec<String> = normalized.lines().map(ToOwned::to_owned).collect();
+    let mut parser_state = PythonStringParseState::default();
+    let mut cursor = 0usize;
+    let mut updated = false;
+
+    while cursor < lines.len() {
+        let current_line = lines[cursor].clone();
+        let current_trimmed = current_line.trim_start();
+        let indent_chars = current_line.len().saturating_sub(current_trimmed.len());
+        // 描述：
+        //
+        //   - 若当前仍处于三引号字符串上下文，且下一行出现顶层 finish(...)，
+        //     说明大概率是“字符串忘记闭合导致 finish 被吞进字符串”。
+        //   - 在 finish 前补一行闭合引号，尽可能恢复脚本可执行性并保留原有 finish 语义。
+        if indent_chars == 0
+            && current_trimmed.starts_with("finish(")
+            && (parser_state.in_triple_single_quote || parser_state.in_triple_double_quote)
+        {
+            if parser_state.in_triple_single_quote {
+                lines.insert(cursor, "'''".to_string());
+                parser_state.in_triple_single_quote = false;
+                updated = true;
+                cursor = cursor.saturating_add(1);
+                continue;
+            }
+            if parser_state.in_triple_double_quote {
+                lines.insert(cursor, "\"\"\"".to_string());
+                parser_state.in_triple_double_quote = false;
+                updated = true;
+                cursor = cursor.saturating_add(1);
+                continue;
+            }
+        }
+        update_python_string_parse_state(&current_line, &mut parser_state);
+        cursor = cursor.saturating_add(1);
+    }
+
+    if parser_state.in_triple_single_quote {
+        lines.push("'''".to_string());
+        parser_state.in_triple_single_quote = false;
+        updated = true;
+    }
+    if parser_state.in_triple_double_quote {
+        lines.push("\"\"\"".to_string());
+        parser_state.in_triple_double_quote = false;
+        updated = true;
+    }
+    if parser_state.in_single_quote {
+        lines.push("'".to_string());
+        parser_state.in_single_quote = false;
+        updated = true;
+    }
+    if parser_state.in_double_quote {
+        lines.push("\"".to_string());
+        parser_state.in_double_quote = false;
+        updated = true;
+    }
+
+    if updated {
+        lines.join("\n")
+    } else {
+        normalized.to_string()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct PythonStringParseState {
+    in_single_quote: bool,
+    in_double_quote: bool,
+    in_triple_single_quote: bool,
+    in_triple_double_quote: bool,
+    escaped: bool,
+}
+
+/// 描述：按行更新 Python 字符串解析状态，支持单双引号、三引号与注释截断。
+fn update_python_string_parse_state(line: &str, state: &mut PythonStringParseState) {
+    let bytes = line.as_bytes();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        let current = bytes[index] as char;
+        if state.in_triple_single_quote {
+            if starts_with_bytes(bytes, index, b"'''") {
+                state.in_triple_single_quote = false;
+                index = index.saturating_add(3);
+                continue;
+            }
+            index = index.saturating_add(1);
+            continue;
+        }
+        if state.in_triple_double_quote {
+            if starts_with_bytes(bytes, index, b"\"\"\"") {
+                state.in_triple_double_quote = false;
+                index = index.saturating_add(3);
+                continue;
+            }
+            index = index.saturating_add(1);
+            continue;
+        }
+        if state.in_single_quote {
+            if state.escaped {
+                state.escaped = false;
+                index = index.saturating_add(1);
+                continue;
+            }
+            if current == '\\' {
+                state.escaped = true;
+                index = index.saturating_add(1);
+                continue;
+            }
+            if current == '\'' {
+                state.in_single_quote = false;
+            }
+            index = index.saturating_add(1);
+            continue;
+        }
+        if state.in_double_quote {
+            if state.escaped {
+                state.escaped = false;
+                index = index.saturating_add(1);
+                continue;
+            }
+            if current == '\\' {
+                state.escaped = true;
+                index = index.saturating_add(1);
+                continue;
+            }
+            if current == '"' {
+                state.in_double_quote = false;
+            }
+            index = index.saturating_add(1);
+            continue;
+        }
+        if current == '#' {
+            break;
+        }
+        if starts_with_bytes(bytes, index, b"'''") {
+            state.in_triple_single_quote = true;
+            index = index.saturating_add(3);
+            continue;
+        }
+        if starts_with_bytes(bytes, index, b"\"\"\"") {
+            state.in_triple_double_quote = true;
+            index = index.saturating_add(3);
+            continue;
+        }
+        if current == '\'' {
+            state.in_single_quote = true;
+            index = index.saturating_add(1);
+            continue;
+        }
+        if current == '"' {
+            state.in_double_quote = true;
+            index = index.saturating_add(1);
+            continue;
+        }
+        index = index.saturating_add(1);
+    }
+}
+
 /// 描述：判断一行是否属于 Python 代码块头（以冒号结尾且命中控制/定义关键字）。
 fn is_python_block_header_line(line: &str) -> bool {
     let trimmed = line.trim();
@@ -1235,17 +1410,32 @@ fn build_tool_result_stream_data(
             ),
             "command": tool_args.get("command").and_then(|item| item.as_str()).unwrap_or(""),
         }),
-        "write_text" | "write_json" => json!({
-            "ok": true,
-            "path": result_data.get("path").and_then(|item| item.as_str()).unwrap_or(""),
-            "bytes": result_data.get("bytes").and_then(|item| item.as_u64()).unwrap_or(0),
-            "added_lines": result_data.get("added_lines").and_then(|item| item.as_u64()).unwrap_or(0),
-            "removed_lines": result_data.get("removed_lines").and_then(|item| item.as_u64()).unwrap_or(0),
-            "diff_preview": truncate_stream_text(
-                result_data.get("diff_preview").and_then(|item| item.as_str()).unwrap_or(""),
-                STREAM_TEXT_MAX_CHARS * 4,
-            ),
-        }),
+        "write_text" | "write_json" => {
+            let content_preview = if tool_name == "write_json" {
+                tool_args
+                    .get("data")
+                    .map(|value| truncate_stream_text(value.to_string().as_str(), STREAM_TEXT_MAX_CHARS * 4))
+                    .unwrap_or_default()
+            } else {
+                tool_args
+                    .get("content")
+                    .and_then(|item| item.as_str())
+                    .map(|value| truncate_stream_text(value, STREAM_TEXT_MAX_CHARS * 4))
+                    .unwrap_or_default()
+            };
+            json!({
+                "ok": true,
+                "path": result_data.get("path").and_then(|item| item.as_str()).unwrap_or(""),
+                "bytes": result_data.get("bytes").and_then(|item| item.as_u64()).unwrap_or(0),
+                "added_lines": result_data.get("added_lines").and_then(|item| item.as_u64()).unwrap_or(0),
+                "removed_lines": result_data.get("removed_lines").and_then(|item| item.as_u64()).unwrap_or(0),
+                "content_preview": content_preview,
+                "diff_preview": truncate_stream_text(
+                    result_data.get("diff_preview").and_then(|item| item.as_str()).unwrap_or(""),
+                    STREAM_TEXT_MAX_CHARS * 4,
+                ),
+            })
+        }
         "apply_patch" => {
             let patch_preview = tool_args
                 .get("patch")
@@ -1314,6 +1504,22 @@ fn build_tool_result_stream_data(
                 .and_then(|item| item.as_array())
                 .map(|items| items.iter().take(60).cloned().collect::<Vec<Value>>())
                 .unwrap_or_default(),
+        }),
+        "todo_read" => json!({
+            "ok": true,
+            "path": result_data.get("path").and_then(|item| item.as_str()).unwrap_or(""),
+            "count": result_data.get("count").and_then(|item| item.as_u64()).unwrap_or(0),
+            "items": result_data
+                .get("items")
+                .and_then(|item| item.as_array())
+                .map(|items| items.iter().take(40).cloned().collect::<Vec<Value>>())
+                .unwrap_or_default(),
+        }),
+        "todo_write" => json!({
+            "ok": true,
+            "path": result_data.get("path").and_then(|item| item.as_str()).unwrap_or(""),
+            "count": result_data.get("count").and_then(|item| item.as_u64()).unwrap_or(0),
+            "success": result_data.get("success").and_then(|item| item.as_bool()).unwrap_or(true),
         }),
         _ => json!({
             "ok": true,
@@ -2085,7 +2291,7 @@ fn builtin_tool_descriptors() -> &'static [AgentToolDescriptor] {
             description: "在项目沙盒中执行命令（含安全策略与超时）",
             params: "command: string, timeout_secs?: number",
             tags: &["shell", "exec", "command"],
-            example: r#"run_shell("cargo test -p zodileap_agent_core", 120)"#,
+            example: r#"run_shell("cargo test -p libra_agent_core", 120)"#,
         },
         AgentToolDescriptor {
             name: "git_status",
@@ -2268,7 +2474,7 @@ mod tests {
     use std::env;
     use std::fs;
     use std::path::{Path, PathBuf};
-    use zodileap_mcp_common::now_millis;
+    use libra_mcp_common::now_millis;
 
     // 从 tools 模块导入公共类型
     use super::*;
@@ -2458,7 +2664,7 @@ def main():
     /// 描述：验证沙盒路径解析会拒绝越界访问。
     #[test]
     fn should_reject_path_outside_sandbox() {
-        let root = PathBuf::from("/tmp/zodileap-agent-test");
+        let root = PathBuf::from("/tmp/libra-agent-test");
         let path = resolve_sandbox_path(&root, "../../etc/passwd");
         assert!(path.is_err());
     }
@@ -2469,7 +2675,7 @@ def main():
         if resolve_python_binary().is_err() {
             return;
         }
-        let root = env::temp_dir().join(format!("zodileap-agent-python-test-{}", now_millis()));
+        let root = env::temp_dir().join(format!("libra-agent-python-test-{}", now_millis()));
         fs::create_dir_all(&root).expect("create temp root");
         fs::write(root.join("hello.txt"), "hello").expect("seed test file");
         let script = r#"
@@ -2499,7 +2705,7 @@ finish("python sandbox ok")
         if resolve_python_binary().is_err() {
             return;
         }
-        let root = env::temp_dir().join(format!("zodileap-agent-python-test-{}", now_millis()));
+        let root = env::temp_dir().join(format!("libra-agent-python-test-{}", now_millis()));
         fs::create_dir_all(&root).expect("create temp root");
         let script = r#"
 items = list_directory(dir_path=".")
@@ -2527,7 +2733,7 @@ print(f"alias items count: {len(items)}")
         if resolve_python_binary().is_err() {
             return;
         }
-        let root = env::temp_dir().join(format!("zodileap-agent-python-test-{}", now_millis()));
+        let root = env::temp_dir().join(format!("libra-agent-python-test-{}", now_millis()));
         fs::create_dir_all(&root).expect("create temp root");
         let script = r##"
 result = write_text(file_path="requirements.md", text="# alias write ok\n")
@@ -2568,7 +2774,7 @@ finish("write_text keyword alias ok")
         if resolve_python_binary().is_err() {
             return;
         }
-        let root = env::temp_dir().join(format!("zodileap-agent-python-test-{}", now_millis()));
+        let root = env::temp_dir().join(format!("libra-agent-python-test-{}", now_millis()));
         fs::create_dir_all(&root).expect("create temp root");
         let script = r##"
 result = todo_write("NEXT_STEP", "设计前端框架")
@@ -2597,7 +2803,7 @@ finish("todo_write legacy positional alias ok")
         )
         .expect("todo_write legacy alias script should execute successfully");
         assert_eq!(result.message, "todo_write legacy positional alias ok");
-        let todo_path = root.join(".zodileap_agent_todo.json");
+        let todo_path = root.join(".libra_agent_todo.json");
         let todo_content =
             fs::read_to_string(todo_path).expect("todo_write should create todo snapshot file");
         let parsed: serde_json::Value =
@@ -2623,13 +2829,178 @@ finish("todo_write legacy positional alias ok")
         assert!(result.actions.iter().any(|item| item == "todo_write"));
     }
 
+    /// 描述：验证 todo_read 默认返回任务项列表，避免脚本直接遍历返回值时因结构误判触发类型错误。
+    #[test]
+    fn should_return_todo_items_list_by_default() {
+        if resolve_python_binary().is_err() {
+            return;
+        }
+        let root = env::temp_dir().join(format!("libra-agent-python-test-{}", now_millis()));
+        fs::create_dir_all(&root).expect("create temp root");
+        let script = r##"
+write_result = todo_write([{"id":"step-1","content":"实现页面布局","status":"pending"}])
+if not isinstance(write_result, dict) or not write_result.get("ok"):
+    raise RuntimeError(f"todo_write prepare failed: {write_result}")
+items = todo_read()
+if not isinstance(items, list):
+    raise RuntimeError(f"todo_read should return list by default: {items}")
+if len(items) < 1:
+    raise RuntimeError(f"todo_read list should not be empty: {items}")
+first = items[0]
+if not isinstance(first, dict):
+    raise RuntimeError(f"todo_read list item should be dict: {first}")
+if first.get("content") != "实现页面布局":
+    raise RuntimeError(f"todo_read item content mismatch: {first}")
+finish("todo_read default items list ok")
+"##;
+        let result = execute_python_script(
+            PythonScriptExecutionRequest {
+                user_script: script,
+                workdir: root.to_str(),
+                blender_bridge_addr: None,
+                policy: &crate::policy::AgentPolicy::default(),
+                trace_id: "test-trace".to_string(),
+                session_id: "test-session-todo-read-default-list".to_string(),
+            },
+            &mut |event| {
+                if let AgentStreamEvent::RequireApproval { approval_id, .. } = event {
+                    thread::spawn(move || {
+                        thread::sleep(Duration::from_millis(20));
+                        let _ = crate::APPROVAL_REGISTRY
+                            .submit_decision(&approval_id, crate::ApprovalOutcome::Approved);
+                    });
+                }
+            },
+        )
+        .expect("todo_read default list script should execute successfully");
+        assert_eq!(result.message, "todo_read default items list ok");
+        assert!(result.actions.iter().any(|item| item == "todo_write"));
+        assert!(result.actions.iter().any(|item| item == "todo_read"));
+    }
+
+    /// 描述：验证 todo_read 会为缺失 id 的历史任务项补齐默认字段，避免脚本直接 item['id'] 时触发 KeyError。
+    #[test]
+    fn should_normalize_todo_items_with_missing_id_in_todo_read() {
+        if resolve_python_binary().is_err() {
+            return;
+        }
+        let root = env::temp_dir().join(format!("libra-agent-python-test-{}", now_millis()));
+        fs::create_dir_all(&root).expect("create temp root");
+        let legacy_payload = json!({
+            "updated_at": now_millis(),
+            "items": [
+                {"content": "需求分析", "status": "done"},
+                {"id": "", "task": "接口设计"},
+                "页面实现"
+            ],
+        });
+        fs::write(
+            root.join(".libra_agent_todo.json"),
+            serde_json::to_string_pretty(&legacy_payload).expect("serialize legacy todo payload"),
+        )
+        .expect("write legacy todo payload");
+        let script = r##"
+items = todo_read()
+if not isinstance(items, list):
+    raise RuntimeError(f"todo_read should return list: {items}")
+for idx, item in enumerate(items):
+    if not isinstance(item, dict):
+        raise RuntimeError(f"todo_read item should be dict: {item}")
+    if not item["id"]:
+        raise RuntimeError(f"todo_read should normalize missing id: {item}")
+    if "content" not in item:
+        raise RuntimeError(f"todo_read should normalize missing content: {item}")
+    if "status" not in item:
+        raise RuntimeError(f"todo_read should normalize missing status: {item}")
+finish("todo_read normalize missing id ok")
+"##;
+        let result = execute_python_script(
+            PythonScriptExecutionRequest {
+                user_script: script,
+                workdir: root.to_str(),
+                blender_bridge_addr: None,
+                policy: &crate::policy::AgentPolicy::default(),
+                trace_id: "test-trace".to_string(),
+                session_id: "test-session-todo-read-normalize-missing-id".to_string(),
+            },
+            &mut |_| {},
+        )
+        .expect("todo_read normalize script should execute successfully");
+        assert_eq!(result.message, "todo_read normalize missing id ok");
+        assert!(result.actions.iter().any(|item| item == "todo_read"));
+    }
+
+    /// 描述：验证 read_text/read_json 默认返回解包后的内容，避免脚本重复手写 JSON 解包并触发类型错误。
+    #[test]
+    fn should_unwrap_read_text_and_read_json_payloads_by_default() {
+        if resolve_python_binary().is_err() {
+            return;
+        }
+        let root = env::temp_dir().join(format!("libra-agent-python-test-{}", now_millis()));
+        fs::create_dir_all(&root).expect("create temp root");
+        fs::write(root.join("note.txt"), "{\"step\":\"ok\"}\n")
+            .expect("prepare read_text fixture file");
+        fs::write(root.join("meta.json"), r#"{"stage":"test","count":2}"#)
+            .expect("prepare read_json fixture file");
+        let script = r##"
+text_content = read_text("note.txt")
+if not isinstance(text_content, str):
+    raise RuntimeError(f"read_text should return str by default: {text_content}")
+if "\"step\":\"ok\"" not in text_content:
+    raise RuntimeError(f"read_text content mismatch: {text_content}")
+
+json_data = read_json("meta.json")
+if not isinstance(json_data, dict):
+    raise RuntimeError(f"read_json should return dict by default: {json_data}")
+if json_data.get("stage") != "test" or json_data.get("count") != 2:
+    raise RuntimeError(f"read_json payload mismatch: {json_data}")
+
+text_meta = read_text("note.txt", with_meta=True)
+if not isinstance(text_meta, dict) or not isinstance(text_meta.get("data"), dict):
+    raise RuntimeError(f"read_text with_meta should return raw response: {text_meta}")
+if "content" not in text_meta["data"]:
+    raise RuntimeError(f"read_text with_meta missing content field: {text_meta}")
+
+json_meta = read_json("meta.json", include_meta=True)
+if not isinstance(json_meta, dict) or not isinstance(json_meta.get("data"), dict):
+    raise RuntimeError(f"read_json include_meta should return raw response: {json_meta}")
+if "data" not in json_meta["data"]:
+    raise RuntimeError(f"read_json include_meta missing data field: {json_meta}")
+
+finish("read_text/read_json default unwrap ok")
+"##;
+        let result = execute_python_script(
+            PythonScriptExecutionRequest {
+                user_script: script,
+                workdir: root.to_str(),
+                blender_bridge_addr: None,
+                policy: &crate::policy::AgentPolicy::default(),
+                trace_id: "test-trace".to_string(),
+                session_id: "test-session-read-text-json-default-unwrap".to_string(),
+            },
+            &mut |event| {
+                if let AgentStreamEvent::RequireApproval { approval_id, .. } = event {
+                    thread::spawn(move || {
+                        thread::sleep(Duration::from_millis(20));
+                        let _ = crate::APPROVAL_REGISTRY
+                            .submit_decision(&approval_id, crate::ApprovalOutcome::Approved);
+                    });
+                }
+            },
+        )
+        .expect("read_text/read_json default unwrap script should execute successfully");
+        assert_eq!(result.message, "read_text/read_json default unwrap ok");
+        assert!(result.actions.iter().any(|item| item == "read_text"));
+        assert!(result.actions.iter().any(|item| item == "read_json"));
+    }
+
     /// 描述：验证当脚本既未输出 finish 结果也未执行工具调用时，会触发“源码摘要兜底”而非直接失败。
     #[test]
     fn should_fallback_when_script_has_no_result_and_no_actions() {
         if resolve_python_binary().is_err() {
             return;
         }
-        let root = env::temp_dir().join(format!("zodileap-agent-python-test-{}", now_millis()));
+        let root = env::temp_dir().join(format!("libra-agent-python-test-{}", now_millis()));
         fs::create_dir_all(&root).expect("create temp root");
         let script = "value = 1 + 1";
         let result = execute_python_script(
@@ -2654,7 +3025,7 @@ finish("todo_write legacy positional alias ok")
         if resolve_python_binary().is_err() {
             return;
         }
-        let root = env::temp_dir().join(format!("zodileap-agent-python-test-{}", now_millis()));
+        let root = env::temp_dir().join(format!("libra-agent-python-test-{}", now_millis()));
         fs::create_dir_all(&root).expect("create temp root");
         let raw_script = r#"
 import os
@@ -2693,7 +3064,7 @@ if __name__ == "__main__":
         if resolve_python_binary().is_err() {
             return;
         }
-        let root = env::temp_dir().join(format!("zodileap-agent-python-test-{}", now_millis()));
+        let root = env::temp_dir().join(format!("libra-agent-python-test-{}", now_millis()));
         fs::create_dir_all(&root).expect("create temp root");
         let script = r##"
 def run():
@@ -2730,7 +3101,7 @@ finish("执行完成（系统自动补全 finish）")
         if resolve_python_binary().is_err() {
             return;
         }
-        let root = env::temp_dir().join(format!("zodileap-agent-python-test-{}", now_millis()));
+        let root = env::temp_dir().join(format!("libra-agent-python-test-{}", now_millis()));
         fs::create_dir_all(&root).expect("create temp root");
         let script = r#"
 print("requirements done")
@@ -2760,7 +3131,7 @@ print("api model done")
         if resolve_python_binary().is_err() {
             return;
         }
-        let root = env::temp_dir().join(format!("zodileap-agent-python-test-{}", now_millis()));
+        let root = env::temp_dir().join(format!("libra-agent-python-test-{}", now_millis()));
         fs::create_dir_all(&root).expect("create temp root");
         let session_id = format!("test-session-traceback-{}", now_millis());
         let script = r#"
@@ -2897,7 +3268,7 @@ diff --git a/src/a.txt b/src/a.txt
     /// 描述：验证补丁路径校验会拒绝沙盒外路径。
     #[test]
     fn should_reject_patch_path_outside_sandbox() {
-        let root = PathBuf::from("/tmp/zodileap-agent-test");
+        let root = PathBuf::from("/tmp/libra-agent-test");
         let result = validate_patch_paths_in_sandbox(&["../../etc/passwd".to_string()], &root);
         assert!(result.is_err());
     }
@@ -2908,7 +3279,7 @@ diff --git a/src/a.txt b/src/a.txt
         if resolve_executable_binary("git", "--version").is_none() {
             return;
         }
-        let root = env::temp_dir().join(format!("zodileap-agent-apply-patch-{}", now_millis()));
+        let root = env::temp_dir().join(format!("libra-agent-apply-patch-{}", now_millis()));
         fs::create_dir_all(&root).expect("create sandbox root");
         fs::write(root.join("hello.txt"), "old\n").expect("seed old file");
         let patch = "--- a/hello.txt\n+++ b/hello.txt\n@@ -1 +1 @@\n-old\n+hello\n";
@@ -2931,7 +3302,7 @@ diff --git a/src/a.txt b/src/a.txt
         if resolve_executable_binary("git", "--version").is_none() {
             return;
         }
-        let root = env::temp_dir().join(format!("zodileap-agent-patch-check-{}", now_millis()));
+        let root = env::temp_dir().join(format!("libra-agent-patch-check-{}", now_millis()));
         fs::create_dir_all(&root).expect("create sandbox root");
         fs::write(root.join("hello.txt"), "old\n").expect("seed old file");
         let patch = "--- a/hello.txt\n+++ b/hello.txt\n@@ -1 +1 @@\n-old\n+hello\n";
@@ -2955,7 +3326,7 @@ diff --git a/src/a.txt b/src/a.txt
     /// 描述：验证任务清单工具可写入并读取同一份数据。
     #[test]
     fn should_write_and_read_todo_items() {
-        let root = env::temp_dir().join(format!("zodileap-agent-todo-{}", now_millis()));
+        let root = env::temp_dir().join(format!("libra-agent-todo-{}", now_millis()));
         fs::create_dir_all(&root).expect("create todo sandbox");
         let policy = crate::policy::AgentPolicy::default();
 
@@ -2989,7 +3360,7 @@ diff --git a/src/a.txt b/src/a.txt
     /// 描述：验证 run_shell 工具在超时时会返回 timed_out 状态且不中断测试进程。
     #[test]
     fn should_timeout_run_shell() {
-        let root = env::temp_dir().join(format!("zodileap-agent-run-shell-{}", now_millis()));
+        let root = env::temp_dir().join(format!("libra-agent-run-shell-{}", now_millis()));
         fs::create_dir_all(&root).expect("create shell sandbox");
         #[cfg(target_os = "windows")]
         let command = "ping -n 3 127.0.0.1 > nul";
@@ -3129,7 +3500,7 @@ diff --git a/src/a.txt b/src/a.txt
     /// 描述：验证 run_shell 路径校验会接受沙盒内路径参数并返回归一化路径。
     #[test]
     fn should_validate_shell_paths_in_sandbox() {
-        let root = PathBuf::from("/tmp/zodileap-agent-shell-path-ok");
+        let root = PathBuf::from("/tmp/libra-agent-shell-path-ok");
         let paths =
             validate_shell_paths_in_sandbox("cat ./src/main.rs --output=dist/app.js", &root)
                 .expect("paths in sandbox should pass");
@@ -3140,7 +3511,7 @@ diff --git a/src/a.txt b/src/a.txt
     /// 描述：验证 run_shell 路径校验会拒绝访问沙盒外路径。
     #[test]
     fn should_reject_shell_path_outside_sandbox() {
-        let root = PathBuf::from("/tmp/zodileap-agent-shell-path-block");
+        let root = PathBuf::from("/tmp/libra-agent-shell-path-block");
         let result = validate_shell_paths_in_sandbox("cat ../outside.txt", &root);
         assert!(result.is_err());
         let error = result.expect_err("outside sandbox path should fail");
@@ -3153,7 +3524,7 @@ diff --git a/src/a.txt b/src/a.txt
     /// 描述：验证 run_shell 路径校验会拒绝变量展开路径，避免绕过沙盒限制。
     #[test]
     fn should_reject_dynamic_shell_path() {
-        let root = PathBuf::from("/tmp/zodileap-agent-shell-path-var");
+        let root = PathBuf::from("/tmp/libra-agent-shell-path-var");
         let result = validate_shell_paths_in_sandbox("cat $HOME/.ssh/id_rsa", &root);
         assert!(result.is_err());
         let error = result.expect_err("dynamic path should fail");
@@ -3166,7 +3537,7 @@ diff --git a/src/a.txt b/src/a.txt
     /// 描述：验证非 Git 仓库执行 git_diff 时会返回失败错误，避免被静默为“无差异”。
     #[test]
     fn should_fail_git_diff_outside_repository() {
-        let root = env::temp_dir().join(format!("zodileap-agent-git-diff-{}", now_millis()));
+        let root = env::temp_dir().join(format!("libra-agent-git-diff-{}", now_millis()));
         fs::create_dir_all(&root).expect("create git diff sandbox");
         let policy = crate::policy::AgentPolicy::default();
 
@@ -3259,6 +3630,7 @@ diff --git a/src/a.txt b/src/a.txt
         assert!(prompt.contains("STATUS: CONTINUE 或 DONE"));
         assert!(prompt.contains("严格只允许一个顶层 finish"));
         assert!(prompt.contains("tool_search(\"工具名\", 1)"));
+        assert!(prompt.contains("read_text(path)  # 默认返回文件 content 字符串"));
         assert!(prompt.contains("todo_write(items)"));
         assert!(prompt.contains("禁止 todo_write(\"A\", \"B\")"));
     }
@@ -3269,6 +3641,29 @@ diff --git a/src/a.txt b/src/a.txt
         let prompt = build_round_description_prompt("实现登录页面", Some("demo"), 1, 6, &[]);
         assert!(prompt.contains("本次仅输出“本轮任务描述”"));
         assert!(prompt.contains("禁止输出代码"));
+    }
+
+    /// 描述：验证未闭合三引号字符串会在顶层 finish(...) 前自动补齐，避免 finish 被吞进字符串导致 SyntaxError。
+    #[test]
+    fn should_repair_unterminated_triple_quote_before_finish_line() {
+        let script = r##"
+write_text("api_design.md", """# API 数据模型
+- 字段: id
+finish("STATUS: CONTINUE\nSUMMARY: ok\nNEXT: next")
+"##;
+        let repaired = repair_unterminated_python_string_literals(script);
+        assert!(repaired.contains("\n\"\"\"\nfinish(\"STATUS: CONTINUE"));
+    }
+
+    /// 描述：验证脚本末尾未闭合三引号字符串会自动在尾部补齐，避免解释器直接抛出 unterminated 错误。
+    #[test]
+    fn should_append_missing_triple_quote_at_script_end() {
+        let script = r##"
+write_text("api_design.md", """# API 数据模型
+- 字段: id
+"##;
+        let repaired = repair_unterminated_python_string_literals(script);
+        assert!(repaired.trim_end().ends_with("\"\"\""));
     }
 
     /// 描述：验证脚本出现多个顶层 finish(...) 时，仅保留第一个 finish 之前的内容，确保单轮只执行一个子任务。
@@ -3328,5 +3723,38 @@ finish("STATUS: DONE\nSUMMARY: 第二轮完成\nNEXT: 无")
         assert!(preview.contains("content_preview"));
         assert!(preview.contains("content_length"));
         assert!(preview.chars().count() <= 801);
+    }
+
+    /// 描述：验证 write_text 结果流包含 content_preview，确保前端“已编辑”详情可直接展示写入后的文件文本。
+    #[test]
+    fn should_include_write_text_content_preview_in_result_stream_data() {
+        let result_data = json!({
+            "path": "/tmp/demo.md",
+            "bytes": 12,
+            "added_lines": 3,
+            "removed_lines": 1,
+            "diff_preview": "--- a\n+++ b\n+hello",
+        });
+        let tool_args = json!({
+            "path": "/tmp/demo.md",
+            "content": "# 标题\n- 列表项\n",
+        });
+        let stream_data = build_tool_result_stream_data(
+            "write_text",
+            true,
+            &result_data,
+            &tool_args,
+            None,
+        );
+        assert_eq!(
+            stream_data.get("path").and_then(|item| item.as_str()),
+            Some("/tmp/demo.md")
+        );
+        assert_eq!(
+            stream_data
+                .get("content_preview")
+                .and_then(|item| item.as_str()),
+            Some("# 标题\n- 列表项\n")
+        );
     }
 }

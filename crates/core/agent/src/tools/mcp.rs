@@ -1,6 +1,6 @@
 use super::{AgentTool, ToolContext};
 use serde_json::Value;
-use zodileap_mcp_common::ProtocolError;
+use libra_mcp_common::ProtocolError;
 
 #[allow(unused_imports)]
 use super::utils::get_required_string;
@@ -29,7 +29,7 @@ impl AgentTool for McpModelTool {
                 "core.agent.python.model_tool.action_missing",
             )?;
             let action = action_text
-                .parse::<zodileap_mcp_model::ModelToolAction>()
+                .parse::<libra_mcp_model::ModelToolAction>()
                 .map_err(|err| {
                     ProtocolError::new(
                         "core.agent.python.model_tool.action_invalid",
@@ -37,13 +37,13 @@ impl AgentTool for McpModelTool {
                     )
                 })?;
             let params = args.get("params").cloned().unwrap_or_else(|| json!({}));
-            let request = zodileap_mcp_model::ModelToolRequest {
+            let request = libra_mcp_model::ModelToolRequest {
                 action,
                 params,
                 blender_bridge_addr: self.blender_bridge_addr.clone(),
                 timeout_secs: None,
             };
-            let result = zodileap_mcp_model::execute_model_tool(request)
+            let result = libra_mcp_model::execute_model_tool(request)
                 .map_err(|err| err.to_protocol_error())?;
             return Ok(json!({
                 "action": result.action.as_str(),

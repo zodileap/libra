@@ -169,7 +169,7 @@ const agent3dBaseUrl = resolveServiceBaseUrl(import.meta.env.VITE_AGENT_3D_BASE_
 // 描述:
 //
 //   - 本地认证令牌存储键。
-const authTokenStorageKey = "zodileap.desktop.authToken";
+const authTokenStorageKey = "libra.desktop.authToken";
 
 // 描述:
 //

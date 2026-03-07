@@ -4,7 +4,7 @@ package service
 
 import (
 	agent_code "git.zodileap.com/entity/agent_code_v1/instance"
-	specs "git.zodileap.com/gemini/zodileap_agent_code/specs/v1"
+	specs "git.zodileap.com/gemini/libra_agent_code/specs/v1"
 	zerr "git.zodileap.com/taurus/zodileap_go_zerr"
 )
 

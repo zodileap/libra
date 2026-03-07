@@ -1,5 +1,5 @@
 {
-  "name": "@zodileap-agen/web",
+  "name": "@libra/web",
   "private": true,
   "version": "0.1.0",
   "type": "module",

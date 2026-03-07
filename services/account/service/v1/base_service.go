@@ -4,7 +4,7 @@ package service
 
 import (
 	account "git.zodileap.com/entity/account_v1/instance"
-	specs "git.zodileap.com/gemini/zodileap_account/specs/v1"
+	specs "git.zodileap.com/gemini/libra_account/specs/v1"
 	zerr "git.zodileap.com/taurus/zodileap_go_zerr"
 )
 

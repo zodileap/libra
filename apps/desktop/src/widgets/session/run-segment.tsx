@@ -107,6 +107,241 @@ export function resolveRunSegmentCodeHeight(detailText: string): number {
 
 // 描述：
 //
+//   - 根据文件路径后缀推断代码语言，优先用于“已编辑”步骤的文件预览。
+//
+// Params:
+//
+//   - filePath: 文件绝对路径或相对路径。
+//
+// Returns:
+//
+//   - AriCode 支持的语言字符串；无法识别时返回 text。
+export function resolveRunSegmentCodeLanguageByPath(filePath: string): string {
+  const normalizedPath = String(filePath || "").trim().toLowerCase();
+  const extension = normalizedPath.includes(".")
+    ? normalizedPath.slice(normalizedPath.lastIndexOf("."))
+    : "";
+  const extensionLanguageMap: Record<string, string> = {
+    ".ts": "typescript",
+    ".tsx": "tsx",
+    ".js": "javascript",
+    ".jsx": "jsx",
+    ".json": "json",
+    ".md": "markdown",
+    ".markdown": "markdown",
+    ".py": "python",
+    ".go": "go",
+    ".rs": "rust",
+    ".java": "java",
+    ".c": "c",
+    ".cpp": "cpp",
+    ".cc": "cpp",
+    ".h": "c",
+    ".hpp": "cpp",
+    ".cs": "csharp",
+    ".rb": "ruby",
+    ".swift": "swift",
+    ".kt": "kotlin",
+    ".sql": "sql",
+    ".html": "html",
+    ".css": "css",
+    ".scss": "scss",
+    ".sh": "bash",
+    ".bash": "bash",
+    ".yml": "yaml",
+    ".yaml": "yaml",
+  };
+  return extensionLanguageMap[extension] || "text";
+}
+
+// 描述：
+//
+//   - 将 unified diff / patch 详情转换为“可读代码内容 + 差异行号”，避免预览内容被大量 +/- 前缀污染。
+//
+// Params:
+//
+//   - detailText: 原始 diff 文本。
+//
+// Returns:
+//
+//   - value: 去除 diff 元信息后的代码文本。
+//   - diffLines: 对应 AriCode 的新增/删除行号。
+export function resolveRunSegmentDiffPreview(detailText: string): {
+  value: string;
+  diffLines?: {
+    added?: number[];
+    removed?: number[];
+  };
+} {
+  const rawText = String(detailText || "");
+  const hasExplicitDiffMarker = [
+    "*** Begin Patch",
+    "*** Update File:",
+    "*** Add File:",
+    "*** Delete File:",
+    "*** Move to:",
+    "diff --git ",
+    "@@ ",
+    "--- ",
+    "+++ ",
+  ].some((marker) => rawText.includes(marker));
+  if (!hasExplicitDiffMarker) {
+    return {
+      value: rawText,
+      diffLines: undefined,
+    };
+  }
+  const lines = rawText.split("\n");
+  const normalizedLines: Array<{
+    text: string;
+    kind: "add" | "remove" | "context";
+  }> = [];
+
+  lines.forEach((line) => {
+    const trimmed = String(line || "");
+    if (
+      trimmed.startsWith("*** Begin Patch")
+      || trimmed.startsWith("*** End Patch")
+      || trimmed.startsWith("*** Update File:")
+      || trimmed.startsWith("*** Add File:")
+      || trimmed.startsWith("*** Delete File:")
+      || trimmed.startsWith("*** Move to:")
+      || trimmed.startsWith("diff --git ")
+      || trimmed.startsWith("index ")
+      || trimmed.startsWith("@@ ")
+      || trimmed.startsWith("--- ")
+      || trimmed.startsWith("+++ ")
+    ) {
+      return;
+    }
+
+    if (trimmed.startsWith("+")) {
+      normalizedLines.push({
+        text: trimmed.slice(1),
+        kind: "add",
+      });
+      return;
+    }
+
+    if (trimmed.startsWith("-")) {
+      normalizedLines.push({
+        text: trimmed.slice(1),
+        kind: "remove",
+      });
+      return;
+    }
+
+    if (trimmed.startsWith(" ")) {
+      normalizedLines.push({
+        text: trimmed.slice(1),
+        kind: "context",
+      });
+      return;
+    }
+
+    normalizedLines.push({
+      text: trimmed,
+      kind: "context",
+    });
+  });
+
+  const previewText = normalizedLines.map((line) => line.text).join("\n");
+  const changedLineIndexes = normalizedLines
+    .map((line, index) => (line.kind === "add" || line.kind === "remove" ? index : -1))
+    .filter((index) => index >= 0);
+  if (changedLineIndexes.length === 0) {
+    return {
+      value: previewText || rawText,
+      diffLines: undefined,
+    };
+  }
+
+  const contextRadius = 2;
+  const keepLineIndexSet = new Set<number>();
+  changedLineIndexes.forEach((lineIndex) => {
+    const start = Math.max(0, lineIndex - contextRadius);
+    const end = Math.min(normalizedLines.length - 1, lineIndex + contextRadius);
+    for (let index = start; index <= end; index += 1) {
+      keepLineIndexSet.add(index);
+    }
+  });
+  const keptLineIndexes = Array.from(keepLineIndexSet).sort((left, right) => left - right);
+  const focusedLines: Array<{
+    text: string;
+    kind: "add" | "remove" | "context" | "ellipsis";
+  }> = [];
+  let previousLineIndex = -1;
+  keptLineIndexes.forEach((lineIndex) => {
+    if (previousLineIndex >= 0 && lineIndex > previousLineIndex + 1) {
+      focusedLines.push({
+        text: "…",
+        kind: "ellipsis",
+      });
+    }
+    focusedLines.push({
+      text: normalizedLines[lineIndex]?.text || "",
+      kind: normalizedLines[lineIndex]?.kind || "context",
+    });
+    previousLineIndex = lineIndex;
+  });
+
+  const maxPreviewLines = 80;
+  const clippedLines = focusedLines.length > maxPreviewLines
+    ? focusedLines.slice(0, maxPreviewLines)
+    : focusedLines.slice();
+  if (focusedLines.length > maxPreviewLines) {
+    const lastLine = clippedLines[clippedLines.length - 1];
+    if (!lastLine || lastLine.kind !== "ellipsis") {
+      clippedLines.push({
+        text: "…",
+        kind: "ellipsis",
+      });
+    }
+  }
+
+  const added: number[] = [];
+  const removed: number[] = [];
+  const focusedTextLines: string[] = [];
+  clippedLines.forEach((line, index) => {
+    focusedTextLines.push(line.text);
+    if (line.kind === "add") {
+      added.push(index + 1);
+      return;
+    }
+    if (line.kind === "remove") {
+      removed.push(index + 1);
+    }
+  });
+
+  return {
+    value: focusedTextLines.join("\n") || previewText || rawText,
+    diffLines: {
+      added: added.length > 0 ? added : undefined,
+      removed: removed.length > 0 ? removed : undefined,
+    },
+  };
+}
+
+// 描述：
+//
+//   - 解析 diff 文本中的新增/删除行号，供 AriCode 的 diffLines 做差异高亮。
+//
+// Params:
+//
+//   - detailText: 详情文本，通常为 unified diff 或 patch 内容。
+//
+// Returns:
+//
+//   - 命中新增/删除时返回行号集合；否则返回 undefined。
+export function resolveRunSegmentDiffLines(detailText: string): {
+  added?: number[];
+  removed?: number[];
+} | undefined {
+  return resolveRunSegmentDiffPreview(detailText).diffLines;
+}
+
+// 描述：
+//
 //   - 解析执行步骤文本的结构化展示元信息，用于“已编辑/已浏览/已批准/已拒绝”类型高亮渲染。
 //
 // Params:
@@ -308,6 +543,7 @@ function handleFilePathKeyDown(
 function renderRunSegmentStepContent(
   segment: SessionRunSegmentStep,
   onCopyFilePath: (filePath: string) => void | Promise<void>,
+  detailExpanded = false,
 ): JSX.Element {
   const richMeta = resolveRunSegmentRichMeta(segment);
   const runningClass = segment.status === "running" ? "desk-run-step-running" : "";
@@ -321,6 +557,15 @@ function renderRunSegmentStepContent(
     );
   }
   if (richMeta.type === "edit") {
+    if (detailExpanded) {
+      return (
+        <AriContainer className={`desk-run-step desk-run-step-rich ${runningClass}`} padding={0}>
+          <span className="desk-run-step-prefix">已编辑的文件</span>
+          <span className="desk-run-step-count-add">+{richMeta.added}</span>
+          <span className="desk-run-step-count-remove">-{richMeta.removed}</span>
+        </AriContainer>
+      );
+    }
     return (
       <AriContainer className={`desk-run-step desk-run-step-rich ${runningClass}`} padding={0}>
         <span className="desk-run-step-prefix">{richMeta.prefix}</span>
@@ -382,8 +627,49 @@ export function SessionRunSegmentItem(props: SessionRunSegmentItemProps): JSX.El
     onToggleDetail,
     onCopyFilePath,
   } = props;
+  const richMeta = resolveRunSegmentRichMeta(segment);
+  const segmentData = segment.data && typeof segment.data === "object"
+    ? (segment.data as Record<string, unknown>)
+    : {};
   const detailPayload = String(segment.detail || "").trim();
+  const editDiffPayload = typeof segmentData.edit_diff_preview === "string"
+    ? String(segmentData.edit_diff_preview || "").trim()
+    : "";
+  const editContentPayload = typeof segmentData.edit_content_preview === "string"
+    ? String(segmentData.edit_content_preview || "").trim()
+    : "";
+  const effectiveEditDetailPayload = editDiffPayload || editContentPayload || detailPayload;
   const detailCodeLanguage = resolveRunSegmentDetailLanguage(detailPayload, segment.text);
+  const shouldUseDiffCode = (
+    richMeta?.type === "edit"
+      ? editDiffPayload.length > 0
+      : detailCodeLanguage === "diff"
+  ) && effectiveEditDetailPayload.length > 0;
+  const detailCodePreview = shouldUseDiffCode
+    ? resolveRunSegmentDiffPreview(richMeta?.type === "edit" ? editDiffPayload : detailPayload)
+    : {
+      value: richMeta?.type === "edit"
+        ? effectiveEditDetailPayload
+        : detailPayload,
+      diffLines: undefined,
+    };
+  const detailCodeValue = detailCodePreview.value;
+  const detailCodePath = richMeta?.type === "edit" ? richMeta.filePath : undefined;
+  const resolvedDetailCodeLanguage = detailCodePath
+    ? resolveRunSegmentCodeLanguageByPath(detailCodePath)
+    : (shouldUseDiffCode ? resolveRunSegmentDetailLanguage(detailCodeValue, segment.text) : detailCodeLanguage);
+  const detailCodeDiffLines = shouldUseDiffCode
+    ? detailCodePreview.diffLines
+    : undefined;
+  const detailCodeAddedCount = richMeta?.type === "edit" ? richMeta.added : undefined;
+  const detailCodeRemovedCount = richMeta?.type === "edit" ? richMeta.removed : undefined;
+  const segmentStepType = typeof segmentData.__step_type === "string"
+    ? String(segmentData.__step_type || "").trim()
+    : "";
+  const shouldRenderPlainBrowseDetail = segmentStepType === "browse";
+  const detailLines = shouldRenderPlainBrowseDetail
+    ? detailPayload.split("\n")
+    : [];
   const canExpand = Boolean(detailPayload);
   return (
     <AriContainer className="desk-run-segment" padding={0}>
@@ -396,7 +682,7 @@ export function SessionRunSegmentItem(props: SessionRunSegmentItemProps): JSX.El
           }}
         >
           <AriContainer className="desk-run-segment-detail-toggle-content" padding={0}>
-            {renderRunSegmentStepContent(segment, onCopyFilePath)}
+            {renderRunSegmentStepContent(segment, onCopyFilePath, detailExpanded)}
           </AriContainer>
           <span className={`desk-run-segment-detail-arrow ${detailExpanded ? "open" : ""}`}>
             ▸
@@ -404,22 +690,41 @@ export function SessionRunSegmentItem(props: SessionRunSegmentItemProps): JSX.El
         </button>
       ) : (
         <AriContainer className="desk-run-segment-static-step" padding={0}>
-          {renderRunSegmentStepContent(segment, onCopyFilePath)}
+          {renderRunSegmentStepContent(segment, onCopyFilePath, false)}
         </AriContainer>
       )}
       {canExpand && detailExpanded ? (
         <AriContainer className="desk-run-segment-detail-panel" padding={0}>
-          <AriContainer className="desk-run-segment-detail-code" padding={0}>
-            <AriCode
-              language={detailCodeLanguage}
-              value={detailPayload}
-              editable={false}
-              showToolbar={false}
-              showCopyButton
-              showLineNumbers={detailCodeLanguage !== "text"}
-              height={resolveRunSegmentCodeHeight(detailPayload)}
-            />
-          </AriContainer>
+          {shouldRenderPlainBrowseDetail ? (
+            <AriContainer className="desk-run-segment-detail-plain" padding={0}>
+              {detailLines.map((line, index) => (
+                <AriTypography
+                  key={`${segment.key}-detail-line-${index}`}
+                  className="desk-run-step"
+                  variant="caption"
+                  value={line}
+                />
+              ))}
+            </AriContainer>
+          ) : (
+            <AriContainer className="desk-run-segment-detail-code" padding={0}>
+              <AriCode
+                language={resolvedDetailCodeLanguage}
+                path={detailCodePath}
+                addedCount={detailCodeAddedCount}
+                removedCount={detailCodeRemovedCount}
+                diffLines={detailCodeDiffLines}
+                value={detailCodeValue}
+                editable={false}
+                showToolbar={false}
+                showCopyButton
+                showLanguageTag={false}
+                showLineNumbers={resolvedDetailCodeLanguage !== "text"}
+                fontSize="sm"
+                height={resolveRunSegmentCodeHeight(detailCodeValue)}
+              />
+            </AriContainer>
+          )}
         </AriContainer>
       ) : null}
     </AriContainer>

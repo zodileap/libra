@@ -15,7 +15,7 @@ const seedAssets: ConstraintAsset[] = [
     id: "a1",
     kind: "framework",
     name: "aries_react",
-    source: "https://git.zodileap.com",
+    source: "https://github.com/zodileap/libra.git",
     description: "统一 UI 组件基础"
   }
 ];

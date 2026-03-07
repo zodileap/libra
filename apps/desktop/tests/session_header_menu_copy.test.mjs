@@ -83,8 +83,8 @@ test("TestSessionCopyShouldBeMovedToDevDebugPanel", () => {
   assert.doesNotMatch(sessionSource, /技能（已安装并匹配）/);
   assert.doesNotMatch(sessionSource, /技能（仅 ID，未在已安装列表命中）/);
   assert.match(sessionSource, /#### 结构化项目信息/);
-  assert.match(sessionSource, /window\.addEventListener\("zodileap:session-copy-request"/);
-  assert.match(sessionSource, /new CustomEvent\("zodileap:session-copy-result"/);
+  assert.match(sessionSource, /window\.addEventListener\("libra:session-copy-request"/);
+  assert.match(sessionSource, /new CustomEvent\("libra:session-copy-result"/);
   assert.match(sessionSource, /会话内容（含过程）已复制/);
 
   // 描述：
@@ -95,7 +95,7 @@ test("TestSessionCopyShouldBeMovedToDevDebugPanel", () => {
   assert.match(devDebugSource, /const resolveCopyTargetSessionId = \(\) =>/);
   assert.match(devDebugSource, /const copyTargetSessionId = resolveCopyTargetSessionId\(\);/);
   assert.match(devDebugSource, /disabled=\{!copyTargetSessionId \|\| Boolean\(copyingSessionId\)\}/);
-  assert.match(devDebugSource, /new CustomEvent\("zodileap:session-debug-request"/);
-  assert.match(devDebugSource, /new CustomEvent\("zodileap:session-copy-request"/);
-  assert.match(devDebugSource, /window\.addEventListener\("zodileap:session-copy-result"/);
+  assert.match(devDebugSource, /new CustomEvent\("libra:session-debug-request"/);
+  assert.match(devDebugSource, /new CustomEvent\("libra:session-copy-request"/);
+  assert.match(devDebugSource, /window\.addEventListener\("libra:session-copy-result"/);
 });

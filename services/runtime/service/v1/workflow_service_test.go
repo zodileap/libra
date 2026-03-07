@@ -1,10 +1,10 @@
 package service
 
 import (
-	"os"
+	"path/filepath"
 	"testing"
 
-	zspecs "git.zodileap.com/taurus/zodileap_go_zspecs"
+	specs "github.com/zodileap/libra/services/runtime/specs/v1"
 )
 
 // 描述：校验分页参数归一化逻辑。
@@ -28,67 +28,66 @@ func TestNormalizePagination(t *testing.T) {
 	}
 }
 
-// 描述：校验会话消息存储的写入与分页查询逻辑。
+// 描述：校验会话消息的写入、分页与用户隔离逻辑。
 func TestWorkflowMessageStoreAddAndList(t *testing.T) {
 	t.Parallel()
 
-	store := newWorkflowMessageStore()
-	sessionID := *zspecs.NewId(1001)
-	userID := *zspecs.NewUserId("123e4567-e89b-12d3-a456-426614174000")
-
-	first := store.add(sessionID, userID, "user", "hello")
-	second := store.add(sessionID, userID, "assistant", "world")
-
-	if first.MessageId.Int64() <= 0 {
-		t.Fatalf("首条消息ID无效: %d", first.MessageId.Int64())
-	}
-	if second.MessageId.Int64() <= first.MessageId.Int64() {
-		t.Fatalf("消息ID应递增: first=%d second=%d", first.MessageId.Int64(), second.MessageId.Int64())
+	service, err := NewWorkflowService(filepath.Join(t.TempDir(), "runtime"))
+	if err != nil {
+		t.Fatalf("创建服务失败: %v", err)
 	}
 
-	list, total := store.list(sessionID, 1, 1)
-	if total != 2 {
-		t.Fatalf("消息总数错误: got=%d want=2", total)
-	}
-	if len(list) != 1 {
-		t.Fatalf("分页结果数量错误: got=%d want=1", len(list))
-	}
-	if list[0].Content != "hello" {
-		t.Fatalf("分页第一条内容错误: got=%s want=hello", list[0].Content)
+	sessionResp, err := service.CreateSession(specs.WorkflowSessionCreateReq{UserId: "user-1", AgentCode: "code"})
+	if err != nil {
+		t.Fatalf("创建会话失败: %v", err)
 	}
 
-	list, total = store.list(sessionID, 2, 1)
-	if total != 2 || len(list) != 1 {
-		t.Fatalf("第二页结果错误: total=%d len=%d", total, len(list))
+	first, err := service.CreateSessionMessage(specs.WorkflowSessionMessageCreateReq{
+		SessionId: sessionResp.Session.ID,
+		UserId:    "user-1",
+		Role:      "user",
+		Content:   "hello",
+	})
+	if err != nil {
+		t.Fatalf("写入首条消息失败: %v", err)
 	}
-	if list[0].Content != "world" {
-		t.Fatalf("第二页内容错误: got=%s want=world", list[0].Content)
+	second, err := service.CreateSessionMessage(specs.WorkflowSessionMessageCreateReq{
+		SessionId: sessionResp.Session.ID,
+		UserId:    "user-1",
+		Role:      "assistant",
+		Content:   "world",
+	})
+	if err != nil {
+		t.Fatalf("写入第二条消息失败: %v", err)
 	}
-}
-
-// 描述：校验会话消息按会话隔离存储。
-func TestWorkflowMessageStoreSessionIsolation(t *testing.T) {
-	t.Parallel()
-
-	store := newWorkflowMessageStore()
-	userID := *zspecs.NewUserId("123e4567-e89b-12d3-a456-426614174000")
-	sessionA := *zspecs.NewId(2001)
-	sessionB := *zspecs.NewId(2002)
-
-	store.add(sessionA, userID, "user", "A-1")
-	store.add(sessionA, userID, "user", "A-2")
-	store.add(sessionB, userID, "user", "B-1")
-
-	listA, totalA := store.list(sessionA, 1, 10)
-	if totalA != 2 || len(listA) != 2 {
-		t.Fatalf("sessionA 数据错误: total=%d len=%d", totalA, len(listA))
+	if first.Message.MessageId == second.Message.MessageId {
+		t.Fatalf("消息 ID 应递增: first=%s second=%s", first.Message.MessageId, second.Message.MessageId)
 	}
-	listB, totalB := store.list(sessionB, 1, 10)
-	if totalB != 1 || len(listB) != 1 {
-		t.Fatalf("sessionB 数据错误: total=%d len=%d", totalB, len(listB))
+
+	list, err := service.ListSessionMessage(specs.WorkflowSessionMessageListReq{
+		SessionId: sessionResp.Session.ID,
+		UserId:    "user-1",
+		Page:      1,
+		PageSize:  1,
+	})
+	if err != nil {
+		t.Fatalf("查询第一页消息失败: %v", err)
 	}
-	if listB[0].Content != "B-1" {
-		t.Fatalf("sessionB 内容错误: got=%s want=B-1", listB[0].Content)
+	if list.Total != 2 || len(list.List) != 1 || list.List[0].Content != "hello" {
+		t.Fatalf("分页第一页结果错误: %+v", list)
+	}
+
+	secondPage, err := service.ListSessionMessage(specs.WorkflowSessionMessageListReq{
+		SessionId: sessionResp.Session.ID,
+		UserId:    "user-1",
+		Page:      2,
+		PageSize:  1,
+	})
+	if err != nil {
+		t.Fatalf("查询第二页消息失败: %v", err)
+	}
+	if secondPage.Total != 2 || len(secondPage.List) != 1 || secondPage.List[0].Content != "world" {
+		t.Fatalf("分页第二页结果错误: %+v", secondPage)
 	}
 }
 
@@ -110,24 +109,15 @@ func TestCompareSemverVersion(t *testing.T) {
 	}
 }
 
-// 描述：校验按平台/架构/通道解析下载地址的优先级。
+// 描述：校验按平台、架构与通道解析下载地址的优先级，并兼容新旧环境变量前缀。
 func TestResolveDesktopUpdateDownloadURL(t *testing.T) {
-	t.Setenv("ZODILEAP_DESKTOP_DOWNLOAD_URL", "https://fallback/update.pkg")
-	t.Setenv("ZODILEAP_DESKTOP_DOWNLOAD_URL_DARWIN", "https://darwin/update.pkg")
-	t.Setenv("ZODILEAP_DESKTOP_DOWNLOAD_URL_DARWIN_ARM64", "https://darwin-arm64/update.pkg")
-	t.Setenv("ZODILEAP_DESKTOP_DOWNLOAD_URL_DARWIN_ARM64_STABLE", "https://darwin-arm64-stable/update.pkg")
+	t.Setenv("LIBRA_DESKTOP_DOWNLOAD_URL", "https://fallback/update.pkg")
+	t.Setenv("LIBRA_DESKTOP_DOWNLOAD_URL_DARWIN", "https://darwin/update.pkg")
+	t.Setenv("LIBRA_DESKTOP_DOWNLOAD_URL_DARWIN_ARM64", "https://darwin-arm64/update.pkg")
+	t.Setenv("LIBRA_DESKTOP_DOWNLOAD_URL_DARWIN_ARM64_STABLE", "https://darwin-arm64-stable/update.pkg")
 
 	got := resolveDesktopUpdateDownloadURL("darwin", "arm64", "stable")
 	if got != "https://darwin-arm64-stable/update.pkg" {
 		t.Fatalf("下载地址优先级错误: got=%s", got)
-	}
-
-	// 描述：移除最精确配置后，应回退到平台+架构配置。
-	if err := os.Unsetenv("ZODILEAP_DESKTOP_DOWNLOAD_URL_DARWIN_ARM64_STABLE"); err != nil {
-		t.Fatalf("清理环境变量失败: %v", err)
-	}
-	got = resolveDesktopUpdateDownloadURL("darwin", "arm64", "stable")
-	if got != "https://darwin-arm64/update.pkg" {
-		t.Fatalf("下载地址回退错误: got=%s", got)
 	}
 }

@@ -48,6 +48,7 @@ test("TestDesktopUpdateFlowShouldConnectApiDownloadAndInstall", () => {
   const tauriCargoSource = readDesktopSource("src-tauri/Cargo.toml");
   const rootPackageSource = readRepoSource("package.json");
   const runtimeApiSource = readRepoSource("services/runtime/api/v1/workflow.go");
+  const runtimeApiServerSource = readRepoSource("services/runtime/api/v1/server.go");
   const runtimeServiceSource = readRepoSource("services/runtime/service/v1/workflow_service.go");
   const runtimeSpecsSource = readRepoSource("services/runtime/specs/v1/workflow.go");
 
@@ -108,8 +109,8 @@ test("TestDesktopUpdateFlowShouldConnectApiDownloadAndInstall", () => {
   //   - Runtime 服务端应提供桌面更新检查接口，支持版本与平台参数。
   assert.match(runtimeSpecsSource, /type WorkflowDesktopUpdateCheckReq struct/);
   assert.match(runtimeSpecsSource, /type WorkflowDesktopUpdateCheckResp struct/);
-  assert.match(runtimeApiSource, /group\.GET\("\/desktop-update\/check", base\.desktopUpdateCheck\)/);
-  assert.match(runtimeApiSource, /func \(api \*BaseWorkflow\) desktopUpdateCheck/);
+  assert.match(runtimeApiServerSource, /\/workflow\/v1\/desktop-update\/check/);
+  assert.match(runtimeApiSource, /func \(s \*Server\) handleDesktopUpdateCheck/);
   assert.match(runtimeServiceSource, /func \(s \*WorkflowService\) CheckDesktopUpdate/);
   assert.match(runtimeServiceSource, /compareSemverVersion/);
   assert.match(runtimeServiceSource, /resolveDesktopUpdateDownloadURL/);

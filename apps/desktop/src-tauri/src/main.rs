@@ -17,16 +17,16 @@ use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tauri::Emitter;
 use tauri::Manager;
 use sha2::{Digest, Sha256};
-use zodileap_agent_core::llm::{call_model, parse_provider};
-use zodileap_agent_core::{
+use libra_agent_core::llm::{call_model, parse_provider};
+use libra_agent_core::{
     run_agent_with_protocol_error_stream, AgentRunRequest, AgentStreamEvent,
 };
-use zodileap_mcp_common::{
+use libra_mcp_common::{
     ProtocolAssetRecord, ProtocolError, ProtocolEventRecord, ProtocolStepRecord,
     ProtocolStepStatus, ProtocolUiHint, ProtocolUiHintAction, ProtocolUiHintActionIntent,
     ProtocolUiHintLevel,
 };
-use zodileap_mcp_model::{
+use libra_mcp_model::{
     blender_bridge_addon_script, blender_bridge_extension_manifest, build_recovery_ui_hint,
     build_safety_confirmation_ui_hint, build_step_trace_payload, check_capability_for_session_step,
     execute_model_tool, export_model, ping_blender_bridge, requires_safety_confirmation,
@@ -198,8 +198,8 @@ struct BridgeHealthResponse {
 }
 
 const BLENDER_EXTENSION_MIN_VERSION: &str = "4.2.0";
-const BLENDER_EXTENSION_REPO_ID: &str = "zodileap_local";
-const BLENDER_EXTENSION_PACKAGE_NAME: &str = "zodileap_mcp_bridge-0.2.0.zip";
+const BLENDER_EXTENSION_REPO_ID: &str = "libra_local";
+const BLENDER_EXTENSION_PACKAGE_NAME: &str = "libra_mcp_bridge-0.2.0.zip";
 const APIFOX_MCP_PACKAGE_NAME: &str = "apifox-mcp-server";
 const APIFOX_MCP_PACKAGE_VERSION: &str = "latest";
 
@@ -958,7 +958,7 @@ fn ensure_blender_extension_repo(blender_bin: &str) -> Result<(), String> {
 
 /// 描述：生成 Blender Extension 安装包（zip），用于 install-file 安装。
 fn build_bridge_extension_archive() -> Result<PathBuf, String> {
-    let package_dir = env::temp_dir().join(format!("zodileap-bridge-extension-{}", now_millis()));
+    let package_dir = env::temp_dir().join(format!("libra-bridge-extension-{}", now_millis()));
     fs::create_dir_all(&package_dir)
         .map_err(|err| format!("create extension temp dir failed: {}", err))?;
     let archive_path = package_dir.join(BLENDER_EXTENSION_PACKAGE_NAME);
@@ -1029,11 +1029,11 @@ fn cleanup_legacy_bridge_files(blender_bin: &str) -> Result<Vec<String>, String>
         let legacy_addon = version_dir
             .join("scripts")
             .join("addons")
-            .join("zodileap_blender_bridge_addon.py");
+            .join("libra_blender_bridge_addon.py");
         let legacy_boot = version_dir
             .join("scripts")
             .join("startup")
-            .join("zodileap_bridge_boot.py");
+            .join("libra_bridge_boot.py");
         for target in [legacy_addon, legacy_boot] {
             if target.exists() {
                 fs::remove_file(&target)
@@ -1143,18 +1143,18 @@ fn discover_blender_version_dirs(root: &Path, blender_bin: &str) -> Vec<PathBuf>
 fn bridge_boot_script_content() -> &'static str {
     r#"import addon_utils
 import bpy
-MODULE = "zodileap_blender_bridge_addon"
+MODULE = "libra_blender_bridge_addon"
 try:
     addon_utils.enable(MODULE, default_set=True, persistent=True)
     if hasattr(bpy.ops.wm, "save_userpref"):
         bpy.ops.wm.save_userpref()
 except Exception as err:
-    print(f"[zodileap] bridge auto-enable failed: {err}")
+    print(f"[libra] bridge auto-enable failed: {err}")
 "#
 }
 
 fn ensure_bridge_boot_script(startup_dir: &Path) -> Result<PathBuf, String> {
-    let boot_script = startup_dir.join("zodileap_bridge_boot.py");
+    let boot_script = startup_dir.join("libra_bridge_boot.py");
     fs::write(&boot_script, bridge_boot_script_content())
         .map_err(|err| format!("write bridge startup script failed: {}", err))?;
     Ok(boot_script)
@@ -1163,12 +1163,12 @@ fn ensure_bridge_boot_script(startup_dir: &Path) -> Result<PathBuf, String> {
 /// 描述：构建后台启用 Bridge 的 Python 表达式，安装后会立刻保存用户偏好。
 fn bridge_enable_and_save_expr() -> &'static str {
     r#"import addon_utils, bpy, traceback
-MODULE = "zodileap_blender_bridge_addon"
+MODULE = "libra_blender_bridge_addon"
 try:
     addon_utils.enable(MODULE, default_set=True, persistent=True)
     if hasattr(bpy.ops.wm, "save_userpref"):
         bpy.ops.wm.save_userpref()
-    print("[zodileap] bridge addon enabled and user preferences saved")
+    print("[libra] bridge addon enabled and user preferences saved")
 except Exception as err:
     traceback.print_exc()
     raise err
@@ -1214,7 +1214,7 @@ fn install_blender_bridge_legacy(blender_bin: &str) -> Result<String, String> {
         fs::create_dir_all(&startup_dir)
             .map_err(|err| format!("create startup dir failed: {}", err))?;
 
-        let addon_path = addon_dir.join("zodileap_blender_bridge_addon.py");
+        let addon_path = addon_dir.join("libra_blender_bridge_addon.py");
         fs::write(&addon_path, addon_content)
             .map_err(|err| format!("write bridge addon failed: {}", err))?;
 
@@ -1503,7 +1503,7 @@ fn run_agent_command_inner(
         .app_data_dir()
         .ok()
         .map(|path| path.join("exports"))
-        .unwrap_or_else(|| env::temp_dir().join("zodileap-agen").join("exports"));
+        .unwrap_or_else(|| env::temp_dir().join("libra").join("exports"));
     let selected_output_dir = output_dir
         .as_deref()
         .map(str::trim)
@@ -1520,7 +1520,7 @@ fn run_agent_command_inner(
         let safe_output_dir = selected_workdir
             .parent()
             .map(|path| path.join("exports"))
-            .unwrap_or_else(|| env::temp_dir().join("zodileap-agen").join("exports"));
+            .unwrap_or_else(|| env::temp_dir().join("libra").join("exports"));
         log(
             "warn",
             "request",
@@ -3777,7 +3777,7 @@ fn ensure_apifox_runtime_package_json(runtime_root: &Path) -> Result<(), String>
         return Ok(());
     }
     let package_json = json!({
-        "name": "zodileap-desktop-apifox-mcp-runtime",
+        "name": "libra-desktop-apifox-mcp-runtime",
         "private": true,
         "version": "0.0.0"
     });
@@ -4224,7 +4224,7 @@ fn normalize_output_dir_for_model(
         .app_data_dir()
         .ok()
         .map(|path| path.join("exports"))
-        .unwrap_or_else(|| env::temp_dir().join("zodileap-agen").join("exports"));
+        .unwrap_or_else(|| env::temp_dir().join("libra").join("exports"));
     let candidate = output_dir
         .as_deref()
         .map(str::trim)
@@ -4241,7 +4241,7 @@ fn normalize_output_dir_for_model(
         selected = current_dir
             .parent()
             .map(|path| path.join("exports"))
-            .unwrap_or_else(|| env::temp_dir().join("zodileap-agen").join("exports"));
+            .unwrap_or_else(|| env::temp_dir().join("libra").join("exports"));
     }
     fs::create_dir_all(&selected).map_err(|err| format!("create output dir failed: {}", err))?;
     Ok(selected)
@@ -8544,11 +8544,11 @@ fn resolve_update_file_extension(download_url: &str) -> String {
 
 /// 描述：构建更新包下载路径，按目标版本和下载地址生成稳定文件名。
 fn resolve_update_download_path(version: &str, download_url: &str) -> Result<PathBuf, String> {
-    let updates_root = env::temp_dir().join("zodileap-desktop-updates");
+    let updates_root = env::temp_dir().join("libra-desktop-updates");
     fs::create_dir_all(&updates_root).map_err(|err| format!("create update temp dir failed: {}", err))?;
     let extension = resolve_update_file_extension(download_url);
     let safe_version = version.replace(['/', '\\', ' '], "_");
-    Ok(updates_root.join(format!("zodileap-agen-{}.{}", safe_version, extension)))
+    Ok(updates_root.join(format!("libra-{}.{}", safe_version, extension)))
 }
 
 /// 描述：计算文件的 SHA256 哈希值，用于更新包完整性校验。
@@ -8737,20 +8737,20 @@ fn install_downloaded_desktop_update() -> Result<DesktopUpdateStateResponse, Str
 #[tauri::command]
 fn get_agent_sandbox_metrics(
     session_id: String,
-) -> Result<Option<zodileap_agent_core::sandbox::SandboxMetrics>, String> {
-    Ok(zodileap_agent_core::sandbox::SANDBOX_REGISTRY.get_metrics(&session_id))
+) -> Result<Option<libra_agent_core::sandbox::SandboxMetrics>, String> {
+    Ok(libra_agent_core::sandbox::SANDBOX_REGISTRY.get_metrics(&session_id))
 }
 
 #[tauri::command]
 fn reset_agent_sandbox(session_id: String) -> Result<(), String> {
-    zodileap_agent_core::sandbox::SANDBOX_REGISTRY.reset(&session_id);
+    libra_agent_core::sandbox::SANDBOX_REGISTRY.reset(&session_id);
     Ok(())
 }
 
 #[tauri::command]
 fn cancel_agent_session(app: tauri::AppHandle, session_id: String) -> Result<bool, String> {
     mark_agent_session_cancelled(&session_id);
-    zodileap_agent_core::sandbox::SANDBOX_REGISTRY.reset(&session_id);
+    libra_agent_core::sandbox::SANDBOX_REGISTRY.reset(&session_id);
     emit_agent_text_stream_event(
         &app,
         AgentTextStreamEvent {
@@ -8769,11 +8769,11 @@ fn cancel_agent_session(app: tauri::AppHandle, session_id: String) -> Result<boo
 #[tauri::command]
 fn approve_agent_action(id: String, approved: bool) -> Result<bool, String> {
     let outcome = if approved {
-        zodileap_agent_core::ApprovalOutcome::Approved
+        libra_agent_core::ApprovalOutcome::Approved
     } else {
-        zodileap_agent_core::ApprovalOutcome::Rejected
+        libra_agent_core::ApprovalOutcome::Rejected
     };
-    let ok = zodileap_agent_core::APPROVAL_REGISTRY.submit_decision(&id, outcome);
+    let ok = libra_agent_core::APPROVAL_REGISTRY.submit_decision(&id, outcome);
     Ok(ok)
 }
 
@@ -8818,7 +8818,7 @@ fn main() {
             get_agent_sandbox_metrics,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running zodileap_agen_desktop");
+        .expect("error while running libra_desktop");
 }
 
 #[cfg(test)]
@@ -8841,8 +8841,8 @@ mod tests {
         SelectionContextSnapshot,
     };
     use serde_json::json;
-    use zodileap_mcp_common::ProtocolError;
-    use zodileap_mcp_model::{
+    use libra_mcp_common::ProtocolError;
+    use libra_mcp_model::{
         ExportModelFormat, ModelPlanBranch, ModelPlanOperationKind, ModelPlanRiskLevel,
         ModelSessionPlannedStep, ModelToolAction,
     };
@@ -9755,7 +9755,7 @@ mod tests {
     #[test]
     fn should_build_file_recover_point_path() {
         let path =
-            build_file_recover_point_path("/tmp/zodileap-exports", "session-01", "trace-abc", 2);
+            build_file_recover_point_path("/tmp/libra-exports", "session-01", "trace-abc", 2);
         let text = path.to_string_lossy().to_string();
         assert!(text.contains("recover_points"));
         assert!(text.contains("session-01"));
@@ -9767,7 +9767,7 @@ mod tests {
     #[test]
     fn should_build_operation_transaction_snapshot_path() {
         let path = build_operation_transaction_snapshot_path(
-            "/tmp/zodileap-exports",
+            "/tmp/libra-exports",
             "session-01",
             "trace-abc",
         );

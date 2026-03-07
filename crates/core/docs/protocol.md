@@ -6,7 +6,7 @@
 
 ## 协议模型
 
-统一类型定义在：`zodileap_mcp_common`
+统一类型定义在：`libra_mcp_common`
 
 - `ProtocolStepRecord`: 步骤记录。
 - `ProtocolEventRecord`: 事件记录。
@@ -80,7 +80,7 @@
 
 ## feature 边界与启用行为
 
-`zodileap_agent_core` 提供如下编译特性：
+`libra_agent_core` 提供如下编译特性：
 
 - `with-mcp-model`: 启用模型 MCP 能力（导出、模型工具链路）。
 - `with-mcp-code`: 启用代码 MCP 能力（当前阶段仅预留边界）。

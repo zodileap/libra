@@ -1,4 +1,4 @@
-module git.zodileap.com/gemini/zodileap_enterprise
+module git.zodileap.com/gemini/libra_enterprise
 
 go 1.24.0
 
@@ -25,4 +25,4 @@ replace git.zodileap.com/taurus/zodileap_go_zstatuscode v1.2.2 => /Users/yoho/co
 
 replace git.zodileap.com/taurus/zodileap_go_zerr v1.5.12 => /Users/yoho/code/go/zodileap_go/zerr
 
-replace git.zodileap.com/entity/enterprise_v1 => /Users/yoho/code/zodileap-agen/services/entity/v1/enterprise
+replace git.zodileap.com/entity/enterprise_v1 => ../entity/v1/enterprise

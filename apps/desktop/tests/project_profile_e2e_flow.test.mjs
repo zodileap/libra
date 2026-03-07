@@ -76,7 +76,7 @@ test("TestE2EProfileUpdateShouldSyncAcrossSessions", () => {
   // 描述：
   //
   //   - 数据层写入结构化信息后应广播项目级更新事件。
-  assert.match(dataSource, /export const CODE_WORKSPACE_PROFILE_UPDATED_EVENT = "zodileap:code-workspace-profile-updated";/);
+  assert.match(dataSource, /export const CODE_WORKSPACE_PROFILE_UPDATED_EVENT = "libra:code-workspace-profile-updated";/);
   assert.match(dataSource, /new CustomEvent\(CODE_WORKSPACE_PROFILE_UPDATED_EVENT,/);
   assert.match(dataSource, /detail: \{\s*workspaceId,\s*reason,\s*revision,\s*\},/s);
 

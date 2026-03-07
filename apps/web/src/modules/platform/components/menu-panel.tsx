@@ -20,7 +20,7 @@ export function MenuPanel({ onNavigate }: MenuPanelProps) {
   return (
     <AriContainer className="web-menu-panel web-scroll">
       <div className="web-menu-header">
-        <AriTypography variant="h3" value="Zodileap Agen" />
+        <AriTypography variant="h3" value="Libra" />
         <AriTypography variant="caption" value="平台入口 + 模块化智能体" />
       </div>
 
@@ -50,7 +50,7 @@ export function MenuPanel({ onNavigate }: MenuPanelProps) {
         })}
       </AriFlex>
 
-      <AriTypography className="web-menu-footer" variant="caption" value="当前用户：demo@zodileap.com" />
+      <AriTypography className="web-menu-footer" variant="caption" value="当前用户：demo@libra.com" />
     </AriContainer>
   );
 }

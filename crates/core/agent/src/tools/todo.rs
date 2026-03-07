@@ -3,7 +3,7 @@ use super::ToolContext;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
-use zodileap_mcp_common::{now_millis, ProtocolError};
+use libra_mcp_common::{now_millis, ProtocolError};
 
 pub struct TodoReadTool;
 
@@ -103,7 +103,7 @@ impl AgentTool for TodoWriteTool {
 
 /// 描述：返回任务清单默认存储路径，固定在沙盒根目录。
 fn resolve_todo_file_path(sandbox_root: &Path) -> PathBuf {
-    sandbox_root.join(".zodileap_agent_todo.json")
+    sandbox_root.join(".libra_agent_todo.json")
 }
 
 #[cfg(test)]

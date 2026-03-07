@@ -10,10 +10,10 @@ import (
 )
 
 func init() {
-	zapi.Register("zodileap_agent_code", "framework-asset", "v1", &FrameworkAssetAPI{})
-	zapi.Register("zodileap_agent_code", "component-asset", "v1", &ComponentAssetAPI{})
-	zapi.Register("zodileap_agent_code", "module-asset", "v1", &ModuleAssetAPI{})
-	zapi.Register("zodileap_agent_code", "execute", "v1", &ExecuteAPI{})
+	zapi.Register("libra_agent_code", "framework-asset", "v1", &FrameworkAssetAPI{})
+	zapi.Register("libra_agent_code", "component-asset", "v1", &ComponentAssetAPI{})
+	zapi.Register("libra_agent_code", "module-asset", "v1", &ModuleAssetAPI{})
+	zapi.Register("libra_agent_code", "execute", "v1", &ExecuteAPI{})
 }
 
 func defaultCors() gin.HandlerFunc {

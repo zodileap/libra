@@ -74,16 +74,16 @@ use policy::AgentPolicy;
 use profile::AgentProfile;
 use serde_json::{json, Value};
 use tracing::{info, info_span};
-use zodileap_mcp_common::{
+use libra_mcp_common::{
     now_millis, ProtocolAssetRecord, ProtocolError, ProtocolEventRecord, ProtocolStepRecord,
     ProtocolStepStatus, ProtocolUiHint,
 };
 
 #[cfg(feature = "with-mcp-model")]
-pub use zodileap_mcp_model as mcp_model;
+pub use libra_mcp_model as mcp_model;
 
 #[cfg(feature = "with-mcp-code")]
-pub use zodileap_mcp_code as mcp_code;
+pub use libra_mcp_code as mcp_code;
 
 /// 描述：智能体核心执行器接口，统一了不同智能体（Code/Model）的执行协议。
 pub trait AgentExecutor {

@@ -4,7 +4,7 @@ mod complex_session;
 mod zbrush;
 
 use serde_json::Value;
-use zodileap_mcp_common::{
+use libra_mcp_common::{
     now_millis, McpError, McpResult, ProtocolAssetRecord, ProtocolEventRecord, ProtocolStepRecord,
     ProtocolStepStatus, ProtocolUiHint,
 };
@@ -946,7 +946,7 @@ mod tests {
 
     #[test]
     fn export_should_fail_without_running_bridge() {
-        let output_dir = env::temp_dir().join("zodileap-mcp-model-tests");
+        let output_dir = env::temp_dir().join("libra-mcp-model-tests");
         let _ = fs::create_dir_all(&output_dir);
 
         let result = export_model(ExportModelRequest {
@@ -963,7 +963,7 @@ mod tests {
 
     #[test]
     fn export_should_reject_non_object_params() {
-        let output_dir = env::temp_dir().join("zodileap-mcp-model-tests");
+        let output_dir = env::temp_dir().join("libra-mcp-model-tests");
         let _ = fs::create_dir_all(&output_dir);
         let result = export_model(ExportModelRequest {
             project_name: "Robot".to_string(),
@@ -1034,7 +1034,7 @@ mod tests {
     fn extension_manifest_should_contain_required_fields() {
         let manifest = blender_bridge_extension_manifest();
         assert!(manifest.contains("schema_version"));
-        assert!(manifest.contains("id = \"zodileap_mcp_bridge\""));
+        assert!(manifest.contains("id = \"libra_mcp_bridge\""));
         assert!(manifest.contains("type = \"add-on\""));
         assert!(manifest.contains("blender_version_min = \"4.2.0\""));
     }

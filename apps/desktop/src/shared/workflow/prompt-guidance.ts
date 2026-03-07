@@ -14,7 +14,7 @@ export const CODE_AGENT_TOOLSET_LINES: string[] = [
   "- write_json(path, data)：write_json(\"meta.json\", {\"name\":\"demo\"})",
   "- run_shell(command, timeout_secs=30)：run_shell(\"pnpm test\", 120)",
   "- apply_patch(patch, check_only=False)：apply_patch(\"*** Begin Patch\\n*** Update File: a.txt\\n@@\\n-old\\n+new\\n*** End Patch\\n\", False)",
-  "- todo_read()：todo_read()",
+  "- todo_read()：todo_read()  # 默认返回任务项列表（items）",
   "- todo_write(items)：todo_write([{\"id\":\"next\",\"content\":\"设计前端框架\",\"status\":\"pending\"}])",
   "- 错误示例（禁止）：todo_write(\"NEXT_STEP\", \"设计前端框架\")",
   "- 参数不确定时先调用：tool_search(\"todo_write\", 1) / tool_search(\"write_text\", 1)",

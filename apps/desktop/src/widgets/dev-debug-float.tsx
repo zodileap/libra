@@ -116,11 +116,11 @@ export function DevDebugFloat({ visible = true }: DevDebugFloatProps) {
       }
     };
 
-    window.addEventListener("zodileap:session-debug", handleSessionDebug as EventListener);
-    window.addEventListener("zodileap:session-copy-result", handleSessionCopyResult as EventListener);
+    window.addEventListener("libra:session-debug", handleSessionDebug as EventListener);
+    window.addEventListener("libra:session-copy-result", handleSessionCopyResult as EventListener);
     // 描述：打开 Dev 调试窗口时主动请求一次最新快照，避免“先发送后打开”导致按钮无法点击。
     window.dispatchEvent(
-      new CustomEvent("zodileap:session-debug-request", {
+      new CustomEvent("libra:session-debug-request", {
         detail: {
           sessionId: resolveSessionIdFromLocation(),
         },
@@ -129,8 +129,8 @@ export function DevDebugFloat({ visible = true }: DevDebugFloatProps) {
 
     return () => {
       clearCopyRequestTimeout();
-      window.removeEventListener("zodileap:session-debug", handleSessionDebug as EventListener);
-      window.removeEventListener("zodileap:session-copy-result", handleSessionCopyResult as EventListener);
+      window.removeEventListener("libra:session-debug", handleSessionDebug as EventListener);
+      window.removeEventListener("libra:session-copy-result", handleSessionCopyResult as EventListener);
     };
   }, [visible]);
 
@@ -159,7 +159,7 @@ export function DevDebugFloat({ visible = true }: DevDebugFloatProps) {
       });
     }, 6000);
     window.dispatchEvent(
-      new CustomEvent("zodileap:session-copy-request", {
+      new CustomEvent("libra:session-copy-request", {
         detail: {
           sessionId: targetSessionId,
         },

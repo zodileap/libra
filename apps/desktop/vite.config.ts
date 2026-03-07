@@ -1,5 +1,11 @@
 import { defineConfig, loadEnv } from "vite";
+import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react-swc";
+
+// 描述：
+//
+//   - 通过配置文件相对路径解析 Desktop 源码目录，避免仓库目录改名后别名失效。
+const desktopSrcDir = fileURLToPath(new URL("./src/", import.meta.url)).replace(/\\/g, "/");
 
 function patchAriesDynamicImport() {
   return {
@@ -69,7 +75,7 @@ export default defineConfig(({ mode }) => {
     alias: [
       {
         find: /^@\//,
-        replacement: "/Users/yoho/code/zodileap-agen/apps/desktop/src/"
+        replacement: desktopSrcDir
       },
       // 描述：
       //

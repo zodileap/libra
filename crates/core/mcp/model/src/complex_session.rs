@@ -4,7 +4,7 @@ use crate::{
 use serde_json::{json, Value};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use zodileap_mcp_common::{
+use libra_mcp_common::{
     McpError, McpResult, ProtocolError, ProtocolUiHint, ProtocolUiHintAction,
     ProtocolUiHintActionIntent, ProtocolUiHintLevel,
 };
@@ -332,7 +332,7 @@ pub fn requires_safety_confirmation(steps: &[ModelSessionPlannedStep]) -> bool {
 pub fn build_safety_confirmation_token(trace_id: &str, prompt: &str) -> String {
     let mut hasher = DefaultHasher::new();
     let _ = trace_id;
-    "zodileap-complex-confirm".hash(&mut hasher);
+    "libra-complex-confirm".hash(&mut hasher);
     prompt.trim().to_lowercase().hash(&mut hasher);
     format!("confirm-{:016x}", hasher.finish())
 }

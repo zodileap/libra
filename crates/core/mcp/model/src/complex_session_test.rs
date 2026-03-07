@@ -6,7 +6,7 @@ use crate::{
 };
 use serde::Deserialize;
 use serde_json::json;
-use zodileap_mcp_common::ProtocolError;
+use libra_mcp_common::ProtocolError;
 
 /// 描述：复杂会话回归基线夹具根结构，承载固定场景、固定提示词和固定断言。
 #[derive(Debug, Deserialize)]

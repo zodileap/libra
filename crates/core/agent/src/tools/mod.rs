@@ -11,7 +11,7 @@ use crate::policy::AgentPolicy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
-use zodileap_mcp_common::ProtocolError;
+use libra_mcp_common::ProtocolError;
 
 /// 描述：工具执行风险等级。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

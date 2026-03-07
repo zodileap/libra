@@ -148,7 +148,7 @@ test("TestSessionPageShouldExposeDebugFlowRecordsToDevPanel", () => {
   assert.match(source, /debugFlowRecords/);
   assert.match(source, /appendDebugFlowRecord/);
   assert.match(source, /const emitSessionDebugSnapshot = useCallback\(\(\) =>/);
-  assert.match(source, /window\.addEventListener\("zodileap:session-debug-request"/);
+  assert.match(source, /window\.addEventListener\("libra:session-debug-request"/);
   assert.match(source, /debugFlowRecords: debugFlowRecords.slice\(0, 120\)/);
 });
 
@@ -186,7 +186,7 @@ test("TestSessionPageShouldNotClearDevSnapshotOnEachStateRefresh", () => {
   //   - 快照清空事件应只在页面真正卸载时触发，防止调试内容闪烁丢失。
   assert.match(
     source,
-    /useEffect\(\(\) => \(\) => \{[\s\S]*new CustomEvent\("zodileap:session-debug", \{\s*detail: null,/,
+    /useEffect\(\(\) => \(\) => \{[\s\S]*new CustomEvent\("libra:session-debug", \{\s*detail: null,/,
   );
 });
 
@@ -272,9 +272,9 @@ test("TestDevDebugFloatShouldUseCompactCopyFirstPanel", () => {
   //   - Dev 调试窗口应采用精简模式，仅保留复制入口与基础提示，不再展示过程日志列表。
   assert.match(source, /label="复制会话内容"/);
   assert.match(source, /resolveCopyTargetSessionId/);
-  assert.match(source, /zodileap:session-debug-request/);
-  assert.match(source, /zodileap:session-copy-request/);
-  assert.match(source, /zodileap:session-copy-result/);
+  assert.match(source, /libra:session-debug-request/);
+  assert.match(source, /libra:session-copy-request/);
+  assert.match(source, /libra:session-copy-result/);
   assert.match(source, /当前会话已连接，点击“复制会话内容”可导出完整排查信息。/);
   assert.doesNotMatch(source, /执行全链路（前端视角）/);
   assert.doesNotMatch(source, /模型规划 LLM 明细（后端视角）/);

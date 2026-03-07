@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	specs "git.zodileap.com/gemini/zodileap_agent_code/specs/v1"
+	specs "git.zodileap.com/gemini/libra_agent_code/specs/v1"
 	zerr "git.zodileap.com/taurus/zodileap_go_zerr"
 	zspecs "git.zodileap.com/taurus/zodileap_go_zspecs"
 	zstatuscode "git.zodileap.com/taurus/zodileap_go_zstatuscode"

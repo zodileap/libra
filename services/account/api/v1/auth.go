@@ -3,8 +3,8 @@ package api
 import (
 	"context"
 
-	service "git.zodileap.com/gemini/zodileap_account/service/v1"
-	specs "git.zodileap.com/gemini/zodileap_account/specs/v1"
+	service "git.zodileap.com/gemini/libra_account/service/v1"
+	specs "git.zodileap.com/gemini/libra_account/specs/v1"
 	zapi "git.zodileap.com/taurus/zodileap_go_zapi"
 	zlog "git.zodileap.com/taurus/zodileap_go_zlog"
 	zspecs "git.zodileap.com/taurus/zodileap_go_zspecs"

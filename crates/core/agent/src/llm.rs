@@ -1,7 +1,7 @@
 use crate::workflow::{RetryClassifiedError, WorkflowRetryPolicy};
 use serde::Serialize;
 use std::env;
-use zodileap_mcp_common::ProtocolError;
+use libra_mcp_common::ProtocolError;
 
 #[path = "llm/providers/mod.rs"]
 mod providers;

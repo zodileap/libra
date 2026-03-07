@@ -9,7 +9,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
-use zodileap_mcp_common::ProtocolError;
+use libra_mcp_common::ProtocolError;
 
 pub struct ApplyPatchTool;
 
@@ -55,7 +55,7 @@ impl AgentTool for ApplyPatchTool {
             .with_suggestion("请安装 git 后重试。")
         })?;
 
-        let runtime_dir = build_temp_dir("zodileap-agent-patch");
+        let runtime_dir = build_temp_dir("libra-agent-patch");
         fs::create_dir_all(&runtime_dir).map_err(|err| {
             ProtocolError::new(
                 "core.agent.python.apply_patch.runtime_dir_failed",

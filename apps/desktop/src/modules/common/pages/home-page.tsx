@@ -14,7 +14,7 @@ export function HomePage({ availableAgents }: HomePageProps) {
   return (
     <AriContainer className="desk-content" showBorderRadius={false}>
       <AriFlex className="desk-home-hero" vertical align="flex-start" justify="flex-start" space={16}>
-        <AriTypography variant="h1" value="欢迎使用 Zodileap Agen" />
+        <AriTypography variant="h1" value="欢迎使用 Libra" />
         <AriTypography
           variant="body"
           value="平台是主入口，智能体是可拆分模块。你可以从左侧进入代码智能体或模型智能体。"

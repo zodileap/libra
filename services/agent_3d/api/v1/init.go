@@ -10,10 +10,10 @@ import (
 )
 
 func init() {
-	zapi.Register("zodileap_agent_3d", "dcc-binding", "v1", &DccBindingAPI{})
-	zapi.Register("zodileap_agent_3d", "model-result", "v1", &ModelResultAPI{})
-	zapi.Register("zodileap_agent_3d", "model-task", "v1", &ModelTaskAPI{})
-	zapi.Register("zodileap_agent_3d", "execute", "v1", &ExecuteAPI{})
+	zapi.Register("libra_agent_3d", "dcc-binding", "v1", &DccBindingAPI{})
+	zapi.Register("libra_agent_3d", "model-result", "v1", &ModelResultAPI{})
+	zapi.Register("libra_agent_3d", "model-task", "v1", &ModelTaskAPI{})
+	zapi.Register("libra_agent_3d", "execute", "v1", &ExecuteAPI{})
 }
 
 func defaultCors() gin.HandlerFunc {

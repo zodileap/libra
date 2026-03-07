@@ -25,7 +25,7 @@ var Config = zbootstrap.Config{
 			Port:       5432,
 			User:       "postgres",
 			Password:   "",
-			DBName:     "zodileap_billing",
+			DBName:     "libra_billing",
 			IsVerifyCa: false,
 		},
 	},
@@ -33,7 +33,7 @@ var Config = zbootstrap.Config{
 	RouterEnable:   true,
 	RouterConfig: []zspecs.RouterConfig{
 		{
-			Name: "zodileap_billing",
+			Name: "libra_billing",
 			Port: ":10006",
 		},
 	},

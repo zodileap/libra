@@ -6,8 +6,8 @@ import (
 	"context"
 
 	license "git.zodileap.com/entity/license_v1/instance"
-	service "git.zodileap.com/gemini/zodileap_license/service/v1"
-	specs "git.zodileap.com/gemini/zodileap_license/specs/v1"
+	service "git.zodileap.com/gemini/libra_license/service/v1"
+	specs "git.zodileap.com/gemini/libra_license/specs/v1"
 	zapi "git.zodileap.com/taurus/zodileap_go_zapi"
 	zlog "git.zodileap.com/taurus/zodileap_go_zlog"
 	zstatuscode "git.zodileap.com/taurus/zodileap_go_zstatuscode"

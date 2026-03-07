@@ -1,8 +1,8 @@
 [package]
-name = "zodileap_agen_desktop"
+name = "libra_desktop"
 version = "0.1.0"
-description = "Zodileap Agen Desktop Client"
-authors = ["zodileap"]
+description = "Libra Desktop Client"
+authors = ["libra"]
 edition = "2021"
 
 [build-dependencies]
@@ -12,9 +12,9 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["macos-private-api"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-zodileap_mcp_model = { path = "../../../crates/core/mcp/model" }
-zodileap_agent_core = { path = "../../../crates/core/agent", features = ["with-mcp-model"] }
-zodileap_mcp_common = { path = "../../../crates/core/mcp/common" }
+libra_mcp_model = { path = "../../../crates/core/mcp/model" }
+libra_agent_core = { path = "../../../crates/core/agent", features = ["with-mcp-model"] }
+libra_mcp_common = { path = "../../../crates/core/mcp/common" }
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 rfd = "0.15"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }

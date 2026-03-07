@@ -1936,6 +1936,56 @@ dependencies = [
 ]
 
 [[package]]
+name = "libra_agent_core"
+version = "0.1.0"
+dependencies = [
+ "dashmap",
+ "libra_mcp_common",
+ "libra_mcp_model",
+ "once_cell",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
+name = "libra_desktop"
+version = "0.1.0"
+dependencies = [
+ "libra_agent_core",
+ "libra_mcp_common",
+ "libra_mcp_model",
+ "reqwest 0.12.28",
+ "rfd",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tauri",
+ "tauri-build",
+ "zip",
+]
+
+[[package]]
+name = "libra_mcp_common"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "libra_mcp_model"
+version = "0.1.0"
+dependencies = [
+ "libra_mcp_common",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "libredox"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5697,56 +5747,6 @@ name = "zmij"
 version = "1.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ff05f8caa9038894637571ae6b9e29466c1f4f829d26c9b28f869a29cbe3445"
-
-[[package]]
-name = "zodileap_agen_desktop"
-version = "0.1.0"
-dependencies = [
- "reqwest 0.12.28",
- "rfd",
- "serde",
- "serde_json",
- "sha2",
- "tauri",
- "tauri-build",
- "zip",
- "zodileap_agent_core",
- "zodileap_mcp_common",
- "zodileap_mcp_model",
-]
-
-[[package]]
-name = "zodileap_agent_core"
-version = "0.1.0"
-dependencies = [
- "dashmap",
- "once_cell",
- "serde",
- "serde_json",
- "sysinfo",
- "tracing",
- "tracing-subscriber",
- "url",
- "zodileap_mcp_common",
- "zodileap_mcp_model",
-]
-
-[[package]]
-name = "zodileap_mcp_common"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "zodileap_mcp_model"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "zodileap_mcp_common",
-]
 
 [[package]]
 name = "zvariant"

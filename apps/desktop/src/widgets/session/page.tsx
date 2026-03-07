@@ -198,7 +198,7 @@ interface AgentRequireApprovalEventData {
 }
 
 const APPROVAL_TOOL_ARGS_PREVIEW_MAX_CHARS = 2000;
-const PLANNING_META_PREFIX = "__zodileap_planning__:";
+const PLANNING_META_PREFIX = "__libra_planning__:";
 const INITIAL_THINKING_SEGMENT_ROLE = "initial_thinking";
 
 // 描述：
@@ -536,6 +536,7 @@ function isEditTool(toolName: string): boolean {
 function isBrowseTool(toolName: string): boolean {
   return toolName === "read_text"
     || toolName === "read_json"
+    || toolName === "todo_read"
     || toolName === "list_dir"
     || toolName === "list_directory"
     || toolName === "glob"
@@ -566,12 +567,14 @@ function buildBrowseDetail(
     glob?: string;
     path?: string;
     pattern?: string;
+    count?: number;
   },
 ): string {
   const query = String(input.query || "").trim();
   const glob = String(input.glob || "").trim();
   const path = String(input.path || "").trim();
   const pattern = String(input.pattern || "").trim();
+  const count = Math.max(0, Math.floor(Number(input.count || 0)));
 
   if (toolName === "search_files" || toolName === "web_search") {
     if (query) {
@@ -591,6 +594,12 @@ function buildBrowseDetail(
   }
   if (toolName === "read_text" || toolName === "read_json" || toolName === "stat") {
     return `Read ${path || "(unknown)"}`;
+  }
+  if (toolName === "todo_read") {
+    if (path) {
+      return `Read TODO list (${count} items) from ${path}`;
+    }
+    return `Read TODO list (${count} items)`;
   }
   if (toolName === "git_diff") {
     return path ? `Read diff in ${path}` : "Read git diff";
@@ -822,11 +831,25 @@ function mapAgentTextStreamToRunSegment(
     const resultData = data.result_data || {};
 
     if (isBrowseTool(toolName)) {
+      const parsedResultRecord = parseJsonRecord(data.result);
+      const parsedRawRecord = parseJsonRecord(resultData.raw);
       const detailText = buildBrowseDetail(toolName, {
         query: String(resultData.query || argsData.query || "").trim(),
         glob: String(resultData.glob || argsData.glob || "").trim(),
-        path: String(resultData.path || argsData.path || "").trim(),
+        path: String(
+          resultData.path
+          || parsedResultRecord?.path
+          || parsedRawRecord?.path
+          || argsData.path
+          || "",
+        ).trim(),
         pattern: String(resultData.pattern || argsData.pattern || "").trim(),
+        count: Number(
+          resultData.count
+          ?? parsedResultRecord?.count
+          ?? parsedRawRecord?.count
+          ?? 0,
+        ),
       });
       const browseDelta = resolveBrowseCountDelta(toolName);
       return {
@@ -897,8 +920,10 @@ function mapAgentTextStreamToRunSegment(
         Math.floor(Number(resultData.added_lines ?? (toolName === "todo_write" ? todoWriteCount : 0))),
       );
       const removed = Math.max(0, Math.floor(Number(resultData.removed_lines || 0)));
+      const contentPreview = truncateRunText(String(resultData.content_preview || "").trim(), 64000);
       const diffPreview = truncateRunText(String(resultData.diff_preview || "").trim(), 64000);
       const detail = diffPreview
+        || contentPreview
         || truncateRunText(String(resultData.raw || data.result || eventMessage || "").trim(), 4000);
       return {
         key: segmentKey,
@@ -912,6 +937,8 @@ function mapAgentTextStreamToRunSegment(
           edit_file_path: fileLabel,
           edit_added_lines: added,
           edit_removed_lines: removed,
+          edit_diff_preview: diffPreview,
+          edit_content_preview: contentPreview,
         },
       };
     }
@@ -2515,7 +2542,7 @@ export function SessionPage({
       return;
     }
     window.dispatchEvent(
-      new CustomEvent("zodileap:session-debug", {
+      new CustomEvent("libra:session-debug", {
         detail: {
           sessionId,
           agentKey: normalizedAgentKey,
@@ -2569,9 +2596,9 @@ export function SessionPage({
       }
       emitSessionDebugSnapshot();
     };
-    window.addEventListener("zodileap:session-debug-request", handleDebugSnapshotRequest as EventListener);
+    window.addEventListener("libra:session-debug-request", handleDebugSnapshotRequest as EventListener);
     return () => {
-      window.removeEventListener("zodileap:session-debug-request", handleDebugSnapshotRequest as EventListener);
+      window.removeEventListener("libra:session-debug-request", handleDebugSnapshotRequest as EventListener);
     };
   }, [sessionId, emitSessionDebugSnapshot]);
 
@@ -2581,7 +2608,7 @@ export function SessionPage({
       return;
     }
     window.dispatchEvent(
-      new CustomEvent("zodileap:session-debug", {
+      new CustomEvent("libra:session-debug", {
         detail: null,
       }),
     );
@@ -4609,7 +4636,7 @@ const handleConfirmWorkflowSkillModal = () => {
       return;
     }
     window.dispatchEvent(
-      new CustomEvent("zodileap:session-copy-result", {
+      new CustomEvent("libra:session-copy-result", {
         detail: {
           sessionId,
           ok,
@@ -4674,9 +4701,9 @@ const handleConfirmWorkflowSkillModal = () => {
       }
       void handleCopySessionContent();
     };
-    window.addEventListener("zodileap:session-copy-request", handleCopyRequest as EventListener);
+    window.addEventListener("libra:session-copy-request", handleCopyRequest as EventListener);
     return () => {
-      window.removeEventListener("zodileap:session-copy-request", handleCopyRequest as EventListener);
+      window.removeEventListener("libra:session-copy-request", handleCopyRequest as EventListener);
     };
   }, [handleCopySessionContent, sessionId]);
 

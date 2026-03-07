@@ -3,7 +3,7 @@ package api
 import (
 	"context"
 
-	service "git.zodileap.com/gemini/zodileap_account/service/v1"
+	service "git.zodileap.com/gemini/libra_account/service/v1"
 	zapi "git.zodileap.com/taurus/zodileap_go_zapi"
 	zerr "git.zodileap.com/taurus/zodileap_go_zerr"
 	zlog "git.zodileap.com/taurus/zodileap_go_zlog"

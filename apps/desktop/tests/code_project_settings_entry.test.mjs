@@ -142,7 +142,7 @@ test("TestCodeProjectSettingsPageShouldSupportNameAndDependencyRules", () => {
   assert.match(dataSource, /apiDataModel: CodeWorkspaceProjectApiDataModel;/);
   assert.match(dataSource, /frontendPageLayout: CodeWorkspaceProjectFrontendPageLayout;/);
   assert.match(dataSource, /frontendCodeStructure: CodeWorkspaceProjectFrontendCodeStructure;/);
-  assert.match(dataSource, /export const CODE_WORKSPACE_PROFILE_UPDATED_EVENT = "zodileap:code-workspace-profile-updated";/);
+  assert.match(dataSource, /export const CODE_WORKSPACE_PROFILE_UPDATED_EVENT = "libra:code-workspace-profile-updated";/);
   assert.match(dataSource, /export function saveCodeWorkspaceProjectProfile\(/);
   assert.match(dataSource, /export function upsertCodeWorkspaceProjectProfile\(/);
   assert.match(dataSource, /export function patchCodeWorkspaceProjectProfile\(/);

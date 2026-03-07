@@ -22,12 +22,12 @@ export interface RetryTailPruneResult {
 // 描述:
 //
 //   - 模型工作流当前选择项本地存储键。
-export const MODEL_WORKFLOW_SELECTED_KEY = "zodileap.desktop.model.selectedWorkflowId";
+export const MODEL_WORKFLOW_SELECTED_KEY = "libra.desktop.model.selectedWorkflowId";
 
 // 描述:
 //
 //   - 代码工作流当前选择项本地存储键。
-export const CODE_WORKFLOW_SELECTED_KEY = "zodileap.desktop.code.selectedWorkflowId";
+export const CODE_WORKFLOW_SELECTED_KEY = "libra.desktop.code.selectedWorkflowId";
 
 // 描述:
 //

@@ -10,10 +10,10 @@ import (
 )
 
 func init() {
-	zapi.Register("zodileap_account", "auth", "v1", &AuthAPI{})
-	zapi.Register("zodileap_account", "agent-access", "v1", &AgentAccessAPI{})
-	zapi.Register("zodileap_account", "agent", "v1", &AgentAPI{})
-	zapi.Register("zodileap_account", "user", "v1", &UserAPI{})
+	zapi.Register("libra_account", "auth", "v1", &AuthAPI{})
+	zapi.Register("libra_account", "agent-access", "v1", &AgentAccessAPI{})
+	zapi.Register("libra_account", "agent", "v1", &AgentAPI{})
+	zapi.Register("libra_account", "user", "v1", &UserAPI{})
 }
 
 func defaultCors() gin.HandlerFunc {

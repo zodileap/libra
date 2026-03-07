@@ -12,7 +12,7 @@ import (
 	"time"
 
 	account "git.zodileap.com/entity/account_v1/instance"
-	specs "git.zodileap.com/gemini/zodileap_account/specs/v1"
+	specs "git.zodileap.com/gemini/libra_account/specs/v1"
 	zerr "git.zodileap.com/taurus/zodileap_go_zerr"
 	zspecs "git.zodileap.com/taurus/zodileap_go_zspecs"
 	zstatuscode "git.zodileap.com/taurus/zodileap_go_zstatuscode"

@@ -1,15 +1,31 @@
 package main
 
 import (
-	configs "git.zodileap.com/gemini/zodileap_runtime/configs"
+	"errors"
+	"log"
+	"net/http"
+	"time"
 
-	// 注册 API 与 RPC
-	_ "git.zodileap.com/gemini/zodileap_runtime/api/v1"
-	_ "git.zodileap.com/gemini/zodileap_runtime/rpc/v1"
-
-	zbootstrap "git.zodileap.com/taurus/zodileap_go_zbootstrap"
+	api "github.com/zodileap/libra/services/runtime/api/v1"
+	configs "github.com/zodileap/libra/services/runtime/configs"
 )
 
+// 描述：启动独立运行的 runtime HTTP 服务，为 Desktop 提供会话、消息和更新检查能力。
 func main() {
-	zbootstrap.InitService(configs.Config, nil)
+	cfg := configs.Load()
+	handler, err := api.NewHandler(cfg)
+	if err != nil {
+		log.Fatalf("初始化 runtime handler 失败: %v", err)
+	}
+
+	server := &http.Server{
+		Addr:              cfg.Addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	log.Printf("runtime service listening on %s", cfg.Addr)
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Fatalf("runtime service 启动失败: %v", err)
+	}
 }

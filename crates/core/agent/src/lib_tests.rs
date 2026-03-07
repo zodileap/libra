@@ -113,7 +113,7 @@ fn should_map_mcp_bridge_error_to_protocol_error() {
     request.blender_bridge_addr = Some("127.0.0.1:notaport".to_string());
     request.output_dir = Some(
         std::env::temp_dir()
-            .join("zodileap-agent-core-tests")
+            .join("libra-agent-core-tests")
             .to_string_lossy()
             .to_string(),
     );

@@ -1,6 +1,6 @@
 bl_info = {
     "name": "Zodileap MCP Bridge",
-    "author": "zodileap",
+    "author": "libra",
     "version": (0, 2, 0),
     "blender": (3, 0, 0),
     "location": "View3D",
@@ -1627,7 +1627,7 @@ class _BridgeServer(socketserver.ThreadingTCPServer):
 
 
 def _server_key():
-    return "_zodileap_bridge_server"
+    return "_libra_bridge_server"
 
 
 def start_bridge(host=HOST, port=PORT):
@@ -1644,7 +1644,7 @@ def start_bridge(host=HOST, port=PORT):
     if not bpy.app.timers.is_registered(_pump_tasks):
         bpy.app.timers.register(_pump_tasks, persistent=True)
 
-    print(f"[zodileap] blender bridge running at {host}:{port}")
+    print(f"[libra] blender bridge running at {host}:{port}")
 
 
 def stop_bridge():
@@ -1656,7 +1656,7 @@ def stop_bridge():
     server.shutdown()
     server.server_close()
     ns[_server_key()] = None
-    print("[zodileap] blender bridge stopped")
+    print("[libra] blender bridge stopped")
 
 
 def _persist_user_preferences():
@@ -1673,7 +1673,7 @@ def _persist_user_preferences():
     except Exception as err:
         if "_RestrictContext" in str(err) and "view_layer" in str(err):
             return
-        print(f"[zodileap] save user preferences failed: {err}")
+        print(f"[libra] save user preferences failed: {err}")
 
 
 def register():
