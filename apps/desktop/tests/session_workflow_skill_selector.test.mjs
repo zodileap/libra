@@ -31,10 +31,24 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   //
   //   - 会话页应加载已安装技能并支持本地持久化“工作流/技能”选择，且只保留统一智能体持久化键。
   assert.match(sessionSource, /listAgentSkills/);
+  assert.match(sessionSource, /listMcpOverview/);
   assert.match(sessionSource, /AGENT_SKILL_SELECTED_KEY/);
   assert.doesNotMatch(sessionSource, /MODEL_SKILL_SELECTED_KEY/);
   assert.match(sessionSource, /readSelectedSkillIds/);
   assert.match(sessionSource, /buildSessionSkillPrompt/);
+  assert.match(sessionSource, /resolveAgentSessionSelectedDccSoftware/);
+  assert.match(sessionSource, /rememberAgentSessionSelectedDccSoftware/);
+  assert.match(sessionSource, /const DCC_MODELING_SKILL_ID = "dcc-modeling";/);
+  assert.match(sessionSource, /interface PendingDccSelectionState/);
+  assert.match(sessionSource, /selectionMode: "single" \| "cross";/);
+  assert.match(sessionSource, /resolvedCrossDccSoftwares\?: string\[\];/);
+  assert.match(sessionSource, /resolveAvailableDccSoftwareOptions\(/);
+  assert.match(sessionSource, /resolveExplicitDccSoftwares\(/);
+  assert.match(sessionSource, /hasCrossDccIntent\(/);
+  assert.match(sessionSource, /buildDccRoutingPromptBlock\(/);
+  assert.match(sessionSource, /const \[selectedDccSoftware, setSelectedDccSoftware\] = useState<string>\(/);
+  assert.match(sessionSource, /const \[pendingDccSelection, setPendingDccSelection\] = useState<PendingDccSelectionState \| null>\(null\);/);
+  assert.match(sessionSource, /const activeUsesDccModelingSkill = useMemo\(/);
 
   // 描述：
   //
@@ -110,6 +124,9 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(sessionSource, /const streamMessageId = String\(options\?\.replaceAssistantMessageId \|\| ""\)\.trim\(\)/);
   assert.match(sessionSource, /contextMessages\?: MessageItem\[\];/);
   assert.match(sessionSource, /const contextMessages = options\?\.contextMessages \|\| messages;/);
+  assert.match(sessionSource, /const dccPreflight = await resolveDccPreflight\(normalizedContent, contextMessages, options\);/);
+  assert.match(sessionSource, /if \(dccPreflight\.blocked\) \{\s*return;\s*\}/s);
+  assert.match(sessionSource, /dccPreflight\.promptBlock/);
   assert.match(sessionSource, /function buildSessionContextPrompt\(/);
   assert.match(sessionSource, /workspacePath\?: string/);
   assert.match(sessionSource, /projectProfile\?: ProjectWorkspaceProfile \| null/);
@@ -141,6 +158,13 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(sessionSource, /sessionApprovedToolNameSetRef\.current\.has\(toolName\)/);
   assert.match(sessionSource, /AriMessage\.success\(`已批准 \$\{normalizedToolName \|\| "该工具"\}`\);/);
   assert.match(sessionSource, /step: "正在思考…"/);
+  assert.match(sessionSource, /请选择建模软件/);
+  assert.match(sessionSource, /请选择源软件和目标软件/);
+  assert.match(sessionSource, /检测到多个可用建模软件，请先选择一个软件。/);
+  assert.match(sessionSource, /检测到跨软件建模需求，请先选择源软件和目标软件。/);
+  assert.match(sessionSource, /handleConfirmPendingDccSelection/);
+  assert.match(sessionSource, /handleCancelPendingDccSelection/);
+  assert.match(sessionSource, /label=\{pendingDccSelection\.selectionMode === "cross" \? "按该组合继续" : "使用该软件继续"\}/);
   assert.match(sessionSource, /__segment_role: INITIAL_THINKING_SEGMENT_ROLE/);
   assert.match(sessionSource, /__segment_role: "round_description"/);
   assert.match(sessionSource, /className="desk-run-thinking-indicator"/);
@@ -180,8 +204,13 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(sessionSource, /addedCount=\{detailCodeAddedCount\}/);
   assert.match(sessionSource, /removedCount=\{detailCodeRemovedCount\}/);
   assert.match(sessionSource, /diffLines=\{detailCodeDiffLines\}/);
+  assert.match(sessionSource, /customLineNumbers=\{detailCodeCustomLineNumbers\}/);
   assert.match(sessionSource, /resolveRunSegmentDiffLines\(/);
   assert.match(sessionSource, /const contextRadius = 2;/);
+  assert.match(sessionSource, /const buildLineNumberRanges = \(/);
+  assert.match(sessionSource, /lineNumber: hasUnifiedHunkHeader \? targetLineNumber : undefined/);
+  assert.match(sessionSource, /lineNumber: hasUnifiedHunkHeader \? sourceLineNumber : undefined/);
+  assert.match(sessionSource, /const diffDetailPayload = richMeta\?\.type === "edit"/);
   assert.match(sessionSource, /type: "approval"/);
   assert.match(sessionSource, /desk-run-step-approval-label/);
   assert.match(sessionSource, /desk-run-step-approval-label-rejected/);

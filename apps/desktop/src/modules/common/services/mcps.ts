@@ -1,10 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 import { COMMANDS, IS_BROWSER } from "../../../shared/constants";
+import { checkDccRuntimeStatus } from "../../../shared/services/dcc-runtime";
 
 // 描述：
 //
 //   - MCP 传输类型；当前桌面端管理页支持 stdio 与 http 两种接入模式。
 export type McpTransport = "stdio" | "http";
+
+// 描述：
+//
+//   - MCP 能力领域；当前主要区分通用工具与 DCC 建模软件接入。
+export type McpDomain = "general" | "dcc";
 
 // 描述：
 //
@@ -19,6 +25,12 @@ export interface McpRegistrationItem {
   templateId: string;
   name: string;
   description: string;
+  domain: McpDomain;
+  software: string;
+  capabilities: string[];
+  priority: number;
+  supportsImport: boolean;
+  supportsExport: boolean;
   transport: McpTransport;
   scope: McpScope;
   enabled: boolean;
@@ -41,6 +53,12 @@ export interface McpTemplateItem {
   id: string;
   name: string;
   description: string;
+  domain: McpDomain;
+  software: string;
+  capabilities: string[];
+  priority: number;
+  supportsImport: boolean;
+  supportsExport: boolean;
   transport: McpTransport;
   command: string;
   args: string[];
@@ -69,6 +87,12 @@ export interface McpRegistrationDraft {
   templateId?: string;
   name: string;
   description?: string;
+  domain?: McpDomain;
+  software?: string;
+  capabilities?: string[];
+  priority?: number;
+  supportsImport?: boolean;
+  supportsExport?: boolean;
   transport: McpTransport;
   scope?: McpScope;
   enabled?: boolean;
@@ -174,6 +198,37 @@ function normalizeTransport(value: unknown): McpTransport {
 
 // 描述：
 //
+//   - 将未知值规整为合法的 MCP 能力领域；非法值统一回退为 general。
+//
+// Params:
+//
+//   - value: 原始领域值。
+//
+// Returns:
+//
+//   - 归一化后的 MCP 能力领域。
+function normalizeDomain(value: unknown): McpDomain {
+  return String(value || "").trim().toLowerCase() === "dcc" ? "dcc" : "general";
+}
+
+// 描述：
+//
+//   - 将未知值规整为整数优先级，非法值统一回退为 0。
+//
+// Params:
+//
+//   - value: 原始优先级值。
+//
+// Returns:
+//
+//   - 归一化后的优先级数值。
+function normalizePriority(value: unknown): number {
+  const parsedValue = Number(value);
+  return Number.isFinite(parsedValue) ? Math.trunc(parsedValue) : 0;
+}
+
+// 描述：
+//
 //   - 将未知值规整为合法的 MCP 作用域；非法值统一回退为 user，避免页面层出现脏状态。
 //
 // Params:
@@ -213,6 +268,12 @@ function normalizeMcpRegistrationItem(rawValue: unknown): McpRegistrationItem | 
     templateId: String(source.templateId || "").trim(),
     name,
     description: String(source.description || "").trim(),
+    domain: normalizeDomain(source.domain),
+    software: String(source.software || "").trim().toLowerCase(),
+    capabilities: normalizeStringList(source.capabilities),
+    priority: normalizePriority(source.priority),
+    supportsImport: Boolean(source.supportsImport),
+    supportsExport: Boolean(source.supportsExport),
     transport: normalizeTransport(source.transport),
     scope: normalizeScope(source.scope),
     enabled: Boolean(source.enabled),
@@ -254,6 +315,12 @@ function normalizeMcpTemplateItem(rawValue: unknown): McpTemplateItem | null {
     id,
     name,
     description: String(source.description || "").trim(),
+    domain: normalizeDomain(source.domain),
+    software: String(source.software || "").trim().toLowerCase(),
+    capabilities: normalizeStringList(source.capabilities),
+    priority: normalizePriority(source.priority),
+    supportsImport: Boolean(source.supportsImport),
+    supportsExport: Boolean(source.supportsExport),
     transport: normalizeTransport(source.transport),
     command: String(source.command || "").trim(),
     args: normalizeStringList(source.args),
@@ -314,6 +381,12 @@ function buildMcpRegistrationPayload(draft: McpRegistrationDraft) {
     templateId: String(draft.templateId || "").trim(),
     name: String(draft.name || "").trim(),
     description: String(draft.description || "").trim(),
+    domain: normalizeDomain(draft.domain),
+    software: String(draft.software || "").trim().toLowerCase(),
+    capabilities: normalizeStringList(draft.capabilities),
+    priority: normalizePriority(draft.priority),
+    supportsImport: draft.supportsImport === true,
+    supportsExport: draft.supportsExport === true,
     transport: normalizeTransport(draft.transport),
     scope: normalizeScope(draft.scope),
     enabled: draft.enabled !== false,
@@ -480,6 +553,21 @@ export async function validateMcpRegistration(
       ok: false,
       message: runtimeStatus?.message || "Apifox Runtime 未安装，请先安装 Runtime。",
       resolvedPath: runtimeStatus?.entry_path || "",
+    };
+  }
+  if (payload.runtimeKind === "dcc_bridge") {
+    if (!payload.software) {
+      return {
+        ok: false,
+        message: "DCC Runtime 缺少软件标识，请先填写软件名称。",
+        resolvedPath: "",
+      };
+    }
+    const runtimeStatus = await checkDccRuntimeStatus(payload.software);
+    return {
+      ok: runtimeStatus.available,
+      message: runtimeStatus.message || "DCC Runtime 校验完成。",
+      resolvedPath: runtimeStatus.resolvedPath,
     };
   }
   return invoke<McpValidationResult>(COMMANDS.VALIDATE_MCP_REGISTRATION, {

@@ -2,9 +2,6 @@ import type {
   AiKeyItem,
   AgentKey,
   AuthAvailableAgentItem,
-  BlenderBridgeEnsureOptions,
-  BlenderBridgeEnsureResult,
-  BlenderBridgeRuntime,
   ColorThemeMode,
   ConsoleIdentityItem,
   DesktopBackendConfig,
@@ -43,8 +40,6 @@ export interface AuthState {
   desktopUpdateState: DesktopUpdateState;
   checkDesktopUpdate: () => Promise<void>;
   installDesktopUpdate: () => Promise<void>;
-  blenderBridgeRuntime: BlenderBridgeRuntime;
-  ensureBlenderBridge: (options?: BlenderBridgeEnsureOptions) => Promise<BlenderBridgeEnsureResult>;
 }
 
 // 描述：声明路由可见性能力，供布局层与侧边栏共享同一套判断。

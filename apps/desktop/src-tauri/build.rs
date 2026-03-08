@@ -10,6 +10,7 @@ fn main() {
     //   0: 正常输出 cargo 指令并完成构建脚本。
     println!("cargo:rerun-if-changed=tauri.conf.json");
     println!("cargo:rerun-if-changed=icons");
+    println!("cargo:rerun-if-changed=resources");
 
     // 描述：执行 Tauri 默认构建流程，生成运行时所需上下文与打包元数据。
     tauri_build::build()

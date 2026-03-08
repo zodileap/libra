@@ -18,6 +18,7 @@ import {
   AriTypography,
 } from "aries_react";
 import type {
+  McpDomain,
   McpOverview,
   McpRegistrationDraft,
   McpRegistrationItem,
@@ -33,6 +34,11 @@ import {
   uninstallApifoxMcpRuntime,
   validateMcpRegistration,
 } from "../services";
+import {
+  checkDccRuntimeStatus,
+  prepareDccRuntime,
+  type DccRuntimeStatus,
+} from "../../../shared/services/dcc-runtime";
 import { getProjectWorkspaceGroupById, listProjectWorkspaceGroups } from "../../../shared/data";
 import { useDesktopHeaderSlot } from "../../../widgets/app-header/header-slot-context";
 import { DeskEmptyState, DeskSectionTitle } from "../../../widgets/settings-primitives";
@@ -65,6 +71,12 @@ const DEFAULT_MCP_DRAFT: McpRegistrationDraft = {
   docsUrl: "",
   officialProvider: "",
   runtimeKind: "",
+  domain: "general",
+  software: "",
+  capabilities: [],
+  priority: 0,
+  supportsImport: false,
+  supportsExport: false,
 };
 
 // 描述：
@@ -75,6 +87,96 @@ interface ApifoxRuntimeStatus {
   version: string;
   entryPath: string;
   message: string;
+}
+
+// 描述：
+//
+//   - 收集总览中声明了 DCC Runtime 的软件列表，供页面批量刷新运行时状态。
+//
+// Params:
+//
+//   - overview: MCP 总览。
+//
+// Returns:
+//
+//   - 去重后的软件标识列表。
+function collectDccRuntimeSoftwares(overview: McpOverview): string[] {
+  return Array.from(
+    new Set(
+      [...overview.registered, ...overview.templates]
+        .filter((item) => item.runtimeKind === "dcc_bridge")
+        .map((item) => String(item.software || "").trim().toLowerCase())
+        .filter((item) => item.length > 0),
+    ),
+  );
+}
+
+// 描述：
+//
+//   - 批量读取 DCC Runtime 状态，并输出按软件归档的映射，供模板和已注册卡片复用。
+//
+// Params:
+//
+//   - overview: MCP 总览。
+//
+// Returns:
+//
+//   - 软件标识到运行时状态的映射。
+async function buildDccRuntimeStatusMap(
+  overview: McpOverview,
+): Promise<Record<string, DccRuntimeStatus>> {
+  const softwares = collectDccRuntimeSoftwares(overview);
+  const entries = await Promise.all(
+    softwares.map(async (software) => {
+      try {
+        return [software, await checkDccRuntimeStatus(software)] as const;
+      } catch (_err) {
+        return [software, {
+          available: false,
+          software,
+          message: "读取 DCC Runtime 状态失败，请稍后重试。",
+          resolvedPath: "",
+          runtimeKind: "dcc_bridge",
+          requiredEnvKeys: [],
+          supportsAutoPrepare: false,
+        }] as const;
+      }
+    }),
+  );
+  return Object.fromEntries(entries);
+}
+
+// 描述：
+//
+//   - 渲染 DCC Runtime 自动准备能力文案，帮助用户快速判断当前软件能否一键准备。
+//
+// Params:
+//
+//   - status: 当前软件的 DCC Runtime 状态。
+//
+// Returns:
+//
+//   - 自动准备能力文案。
+function renderDccRuntimeAutoPrepareLabel(status?: DccRuntimeStatus): string {
+  return status?.supportsAutoPrepare ? "自动准备：支持" : "自动准备：手动";
+}
+
+// 描述：
+//
+//   - 渲染 DCC Runtime 环境变量要求文案，避免用户不知道应配置哪些软件路径。
+//
+// Params:
+//
+//   - status: 当前软件的 DCC Runtime 状态。
+//
+// Returns:
+//
+//   - 环境变量要求文案；没有要求时返回空文本。
+function renderDccRuntimeEnvRequirementLabel(status?: DccRuntimeStatus): string {
+  if (!status?.requiredEnvKeys || status.requiredEnvKeys.length === 0) {
+    return "";
+  }
+  return `环境变量：${status.requiredEnvKeys.join("、")}`;
 }
 
 // 描述：
@@ -139,6 +241,21 @@ function parseArgsText(source: string): string[] {
 
 // 描述：
 //
+//   - 将字符串数组格式化为多行文本，供“能力列表（每行一个）”编辑区复用。
+//
+// Params:
+//
+//   - source: 原始字符串列表。
+//
+// Returns:
+//
+//   - 多行文本。
+function stringifyStringList(source: string[]): string {
+  return source.join("\n");
+}
+
+// 描述：
+//
 //   - 将注册项转换为编辑草稿，便于“编辑 / 启用切换”统一复用保存接口。
 //
 // Params:
@@ -154,6 +271,12 @@ function buildDraftFromRegistration(item: McpRegistrationItem): McpRegistrationD
     templateId: item.templateId,
     name: item.name,
     description: item.description,
+    domain: item.domain,
+    software: item.software,
+    capabilities: item.capabilities,
+    priority: item.priority,
+    supportsImport: item.supportsImport,
+    supportsExport: item.supportsExport,
     transport: item.transport,
     scope: item.scope,
     enabled: item.enabled,
@@ -186,6 +309,12 @@ function buildDraftFromTemplate(item: McpTemplateItem): McpRegistrationDraft {
     templateId: item.id,
     name: item.name,
     description: item.description,
+    domain: item.domain,
+    software: item.software,
+    capabilities: item.capabilities,
+    priority: item.priority,
+    supportsImport: item.supportsImport,
+    supportsExport: item.supportsExport,
     transport: item.transport,
     command: item.command,
     args: item.args,
@@ -216,6 +345,49 @@ function renderTransportLabel(transport: string): string {
 
 // 描述：
 //
+//   - 渲染 MCP 领域标签，便于区分通用工具与建模软件接入。
+//
+// Params:
+//
+//   - domain: MCP 领域。
+//
+// Returns:
+//
+//   - 标签文案。
+function renderDomainLabel(domain: McpDomain): string {
+  return domain === "dcc" ? "DCC" : "General";
+}
+
+// 描述：
+//
+//   - 渲染 DCC 软件展示文案，尽量保持常见软件名称的统一展示口径。
+//
+// Params:
+//
+//   - software: DCC 软件标识。
+//
+// Returns:
+//
+//   - 规范化后的展示文案。
+function renderSoftwareLabel(software: string): string {
+  const normalizedSoftware = String(software || "").trim().toLowerCase();
+  if (normalizedSoftware === "blender") {
+    return "Blender";
+  }
+  if (normalizedSoftware === "maya") {
+    return "Maya";
+  }
+  if (normalizedSoftware === "c4d") {
+    return "Cinema 4D";
+  }
+  if (normalizedSoftware === "houdini") {
+    return "Houdini";
+  }
+  return normalizedSoftware || "未指定";
+}
+
+// 描述：
+//
 //   - 渲染 MCP 作用域标签，帮助用户快速识别配置是全局生效还是仅覆盖当前项目。
 //
 // Params:
@@ -236,6 +408,7 @@ function RegisteredMcpCard({
   item,
   busy,
   apifoxRuntimeStatus,
+  dccRuntimeStatus,
   onToggleEnabled,
   onEdit,
   onValidate,
@@ -244,6 +417,7 @@ function RegisteredMcpCard({
   item: McpRegistrationItem;
   busy: boolean;
   apifoxRuntimeStatus: ApifoxRuntimeStatus | null;
+  dccRuntimeStatus?: DccRuntimeStatus;
   onToggleEnabled: (item: McpRegistrationItem, enabled: boolean) => void;
   onEdit: (item: McpRegistrationItem) => void;
   onValidate: (item: McpRegistrationItem) => void;
@@ -263,11 +437,25 @@ function RegisteredMcpCard({
                 {renderTransportLabel(item.transport)}
               </AriTag>
               <AriTag bordered size="sm">
+                {renderDomainLabel(item.domain)}
+              </AriTag>
+              <AriTag bordered size="sm">
                 {renderScopeLabel(item.scope)}
               </AriTag>
+              {item.domain === "dcc" && item.software ? (
+                <AriTag bordered size="sm">
+                  {renderSoftwareLabel(item.software)}
+                </AriTag>
+              ) : null}
               {!item.enabled ? <AriTag bordered size="sm">已停用</AriTag> : null}
             </AriFlex>
             <AriTypography variant="caption" value={item.description || "未填写 MCP 描述"} />
+            {item.domain === "dcc" ? (
+              <AriTypography
+                variant="caption"
+                value={`能力：${item.capabilities.length > 0 ? item.capabilities.join("、") : "未声明"}；优先级：${item.priority}`}
+              />
+            ) : null}
             {item.officialProvider ? (
               <AriTypography variant="caption" value={`提供方：${item.officialProvider}`} />
             ) : null}
@@ -276,11 +464,25 @@ function RegisteredMcpCard({
                 variant="caption"
                 value={item.runtimeKind === "apifox_runtime"
                   ? `Runtime：${apifoxRuntimeStatus?.installed ? "已安装" : "未安装"}`
+                  : item.runtimeKind === "dcc_bridge"
+                    ? `Runtime：${dccRuntimeStatus?.available ? "已就绪" : "未就绪"}${dccRuntimeStatus?.resolvedPath ? `（${dccRuntimeStatus.resolvedPath}）` : ""}`
                   : `命令：${item.command || "未填写"}`}
               />
             ) : (
               <AriTypography variant="caption" value={`地址：${item.url || "未填写"}`} />
             )}
+            {item.runtimeKind === "dcc_bridge" ? (
+              <AriTypography
+                variant="caption"
+                value={renderDccRuntimeAutoPrepareLabel(dccRuntimeStatus)}
+              />
+            ) : null}
+            {item.runtimeKind === "dcc_bridge" && renderDccRuntimeEnvRequirementLabel(dccRuntimeStatus) ? (
+              <AriTypography
+                variant="caption"
+                value={renderDccRuntimeEnvRequirementLabel(dccRuntimeStatus)}
+              />
+            ) : null}
             {item.docsUrl ? <AriTypography variant="caption" value={`文档：${item.docsUrl}`} /> : null}
           </AriContainer>
         </AriFlex>
@@ -309,21 +511,26 @@ function McpTemplateCard({
   busy,
   alreadyRegistered,
   apifoxRuntimeStatus,
+  dccRuntimeStatus,
   runtimeBusy,
   onCreate,
   onInstallApifoxRuntime,
   onUninstallApifoxRuntime,
+  onPrepareDccRuntime,
 }: {
   item: McpTemplateItem;
   busy: boolean;
   alreadyRegistered: boolean;
   apifoxRuntimeStatus: ApifoxRuntimeStatus | null;
+  dccRuntimeStatus?: DccRuntimeStatus;
   runtimeBusy: boolean;
   onCreate: (item: McpTemplateItem) => void;
   onInstallApifoxRuntime: () => void;
   onUninstallApifoxRuntime: () => void;
+  onPrepareDccRuntime: (item: McpTemplateItem) => void;
 }) {
   const isApifoxTemplate = item.runtimeKind === "apifox_runtime";
+  const isDccRuntimeTemplate = item.runtimeKind === "dcc_bridge";
   const runtimeInstalled = Boolean(apifoxRuntimeStatus?.installed);
   return (
     <AriCard className="desk-skill-card">
@@ -338,8 +545,22 @@ function McpTemplateCard({
               <AriTag bordered size="sm" color="var(--z-color-text-brand)">
                 {renderTransportLabel(item.transport)}
               </AriTag>
+              <AriTag bordered size="sm">
+                {renderDomainLabel(item.domain)}
+              </AriTag>
+              {item.domain === "dcc" && item.software ? (
+                <AriTag bordered size="sm">
+                  {renderSoftwareLabel(item.software)}
+                </AriTag>
+              ) : null}
             </AriFlex>
             <AriTypography variant="caption" value={item.description || "未填写模板描述"} />
+            {item.domain === "dcc" ? (
+              <AriTypography
+                variant="caption"
+                value={`能力：${item.capabilities.length > 0 ? item.capabilities.join("、") : "未声明"}；优先级：${item.priority}`}
+              />
+            ) : null}
             {item.officialProvider ? (
               <AriTypography variant="caption" value={`提供方：${item.officialProvider}`} />
             ) : null}
@@ -348,11 +569,28 @@ function McpTemplateCard({
                 variant="caption"
                 value={`Runtime：${runtimeInstalled ? "已安装" : "未安装"}${apifoxRuntimeStatus?.version ? `（${apifoxRuntimeStatus.version}）` : ""}`}
               />
+            ) : isDccRuntimeTemplate ? (
+              <AriTypography
+                variant="caption"
+                value={`Runtime：${dccRuntimeStatus?.available ? "已就绪" : "未就绪"}${dccRuntimeStatus?.resolvedPath ? `（${dccRuntimeStatus.resolvedPath}）` : ""}`}
+              />
             ) : item.transport === "http" ? (
               <AriTypography variant="caption" value={`示例地址：${item.url || "无"}`} />
             ) : (
               <AriTypography variant="caption" value="按需填写命令、参数和环境变量。" />
             )}
+            {isDccRuntimeTemplate ? (
+              <AriTypography
+                variant="caption"
+                value={renderDccRuntimeAutoPrepareLabel(dccRuntimeStatus)}
+              />
+            ) : null}
+            {isDccRuntimeTemplate && renderDccRuntimeEnvRequirementLabel(dccRuntimeStatus) ? (
+              <AriTypography
+                variant="caption"
+                value={renderDccRuntimeEnvRequirementLabel(dccRuntimeStatus)}
+              />
+            ) : null}
             {item.docsUrl ? <AriTypography variant="caption" value={`文档：${item.docsUrl}`} /> : null}
           </AriContainer>
         </AriFlex>
@@ -375,6 +613,15 @@ function McpTemplateCard({
                 onClick={onInstallApifoxRuntime}
               />
             )
+          ) : null}
+          {isDccRuntimeTemplate ? (
+            <AriButton
+              ghost
+              icon={dccRuntimeStatus?.available ? "check_circle" : "build"}
+              label={dccRuntimeStatus?.available ? "重新校验" : "准备 Runtime"}
+              disabled={runtimeBusy}
+              onClick={() => onPrepareDccRuntime(item)}
+            />
           ) : null}
           <AriButton
             color="brand"
@@ -401,9 +648,11 @@ export function McpPage() {
   const [busyActionId, setBusyActionId] = useState("");
   const [runtimeBusy, setRuntimeBusy] = useState(false);
   const [apifoxRuntimeStatus, setApifoxRuntimeStatus] = useState<ApifoxRuntimeStatus | null>(null);
+  const [dccRuntimeStatusMap, setDccRuntimeStatusMap] = useState<Record<string, DccRuntimeStatus>>({});
   const [editorVisible, setEditorVisible] = useState(false);
   const [editingDraft, setEditingDraft] = useState<McpRegistrationDraft>(DEFAULT_MCP_DRAFT);
   const [argsText, setArgsText] = useState("");
+  const [capabilitiesText, setCapabilitiesText] = useState("");
   const [envText, setEnvText] = useState("");
   const [headersText, setHeadersText] = useState("");
   const [removingItem, setRemovingItem] = useState<McpRegistrationItem | null>(null);
@@ -440,6 +689,7 @@ export function McpPage() {
       listMcpOverview(mcpRegistryContext),
       readApifoxMcpRuntimeStatus(),
     ]);
+    const nextDccRuntimeStatusMap = await buildDccRuntimeStatusMap(nextOverview);
     setOverview(nextOverview);
     setApifoxRuntimeStatus(runtimeStatus
       ? {
@@ -449,7 +699,8 @@ export function McpPage() {
         message: runtimeStatus.message,
       }
       : null);
-  }, []);
+    setDccRuntimeStatusMap(nextDccRuntimeStatusMap);
+  }, [mcpRegistryContext]);
 
   // 描述：
   //
@@ -463,6 +714,7 @@ export function McpPage() {
           listMcpOverview(mcpRegistryContext),
           readApifoxMcpRuntimeStatus(),
         ]);
+        const nextDccRuntimeStatusMap = await buildDccRuntimeStatusMap(nextOverview);
         if (disposed) {
           return;
         }
@@ -475,10 +727,12 @@ export function McpPage() {
             message: runtimeStatus.message,
           }
           : null);
+        setDccRuntimeStatusMap(nextDccRuntimeStatusMap);
       } catch (_err) {
         if (!disposed) {
           setOverview(DEFAULT_MCP_OVERVIEW);
           setApifoxRuntimeStatus(null);
+          setDccRuntimeStatusMap({});
           AriMessage.error({
             content: "加载 MCP 注册表失败，请稍后重试。",
             duration: 2200,
@@ -510,6 +764,7 @@ export function McpPage() {
   const openEditor = useCallback((draft: McpRegistrationDraft) => {
     setEditingDraft(draft);
     setArgsText((draft.args || []).join("\n"));
+    setCapabilitiesText(stringifyStringList(draft.capabilities || []));
     setEnvText(stringifyRecordEntries(draft.env || {}));
     setHeadersText(stringifyRecordEntries(draft.headers || {}));
     setEditorVisible(true);
@@ -521,9 +776,10 @@ export function McpPage() {
   const buildEditorDraft = useCallback((): McpRegistrationDraft => ({
     ...editingDraft,
     args: parseArgsText(argsText),
+    capabilities: parseArgsText(capabilitiesText),
     env: parseRecordEntries(envText),
     headers: parseRecordEntries(headersText),
-  }), [argsText, editingDraft, envText, headersText]);
+  }), [argsText, capabilitiesText, editingDraft, envText, headersText]);
 
   // 描述：
   //
@@ -545,6 +801,7 @@ export function McpPage() {
       setEditorVisible(false);
       setEditingDraft(DEFAULT_MCP_DRAFT);
       setArgsText("");
+      setCapabilitiesText("");
       setEnvText("");
       setHeadersText("");
     } catch (err) {
@@ -691,6 +948,44 @@ export function McpPage() {
 
   // 描述：
   //
+  //   - 准备或重新校验指定 DCC Runtime，并在完成后刷新总览与状态映射。
+  const handlePrepareDccRuntime = useCallback(async (item: McpTemplateItem) => {
+    const software = String(item.software || "").trim().toLowerCase();
+    if (!software) {
+      AriMessage.error({
+        content: "当前 DCC 模板缺少软件标识，无法准备 Runtime。",
+        duration: 2200,
+      });
+      return;
+    }
+    setRuntimeBusy(true);
+    try {
+      const status = await prepareDccRuntime(software);
+      await reloadOverview();
+      if (status.available) {
+        AriMessage.success({
+          content: status.message || `${renderSoftwareLabel(software)} Runtime 已就绪。`,
+          duration: 2200,
+        });
+      } else {
+        AriMessage.error({
+          content: status.message || `${renderSoftwareLabel(software)} Runtime 尚未就绪。`,
+          duration: 2600,
+        });
+      }
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err || "").trim();
+      AriMessage.error({
+        content: reason || "准备 DCC Runtime 失败，请稍后重试。",
+        duration: 2200,
+      });
+    } finally {
+      setRuntimeBusy(false);
+    }
+  }, [reloadOverview]);
+
+  // 描述：
+  //
   //   - 生成标题栏内容并挂载到全局头部 slot，保持 Desktop 页面头部一致性。
   const headerNode = useMemo(() => (
     <AriContainer className="desk-project-settings-header" padding={0} data-tauri-drag-region>
@@ -759,6 +1054,67 @@ export function McpPage() {
               rows={3}
             />
           </AriFormItem>
+          <AriFormItem label="领域" name="mcp.editor.domain">
+            <AriSelect
+              value={editingDraft.domain || "general"}
+              options={[
+                { label: "General（通用）", value: "general" },
+                { label: "DCC（建模软件）", value: "dcc" },
+              ]}
+              onChange={(value: unknown) => {
+                const nextDomain = String(value || "general") === "dcc" ? "dcc" : "general";
+                setEditingDraft((current) => ({
+                  ...current,
+                  domain: nextDomain,
+                  software: nextDomain === "dcc" ? current.software || "" : "",
+                  capabilities: nextDomain === "dcc" ? current.capabilities || [] : [],
+                  supportsImport: nextDomain === "dcc" ? current.supportsImport === true : false,
+                  supportsExport: nextDomain === "dcc" ? current.supportsExport === true : false,
+                }));
+              }}
+            />
+          </AriFormItem>
+          {editingDraft.domain === "dcc" ? (
+            <>
+              <AriFormItem label="软件标识" name="mcp.editor.software">
+                <AriInput
+                  value={editingDraft.software || ""}
+                  onChange={(value: string) => setEditingDraft((current) => ({ ...current, software: value }))}
+                  placeholder="例如：blender、maya、c4d"
+                />
+              </AriFormItem>
+              <AriFormItem label="能力列表（每行一个）" name="mcp.editor.capabilities">
+                <AriInput.TextArea
+                  value={capabilitiesText}
+                  onChange={setCapabilitiesText}
+                  placeholder="例如：scene.inspect\nmesh.edit\nfile.export"
+                  rows={4}
+                />
+              </AriFormItem>
+              <AriFormItem label="优先级" name="mcp.editor.priority">
+                <AriInput
+                  value={String(editingDraft.priority || 0)}
+                  onChange={(value: string) => setEditingDraft((current) => ({
+                    ...current,
+                    priority: Number.parseInt(String(value || "0").trim() || "0", 10) || 0,
+                  }))}
+                  placeholder="数值越大优先级越高"
+                />
+              </AriFormItem>
+              <AriFormItem label="支持导入" name="mcp.editor.supportsImport">
+                <AriSwitch
+                  checked={editingDraft.supportsImport === true}
+                  onChange={(checked: boolean) => setEditingDraft((current) => ({ ...current, supportsImport: checked }))}
+                />
+              </AriFormItem>
+              <AriFormItem label="支持导出" name="mcp.editor.supportsExport">
+                <AriSwitch
+                  checked={editingDraft.supportsExport === true}
+                  onChange={(checked: boolean) => setEditingDraft((current) => ({ ...current, supportsExport: checked }))}
+                />
+              </AriFormItem>
+            </>
+          ) : null}
           <AriFormItem label="传输方式" name="mcp.editor.transport">
             <AriSelect
               value={editingDraft.transport}
@@ -799,6 +1155,31 @@ export function McpPage() {
                     ? `Apifox Runtime 已安装：${apifoxRuntimeStatus.entryPath || "应用私有目录"}`
                     : "Apifox Runtime 未安装，请先在模板卡片中安装 Runtime。"}
                 />
+              </AriFormItem>
+            ) : editingDraft.runtimeKind === "dcc_bridge" ? (
+              <AriFormItem label="运行方式" name="mcp.editor.runtimeKind">
+                <AriTypography
+                  variant="caption"
+                  value={editingDraft.software
+                    ? `${renderSoftwareLabel(editingDraft.software)} Runtime 由 DCC Bridge 管理，请在模板卡片中准备或校验 Runtime。`
+                    : "DCC Runtime 由 DCC Bridge 管理，请先填写软件标识后再回到模板卡片准备 Runtime。"}
+                />
+                {editingDraft.software ? (
+                  <>
+                    <AriTypography
+                      variant="caption"
+                      value={editingDraft.software.trim().toLowerCase() === "blender"
+                        ? "自动准备：支持"
+                        : "自动准备：手动"}
+                    />
+                    {editingDraft.software.trim().toLowerCase() === "maya" ? (
+                      <AriTypography variant="caption" value="环境变量：MAYA_BIN" />
+                    ) : null}
+                    {editingDraft.software.trim().toLowerCase() === "c4d" ? (
+                      <AriTypography variant="caption" value="环境变量：C4D_BIN" />
+                    ) : null}
+                  </>
+                ) : null}
               </AriFormItem>
             ) : (
               <>
@@ -935,6 +1316,7 @@ export function McpPage() {
                 item={item}
                 busy={busyActionId === item.id || runtimeBusy}
                 apifoxRuntimeStatus={apifoxRuntimeStatus}
+                dccRuntimeStatus={dccRuntimeStatusMap[item.software]}
                 onToggleEnabled={(target, enabled) => {
                   void handleToggleEnabled(target, enabled);
                 }}
@@ -960,6 +1342,7 @@ export function McpPage() {
                 busy={Boolean(busyActionId)}
                 alreadyRegistered={registeredTemplateIds.has(item.id)}
                 apifoxRuntimeStatus={apifoxRuntimeStatus}
+                dccRuntimeStatus={dccRuntimeStatusMap[item.software]}
                 runtimeBusy={runtimeBusy}
                 onCreate={(target) => openEditor({
                   ...buildDraftFromTemplate(target),
@@ -970,6 +1353,9 @@ export function McpPage() {
                 }}
                 onUninstallApifoxRuntime={() => {
                   void handleUninstallApifoxRuntime();
+                }}
+                onPrepareDccRuntime={(target) => {
+                  void handlePrepareDccRuntime(target);
                 }}
               />
             ))}

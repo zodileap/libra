@@ -4,7 +4,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { HashRouter } from "react-router-dom";
 import { DesktopRouter } from "./router";
 import { SetupRequiredPage } from "./modules/common/pages/setup-required-page";
-import { ensureBlenderBridge } from "./shared/services/blender-bridge";
 import {
 	checkDesktopUpdate as requestDesktopUpdateCheck,
 	clearAuthToken,
@@ -31,10 +30,7 @@ import {
 import type { AuthState } from "./router/types";
 import type {
 	AiKeyItem,
-	BlenderBridgeEnsureOptions,
 	AuthAvailableAgentItem,
-	BlenderBridgeEnsureResult,
-	BlenderBridgeRuntime,
 	ColorThemeMode,
 	ConsoleIdentityItem,
 	DesktopBackendConfig,
@@ -451,14 +447,6 @@ export default function App() {
 	const checkingDesktopUpdateRef = useRef(false);
 	// 描述：更新状态轮询定时器句柄。
 	const desktopUpdatePollTimerRef = useRef<number | null>(null);
-	// 描述：Blender Bridge 运行态（检测中/可用性/提示文案）。
-	const [blenderBridgeRuntime, setBlenderBridgeRuntime] = useState<BlenderBridgeRuntime>({
-		checking: false,
-		ok: null,
-		message: "Bridge 未检测",
-	});
-	// 描述：缓存 Bridge 检测任务，避免并发触发重复检测。
-	const bridgeTaskRef = useRef<Promise<BlenderBridgeEnsureResult> | null>(null);
 	// 描述：记录已展示过的 Codex 提示弹窗，防止同一提示重复弹出。
 	const codexPopupShownRef = useRef<Set<string>>(new Set());
 	// 描述：记录已展示过的 Gemini CLI 提示弹窗，防止同一提示重复弹出。
@@ -818,38 +806,6 @@ export default function App() {
 		};
 	}, [aiKeys]);
 
-	// 描述：统一执行 Blender Bridge 检测并同步运行态，含并发去重。
-	const ensureBlenderBridgeRuntime = useCallback(async (options?: BlenderBridgeEnsureOptions) => {
-		if (bridgeTaskRef.current) {
-			return bridgeTaskRef.current;
-		}
-
-		const task = (async () => {
-			setBlenderBridgeRuntime({
-				checking: true,
-				ok: null,
-				message: "正在检测 Blender Bridge...",
-			});
-
-			const result = await ensureBlenderBridge(undefined, options);
-			setBlenderBridgeRuntime({
-				checking: false,
-				ok: result.ok,
-				message: result.ok ? `Bridge 已就绪：${result.message}` : result.message,
-			});
-			return result;
-		})().finally(() => {
-			bridgeTaskRef.current = null;
-		});
-
-		bridgeTaskRef.current = task;
-		return task;
-	}, []);
-
-	useEffect(() => {
-		void ensureBlenderBridgeRuntime();
-	}, [ensureBlenderBridgeRuntime]);
-
 	// 描述：轮询 Tauri 更新状态并同步到前端。
 	const syncDesktopUpdateState = useCallback(async () => {
 		const payload = await invoke<DesktopUpdateStateResponse>(COMMANDS.GET_DESKTOP_UPDATE_STATE, {});
@@ -1057,8 +1013,6 @@ export default function App() {
 			desktopUpdateState,
 			checkDesktopUpdate,
 			installDesktopUpdate,
-			blenderBridgeRuntime,
-			ensureBlenderBridge: ensureBlenderBridgeRuntime
 		}),
 		[
 			user,
@@ -1072,8 +1026,6 @@ export default function App() {
 			desktopUpdateState,
 			checkDesktopUpdate,
 			installDesktopUpdate,
-			blenderBridgeRuntime,
-			ensureBlenderBridgeRuntime,
 			updateBackendConfig,
 			restoreBackendConfig,
 			updateSelectedIdentity,

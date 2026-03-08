@@ -34,24 +34,13 @@ pub struct AgentProfile {
 }
 
 impl AgentProfile {
-    /// 描述：内置代码智能体默认档案。
-    pub fn code_default() -> Self {
+    /// 描述：内置统一智能体默认档案。
+    pub fn default_profile() -> Self {
         Self {
-            id: "code".to_string(),
-            display_name: "代码智能体".to_string(),
-            system_prompt: "你是代码智能体。目标：输出可执行、可维护的实现方案与代码建议。约束：优先模块化、明确文件结构、明确下一步动作。".to_string(),
+            id: "agent".to_string(),
+            display_name: "智能体".to_string(),
+            system_prompt: "你是统一智能体。目标：输出可执行、可维护的实现方案与代码建议。约束：优先模块化、明确文件结构、优先复用工作流、技能与 MCP。".to_string(),
             allowed_tools: HashSet::new(),
-            features: AgentFeatureFlags::default_for_env(),
-        }
-    }
-
-    /// 描述：内置模型智能体默认档案。
-    pub fn model_default() -> Self {
-        Self {
-            id: "model".to_string(),
-            display_name: "3D 模型智能体".to_string(),
-            system_prompt: "你是三维模型智能体。目标：帮助用户完成建模任务，并在可用时调用导出能力。约束：输出操作步骤要具体，先给可执行动作，再给解释。".to_string(),
-            allowed_tools: ["mcp_model_tool"].iter().map(|&s| s.to_string()).collect(),
             features: AgentFeatureFlags::default_for_env(),
         }
     }

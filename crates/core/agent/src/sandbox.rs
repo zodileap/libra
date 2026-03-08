@@ -1,4 +1,5 @@
 use dashmap::DashMap;
+use libra_mcp_common::ProtocolError;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use serde_json::Value;
@@ -10,7 +11,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 use sysinfo::{Pid, ProcessesToUpdate, System};
 use tracing::info;
-use libra_mcp_common::ProtocolError;
 
 /// 描述：持久化沙盒的单次任务执行结果。
 pub struct SandboxExecutionResult {
@@ -350,13 +350,42 @@ def fetch_url(url=None, max_chars=8000, **kwargs):
         {"url": _require_arg(resolved_url, "url"), "max_chars": resolved_max_chars if resolved_max_chars is not None else 8000},
     )
 
+def mcp_tool(server=None, tool=None, arguments=None, **kwargs):
+    resolved_server = _pick_first_non_none([server, _pop_alias(kwargs, ("mcp", "server_id"))])
+    resolved_tool = _pick_first_non_none([tool, _pop_alias(kwargs, ("name", "action"))])
+    resolved_arguments = _pick_first_non_none([arguments, _pop_alias(kwargs, ("params", "payload", "data"))])
+    return _invoke_tool(
+        "mcp_tool",
+        {
+            "server": resolved_server or "",
+            "tool": _require_arg(resolved_tool, "tool"),
+            "arguments": resolved_arguments or {},
+        },
+    )
+
+def dcc_tool(capability=None, action=None, arguments=None, software=None, source_software=None, target_software=None, **kwargs):
+    resolved_capability = _pick_first_non_none([capability, _pop_alias(kwargs, ("domain_capability",))])
+    resolved_action = _pick_first_non_none([action, _pop_alias(kwargs, ("tool", "name"))])
+    resolved_arguments = _pick_first_non_none([arguments, _pop_alias(kwargs, ("params", "payload", "data"))])
+    resolved_software = _pick_first_non_none([software, _pop_alias(kwargs, ("dcc",))])
+    resolved_source_software = _pick_first_non_none([source_software, _pop_alias(kwargs, ("sourceSoftware", "source"))])
+    resolved_target_software = _pick_first_non_none([target_software, _pop_alias(kwargs, ("targetSoftware", "target"))])
+    return _invoke_tool(
+        "dcc_tool",
+        {
+            "capability": _require_arg(resolved_capability, "capability"),
+            "action": _require_arg(resolved_action, "action"),
+            "arguments": resolved_arguments or {},
+            "software": resolved_software or "",
+            "source_software": resolved_source_software or "",
+            "target_software": resolved_target_software or "",
+        },
+    )
+
 def mcp_model_tool(action=None, params=None, **kwargs):
     resolved_action = _pick_first_non_none([action, _pop_alias(kwargs, ("name", "tool"))])
     resolved_params = _pick_first_non_none([params, _pop_alias(kwargs, ("payload", "data"))])
-    return _invoke_tool(
-        "mcp_model_tool",
-        {"action": _require_arg(resolved_action, "action"), "params": resolved_params or {}},
-    )
+    return mcp_tool(server="model", tool=_require_arg(resolved_action, "action"), arguments=resolved_params or {})
 
 def tool_search(query="", limit=10, **kwargs):
     query_alias = _pop_alias(kwargs, ("q", "keyword"))

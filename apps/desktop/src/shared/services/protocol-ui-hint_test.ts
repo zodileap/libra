@@ -36,14 +36,14 @@ function TestMapProtocolUiHintShouldKeepFields(): void {
   assert(workflowUiHint.actions[0]?.kind === "allow_once", "首个动作 kind 映射错误");
 }
 
-// 描述：验证 Bridge 连接错误会映射为“重启 Blender”修复提示。
+// 描述：验证 DCC Runtime 连接错误会映射为统一修复提示。
 function TestBuildUiHintShouldMapBridgeError(): void {
   const uiHint = buildUiHintFromProtocolError({
     code: "mcp.model.export.bridge_connect_failed",
     message: "bridge connect failed",
     retryable: true,
   });
-  assert(uiHint?.key === "restart-blender-bridge", "Bridge 错误未映射到重启提示");
+  assert(uiHint?.key === "check-dcc-runtime", "DCC Runtime 错误未映射到统一提示");
 }
 
 // 描述：验证能力关闭错误会映射为“打开智能体设置”提示。

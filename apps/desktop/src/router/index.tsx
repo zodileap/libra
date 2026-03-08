@@ -358,8 +358,6 @@ export function DesktopRouter({ auth }: { auth: AuthState }) {
                     <AgentSessionPageLazy
                       currentUser={auth.user}
                       dccMcpCapabilities={auth.dccMcpCapabilities}
-                      blenderBridgeRuntime={auth.blenderBridgeRuntime}
-                      ensureBlenderBridge={auth.ensureBlenderBridge}
                       aiKeys={auth.aiKeys}
                     />
                   </RouteGuard>,

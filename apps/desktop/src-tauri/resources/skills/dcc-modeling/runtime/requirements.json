@@ -1,0 +1,19 @@
+{
+  "domain": "dcc-modeling",
+  "provider_selection_policy": {
+    "require_user_choice_when_multiple": true,
+    "persist_selection_within_thread": true,
+    "allow_cross_dcc_only_when_explicit": true,
+    "require_cross_dcc_source_and_target_choice_when_not_explicit": true
+  },
+  "capability_groups": [
+    "scene.inspect",
+    "selection.read",
+    "object.transform",
+    "mesh.edit",
+    "material.apply",
+    "file.import",
+    "file.export",
+    "cross_dcc.transfer"
+  ]
+}

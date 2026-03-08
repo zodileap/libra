@@ -29,6 +29,8 @@ import {
   getSessionMessages,
   removeSessionDebugArtifact,
   resolveAgentSessionTitle,
+  resolveAgentSessionSelectedDccSoftware,
+  rememberAgentSessionSelectedDccSoftware,
   removeSessionRunState,
   SESSION_TITLE_UPDATED_EVENT,
   upsertSessionRunState,
@@ -43,11 +45,11 @@ import {
 } from "../../shared/data";
 import { updateRuntimeSessionStatus } from "../../shared/services/backend-api";
 import {
-  DEFAULT_BLENDER_BRIDGE_ADDR,
+  DEFAULT_DCC_PROVIDER_ADDR,
   normalizeInvokeError,
   normalizeInvokeErrorDetail,
   type NormalizedInvokeErrorDetail,
-} from "../../shared/services/blender-bridge";
+} from "../../shared/services/dcc-runtime";
 import {
   buildUiHintFromProtocolError,
   mapProtocolUiHint,
@@ -58,9 +60,6 @@ import type {
   AgentEventRecord,
   AgentStepRecord,
   AiKeyItem,
-  BlenderBridgeEnsureOptions,
-  BlenderBridgeEnsureResult,
-  BlenderBridgeRuntime,
   LoginUser,
   DccMcpCapabilities,
   ProtocolUiHint,
@@ -71,8 +70,9 @@ import {
   buildAgentWorkflowPrompt,
   listAgentWorkflows,
 } from "../../shared/workflow";
-import { listAgentSkills } from "../../modules/common/services";
-import type { AgentSkillItem } from "../../modules/common/services";
+import { normalizeAgentSkillId } from "../../shared/workflow/prompt-guidance";
+import { listAgentSkills, listMcpOverview } from "../../modules/common/services";
+import type { AgentSkillItem, McpRegistrationItem } from "../../modules/common/services";
 import {
   AGENT_HOME_PATH,
   AGENT_SETTINGS_PATH,
@@ -117,8 +117,6 @@ interface SessionPageProps {
   sessionUiConfig?: SessionAgentUiConfig;
   currentUser?: LoginUser | null;
   dccMcpCapabilities: DccMcpCapabilities;
-  blenderBridgeRuntime: BlenderBridgeRuntime;
-  ensureBlenderBridge: (options?: BlenderBridgeEnsureOptions) => Promise<BlenderBridgeEnsureResult>;
   aiKeys: AiKeyItem[];
 }
 
@@ -140,6 +138,9 @@ interface ExecutePromptOptions {
   skipDependencyRuleCheck?: boolean;
   replaceAssistantMessageId?: string;
   contextMessages?: MessageItem[];
+  resolvedDccSoftware?: string;
+  resolvedCrossDccSoftwares?: string[];
+  skipDccSelectionPrompt?: boolean;
 }
 
 // 描述:
@@ -191,12 +192,235 @@ interface AgentRequireApprovalEventData {
 const APPROVAL_TOOL_ARGS_PREVIEW_MAX_CHARS = 2000;
 const PLANNING_META_PREFIX = "__libra_planning__:";
 const INITIAL_THINKING_SEGMENT_ROLE = "initial_thinking";
+const DCC_MODELING_SKILL_ID = "dcc-modeling";
+
+// 描述：
+//
+//   - DCC 软件选项结构；统一承载软件标识、展示文案和可用 MCP 摘要，供会话级软件选择与提示词路由复用。
+interface DccSoftwareOption {
+  software: string;
+  label: string;
+  providerIds: string[];
+  capabilities: string[];
+  supportsImport: boolean;
+  supportsExport: boolean;
+  priority: number;
+}
+
+// 描述：
+//
+//   - DCC 选择中断态；当用户未指定软件且存在多个可用 DCC 软件时，先缓存当前请求并要求用户选择软件。
+interface PendingDccSelectionState {
+  selectionMode: "single" | "cross";
+  prompt: string;
+  options: ExecutePromptOptions;
+  contextMessages: MessageItem[];
+  softwareOptions: DccSoftwareOption[];
+  selectedSoftware: string;
+  selectedTargetSoftware: string;
+}
+
+// 描述：
+//
+//   - DCC 预检查结果；统一返回是否阻断、当前绑定软件与应注入提示词的上下文块。
+interface DccPreflightResult {
+  blocked: boolean;
+  promptBlock: string;
+}
+
+// 描述：
+//
+//   - DCC 软件展示文案映射，保证会话页与 MCP 页面在常见软件名称上的展示口径一致。
+const DCC_SOFTWARE_LABEL_MAP: Record<string, string> = {
+  blender: "Blender",
+  maya: "Maya",
+  c4d: "Cinema 4D",
+  houdini: "Houdini",
+};
+
+// 描述：
+//
+//   - DCC 软件别名映射，供会话层从用户文本中识别显式指定的软件。
+const DCC_SOFTWARE_ALIAS_MAP: Record<string, string[]> = {
+  blender: ["blender"],
+  maya: ["maya"],
+  c4d: ["c4d", "cinema 4d", "cinema4d"],
+  houdini: ["houdini"],
+};
+
+// 描述：
+//
+//   - 跨软件操作意图关键词；当用户表达“导出到另一个建模软件/跨软件迁移”等语义时，必须先明确源软件和目标软件。
+const DCC_CROSS_SOFTWARE_INTENT_KEYWORDS = [
+  "跨软件",
+  "另一个建模软件",
+  "另一个软件",
+  "导出到",
+  "导入到",
+  "迁移到",
+  "转到",
+  "切到",
+  "在另一个软件",
+];
 
 // 描述：
 //
 //   - 规范化审批工具名，统一转为小写并去除首尾空白，供“会话内批准”命中比较。
 function normalizeApprovalToolName(toolName: string): string {
   return String(toolName || "").trim().toLowerCase();
+}
+
+// 描述：
+//
+//   - 判断技能是否属于 DCC 建模领域，优先读取标准技能运行时元数据，缺失时回退到技能编码。
+//
+// Params:
+//
+//   - skill: 当前技能记录。
+//
+// Returns:
+//
+//   - true 表示当前技能需要启用 DCC 软件路由。
+function isDccModelingSkill(skill: AgentSkillItem): boolean {
+  const runtimeDomain = String(skill.runtimeRequirements?.domain || "").trim().toLowerCase();
+  return runtimeDomain === DCC_MODELING_SKILL_ID || normalizeAgentSkillId(skill.id) === DCC_MODELING_SKILL_ID;
+}
+
+// 描述：
+//
+//   - 将 MCP 注册项聚合为按软件分组的 DCC 可用列表，供会话前置路由与用户选择复用。
+//
+// Params:
+//
+//   - items: 当前工作区可见的 MCP 注册项。
+//
+// Returns:
+//
+//   - 去重聚合后的 DCC 软件列表，按优先级从高到低排序。
+function resolveAvailableDccSoftwareOptions(items: McpRegistrationItem[]): DccSoftwareOption[] {
+  const groupedOptions = new Map<string, DccSoftwareOption>();
+  items.forEach((item) => {
+    if (!item.enabled || item.domain !== "dcc") {
+      return;
+    }
+    const normalizedSoftware = String(item.software || "").trim().toLowerCase();
+    if (!normalizedSoftware) {
+      return;
+    }
+    const currentOption = groupedOptions.get(normalizedSoftware);
+    const nextProviderIds = currentOption
+      ? Array.from(new Set([...currentOption.providerIds, item.id]))
+      : [item.id];
+    const nextCapabilities = currentOption
+      ? Array.from(new Set([...currentOption.capabilities, ...item.capabilities]))
+      : Array.from(new Set(item.capabilities));
+    const nextPriority = currentOption ? Math.max(currentOption.priority, item.priority) : item.priority;
+    groupedOptions.set(normalizedSoftware, {
+      software: normalizedSoftware,
+      label: DCC_SOFTWARE_LABEL_MAP[normalizedSoftware] || item.name || normalizedSoftware,
+      providerIds: nextProviderIds,
+      capabilities: nextCapabilities,
+      supportsImport: currentOption ? currentOption.supportsImport || item.supportsImport : item.supportsImport,
+      supportsExport: currentOption ? currentOption.supportsExport || item.supportsExport : item.supportsExport,
+      priority: nextPriority,
+    });
+  });
+  return Array.from(groupedOptions.values()).sort((left, right) => right.priority - left.priority);
+}
+
+// 描述：
+//
+//   - 从当前会话上下文中提取用户显式提到的软件名称；只有被实际启用的 DCC 软件才会参与命中。
+//
+// Params:
+//
+//   - sourceTexts: 当前话题中的用户文本集合。
+//   - softwareOptions: 当前可用的 DCC 软件选项。
+//
+// Returns:
+//
+//   - 用户显式提到的软件标识列表，按发现顺序去重输出。
+function resolveExplicitDccSoftwares(
+  sourceTexts: string[],
+  softwareOptions: DccSoftwareOption[],
+): string[] {
+  const normalizedText = sourceTexts
+    .map((item) => String(item || "").trim().toLowerCase())
+    .filter((item) => item.length > 0)
+    .join("\n");
+  const resolvedSoftwares: string[] = [];
+  softwareOptions.forEach((item) => {
+    const aliases = Array.from(
+      new Set([
+        item.software,
+        item.label.toLowerCase(),
+        ...(DCC_SOFTWARE_ALIAS_MAP[item.software] || []),
+      ]),
+    );
+    if (aliases.some((alias) => alias && normalizedText.includes(alias)) && !resolvedSoftwares.includes(item.software)) {
+      resolvedSoftwares.push(item.software);
+    }
+  });
+  return resolvedSoftwares;
+}
+
+// 描述：
+//
+//   - 判断当前用户文本是否表达了跨软件操作意图；一旦命中，后续必须拿到两个明确软件后才能继续执行。
+//
+// Params:
+//
+//   - sourceTexts: 当前话题中的用户文本集合。
+//
+// Returns:
+//
+//   - true 表示当前请求存在跨软件迁移或跨软件使用的明确意图。
+function hasCrossDccIntent(sourceTexts: string[]): boolean {
+  const normalizedText = sourceTexts
+    .map((item) => String(item || "").trim().toLowerCase())
+    .filter((item) => item.length > 0)
+    .join("\n");
+  if (!normalizedText) {
+    return false;
+  }
+  return DCC_CROSS_SOFTWARE_INTENT_KEYWORDS.some((keyword) => normalizedText.includes(keyword));
+}
+
+// 描述：
+//
+//   - 构造 DCC 路由提示词片段，向建模 Skill 明确当前可用软件、线程绑定与跨软件限制。
+//
+// Params:
+//
+//   - softwareOptions: 当前可用 DCC 软件。
+//   - selectedSoftware: 当前话题绑定的软件标识。
+//   - crossSoftwareSoftwares: 本轮允许跨软件的目标软件列表。
+//
+// Returns:
+//
+//   - 可直接拼接到主提示词中的 DCC 路由片段。
+function buildDccRoutingPromptBlock(
+  softwareOptions: DccSoftwareOption[],
+  selectedSoftware: string,
+  crossSoftwareSoftwares: string[],
+): string {
+  const availableLines = softwareOptions.map((item) => {
+    const capabilities = item.capabilities.length > 0 ? item.capabilities.join(", ") : "未声明";
+    return `- ${item.label} (${item.software})：providers=${item.providerIds.join(", ")}；priority=${item.priority}；import=${item.supportsImport}；export=${item.supportsExport}；capabilities=${capabilities}`;
+  });
+  const lines = ["【DCC 路由约束】"];
+  if (crossSoftwareSoftwares.length >= 2) {
+    lines.push(`本轮允许跨软件流程，仅可使用用户明确提到的软件：${crossSoftwareSoftwares.map((item) => DCC_SOFTWARE_LABEL_MAP[item] || item).join("、")}。`);
+    lines.push("如需跨软件迁移，必须先输出“源软件 -> 中间格式 -> 目标软件”的计划，且不得额外引入未被用户明确提到的软件。");
+  } else if (selectedSoftware) {
+    lines.push(`当前话题绑定的软件：${DCC_SOFTWARE_LABEL_MAP[selectedSoftware] || selectedSoftware}。`);
+    lines.push("除非用户后续明确改用其他软件，否则本话题的后续建模操作默认继续使用该软件。");
+  }
+  lines.push("用户未明确提到两个或以上软件时，不得擅自规划跨软件导入导出流程。");
+  lines.push("执行任何软件动作前，必须确认所需对象、路径、格式和风险边界。");
+  lines.push("当前可用 DCC 软件：");
+  lines.push(...availableLines);
+  return lines.join("\n");
 }
 
 // 描述：
@@ -1562,6 +1786,10 @@ export function SessionPage({
   const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>(
     () => readSelectedSkillIds(AGENT_SKILL_SELECTED_KEY),
   );
+  const [selectedDccSoftware, setSelectedDccSoftware] = useState<string>(
+    () => resolveAgentSessionSelectedDccSoftware(sessionId),
+  );
+  const [pendingDccSelection, setPendingDccSelection] = useState<PendingDccSelectionState | null>(null);
   const [workflowSkillModalVisible, setWorkflowSkillModalVisible] = useState(false);
   const [draftWorkflowId, setDraftWorkflowId] = useState("");
   const [draftSkillIds, setDraftSkillIds] = useState<string[]>([]);
@@ -1590,6 +1818,16 @@ export function SessionPage({
     () => availableSkills.filter((item) => activeSelectedSkillIds.includes(item.id)),
     [activeSelectedSkillIds, availableSkills],
   );
+  const activeUsesDccModelingSkill = useMemo(() => {
+    if (selectedSessionSkills.some((item) => isDccModelingSkill(item))) {
+      return true;
+    }
+    return Boolean(
+      (selectedWorkflow?.graph?.nodes || []).some(
+        (node) => node.type === "skill" && normalizeAgentSkillId(String(node.skillId || "").trim()) === DCC_MODELING_SKILL_ID,
+      ),
+    );
+  }, [selectedSessionSkills, selectedWorkflow]);
   const aiSelectOptions = useMemo(
     () =>
       availableAiKeys.map((item) => ({
@@ -2426,6 +2664,20 @@ export function SessionPage({
     window.localStorage.setItem(AGENT_SKILL_SELECTED_KEY, JSON.stringify(selectedSkillIds));
   }, [selectedSkillIds]);
 
+  // 描述：在切换会话时同步恢复线程级 DCC 软件绑定，保证同一话题后续默认继续使用已选软件。
+  useEffect(() => {
+    setSelectedDccSoftware(resolveAgentSessionSelectedDccSoftware(sessionId));
+    setPendingDccSelection(null);
+  }, [sessionId]);
+
+  // 描述：当当前执行策略不再包含 DCC 建模 Skill 时，主动清理残留的软件选择拦截状态。
+  useEffect(() => {
+    if (activeUsesDccModelingSkill) {
+      return;
+    }
+    setPendingDccSelection(null);
+  }, [activeUsesDccModelingSkill]);
+
   useEffect(() => {
     if (!sessionId) {
       return;
@@ -2609,6 +2861,155 @@ export function SessionPage({
     };
   }, [sessionId]);
 
+  // 描述：
+  //
+  //   - 在正式执行前解析 DCC 软件路由；当存在多个可用软件且用户未明确指定时，阻断执行并要求用户先选软件。
+  const resolveDccPreflight = useCallback(async (
+    promptText: string,
+    contextMessages: MessageItem[],
+    options?: ExecutePromptOptions,
+  ): Promise<DccPreflightResult> => {
+    if (!activeUsesDccModelingSkill) {
+      return {
+        blocked: false,
+        promptBlock: "",
+      };
+    }
+
+    const overview = await listMcpOverview({
+      workspaceRoot: String(activeWorkspace?.path || "").trim() || undefined,
+    });
+    const softwareOptions = resolveAvailableDccSoftwareOptions(overview.registered);
+    if (softwareOptions.length === 0) {
+      throw new Error("当前未启用任何 DCC MCP，请先在 MCP 页面注册并启用建模软件。");
+    }
+
+    const userSourceTexts = [
+      ...contextMessages
+        .filter((item) => item.role === "user")
+        .map((item) => item.text),
+      promptText,
+    ];
+    const explicitSoftwares = resolveExplicitDccSoftwares(userSourceTexts, softwareOptions);
+    const crossSoftwareIntent = hasCrossDccIntent(userSourceTexts);
+
+    if (explicitSoftwares.length >= 2) {
+      return {
+        blocked: false,
+        promptBlock: buildDccRoutingPromptBlock(softwareOptions, "", explicitSoftwares),
+      };
+    }
+
+    if (crossSoftwareIntent) {
+      const resolvedCrossSoftwares = Array.from(
+        new Set(
+          (options?.resolvedCrossDccSoftwares || [])
+            .map((item) => String(item || "").trim().toLowerCase())
+            .filter((item) => softwareOptions.some((option) => option.software === item)),
+        ),
+      );
+      if (resolvedCrossSoftwares.length >= 2) {
+        return {
+          blocked: false,
+          promptBlock: buildDccRoutingPromptBlock(softwareOptions, "", resolvedCrossSoftwares),
+        };
+      }
+      if (softwareOptions.length < 2) {
+        throw new Error("当前仅启用了一个 DCC 软件，无法执行跨软件操作，请先启用至少两个建模软件。");
+      }
+      if (!options?.skipDccSelectionPrompt) {
+        const defaultSourceSoftware = softwareOptions[0]?.software || "";
+        const defaultTargetSoftware = softwareOptions.find((item) => item.software !== defaultSourceSoftware)?.software || "";
+        setPendingDccSelection({
+          selectionMode: "cross",
+          prompt: promptText,
+          options: {
+            ...options,
+          },
+          contextMessages,
+          softwareOptions,
+          selectedSoftware: defaultSourceSoftware,
+          selectedTargetSoftware: defaultTargetSoftware,
+        });
+        setStatus("检测到跨软件建模需求，请先选择源软件和目标软件。");
+        return {
+          blocked: true,
+          promptBlock: "",
+        };
+      }
+      throw new Error("跨软件建模需要先明确源软件和目标软件。");
+    }
+
+    if (explicitSoftwares.length === 1) {
+      const explicitSoftware = explicitSoftwares[0];
+      const matchedOption = softwareOptions.find((item) => item.software === explicitSoftware);
+      if (!matchedOption) {
+        throw new Error(`未找到可用的 ${explicitSoftware} DCC MCP，请先在 MCP 页面启用对应软件。`);
+      }
+      rememberAgentSessionSelectedDccSoftware(sessionId, explicitSoftware);
+      setSelectedDccSoftware(explicitSoftware);
+      return {
+        blocked: false,
+        promptBlock: buildDccRoutingPromptBlock(softwareOptions, explicitSoftware, []),
+      };
+    }
+
+    const persistedSoftware = String(
+      options?.resolvedDccSoftware || selectedDccSoftware || resolveAgentSessionSelectedDccSoftware(sessionId),
+    )
+      .trim()
+      .toLowerCase();
+    if (persistedSoftware) {
+      const matchedOption = softwareOptions.find((item) => item.software === persistedSoftware);
+      if (matchedOption) {
+        rememberAgentSessionSelectedDccSoftware(sessionId, persistedSoftware);
+        setSelectedDccSoftware(persistedSoftware);
+        return {
+          blocked: false,
+          promptBlock: buildDccRoutingPromptBlock(softwareOptions, persistedSoftware, []),
+        };
+      }
+      rememberAgentSessionSelectedDccSoftware(sessionId, "");
+      setSelectedDccSoftware("");
+    }
+
+    if (softwareOptions.length === 1) {
+      const onlySoftware = softwareOptions[0]?.software || "";
+      rememberAgentSessionSelectedDccSoftware(sessionId, onlySoftware);
+      setSelectedDccSoftware(onlySoftware);
+      return {
+        blocked: false,
+        promptBlock: buildDccRoutingPromptBlock(softwareOptions, onlySoftware, []),
+      };
+    }
+
+    if (!options?.skipDccSelectionPrompt) {
+      setPendingDccSelection({
+        selectionMode: "single",
+        prompt: promptText,
+        options: {
+          ...options,
+        },
+        contextMessages,
+        softwareOptions,
+        selectedSoftware: softwareOptions[0]?.software || "",
+        selectedTargetSoftware: "",
+      });
+      setStatus("检测到多个可用建模软件，请先选择一个软件。");
+      return {
+        blocked: true,
+        promptBlock: "",
+      };
+    }
+
+    throw new Error("当前 DCC 会话缺少软件选择结果，请先选择一个建模软件后继续。");
+  }, [
+    activeUsesDccModelingSkill,
+    activeWorkspace?.path,
+    selectedDccSoftware,
+    sessionId,
+  ]);
+
   const executePrompt = async (content: string, options?: ExecutePromptOptions) => {
     const normalizedContent = content.trim();
     if (!normalizedContent || sending) return;
@@ -2617,6 +3018,10 @@ export function SessionPage({
     const confirmationToken = options?.confirmationToken;
     const appendUserMessage = options?.appendUserMessage !== false;
     const contextMessages = options?.contextMessages || messages;
+    const dccPreflight = await resolveDccPreflight(normalizedContent, contextMessages, options);
+    if (dccPreflight.blocked) {
+      return;
+    }
 
     // 描述：智能体在正式执行前先检查项目依赖规则；发现版本不一致时先弹确认，不直接中断。
     if (!options?.skipDependencyRuleCheck) {
@@ -2756,8 +3161,8 @@ export function SessionPage({
         contextualRequestPrompt || currentRequestPrompt,
       );
       const agentPrompt = skillExecutionPlan.planPrompt
-        ? `${workflowPrompt}\n\n${skillExecutionPlan.planPrompt}${selectedSessionSkillPrompt ? `\n\n${selectedSessionSkillPrompt}` : ""}`
-        : `${workflowPrompt}${selectedSessionSkillPrompt ? `\n\n${selectedSessionSkillPrompt}` : ""}`;
+        ? `${workflowPrompt}\n\n${skillExecutionPlan.planPrompt}${selectedSessionSkillPrompt ? `\n\n${selectedSessionSkillPrompt}` : ""}${dccPreflight.promptBlock ? `\n\n${dccPreflight.promptBlock}` : ""}`
+        : `${workflowPrompt}${selectedSessionSkillPrompt ? `\n\n${selectedSessionSkillPrompt}` : ""}${dccPreflight.promptBlock ? `\n\n${dccPreflight.promptBlock}` : ""}`;
       agentPromptRawRef.current = agentPrompt;
       agentLlmDeltaBufferRef.current = "";
       agentLlmResponseRawRef.current = "";
@@ -2803,7 +3208,7 @@ export function SessionPage({
         traceId: agentTraceId,
         projectName: title,
         modelExportEnabled: dccMcpCapabilities.export,
-        blenderBridgeAddr: DEFAULT_BLENDER_BRIDGE_ADDR,
+        dccProviderAddr: DEFAULT_DCC_PROVIDER_ADDR,
         outputDir,
         workdir: String(activeWorkspace?.path || "").trim() || undefined,
       });
@@ -3231,6 +3636,67 @@ export function SessionPage({
     } catch (err) {
       setStatus("授权操作失败，请重试");
     }
+  };
+
+  // 描述：确认当前 DCC 软件选择，并继续执行刚才被拦截的建模请求。
+  const handleConfirmPendingDccSelection = async () => {
+    if (!pendingDccSelection) {
+      return;
+    }
+    const nextSoftware = String(pendingDccSelection.selectedSoftware || "").trim().toLowerCase();
+    if (pendingDccSelection.selectionMode === "cross") {
+      const nextTargetSoftware = String(pendingDccSelection.selectedTargetSoftware || "").trim().toLowerCase();
+      if (!nextSoftware || !nextTargetSoftware) {
+        AriMessage.warning({
+          content: "请先选择源软件和目标软件。",
+          duration: 1800,
+        });
+        return;
+      }
+      if (nextSoftware === nextTargetSoftware) {
+        AriMessage.warning({
+          content: "跨软件操作需要两个不同的建模软件。",
+          duration: 1800,
+        });
+        return;
+      }
+      const pendingPrompt = pendingDccSelection.prompt;
+      const pendingOptions = pendingDccSelection.options;
+      const pendingContextMessages = pendingDccSelection.contextMessages;
+      setPendingDccSelection(null);
+      await executePrompt(pendingPrompt, {
+        ...pendingOptions,
+        resolvedCrossDccSoftwares: [nextSoftware, nextTargetSoftware],
+        skipDccSelectionPrompt: true,
+        contextMessages: pendingContextMessages,
+      });
+      return;
+    }
+    if (!nextSoftware) {
+      AriMessage.warning({
+        content: "请先选择一个建模软件。",
+        duration: 1800,
+      });
+      return;
+    }
+    rememberAgentSessionSelectedDccSoftware(sessionId, nextSoftware);
+    setSelectedDccSoftware(nextSoftware);
+    const pendingPrompt = pendingDccSelection.prompt;
+    const pendingOptions = pendingDccSelection.options;
+    const pendingContextMessages = pendingDccSelection.contextMessages;
+    setPendingDccSelection(null);
+    await executePrompt(pendingPrompt, {
+      ...pendingOptions,
+      resolvedDccSoftware: nextSoftware,
+      skipDccSelectionPrompt: true,
+      contextMessages: pendingContextMessages,
+    });
+  };
+
+  // 描述：取消当前 DCC 软件选择拦截，不继续执行本轮请求。
+  const handleCancelPendingDccSelection = () => {
+    setPendingDccSelection(null);
+    setStatus("已取消本轮建模执行。");
   };
 
   // 描述：获取当前最后一个待授权的任务。
@@ -4678,6 +5144,81 @@ const handleConfirmWorkflowSkillModal = () => {
                       },
                     )
                   }
+                />
+              </AriFlex>
+            </AriCard>
+          ) : pendingDccSelection ? (
+            <AriCard className="desk-action-slot desk-action-slot-warning">
+              <AriTypography
+                variant="h4"
+                value={pendingDccSelection.selectionMode === "cross" ? "请选择源软件和目标软件" : "请选择建模软件"}
+              />
+              <AriTypography
+                variant="caption"
+                value={pendingDccSelection.selectionMode === "cross"
+                  ? "当前请求涉及跨软件建模操作。请先明确源软件和目标软件；未明确两个软件前，不会自动规划跨软件迁移。"
+                  : "当前命中了建模 Skill，且存在多个可用建模软件。请先选择本话题要使用的软件，后续未明确改用其他软件前都会继续使用它。"}
+              />
+              <AriSelect
+                value={pendingDccSelection.selectedSoftware}
+                options={pendingDccSelection.softwareOptions.map((item) => ({
+                  value: item.software,
+                  label: `${item.label} (${item.providerIds.join(", ")})`,
+                }))}
+                onChange={(value: unknown) => {
+                  const nextSoftware = String(value || "").trim().toLowerCase();
+                  setPendingDccSelection((current) => {
+                    if (!current) {
+                      return current;
+                    }
+                    return {
+                      ...current,
+                      selectedSoftware: nextSoftware,
+                    };
+                  });
+                }}
+              />
+              {pendingDccSelection.selectionMode === "cross" ? (
+                <AriSelect
+                  value={pendingDccSelection.selectedTargetSoftware}
+                  options={pendingDccSelection.softwareOptions
+                    .filter((item) => item.software !== pendingDccSelection.selectedSoftware)
+                    .map((item) => ({
+                      value: item.software,
+                      label: `${item.label} (${item.providerIds.join(", ")})`,
+                    }))}
+                  onChange={(value: unknown) => {
+                    const nextTargetSoftware = String(value || "").trim().toLowerCase();
+                    setPendingDccSelection((current) => {
+                      if (!current) {
+                        return current;
+                      }
+                      return {
+                        ...current,
+                        selectedTargetSoftware: nextTargetSoftware,
+                      };
+                    });
+                  }}
+                />
+              ) : null}
+              <AriFlex
+                align="center"
+                space={8}
+                className="desk-action-slot-actions"
+              >
+                <AriButton
+                  color="primary"
+                  icon="check"
+                  label={pendingDccSelection.selectionMode === "cross" ? "按该组合继续" : "使用该软件继续"}
+                  onClick={() => {
+                    void handleConfirmPendingDccSelection();
+                  }}
+                />
+                <AriButton
+                  ghost
+                  icon="close"
+                  label="取消"
+                  onClick={handleCancelPendingDccSelection}
                 />
               </AriFlex>
             </AriCard>

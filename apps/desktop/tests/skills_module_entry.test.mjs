@@ -81,6 +81,10 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   const styleSource = readDesktopSource("src/styles.css");
   const builtinSkillPath = path.resolve(process.cwd(), "src-tauri/resources/skills/requirements-analyst/SKILL.md");
   const builtinSkillSource = fs.readFileSync(builtinSkillPath, "utf8");
+  const dccSkillPath = path.resolve(process.cwd(), "src-tauri/resources/skills/dcc-modeling/SKILL.md");
+  const dccSkillSource = fs.readFileSync(dccSkillPath, "utf8");
+  const dccSkillRuntimePath = path.resolve(process.cwd(), "src-tauri/resources/skills/dcc-modeling/runtime/requirements.json");
+  const dccSkillRuntimeSource = fs.readFileSync(dccSkillRuntimePath, "utf8");
 
   // 描述：
   //
@@ -99,6 +103,7 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   //   - 技能服务层应改为调用 Tauri 注册表，不再依赖前端静态 catalog 或 localStorage 安装态。
   assert.match(skillServiceSource, /export interface AgentSkillItem/);
   assert.match(skillServiceSource, /markdownBody: string;/);
+  assert.match(skillServiceSource, /runtimeRequirements: Record<string, unknown>;/);
   assert.match(skillServiceSource, /removable: boolean;/);
   assert.match(skillServiceSource, /invoke<unknown\[]>\(COMMANDS\.LIST_AGENT_SKILLS\)/);
   assert.match(skillServiceSource, /invoke<string \| null>\(COMMANDS\.PICK_AGENT_SKILL_FOLDER\)/);
@@ -123,6 +128,7 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   assert.match(tauriSkillRegistrySource, /pub async fn import_agent_skill_from_path/);
   assert.match(tauriSkillRegistrySource, /pub async fn remove_user_agent_skill/);
   assert.match(tauriSkillRegistrySource, /serde_yaml::from_str/);
+  assert.match(tauriSkillRegistrySource, /read_optional_runtime_requirements/);
   assert.match(tauriSkillRegistrySource, /resolve_external_skill_root/);
   assert.match(tauriSkillRegistrySource, /CODEX_HOME/);
   assert.match(tauriSkillRegistrySource, /copy_directory_recursive/);
@@ -145,6 +151,12 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   //   - 至少应存在一个标准内置技能包，并包含合法 frontmatter 与正文。
   assert.match(builtinSkillSource, /^---\nname: requirements-analyst\ndescription:/);
   assert.match(builtinSkillSource, /# 需求分析/);
+  assert.match(dccSkillSource, /^---\nname: dcc-modeling\ndescription:/);
+  assert.match(dccSkillSource, /# 建模执行/);
+  assert.match(dccSkillSource, /如果用户表达了“跨软件导出\/导入\/迁移”意图，但没有明确提到两个或以上建模软件，必须先让用户选择源软件和目标软件/);
+  assert.match(dccSkillRuntimeSource, /"domain": "dcc-modeling"/);
+  assert.match(dccSkillRuntimeSource, /"require_user_choice_when_multiple": true/);
+  assert.match(dccSkillRuntimeSource, /"require_cross_dcc_source_and_target_choice_when_not_explicit": true/);
 
   // 描述：
   //
@@ -157,6 +169,7 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
 test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
   const mcpPageSource = readDesktopSource("src/modules/common/pages/mcp-page.tsx");
   const mcpServiceSource = readDesktopSource("src/modules/common/services/mcps.ts");
+  const dccRuntimeServiceSource = readDesktopSource("src/shared/services/dcc-runtime.ts");
   const mcpRegistrySource = readDesktopSource("src-tauri/src/mcp_registry.rs");
   const envSource = readDesktopSource("src/vite-env.d.ts");
   const constantsSource = readDesktopSource("src/shared/constants.ts");
@@ -173,6 +186,13 @@ test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
   assert.match(mcpPageSource, /removeMcpRegistration/);
   assert.match(mcpPageSource, /installApifoxMcpRuntime/);
   assert.match(mcpPageSource, /uninstallApifoxMcpRuntime/);
+  assert.match(mcpPageSource, /prepareDccRuntime/);
+  assert.match(mcpPageSource, /buildDccRuntimeStatusMap/);
+  assert.match(mcpPageSource, /label=\{dccRuntimeStatus\?\.available \? "重新校验" : "准备 Runtime"\}/);
+  assert.match(mcpPageSource, /renderDccRuntimeAutoPrepareLabel/);
+  assert.match(mcpPageSource, /renderDccRuntimeEnvRequirementLabel/);
+  assert.match(mcpPageSource, /环境变量：MAYA_BIN/);
+  assert.match(mcpPageSource, /环境变量：C4D_BIN/);
   assert.match(mcpPageSource, /label=\"新增 MCP\"/);
   assert.match(mcpPageSource, /createPortal\(headerNode, headerSlotElement\)/);
   assert.match(mcpPageSource, /安装 Runtime/);
@@ -187,6 +207,13 @@ test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
   //
   //   - MCP 服务层应改为调用 Tauri 注册表，不再依赖静态 catalog、远端目录或 localStorage 安装态。
   assert.match(mcpServiceSource, /export interface McpRegistrationItem/);
+  assert.match(mcpServiceSource, /export type McpDomain = "general" \| "dcc";/);
+  assert.match(mcpServiceSource, /domain: McpDomain;/);
+  assert.match(mcpServiceSource, /software: string;/);
+  assert.match(mcpServiceSource, /capabilities: string\[];/);
+  assert.match(mcpServiceSource, /priority: number;/);
+  assert.match(mcpServiceSource, /supportsImport: boolean;/);
+  assert.match(mcpServiceSource, /supportsExport: boolean;/);
   assert.match(mcpServiceSource, /export type McpScope = "user" \| "workspace";/);
   assert.match(mcpServiceSource, /export interface McpRegistryContext/);
   assert.match(mcpServiceSource, /export interface McpTemplateItem/);
@@ -196,10 +223,16 @@ test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
   assert.match(mcpServiceSource, /validateMcpRegistration\(/);
   assert.match(mcpServiceSource, /workspaceRoot: workspaceRoot \|\| undefined/);
   assert.match(mcpServiceSource, /COMMANDS\.LIST_REGISTERED_MCPS/);
+  assert.match(dccRuntimeServiceSource, /requiredEnvKeys: string\[];/);
+  assert.match(dccRuntimeServiceSource, /supportsAutoPrepare: boolean;/);
+  assert.match(dccRuntimeServiceSource, /required_env_keys\?: string\[];/);
+  assert.match(dccRuntimeServiceSource, /supports_auto_prepare\?: boolean;/);
   assert.match(mcpServiceSource, /COMMANDS\.SAVE_MCP_REGISTRATION/);
   assert.match(mcpServiceSource, /COMMANDS\.REMOVE_MCP_REGISTRATION/);
   assert.match(mcpServiceSource, /COMMANDS\.VALIDATE_MCP_REGISTRATION/);
   assert.match(mcpServiceSource, /COMMANDS\.CHECK_APIFOX_MCP_RUNTIME_STATUS/);
+  assert.match(mcpServiceSource, /checkDccRuntimeStatus/);
+  assert.match(mcpServiceSource, /payload\.runtimeKind === "dcc_bridge"/);
   assert.doesNotMatch(mcpServiceSource, /MCP_CATALOG/);
   assert.doesNotMatch(mcpServiceSource, /localStorage/);
   assert.doesNotMatch(mcpServiceSource, /VITE_MCP_CATALOG_URL/);
@@ -217,6 +250,18 @@ test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
   assert.match(mcpRegistrySource, /slugify_identifier/);
   assert.match(mcpRegistrySource, /normalize_registration_payload/);
   assert.match(mcpRegistrySource, /Apifox 官方 MCP/);
+  assert.match(mcpRegistrySource, /Blender 本地 Bridge/);
+  assert.match(mcpRegistrySource, /maya-local-bridge/);
+  assert.match(mcpRegistrySource, /c4d-local-bridge/);
+  assert.match(mcpRegistrySource, /docs_url: "https:\/\/www\.blender\.org\/download\/"/);
+  assert.match(mcpRegistrySource, /docs_url: "https:\/\/www\.autodesk\.com\/products\/maya\/buy"/);
+  assert.match(mcpRegistrySource, /docs_url: "https:\/\/www\.maxon\.net\/en\/cinema-4d"/);
+  assert.match(mcpRegistrySource, /domain: "dcc"/);
+  assert.match(mcpRegistrySource, /software: "blender"/);
+  assert.match(mcpRegistrySource, /capabilities: vec!\[/);
+  assert.match(tauriMainSource, /mod blender_runtime;/);
+  assert.match(tauriMainSource, /mod maya_runtime;/);
+  assert.match(tauriMainSource, /mod c4d_runtime;/);
 
   // 描述：
   //
@@ -239,6 +284,10 @@ test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
   assert.match(tauriMainSource, /check_apifox_mcp_runtime_status,/);
   assert.match(tauriMainSource, /install_apifox_mcp_runtime,/);
   assert.match(tauriMainSource, /uninstall_apifox_mcp_runtime,/);
+  assert.match(constantsSource, /CHECK_DCC_RUNTIME_STATUS: "check_dcc_runtime_status"/);
+  assert.match(constantsSource, /PREPARE_DCC_RUNTIME: "prepare_dcc_runtime"/);
+  assert.match(tauriMainSource, /prepare_dcc_runtime,/);
+  assert.match(tauriMainSource, /check_dcc_runtime_status,/);
   assert.match(tauriMainSource, /resolve_apifox_mcp_runtime_root/);
   assert.match(tauriMainSource, /app_data_dir\(\)/);
   assert.match(tauriMainSource, /npm install/);

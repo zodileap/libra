@@ -169,9 +169,10 @@ export function resolveRunSegmentCodeLanguageByPath(filePath: string): string {
 export function resolveRunSegmentDiffPreview(detailText: string): {
   value: string;
   diffLines?: {
-    added?: number[];
-    removed?: number[];
+    added?: Array<number | { start: number; end: number }>;
+    removed?: Array<number | { start: number; end: number }>;
   };
+  customLineNumbers?: Array<number | string>;
 } {
   const rawText = String(detailText || "");
   const hasExplicitDiffMarker = [
@@ -195,10 +196,45 @@ export function resolveRunSegmentDiffPreview(detailText: string): {
   const normalizedLines: Array<{
     text: string;
     kind: "add" | "remove" | "context";
+    lineNumber?: number;
   }> = [];
+  let sourceLineNumber = 1;
+  let targetLineNumber = 1;
+  let hasUnifiedHunkHeader = false;
+
+  const buildLineNumberRanges = (
+    linesToGroup: number[],
+  ): Array<number | { start: number; end: number }> | undefined => {
+    if (linesToGroup.length === 0) {
+      return undefined;
+    }
+    const sorted = [...new Set(linesToGroup)].sort((left, right) => left - right);
+    const ranges: Array<number | { start: number; end: number }> = [];
+    let rangeStart = sorted[0];
+    let previous = sorted[0];
+    for (let index = 1; index < sorted.length; index += 1) {
+      const current = sorted[index];
+      if (current === previous + 1) {
+        previous = current;
+        continue;
+      }
+      ranges.push(rangeStart === previous ? rangeStart : { start: rangeStart, end: previous });
+      rangeStart = current;
+      previous = current;
+    }
+    ranges.push(rangeStart === previous ? rangeStart : { start: rangeStart, end: previous });
+    return ranges;
+  };
 
   lines.forEach((line) => {
     const trimmed = String(line || "");
+    const unifiedHunkHeaderMatch = trimmed.match(/^@@\s*-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s*@@/);
+    if (unifiedHunkHeaderMatch) {
+      sourceLineNumber = Math.max(1, Number(unifiedHunkHeaderMatch[1] || 1));
+      targetLineNumber = Math.max(1, Number(unifiedHunkHeaderMatch[2] || 1));
+      hasUnifiedHunkHeader = true;
+      return;
+    }
     if (
       trimmed.startsWith("*** Begin Patch")
       || trimmed.startsWith("*** End Patch")
@@ -214,12 +250,19 @@ export function resolveRunSegmentDiffPreview(detailText: string): {
     ) {
       return;
     }
+    if (trimmed === "\\ No newline at end of file") {
+      return;
+    }
 
     if (trimmed.startsWith("+")) {
       normalizedLines.push({
         text: trimmed.slice(1),
         kind: "add",
+        lineNumber: hasUnifiedHunkHeader ? targetLineNumber : undefined,
       });
+      if (hasUnifiedHunkHeader) {
+        targetLineNumber += 1;
+      }
       return;
     }
 
@@ -227,7 +270,11 @@ export function resolveRunSegmentDiffPreview(detailText: string): {
       normalizedLines.push({
         text: trimmed.slice(1),
         kind: "remove",
+        lineNumber: hasUnifiedHunkHeader ? sourceLineNumber : undefined,
       });
+      if (hasUnifiedHunkHeader) {
+        sourceLineNumber += 1;
+      }
       return;
     }
 
@@ -235,14 +282,24 @@ export function resolveRunSegmentDiffPreview(detailText: string): {
       normalizedLines.push({
         text: trimmed.slice(1),
         kind: "context",
+        lineNumber: hasUnifiedHunkHeader ? targetLineNumber : undefined,
       });
+      if (hasUnifiedHunkHeader) {
+        sourceLineNumber += 1;
+        targetLineNumber += 1;
+      }
       return;
     }
 
     normalizedLines.push({
       text: trimmed,
       kind: "context",
+      lineNumber: hasUnifiedHunkHeader ? targetLineNumber : undefined,
     });
+    if (hasUnifiedHunkHeader) {
+      sourceLineNumber += 1;
+      targetLineNumber += 1;
+    }
   });
 
   const previewText = normalizedLines.map((line) => line.text).join("\n");
@@ -269,6 +326,7 @@ export function resolveRunSegmentDiffPreview(detailText: string): {
   const focusedLines: Array<{
     text: string;
     kind: "add" | "remove" | "context" | "ellipsis";
+    lineNumber?: number | string;
   }> = [];
   let previousLineIndex = -1;
   keptLineIndexes.forEach((lineIndex) => {
@@ -276,11 +334,13 @@ export function resolveRunSegmentDiffPreview(detailText: string): {
       focusedLines.push({
         text: "…",
         kind: "ellipsis",
+        lineNumber: "",
       });
     }
     focusedLines.push({
       text: normalizedLines[lineIndex]?.text || "",
       kind: normalizedLines[lineIndex]?.kind || "context",
+      lineNumber: normalizedLines[lineIndex]?.lineNumber,
     });
     previousLineIndex = lineIndex;
   });
@@ -295,6 +355,7 @@ export function resolveRunSegmentDiffPreview(detailText: string): {
       clippedLines.push({
         text: "…",
         kind: "ellipsis",
+        lineNumber: "",
       });
     }
   }
@@ -302,6 +363,7 @@ export function resolveRunSegmentDiffPreview(detailText: string): {
   const added: number[] = [];
   const removed: number[] = [];
   const focusedTextLines: string[] = [];
+  const customLineNumbers = clippedLines.map((line) => line.lineNumber ?? "");
   clippedLines.forEach((line, index) => {
     focusedTextLines.push(line.text);
     if (line.kind === "add") {
@@ -316,9 +378,12 @@ export function resolveRunSegmentDiffPreview(detailText: string): {
   return {
     value: focusedTextLines.join("\n") || previewText || rawText,
     diffLines: {
-      added: added.length > 0 ? added : undefined,
-      removed: removed.length > 0 ? removed : undefined,
+      added: buildLineNumberRanges(added),
+      removed: buildLineNumberRanges(removed),
     },
+    customLineNumbers: customLineNumbers.some((lineNumber) => String(lineNumber).trim().length > 0)
+      ? customLineNumbers
+      : undefined,
   };
 }
 
@@ -640,18 +705,19 @@ export function SessionRunSegmentItem(props: SessionRunSegmentItemProps): JSX.El
     : "";
   const effectiveEditDetailPayload = editDiffPayload || editContentPayload || detailPayload;
   const detailCodeLanguage = resolveRunSegmentDetailLanguage(detailPayload, segment.text);
-  const shouldUseDiffCode = (
-    richMeta?.type === "edit"
-      ? editDiffPayload.length > 0
-      : detailCodeLanguage === "diff"
-  ) && effectiveEditDetailPayload.length > 0;
+  const diffDetailPayload = richMeta?.type === "edit"
+    ? (editDiffPayload || detailPayload)
+    : detailPayload;
+  const shouldUseDiffCode = resolveRunSegmentDetailLanguage(diffDetailPayload, segment.text) === "diff"
+    && diffDetailPayload.length > 0;
   const detailCodePreview = shouldUseDiffCode
-    ? resolveRunSegmentDiffPreview(richMeta?.type === "edit" ? editDiffPayload : detailPayload)
+    ? resolveRunSegmentDiffPreview(diffDetailPayload)
     : {
       value: richMeta?.type === "edit"
         ? effectiveEditDetailPayload
         : detailPayload,
       diffLines: undefined,
+      customLineNumbers: undefined,
     };
   const detailCodeValue = detailCodePreview.value;
   const detailCodePath = richMeta?.type === "edit" ? richMeta.filePath : undefined;
@@ -660,6 +726,9 @@ export function SessionRunSegmentItem(props: SessionRunSegmentItemProps): JSX.El
     : (shouldUseDiffCode ? resolveRunSegmentDetailLanguage(detailCodeValue, segment.text) : detailCodeLanguage);
   const detailCodeDiffLines = shouldUseDiffCode
     ? detailCodePreview.diffLines
+    : undefined;
+  const detailCodeCustomLineNumbers = shouldUseDiffCode
+    ? detailCodePreview.customLineNumbers
     : undefined;
   const detailCodeAddedCount = richMeta?.type === "edit" ? richMeta.added : undefined;
   const detailCodeRemovedCount = richMeta?.type === "edit" ? richMeta.removed : undefined;
@@ -714,12 +783,13 @@ export function SessionRunSegmentItem(props: SessionRunSegmentItemProps): JSX.El
                 addedCount={detailCodeAddedCount}
                 removedCount={detailCodeRemovedCount}
                 diffLines={detailCodeDiffLines}
+                customLineNumbers={detailCodeCustomLineNumbers}
                 value={detailCodeValue}
                 editable={false}
                 showToolbar={false}
                 showCopyButton
                 showLanguageTag={false}
-                showLineNumbers={resolvedDetailCodeLanguage !== "text"}
+                showLineNumbers={resolvedDetailCodeLanguage !== "text" || Boolean(detailCodeCustomLineNumbers)}
                 fontSize="sm"
                 height={resolveRunSegmentCodeHeight(detailCodeValue)}
               />

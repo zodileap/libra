@@ -3,9 +3,6 @@ import { SessionPage } from "../../../widgets/session/page";
 import { AGENT_SESSION_UI_CONFIG } from "../../../widgets/session/config";
 import type {
   AiKeyItem,
-  BlenderBridgeEnsureOptions,
-  BlenderBridgeEnsureResult,
-  BlenderBridgeRuntime,
   LoginUser,
   DccMcpCapabilities,
 } from "../../../shared/types";
@@ -16,8 +13,6 @@ import type {
 interface AgentSessionPageProps {
   currentUser?: LoginUser | null;
   dccMcpCapabilities: DccMcpCapabilities;
-  blenderBridgeRuntime: BlenderBridgeRuntime;
-  ensureBlenderBridge: (options?: BlenderBridgeEnsureOptions) => Promise<BlenderBridgeEnsureResult>;
   aiKeys: AiKeyItem[];
 }
 

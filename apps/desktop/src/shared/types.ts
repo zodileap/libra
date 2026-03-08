@@ -97,30 +97,6 @@ export interface AiKeyItem {
   updatedAt: string;
 }
 
-// 描述:
-//
-//   - 定义 Blender Bridge 运行时状态结构。
-export interface BlenderBridgeRuntime {
-  checking: boolean;
-  ok: boolean | null;
-  message: string;
-}
-
-// 描述:
-//
-//   - 定义 Blender Bridge 检测结果结构。
-export interface BlenderBridgeEnsureResult {
-  ok: boolean;
-  message: string;
-}
-
-// 描述:
-//
-//   - 定义 Blender Bridge 检测选项结构。
-export interface BlenderBridgeEnsureOptions {
-  forceInstall?: boolean;
-}
-
 // 描述：
 //
 //   - 定义桌面端更新状态枚举。

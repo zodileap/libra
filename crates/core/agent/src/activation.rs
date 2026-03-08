@@ -134,7 +134,7 @@ pub fn validate_activation_code_with_options(
             return ActivationValidationResult::invalid(
                 "core.activation.agent_mismatch",
                 format!(
-                    "activation code agent mismatch: expected `{}`, got `{}`",
+                    "activation target mismatch: expected `{}`, got `{}`",
                     expected_agent, parts.agent_key
                 ),
             );

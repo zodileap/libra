@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { AriButton, AriContainer, AriFlex, AriInput, AriTypography } from "aries_react";
+import { AriButton, AriContainer, AriFlex, AriInput, AriTag, AriTypography } from "aries_react";
 import {
   bootstrapProjectWorkspaceProfile,
   PROJECT_WORKSPACE_GROUPS_UPDATED_EVENT,
@@ -14,8 +14,10 @@ import {
   type ProjectWorkspaceProfile,
 } from "../../../shared/data";
 import { MCP_PAGE_PATH } from "../../common/routes";
+import { type McpOverview, listMcpOverview } from "../../common/services/mcps";
+import { type DccRuntimeStatus, checkDccRuntimeStatus, normalizeInvokeError } from "../../../shared/services/dcc-runtime";
 import { useDesktopHeaderSlot } from "../../../widgets/app-header/header-slot-context";
-import { DeskEmptyState, DeskSectionTitle, DeskSettingsRow } from "../../../widgets/settings-primitives";
+import { DeskEmptyState, DeskSectionTitle, DeskSettingsRow, DeskStatusText } from "../../../widgets/settings-primitives";
 
 // 描述：
 //
@@ -105,6 +107,114 @@ function normalizeProfileDraftTextList(value: unknown): string[] {
     .map((item) => String(item || "").trim())
     .filter((item) => item.length > 0);
   return normalized.filter((item, index) => normalized.indexOf(item) === index);
+}
+
+// 描述：
+//
+//   - 创建空的 MCP 总览对象，避免页面首屏阶段反复判空。
+//
+// Returns:
+//
+//   - 空的 MCP 总览。
+function createEmptyMcpOverview(): McpOverview {
+  return {
+    registered: [],
+    templates: [],
+  };
+}
+
+// 描述：
+//
+//   - 将 DCC 软件标识转换为用户可读标签，统一项目设置页与 MCP 页的软件展示口径。
+//
+// Params:
+//
+//   - software: DCC 软件标识。
+//
+// Returns:
+//
+//   - 软件标签。
+function buildDccSoftwareLabel(software: string): string {
+  const normalized = String(software || "").trim().toLowerCase();
+  if (normalized === "blender") {
+    return "Blender";
+  }
+  if (normalized === "maya") {
+    return "Maya";
+  }
+  if (normalized === "c4d") {
+    return "C4D";
+  }
+  return normalized || "未命名软件";
+}
+
+// 描述：
+//
+//   - 归并 MCP 总览中的 DCC 软件列表，优先保留启用的软件，再补齐模板中的候选软件。
+//
+// Params:
+//
+//   - overview: MCP 总览。
+//
+// Returns:
+//
+//   - 去重且保持顺序的软件列表。
+function collectProjectDccSoftware(overview: McpOverview): string[] {
+  const softwareList = [
+    ...overview.registered
+      .filter((item) => item.domain === "dcc" && item.runtimeKind === "dcc_bridge" && item.enabled)
+      .map((item) => item.software),
+    ...overview.templates
+      .filter((item) => item.domain === "dcc" && item.runtimeKind === "dcc_bridge")
+      .map((item) => item.software),
+  ]
+    .map((item) => String(item || "").trim().toLowerCase())
+    .filter((item) => item.length > 0);
+  return softwareList.filter((item, index) => softwareList.indexOf(item) === index);
+}
+
+// 描述：
+//
+//   - 根据 DCC Runtime 状态生成项目设置页中的摘要文案，帮助快速判断当前项目缺失的环境。
+//
+// Params:
+//
+//   - status: DCC Runtime 状态。
+//
+// Returns:
+//
+//   - 面向项目设置页的摘要文案。
+function buildDccRuntimeRequirementSummary(status: DccRuntimeStatus): string {
+  const modeLabel = status.supportsAutoPrepare ? "支持自动准备" : "需手动准备";
+  const envLabel = status.requiredEnvKeys.length > 0
+    ? `环境变量 ${status.requiredEnvKeys.join(" / ")}`
+    : "无需额外环境变量";
+  const stateLabel = status.available ? "已连通" : "未就绪";
+  return `${stateLabel}，${modeLabel}，${envLabel}`;
+}
+
+// 描述：
+//
+//   - 在运行时状态读取失败时构造兜底对象，保证项目设置页仍可展示可理解的失败信息。
+//
+// Params:
+//
+//   - software: DCC 软件标识。
+//   - error: 读取运行时状态时抛出的异常。
+//
+// Returns:
+//
+//   - 兜底的 DCC Runtime 状态。
+function buildDccRuntimeFallbackStatus(software: string, error: unknown): DccRuntimeStatus {
+  return {
+    available: false,
+    software,
+    message: normalizeInvokeError(error),
+    resolvedPath: "",
+    runtimeKind: "dcc_bridge",
+    requiredEnvKeys: [],
+    supportsAutoPrepare: software === "blender",
+  };
 }
 
 const PROJECT_PROFILE_SECTION_KEYS = {
@@ -424,6 +534,9 @@ export function ProjectSettingsPage() {
   const [projectProfileJsonStatus, setProjectProfileJsonStatus] = useState("");
   const [profileSyncStatus, setProfileSyncStatus] = useState("");
   const [regeneratingProfile, setRegeneratingProfile] = useState(false);
+  const [projectMcpOverview, setProjectMcpOverview] = useState<McpOverview>(createEmptyMcpOverview);
+  const [projectMcpStatus, setProjectMcpStatus] = useState("");
+  const [projectDccRuntimeStatusMap, setProjectDccRuntimeStatusMap] = useState<Record<string, DccRuntimeStatus>>({});
   const skipAutoSaveRef = useRef(true);
   const skipProfileAutoSaveRef = useRef(true);
   const profileRevisionRef = useRef(0);
@@ -576,6 +689,61 @@ export function ProjectSettingsPage() {
       window.clearTimeout(timer);
     };
   }, [workspaceId, workspace, projectProfileDraft]);
+
+  // 描述：
+  //
+  //   - 读取当前项目的 workspace 级 MCP 配置，并补充 DCC Runtime 摘要，避免用户必须跳转到 MCP 页面才能判断当前项目缺失的运行时环境。
+  useEffect(() => {
+    if (!workspaceId || !workspace?.path) {
+      setProjectMcpOverview(createEmptyMcpOverview());
+      setProjectMcpStatus("");
+      setProjectDccRuntimeStatusMap({});
+      return;
+    }
+    let disposed = false;
+    const loadProjectMcpState = async () => {
+      setProjectMcpStatus("正在检查当前项目的 MCP 与 DCC Runtime...");
+      try {
+        const overview = await listMcpOverview({ workspaceRoot: workspace.path });
+        if (disposed) {
+          return;
+        }
+        setProjectMcpOverview(overview);
+        const dccSoftwareList = collectProjectDccSoftware(overview);
+        const runtimeEntries = await Promise.all(
+          dccSoftwareList.map(async (software) => {
+            try {
+              const status = await checkDccRuntimeStatus(software);
+              return [software, status] as const;
+            } catch (err) {
+              return [software, buildDccRuntimeFallbackStatus(software, err)] as const;
+            }
+          }),
+        );
+        if (disposed) {
+          return;
+        }
+        setProjectDccRuntimeStatusMap(Object.fromEntries(runtimeEntries));
+        const enabledDccCount = overview.registered.filter((item) => item.domain === "dcc" && item.enabled).length;
+        setProjectMcpStatus(
+          enabledDccCount > 0
+            ? `当前项目已启用 ${enabledDccCount} 个 DCC MCP。`
+            : "当前项目尚未启用 DCC MCP，可先在项目 MCP 中选择软件。",
+        );
+      } catch (err) {
+        if (disposed) {
+          return;
+        }
+        setProjectMcpOverview(createEmptyMcpOverview());
+        setProjectDccRuntimeStatusMap({});
+        setProjectMcpStatus(`项目 MCP 读取失败：${normalizeInvokeError(err)}`);
+      }
+    };
+    void loadProjectMcpState();
+    return () => {
+      disposed = true;
+    };
+  }, [workspaceId, workspace?.path]);
 
   // 描述：
   //
@@ -774,6 +942,34 @@ export function ProjectSettingsPage() {
 
   // 描述：
   //
+  //   - 计算当前项目已启用的 DCC MCP 列表，后续用于软件标签与运行时摘要展示。
+  const enabledDccRegistrations = useMemo(
+    () => projectMcpOverview.registered.filter((item) => item.domain === "dcc" && item.runtimeKind === "dcc_bridge" && item.enabled),
+    [projectMcpOverview],
+  );
+
+  // 描述：
+  //
+  //   - 计算当前项目可直接接入的 DCC 模板列表，帮助项目设置页展示候选软件与文档入口。
+  const dccTemplateItems = useMemo(
+    () => projectMcpOverview.templates.filter((item) => item.domain === "dcc" && item.runtimeKind === "dcc_bridge"),
+    [projectMcpOverview],
+  );
+
+  // 描述：
+  //
+  //   - 汇总需要展示 Runtime 要求的软件列表；优先展示当前项目已启用的软件，未启用时回退到模板列表。
+  const projectDccRuntimeSoftware = useMemo(() => {
+    const preferred = enabledDccRegistrations.map((item) => item.software);
+    const fallback = dccTemplateItems.map((item) => item.software);
+    const combined = (preferred.length > 0 ? preferred : fallback)
+      .map((item) => String(item || "").trim().toLowerCase())
+      .filter((item) => item.length > 0);
+    return combined.filter((item, index) => combined.indexOf(item) === index);
+  }, [dccTemplateItems, enabledDccRegistrations]);
+
+  // 描述：
+  //
   //   - 打开当前项目的 MCP 配置页，并将项目 ID 透传给 MCP 页面用于 workspace 级注册表编辑。
   const handleOpenWorkspaceMcpPage = () => {
     if (!workspaceId) {
@@ -855,6 +1051,89 @@ export function ProjectSettingsPage() {
                 minWidth={360}
               />
             </AriContainer>
+          </AriContainer>
+        </AriContainer>
+
+        <DeskSectionTitle title="DCC / MCP" />
+        <AriContainer className="desk-settings-panel">
+          <AriContainer className="desk-project-settings-form" padding={0}>
+            <DeskSettingsRow
+              title="项目级配置"
+              description="workspace 级配置会覆盖同名 user 级 MCP。"
+            >
+              <AriButton
+                type="default"
+                icon="hub"
+                label="打开项目 MCP"
+                size="sm"
+                onClick={handleOpenWorkspaceMcpPage}
+              />
+            </DeskSettingsRow>
+
+            <DeskSettingsRow title="已启用建模软件">
+              <AriFlex align="center" justify="flex-start" space={8}>
+                {enabledDccRegistrations.length > 0 ? enabledDccRegistrations.map((item) => (
+                  <AriTag
+                    key={`${item.scope}:${item.id}`}
+                    bordered
+                    size="sm"
+                    color="var(--z-color-text-brand)"
+                  >
+                    {buildDccSoftwareLabel(item.software)}
+                  </AriTag>
+                )) : (
+                  <AriTypography variant="caption" value="当前项目尚未启用 DCC MCP。" />
+                )}
+              </AriFlex>
+            </DeskSettingsRow>
+
+            <DeskSettingsRow title="可接入软件">
+              <AriFlex align="center" justify="flex-start" space={8}>
+                {dccTemplateItems.length > 0 ? dccTemplateItems.map((item) => (
+                  <AriTag key={item.id} bordered size="sm">
+                    {buildDccSoftwareLabel(item.software)}
+                  </AriTag>
+                )) : (
+                  <AriTypography variant="caption" value="当前没有可用的 DCC 模板。" />
+                )}
+              </AriFlex>
+            </DeskSettingsRow>
+
+            <DeskSettingsRow title="Runtime 要求">
+              <AriContainer padding={0}>
+                {projectDccRuntimeSoftware.length > 0 ? projectDccRuntimeSoftware.map((software) => {
+                  const runtimeStatus = projectDccRuntimeStatusMap[software];
+                  const value = runtimeStatus
+                    ? `${buildDccSoftwareLabel(software)}：${buildDccRuntimeRequirementSummary(runtimeStatus)}`
+                    : `${buildDccSoftwareLabel(software)}：正在读取 Runtime 状态...`;
+                  return (
+                    <AriTypography
+                      key={software}
+                      variant="caption"
+                      value={value}
+                    />
+                  );
+                }) : (
+                  <AriTypography variant="caption" value="当前没有需要检查的 DCC Runtime。" />
+                )}
+              </AriContainer>
+            </DeskSettingsRow>
+
+            <DeskSettingsRow title="接入文档">
+              <AriContainer padding={0}>
+                {dccTemplateItems.length > 0 ? dccTemplateItems.map((item) => (
+                  <AriTypography
+                    key={`${item.id}:docs`}
+                    variant="caption"
+                    value={`${buildDccSoftwareLabel(item.software)}：${item.docsUrl || "未提供接入文档。"}`}
+                  />
+                )) : (
+                  <AriTypography variant="caption" value="当前没有可显示的接入文档。" />
+                )}
+              </AriContainer>
+            </DeskSettingsRow>
+
+            {projectMcpStatus ? <DeskStatusText value={projectMcpStatus} /> : null}
           </AriContainer>
         </AriContainer>
 

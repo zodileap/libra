@@ -75,9 +75,9 @@ test("TestTauriHealthChecksShouldRunInSpawnBlocking", () => {
 
   // 描述:
   //
-  //   - Bridge/Codex 健康检查应放入后台线程执行，避免阻塞 Tauri 主事件循环导致窗口卡顿。
-  assert.match(source, /async fn check_blender_bridge/);
-  assert.match(source, /spawn_blocking\(move \|\| check_blender_bridge_inner/);
+  //   - DCC Runtime / Codex 健康检查应放入后台线程执行，避免阻塞 Tauri 主事件循环导致窗口卡顿。
+  assert.match(source, /async fn check_dcc_runtime_status/);
+  assert.match(source, /spawn_blocking\(move \|\| \{/);
   assert.match(source, /async fn check_codex_cli_health/);
   assert.match(source, /spawn_blocking\(move \|\| check_codex_cli_health_inner/);
 });

@@ -44,14 +44,14 @@ export function buildUiHintFromProtocolError(
     || lowerMessage.includes("unsupported_action")
   ) {
     return {
-      key: "restart-blender-bridge",
+      key: "check-dcc-runtime",
       level: "warning",
-      title: "需要重启 Blender",
+      title: "需要检查 DCC Runtime",
       message:
         error.suggestion
-        || "Bridge 已自动更新，但当前会话仍是旧版本。请重启 Blender 后点击“我已重启并重试”。",
+        || "DCC Runtime 已自动更新，但当前软件会话仍是旧版本。请重启对应建模软件后点击“我已处理并重试”。",
       actions: [
-        { kind: "retry_last_step", label: "我已重启并重试", intent: "primary" },
+        { kind: "retry_last_step", label: "我已处理并重试", intent: "primary" },
         { kind: "dismiss", label: "暂不处理", intent: "default" },
       ],
     };

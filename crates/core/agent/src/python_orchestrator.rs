@@ -3,7 +3,11 @@ use crate::llm::{parse_provider, LlmUsage};
 use crate::sandbox::{
     BATCH_SIZE_PREFIX, FINAL_RESULT_PREFIX, SANDBOX_ERROR_PREFIX, TOOL_CALL_PREFIX, TURN_END_MARKER,
 };
-use crate::{AgentRunRequest, AgentRunResult, AgentStreamEvent};
+use crate::{AgentRegisteredMcp, AgentRunRequest, AgentRunResult, AgentStreamEvent};
+use libra_mcp_common::{
+    now_millis, ProtocolAssetRecord, ProtocolError, ProtocolEventRecord, ProtocolStepRecord,
+    ProtocolStepStatus,
+};
 use serde_json::{json, Value};
 use std::env;
 use std::io::Write;
@@ -13,10 +17,6 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 use tracing::{info_span, warn};
-use libra_mcp_common::{
-    now_millis, ProtocolAssetRecord, ProtocolError, ProtocolEventRecord, ProtocolStepRecord,
-    ProtocolStepStatus,
-};
 
 #[derive(Debug)]
 pub(crate) struct PythonScriptExecutionResult {
@@ -29,14 +29,15 @@ pub(crate) struct PythonScriptExecutionResult {
 pub(crate) struct PythonScriptExecutionRequest<'a> {
     pub user_script: &'a str,
     pub workdir: Option<&'a str>,
-    pub blender_bridge_addr: Option<&'a str>,
+    pub dcc_provider_addr: Option<&'a str>,
+    pub available_mcps: &'a [AgentRegisteredMcp],
     pub policy: &'a crate::policy::AgentPolicy,
     pub trace_id: String,
     pub session_id: String,
 }
 
 #[derive(Debug, Clone)]
-struct CodeAgentTurnRecord {
+struct AgentTurnRecord {
     turn_index: usize,
     summary: String,
     next: String,
@@ -61,8 +62,8 @@ const TOOL_ARGS_CONTENT_PREVIEW_MAX_CHARS: usize = 240;
 const PLANNING_META_PREFIX: &str = "__libra_planning__:";
 const STREAM_TEXT_MAX_CHARS: usize = 4000;
 
-/// 描述：执行代码智能体 Python 编排主流程，包含脚本生成与沙盒执行。
-pub(crate) fn run_code_agent_with_python_workflow(
+/// 描述：执行智能体 Python 编排主流程，包含脚本生成与沙盒执行。
+pub(crate) fn run_agent_with_python_workflow(
     request: AgentRunRequest,
     policy: crate::policy::AgentPolicy,
     _profile: crate::profile::AgentProfile,
@@ -70,7 +71,7 @@ pub(crate) fn run_code_agent_with_python_workflow(
 ) -> Result<AgentRunResult, ProtocolError> {
     let provider = parse_provider(&request.provider);
     let trace_id = request.trace_id.clone();
-    let max_turns = resolve_code_agent_max_turns();
+    let max_turns = resolve_agent_max_turns();
     let llm_policy = crate::llm::LlmGatewayPolicy {
         timeout_secs: policy.llm_timeout_secs,
         retry_policy: policy.llm_retry_policy,
@@ -80,7 +81,7 @@ pub(crate) fn run_code_agent_with_python_workflow(
     let mut events: Vec<ProtocolEventRecord> = Vec::new();
     let mut assets: Vec<ProtocolAssetRecord> = Vec::new();
     let mut actions: Vec<String> = Vec::new();
-    let mut turn_records: Vec<CodeAgentTurnRecord> = Vec::new();
+    let mut turn_records: Vec<AgentTurnRecord> = Vec::new();
     let mut final_message = String::new();
     let mut completed = false;
 
@@ -130,6 +131,7 @@ pub(crate) fn run_code_agent_with_python_workflow(
             turn_index,
             max_turns,
             &turn_records,
+            request.available_mcps.as_slice(),
         );
         let llm_started_at = now_millis();
         let mut stream_observer = |chunk: &str| {
@@ -177,7 +179,8 @@ pub(crate) fn run_code_agent_with_python_workflow(
             PythonScriptExecutionRequest {
                 user_script: &generated_script,
                 workdir: request.workdir.as_deref(),
-                blender_bridge_addr: request.blender_bridge_addr.as_deref(),
+                dcc_provider_addr: request.dcc_provider_addr.as_deref(),
+                available_mcps: request.available_mcps.as_slice(),
                 policy: &policy,
                 trace_id: trace_id.clone(),
                 session_id: request.session_id.clone(),
@@ -193,7 +196,7 @@ pub(crate) fn run_code_agent_with_python_workflow(
             max_turns,
         );
         final_message = turn_result.summary.clone();
-        turn_records.push(CodeAgentTurnRecord {
+        turn_records.push(AgentTurnRecord {
             turn_index,
             summary: turn_result.summary.clone(),
             next: turn_result.next.clone(),
@@ -313,18 +316,18 @@ fn build_round_description_prompt(
     project_name: Option<&str>,
     turn_index: usize,
     max_turns: usize,
-    turn_records: &[CodeAgentTurnRecord],
+    turn_records: &[AgentTurnRecord],
 ) -> String {
     let project_name_text = project_name
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("未命名项目");
-    let system_prompt = build_system_prompt(crate::flow::AgentKind::Code);
+    let system_prompt = build_system_prompt();
     let turn_context = build_turn_context(turn_records);
 
     format!(
         "{system_prompt}\n\
-你正在执行“多轮代码智能体流程”，当前为第 {turn_index} 轮（最多 {max_turns} 轮）。\n\
+你正在执行“多轮智能体流程”，当前为第 {turn_index} 轮（最多 {max_turns} 轮）。\n\
 本次仅输出“本轮任务描述”，禁止输出代码、列表、序号、Markdown 围栏。\n\
 输出要求：\n\
 1. 仅输出一段中文自然语言，偏口语化，面向用户可读；\n\
@@ -345,18 +348,20 @@ fn build_python_workflow_prompt(
     project_name: Option<&str>,
     turn_index: usize,
     max_turns: usize,
-    turn_records: &[CodeAgentTurnRecord],
+    turn_records: &[AgentTurnRecord],
+    available_mcps: &[AgentRegisteredMcp],
 ) -> String {
     let project_name_text = project_name
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("未命名项目");
-    let system_prompt = build_system_prompt(crate::flow::AgentKind::Code);
+    let system_prompt = build_system_prompt();
     let turn_context = build_turn_context(turn_records);
+    let registered_mcp_context = build_registered_mcp_context(available_mcps);
 
     format!(
         "{system_prompt}\n\
-你正在执行“多轮代码智能体流程”，当前为第 {turn_index} 轮（最多 {max_turns} 轮）。\n\
+你正在执行“多轮智能体流程”，当前为第 {turn_index} 轮（最多 {max_turns} 轮）。\n\
 你必须严格遵守以下输出协议：\n\
 1. 仅输出可执行 Python3 代码，禁止输出 Markdown 围栏与任何自然语言说明。\n\
 2. 第一行必须是 Python 代码（如 import/from/def/class/# 注释），不能是英文句子。\n\
@@ -367,7 +372,7 @@ fn build_python_workflow_prompt(
    NEXT: 下一步要做什么（若 STATUS=DONE 则写“无”）\n\
 5. 禁止输出“我将会...”等计划性句子，计划应写成代码注释。\n\
 6. 禁止导入 `gemini_cli_native_tools` / `codex_tools` / `openai_tools` 等外部工具模块，直接调用内置函数（如 list_directory/write_file/run_shell_command）。\n\
-7. 可用内置工具：read_text/read_json/write_text/write_json/list_dir/list_directory/mkdir/stat/glob/search_files/run_shell/run_shell_command/git_status/git_diff/git_log/apply_patch/todo_read/todo_write/web_search/fetch_url/mcp_model_tool/tool_search。\n\
+7. 可用内置工具：read_text/read_json/write_text/write_json/list_dir/list_directory/mkdir/stat/glob/search_files/run_shell/run_shell_command/git_status/git_diff/git_log/apply_patch/todo_read/todo_write/web_search/fetch_url/mcp_tool/dcc_tool/tool_search。\n\
 8. 工具调用前若不确定参数，必须先执行 `tool_search(\"工具名\", 1)` 查看签名与示例，再落地调用。\n\
 9. 关键签名示例：\n\
    - read_text(path)  # 默认返回文件 content 字符串（非原始响应对象）\n\
@@ -381,9 +386,15 @@ fn build_python_workflow_prompt(
 11. 严禁“只写文档就结束”；必须持续执行，直到需求完成并给出 DONE。\n\
 12. 严格只允许一个顶层 finish(...) 调用；完成本轮子任务后必须立即 finish 结束脚本。\n\
 13. 禁止在同一脚本里拼接第二轮任务或多个 STATUS/SUMMARY/NEXT 区块。\n\
+14. 需要调用 DCC 建模能力时优先使用 `dcc_tool(capability=\"<capability>\", action=\"<tool>\", arguments={{...}}, software=\"<software>\")`；\
+如需跨软件迁移，先调用 `dcc_tool(capability=\"cross_dcc.transfer\", action=\"plan_transfer\", source_software=\"<源软件>\", target_software=\"<目标软件>\", arguments={{...}})` 生成计划。\n\
+15. 需要调用通用外部 MCP 时使用 `mcp_tool(server=\"<id>\", tool=\"<name>\", arguments={{...}})`；\
+如不确定某个 MCP 支持的能力，先调用 `mcp_tool(server=\"<id>\", tool=\"list_tools\")` 进行探测。\n\
 当前项目：{project_name_text}\n\
 历史执行摘要（最近轮次）：\n\
 {turn_context}\n\
+当前已启用的 MCP：\n\
+{registered_mcp_context}\n\
 用户需求：\n\
 {user_prompt}"
     )
@@ -466,8 +477,8 @@ fn normalize_round_description_candidate(raw: &str, turn_index: usize) -> String
     text.to_string()
 }
 
-/// 描述：解析代码智能体多轮上限配置，未配置时默认 6 轮。
-fn resolve_code_agent_max_turns() -> usize {
+/// 描述：解析智能体多轮上限配置，未配置时默认 6 轮。
+fn resolve_agent_max_turns() -> usize {
     env::var("ZODILEAP_CODE_AGENT_MAX_TURNS")
         .ok()
         .and_then(|value| value.trim().parse::<usize>().ok())
@@ -477,7 +488,7 @@ fn resolve_code_agent_max_turns() -> usize {
 }
 
 /// 描述：构建回合上下文摘要，供后续轮次提示词注入，避免模型丢失执行连续性。
-fn build_turn_context(turn_records: &[CodeAgentTurnRecord]) -> String {
+fn build_turn_context(turn_records: &[AgentTurnRecord]) -> String {
     if turn_records.is_empty() {
         return "（首轮执行，无历史上下文）".to_string();
     }
@@ -501,6 +512,81 @@ fn build_turn_context(turn_records: &[CodeAgentTurnRecord]) -> String {
                 item.summary.trim(),
                 next,
                 actions
+            )
+        })
+        .collect::<Vec<String>>()
+        .join("\n")
+}
+
+/// 描述：将当前启用中的 MCP 注册项压缩为提示词上下文，避免把敏感命令、Header 或环境变量直接暴露给模型。
+///
+/// Params:
+///
+///   - available_mcps: 运行时可见的 MCP 注册项。
+///
+/// Returns:
+///
+///   - 适合直接拼接到提示词中的 MCP 摘要文本。
+fn build_registered_mcp_context(available_mcps: &[AgentRegisteredMcp]) -> String {
+    if available_mcps.is_empty() {
+        return "（当前未启用外部 MCP 注册项；如需 DCC 建模能力，请先注册并启用对应的 DCC MCP）"
+            .to_string();
+    }
+
+    available_mcps
+        .iter()
+        .map(|item| {
+            let domain_text = if item.domain.trim().is_empty() {
+                "general".to_string()
+            } else {
+                item.domain.trim().to_string()
+            };
+            let software_text = if item.software.trim().is_empty() {
+                "n/a".to_string()
+            } else {
+                item.software.trim().to_string()
+            };
+            let capability_text = if item.capabilities.is_empty() {
+                "[]".to_string()
+            } else {
+                format!("[{}]", item.capabilities.join(", "))
+            };
+            let runtime_text = if item.runtime_kind.trim().is_empty() {
+                "generic".to_string()
+            } else {
+                item.runtime_kind.trim().to_string()
+            };
+            let provider_text = if item.official_provider.trim().is_empty() {
+                "custom".to_string()
+            } else {
+                item.official_provider.trim().to_string()
+            };
+            let readiness_text = if item.runtime_ready {
+                "ready".to_string()
+            } else {
+                format!(
+                    "not-ready: {}",
+                    item.runtime_hint
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or("运行时未就绪")
+                )
+            };
+            format!(
+                "- id={}; name={}; domain={}; software={}; transport={}; runtime={}; provider={}; priority={}; import={}; export={}; capabilities={}; status={}",
+                item.id,
+                item.name,
+                domain_text,
+                software_text,
+                item.transport,
+                runtime_text,
+                provider_text,
+                item.priority,
+                item.supports_import,
+                item.supports_export,
+                capability_text,
+                readiness_text
             )
         })
         .collect::<Vec<String>>()
@@ -1414,7 +1500,9 @@ fn build_tool_result_stream_data(
             let content_preview = if tool_name == "write_json" {
                 tool_args
                     .get("data")
-                    .map(|value| truncate_stream_text(value.to_string().as_str(), STREAM_TEXT_MAX_CHARS * 4))
+                    .map(|value| {
+                        truncate_stream_text(value.to_string().as_str(), STREAM_TEXT_MAX_CHARS * 4)
+                    })
                     .unwrap_or_default()
             } else {
                 tool_args
@@ -1627,7 +1715,8 @@ where
     let PythonScriptExecutionRequest {
         user_script,
         workdir,
-        blender_bridge_addr,
+        dcc_provider_addr,
+        available_mcps,
         policy,
         trace_id,
         session_id,
@@ -1662,7 +1751,7 @@ where
     let mut plain_stdout_lines: Vec<String> = Vec::new();
     let mut last_event_at = Instant::now();
     let execution_started_at = Instant::now();
-    let registry = build_default_tool_registry(blender_bridge_addr);
+    let registry = build_default_tool_registry(dcc_provider_addr, available_mcps);
 
     loop {
         let now = Instant::now();
@@ -1996,7 +2085,7 @@ use crate::tools::file::{
     WriteJsonTool, WriteTextTool,
 };
 use crate::tools::git::{GitDiffTool, GitLogTool, GitStatusTool};
-use crate::tools::mcp::McpModelTool;
+use crate::tools::mcp::{DccTool, McpTool};
 use crate::tools::patch::ApplyPatchTool;
 use crate::tools::shell::RunShellTool;
 use crate::tools::todo::{TodoReadTool, TodoWriteTool};
@@ -2176,8 +2265,11 @@ fn build_batch_payload(user_script: &str) -> String {
     )
 }
 
-/// 描述：构建代码智能体默认可用的工具注册表。
-fn build_default_tool_registry(blender_bridge_addr: Option<&str>) -> ToolRegistry {
+/// 描述：构建智能体默认可用的工具注册表。
+fn build_default_tool_registry(
+    dcc_provider_addr: Option<&str>,
+    available_mcps: &[AgentRegisteredMcp],
+) -> ToolRegistry {
     #[allow(unused_mut)]
     let mut registry = ToolRegistry::new();
     registry.register(Box::new(ReadTextTool));
@@ -2198,8 +2290,12 @@ fn build_default_tool_registry(blender_bridge_addr: Option<&str>) -> ToolRegistr
     registry.register(Box::new(ApplyPatchTool));
     registry.register(Box::new(WebSearchTool));
     registry.register(Box::new(FetchUrlTool));
-    registry.register(Box::new(McpModelTool {
-        blender_bridge_addr: blender_bridge_addr.map(String::from),
+    registry.register(Box::new(McpTool {
+        dcc_provider_addr: dcc_provider_addr.map(String::from),
+        registered_mcps: available_mcps.to_vec(),
+    }));
+    registry.register(Box::new(DccTool {
+        registered_mcps: available_mcps.to_vec(),
     }));
     registry
 }
@@ -2350,11 +2446,18 @@ fn builtin_tool_descriptors() -> &'static [AgentToolDescriptor] {
             example: r#"tool_search("web", 5)"#,
         },
         AgentToolDescriptor {
-            name: "mcp_model_tool",
-            description: "调用模型 MCP 工具（构建启用时）",
-            params: "action: string, params?: object",
-            tags: &["mcp", "model", "bridge"],
-            example: r#"mcp_model_tool("list_objects", {})"#,
+            name: "mcp_tool",
+            description: "调用已注册的 MCP Server；对未知能力可先用 list_tools 探测",
+            params: "server?: string, tool: string, arguments?: object",
+            tags: &["mcp", "tool", "server", "bridge"],
+            example: r#"mcp_tool(server="apifox-official", tool="list_tools")"#,
+        },
+        AgentToolDescriptor {
+            name: "dcc_tool",
+            description: "调用 DCC 建模能力路由；支持按 capability/software 选择建模软件与生成跨软件迁移计划",
+            params: "capability: string, action: string, arguments?: object, software?: string, source_software?: string, target_software?: string",
+            tags: &["dcc", "mcp", "modeling", "capability", "blender", "maya", "c4d"],
+            example: r#"dcc_tool(capability="mesh.edit", action="list_mesh_objects", arguments={"scope":"selected"}, software="blender")"#,
         },
     ]
 }
@@ -2469,12 +2572,12 @@ fn resolve_sandbox_root(workdir: Option<&str>) -> Result<PathBuf, ProtocolError>
 /// 描述：构建 Python 临时运行目录路径，目录名包含时间戳避免并发冲突。
 #[cfg(test)]
 mod tests {
+    use libra_mcp_common::now_millis;
     use serde_json::json;
     use std::collections::HashSet;
     use std::env;
     use std::fs;
     use std::path::{Path, PathBuf};
-    use libra_mcp_common::now_millis;
 
     // 从 tools 模块导入公共类型
     use super::*;
@@ -2491,6 +2594,23 @@ mod tests {
     use crate::tools::utils::{resolve_executable_binary, resolve_sandbox_path};
     use crate::tools::web::{strip_html_tags, url_encode_component};
     use crate::tools::{AgentTool, ToolContext};
+
+    /// 描述：为并发测试生成唯一沙盒目录，避免多个用例在同一毫秒命中同一路径导致任务清单互相污染。
+    ///
+    /// Returns:
+    ///
+    ///   - 当前测试专用的临时目录路径。
+    fn build_unique_test_root() -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos();
+        env::temp_dir().join(format!(
+            "libra-agent-python-test-{}-{}",
+            now_millis(),
+            nanos
+        ))
+    }
 
     fn build_test_context<'a>(
         sandbox_root: &'a Path,
@@ -2675,7 +2795,7 @@ def main():
         if resolve_python_binary().is_err() {
             return;
         }
-        let root = env::temp_dir().join(format!("libra-agent-python-test-{}", now_millis()));
+        let root = build_unique_test_root();
         fs::create_dir_all(&root).expect("create temp root");
         fs::write(root.join("hello.txt"), "hello").expect("seed test file");
         let script = r#"
@@ -2688,7 +2808,8 @@ finish("python sandbox ok")
             PythonScriptExecutionRequest {
                 user_script: script,
                 workdir: root.to_str(),
-                blender_bridge_addr: None,
+                dcc_provider_addr: None,
+                available_mcps: &[],
                 policy: &crate::policy::AgentPolicy::default(),
                 trace_id: "test-trace".to_string(),
                 session_id: "test-session".to_string(),
@@ -2705,7 +2826,7 @@ finish("python sandbox ok")
         if resolve_python_binary().is_err() {
             return;
         }
-        let root = env::temp_dir().join(format!("libra-agent-python-test-{}", now_millis()));
+        let root = build_unique_test_root();
         fs::create_dir_all(&root).expect("create temp root");
         let script = r#"
 items = list_directory(dir_path=".")
@@ -2715,7 +2836,8 @@ print(f"alias items count: {len(items)}")
             PythonScriptExecutionRequest {
                 user_script: script,
                 workdir: root.to_str(),
-                blender_bridge_addr: None,
+                dcc_provider_addr: None,
+                available_mcps: &[],
                 policy: &crate::policy::AgentPolicy::default(),
                 trace_id: "test-trace".to_string(),
                 session_id: "test-session-alias-tools".to_string(),
@@ -2733,7 +2855,7 @@ print(f"alias items count: {len(items)}")
         if resolve_python_binary().is_err() {
             return;
         }
-        let root = env::temp_dir().join(format!("libra-agent-python-test-{}", now_millis()));
+        let root = build_unique_test_root();
         fs::create_dir_all(&root).expect("create temp root");
         let script = r##"
 result = write_text(file_path="requirements.md", text="# alias write ok\n")
@@ -2745,7 +2867,8 @@ finish("write_text keyword alias ok")
             PythonScriptExecutionRequest {
                 user_script: script,
                 workdir: root.to_str(),
-                blender_bridge_addr: None,
+                dcc_provider_addr: None,
+                available_mcps: &[],
                 policy: &crate::policy::AgentPolicy::default(),
                 trace_id: "test-trace".to_string(),
                 session_id: "test-session-write-text-alias".to_string(),
@@ -2774,7 +2897,7 @@ finish("write_text keyword alias ok")
         if resolve_python_binary().is_err() {
             return;
         }
-        let root = env::temp_dir().join(format!("libra-agent-python-test-{}", now_millis()));
+        let root = build_unique_test_root();
         fs::create_dir_all(&root).expect("create temp root");
         let script = r##"
 result = todo_write("NEXT_STEP", "设计前端框架")
@@ -2786,7 +2909,8 @@ finish("todo_write legacy positional alias ok")
             PythonScriptExecutionRequest {
                 user_script: script,
                 workdir: root.to_str(),
-                blender_bridge_addr: None,
+                dcc_provider_addr: None,
+                available_mcps: &[],
                 policy: &crate::policy::AgentPolicy::default(),
                 trace_id: "test-trace".to_string(),
                 session_id: "test-session-todo-write-legacy-alias".to_string(),
@@ -2806,8 +2930,8 @@ finish("todo_write legacy positional alias ok")
         let todo_path = root.join(".libra_agent_todo.json");
         let todo_content =
             fs::read_to_string(todo_path).expect("todo_write should create todo snapshot file");
-        let parsed: serde_json::Value =
-            serde_json::from_str(todo_content.as_str()).expect("todo snapshot should be valid json");
+        let parsed: serde_json::Value = serde_json::from_str(todo_content.as_str())
+            .expect("todo snapshot should be valid json");
         let items = parsed
             .get("items")
             .and_then(|value| value.as_array())
@@ -2823,7 +2947,10 @@ finish("todo_write legacy positional alias ok")
             "设计前端框架"
         );
         assert_eq!(
-            first.get("status").and_then(|value| value.as_str()).unwrap_or(""),
+            first
+                .get("status")
+                .and_then(|value| value.as_str())
+                .unwrap_or(""),
             "pending"
         );
         assert!(result.actions.iter().any(|item| item == "todo_write"));
@@ -2835,7 +2962,7 @@ finish("todo_write legacy positional alias ok")
         if resolve_python_binary().is_err() {
             return;
         }
-        let root = env::temp_dir().join(format!("libra-agent-python-test-{}", now_millis()));
+        let root = build_unique_test_root();
         fs::create_dir_all(&root).expect("create temp root");
         let script = r##"
 write_result = todo_write([{"id":"step-1","content":"实现页面布局","status":"pending"}])
@@ -2857,7 +2984,8 @@ finish("todo_read default items list ok")
             PythonScriptExecutionRequest {
                 user_script: script,
                 workdir: root.to_str(),
-                blender_bridge_addr: None,
+                dcc_provider_addr: None,
+                available_mcps: &[],
                 policy: &crate::policy::AgentPolicy::default(),
                 trace_id: "test-trace".to_string(),
                 session_id: "test-session-todo-read-default-list".to_string(),
@@ -2884,7 +3012,7 @@ finish("todo_read default items list ok")
         if resolve_python_binary().is_err() {
             return;
         }
-        let root = env::temp_dir().join(format!("libra-agent-python-test-{}", now_millis()));
+        let root = build_unique_test_root();
         fs::create_dir_all(&root).expect("create temp root");
         let legacy_payload = json!({
             "updated_at": now_millis(),
@@ -2918,7 +3046,8 @@ finish("todo_read normalize missing id ok")
             PythonScriptExecutionRequest {
                 user_script: script,
                 workdir: root.to_str(),
-                blender_bridge_addr: None,
+                dcc_provider_addr: None,
+                available_mcps: &[],
                 policy: &crate::policy::AgentPolicy::default(),
                 trace_id: "test-trace".to_string(),
                 session_id: "test-session-todo-read-normalize-missing-id".to_string(),
@@ -2936,7 +3065,7 @@ finish("todo_read normalize missing id ok")
         if resolve_python_binary().is_err() {
             return;
         }
-        let root = env::temp_dir().join(format!("libra-agent-python-test-{}", now_millis()));
+        let root = build_unique_test_root();
         fs::create_dir_all(&root).expect("create temp root");
         fs::write(root.join("note.txt"), "{\"step\":\"ok\"}\n")
             .expect("prepare read_text fixture file");
@@ -2973,7 +3102,8 @@ finish("read_text/read_json default unwrap ok")
             PythonScriptExecutionRequest {
                 user_script: script,
                 workdir: root.to_str(),
-                blender_bridge_addr: None,
+                dcc_provider_addr: None,
+                available_mcps: &[],
                 policy: &crate::policy::AgentPolicy::default(),
                 trace_id: "test-trace".to_string(),
                 session_id: "test-session-read-text-json-default-unwrap".to_string(),
@@ -3000,14 +3130,15 @@ finish("read_text/read_json default unwrap ok")
         if resolve_python_binary().is_err() {
             return;
         }
-        let root = env::temp_dir().join(format!("libra-agent-python-test-{}", now_millis()));
+        let root = build_unique_test_root();
         fs::create_dir_all(&root).expect("create temp root");
         let script = "value = 1 + 1";
         let result = execute_python_script(
             PythonScriptExecutionRequest {
                 user_script: script,
                 workdir: root.to_str(),
-                blender_bridge_addr: None,
+                dcc_provider_addr: None,
+                available_mcps: &[],
                 policy: &crate::policy::AgentPolicy::default(),
                 trace_id: "test-trace".to_string(),
                 session_id: "test-session-empty-result".to_string(),
@@ -3025,7 +3156,7 @@ finish("read_text/read_json default unwrap ok")
         if resolve_python_binary().is_err() {
             return;
         }
-        let root = env::temp_dir().join(format!("libra-agent-python-test-{}", now_millis()));
+        let root = build_unique_test_root();
         fs::create_dir_all(&root).expect("create temp root");
         let raw_script = r#"
 import os
@@ -3044,7 +3175,8 @@ if __name__ == "__main__":
             PythonScriptExecutionRequest {
                 user_script: &prepared_script,
                 workdir: root.to_str(),
-                blender_bridge_addr: None,
+                dcc_provider_addr: None,
+                available_mcps: &[],
                 policy: &crate::policy::AgentPolicy::default(),
                 trace_id: "test-trace".to_string(),
                 session_id: "test-session-requirement-style-script".to_string(),
@@ -3064,7 +3196,7 @@ if __name__ == "__main__":
         if resolve_python_binary().is_err() {
             return;
         }
-        let root = env::temp_dir().join(format!("libra-agent-python-test-{}", now_millis()));
+        let root = build_unique_test_root();
         fs::create_dir_all(&root).expect("create temp root");
         let script = r##"
 def run():
@@ -3079,7 +3211,8 @@ finish("执行完成（系统自动补全 finish）")
             PythonScriptExecutionRequest {
                 user_script: script,
                 workdir: root.to_str(),
-                blender_bridge_addr: None,
+                dcc_provider_addr: None,
+                available_mcps: &[],
                 policy: &crate::policy::AgentPolicy::default(),
                 trace_id: "test-trace".to_string(),
                 session_id: "test-session-multi-finish-priority".to_string(),
@@ -3101,7 +3234,7 @@ finish("执行完成（系统自动补全 finish）")
         if resolve_python_binary().is_err() {
             return;
         }
-        let root = env::temp_dir().join(format!("libra-agent-python-test-{}", now_millis()));
+        let root = build_unique_test_root();
         fs::create_dir_all(&root).expect("create temp root");
         let script = r#"
 print("requirements done")
@@ -3111,7 +3244,8 @@ print("api model done")
             PythonScriptExecutionRequest {
                 user_script: script,
                 workdir: root.to_str(),
-                blender_bridge_addr: None,
+                dcc_provider_addr: None,
+                available_mcps: &[],
                 policy: &crate::policy::AgentPolicy::default(),
                 trace_id: "test-trace".to_string(),
                 session_id: "test-session-plain-print".to_string(),
@@ -3131,7 +3265,7 @@ print("api model done")
         if resolve_python_binary().is_err() {
             return;
         }
-        let root = env::temp_dir().join(format!("libra-agent-python-test-{}", now_millis()));
+        let root = build_unique_test_root();
         fs::create_dir_all(&root).expect("create temp root");
         let session_id = format!("test-session-traceback-{}", now_millis());
         let script = r#"
@@ -3144,7 +3278,8 @@ run()
             PythonScriptExecutionRequest {
                 user_script: script,
                 workdir: root.to_str(),
-                blender_bridge_addr: None,
+                dcc_provider_addr: None,
+                available_mcps: &[],
                 policy: &crate::policy::AgentPolicy::default(),
                 trace_id: "test-trace".to_string(),
                 session_id,
@@ -3205,14 +3340,50 @@ run()
         );
     }
 
+    /// 描述：验证工具目录中的 MCP 条目已切换到通用 `mcp_tool`，避免提示词与运行时入口不一致。
+    #[test]
+    fn should_search_generic_mcp_tool_descriptor() {
+        let result = tool_tool_search(&json!({"query":"mcp","limit":10})).expect("tool search ok");
+        let tools = result
+            .get("tools")
+            .and_then(|value| value.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert!(tools.iter().any(|item| {
+            item.get("name")
+                .and_then(|value| value.as_str())
+                .map(|name| name == "mcp_tool")
+                .unwrap_or(false)
+        }));
+    }
+
+    /// 描述：验证工具目录可检索到 `dcc_tool`，确保建模 Skill 能看到显式 DCC 路由入口。
+    #[test]
+    fn should_search_dcc_tool_descriptor() {
+        let result = tool_tool_search(&json!({"query":"dcc","limit":10})).expect("tool search ok");
+        let tools = result
+            .get("tools")
+            .and_then(|value| value.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert!(tools.iter().any(|item| {
+            item.get("name")
+                .and_then(|value| value.as_str())
+                .map(|name| name == "dcc_tool")
+                .unwrap_or(false)
+        }));
+    }
+
     /// 描述：验证默认工具注册表已接入新增文件工具，避免声明与运行时能力不一致。
     #[test]
     fn should_register_extended_file_tools() {
-        let registry = build_default_tool_registry(None);
+        let registry = build_default_tool_registry(None, &[]);
         assert!(registry.get("write_json").is_some());
         assert!(registry.get("mkdir").is_some());
         assert!(registry.get("stat").is_some());
         assert!(registry.get("glob").is_some());
+        assert!(registry.get("mcp_tool").is_some());
+        assert!(registry.get("dcc_tool").is_some());
     }
 
     /// 描述：验证搜索行解析逻辑能正确拆解 path/line/content 三段信息。
@@ -3624,12 +3795,16 @@ diff --git a/src/a.txt b/src/a.txt
     /// 描述：验证多轮编排脚本提示词不再强制 PLAN 注释协议，避免前端展示固定模板化步骤。
     #[test]
     fn should_not_require_plan_comment_protocol_in_prompt() {
-        let prompt = build_python_workflow_prompt("实现登录页面", Some("demo"), 1, 6, &[]);
+        let prompt = build_python_workflow_prompt("实现登录页面", Some("demo"), 1, 6, &[], &[]);
         assert!(!prompt.contains("# PLAN_TITLE:"));
         assert!(!prompt.contains("# PLAN_STEP_1:"));
         assert!(prompt.contains("STATUS: CONTINUE 或 DONE"));
         assert!(prompt.contains("严格只允许一个顶层 finish"));
         assert!(prompt.contains("tool_search(\"工具名\", 1)"));
+        assert!(prompt.contains("mcp_tool"));
+        assert!(prompt.contains("dcc_tool"));
+        assert!(prompt.contains("plan_transfer"));
+        assert!(prompt.contains("list_tools"));
         assert!(prompt.contains("read_text(path)  # 默认返回文件 content 字符串"));
         assert!(prompt.contains("todo_write(items)"));
         assert!(prompt.contains("禁止 todo_write(\"A\", \"B\")"));
@@ -3641,6 +3816,42 @@ diff --git a/src/a.txt b/src/a.txt
         let prompt = build_round_description_prompt("实现登录页面", Some("demo"), 1, 6, &[]);
         assert!(prompt.contains("本次仅输出“本轮任务描述”"));
         assert!(prompt.contains("禁止输出代码"));
+    }
+
+    /// 描述：验证 Python 编排提示词会注入已启用 MCP 摘要，避免模型看不到外部能力入口。
+    #[test]
+    fn should_include_registered_mcp_context_in_prompt() {
+        let prompt = build_python_workflow_prompt(
+            "同步 Apifox 接口",
+            Some("demo"),
+            1,
+            6,
+            &[],
+            &[AgentRegisteredMcp {
+                id: "apifox-official".to_string(),
+                name: "Apifox 官方 MCP".to_string(),
+                domain: "general".to_string(),
+                software: "".to_string(),
+                capabilities: Vec::new(),
+                priority: 0,
+                supports_import: false,
+                supports_export: false,
+                transport: "stdio".to_string(),
+                command: "/tmp/apifox-mcp".to_string(),
+                args: Vec::new(),
+                env: std::collections::HashMap::new(),
+                cwd: "".to_string(),
+                url: "".to_string(),
+                headers: std::collections::HashMap::new(),
+                runtime_kind: "apifox_runtime".to_string(),
+                official_provider: "Apifox".to_string(),
+                runtime_ready: true,
+                runtime_hint: None,
+            }],
+        );
+        assert!(prompt.contains("当前已启用的 MCP"));
+        assert!(prompt.contains("apifox-official"));
+        assert!(prompt.contains("Apifox 官方 MCP"));
     }
 
     /// 描述：验证未闭合三引号字符串会在顶层 finish(...) 前自动补齐，避免 finish 被吞进字符串导致 SyntaxError。
@@ -3739,13 +3950,8 @@ finish("STATUS: DONE\nSUMMARY: 第二轮完成\nNEXT: 无")
             "path": "/tmp/demo.md",
             "content": "# 标题\n- 列表项\n",
         });
-        let stream_data = build_tool_result_stream_data(
-            "write_text",
-            true,
-            &result_data,
-            &tool_args,
-            None,
-        );
+        let stream_data =
+            build_tool_result_stream_data("write_text", true, &result_data, &tool_args, None);
         assert_eq!(
             stream_data.get("path").and_then(|item| item.as_str()),
             Some("/tmp/demo.md")

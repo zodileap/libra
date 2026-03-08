@@ -36,6 +36,8 @@ export const COMMANDS = {
   SAVE_MCP_REGISTRATION: "save_mcp_registration",
   REMOVE_MCP_REGISTRATION: "remove_mcp_registration",
   VALIDATE_MCP_REGISTRATION: "validate_mcp_registration",
+  CHECK_DCC_RUNTIME_STATUS: "check_dcc_runtime_status",
+  PREPARE_DCC_RUNTIME: "prepare_dcc_runtime",
   RUN_AGENT_COMMAND: "run_agent_command",
   CANCEL_AGENT_SESSION: "cancel_agent_session",
   RESET_AGENT_SANDBOX: "reset_agent_sandbox",

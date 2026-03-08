@@ -12,6 +12,7 @@ export interface AgentSkillItem {
   rootPath: string;
   skillFilePath: string;
   markdownBody: string;
+  runtimeRequirements: Record<string, unknown>;
   removable: boolean;
 }
 
@@ -32,7 +33,26 @@ interface RawAgentSkillItem {
   root_path?: unknown;
   skill_file_path?: unknown;
   markdown_body?: unknown;
+  runtime_requirements?: unknown;
   removable?: unknown;
+}
+
+// 描述：
+//
+//   - 将未知值规整为对象，供技能运行时元数据统一消费；非法值统一回退为空对象。
+//
+// Params:
+//
+//   - rawValue: 原始运行时元数据。
+//
+// Returns:
+//
+//   - 归一化后的运行时元数据对象。
+function normalizeRuntimeRequirements(rawValue: unknown): Record<string, unknown> {
+  if (!rawValue || typeof rawValue !== "object" || Array.isArray(rawValue)) {
+    return {};
+  }
+  return rawValue as Record<string, unknown>;
 }
 
 // 描述：
@@ -65,6 +85,7 @@ function normalizeAgentSkillItem(rawItem: unknown): AgentSkillItem | null {
     rootPath: String(source.root_path || "").trim(),
     skillFilePath,
     markdownBody: String(source.markdown_body || "").trim(),
+    runtimeRequirements: normalizeRuntimeRequirements(source.runtime_requirements),
     removable: Boolean(source.removable),
   };
 }

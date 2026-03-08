@@ -68,16 +68,13 @@ impl ApprovalRegistry {
 pub static APPROVAL_REGISTRY: Lazy<ApprovalRegistry> = Lazy::new(|| ApprovalRegistry {
     pending: Mutex::new(HashMap::new()),
 });
-use flow::{compose_prompt, AgentKind};
-use llm::{parse_provider, LlmUsage};
+use libra_mcp_common::{
+    ProtocolAssetRecord, ProtocolError, ProtocolEventRecord, ProtocolStepRecord, ProtocolUiHint,
+};
+use llm::LlmUsage;
 use policy::AgentPolicy;
 use profile::AgentProfile;
-use serde_json::{json, Value};
-use tracing::{info, info_span};
-use libra_mcp_common::{
-    now_millis, ProtocolAssetRecord, ProtocolError, ProtocolEventRecord, ProtocolStepRecord,
-    ProtocolStepStatus, ProtocolUiHint,
-};
+use serde_json::Value;
 
 #[cfg(feature = "with-mcp-model")]
 pub use libra_mcp_model as mcp_model;
@@ -96,6 +93,31 @@ pub trait AgentExecutor {
     ) -> Result<AgentRunResult, ProtocolError>;
 }
 
+/// 描述：智能体运行时可见的 MCP 注册项快照，统一携带执行所需的最小上下文。
+#[derive(Debug, Clone)]
+pub struct AgentRegisteredMcp {
+    pub id: String,
+    pub name: String,
+    pub domain: String,
+    pub software: String,
+    pub capabilities: Vec<String>,
+    pub priority: i64,
+    pub supports_import: bool,
+    pub supports_export: bool,
+    pub transport: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub env: HashMap<String, String>,
+    pub cwd: String,
+    pub url: String,
+    pub headers: HashMap<String, String>,
+    pub runtime_kind: String,
+    pub official_provider: String,
+    pub runtime_ready: bool,
+    pub runtime_hint: Option<String>,
+}
+
+/// 描述：统一智能体执行请求，承载会话上下文、执行目录以及外部能力注册信息。
 #[derive(Debug, Clone)]
 pub struct AgentRunRequest {
     pub trace_id: String,
@@ -105,9 +127,10 @@ pub struct AgentRunRequest {
     pub prompt: String,
     pub project_name: Option<String>,
     pub model_export_enabled: bool,
-    pub blender_bridge_addr: Option<String>,
+    pub dcc_provider_addr: Option<String>,
     pub output_dir: Option<String>,
     pub workdir: Option<String>,
+    pub available_mcps: Vec<AgentRegisteredMcp>,
 }
 
 #[derive(Debug, Clone)]
@@ -248,19 +271,16 @@ where
     sandbox::SANDBOX_REGISTRY
         .cleanup_idle(Duration::from_secs(policy.sandbox_idle_timeout_mins * 60));
 
-    let agent_kind = parse_agent_kind(&request.agent_key);
-
-    let (executor, profile): (Box<dyn AgentExecutor>, AgentProfile) = match agent_kind {
-        AgentKind::Code => (Box::new(CodeAgentExecutor), AgentProfile::code_default()),
-        AgentKind::Model => (Box::new(ModelAgentExecutor), AgentProfile::model_default()),
-    };
+    let _ = normalize_agent_key(&request.agent_key);
+    let executor: Box<dyn AgentExecutor> = Box::new(UnifiedAgentExecutor);
+    let profile = AgentProfile::default_profile();
 
     executor.run(request, policy, profile, &mut on_stream_event)
 }
 
-struct CodeAgentExecutor;
+struct UnifiedAgentExecutor;
 
-impl AgentExecutor for CodeAgentExecutor {
+impl AgentExecutor for UnifiedAgentExecutor {
     fn run(
         &self,
         request: AgentRunRequest,
@@ -268,7 +288,7 @@ impl AgentExecutor for CodeAgentExecutor {
         profile: AgentProfile,
         on_stream_event: &mut dyn FnMut(AgentStreamEvent),
     ) -> Result<AgentRunResult, ProtocolError> {
-        python_orchestrator::run_code_agent_with_python_workflow(
+        python_orchestrator::run_agent_with_python_workflow(
             request,
             policy,
             profile,
@@ -277,254 +297,10 @@ impl AgentExecutor for CodeAgentExecutor {
     }
 }
 
-struct ModelAgentExecutor;
-
-impl AgentExecutor for ModelAgentExecutor {
-    fn run(
-        &self,
-        request: AgentRunRequest,
-        policy: AgentPolicy,
-        _profile: AgentProfile,
-        on_stream_event: &mut dyn FnMut(AgentStreamEvent),
-    ) -> Result<AgentRunResult, ProtocolError> {
-        let trace_id = request.trace_id.clone();
-        let span = info_span!("model_agent_run", trace_id = %trace_id, agent = %request.agent_key);
-        let _enter = span.enter();
-
-        info!("starting model agent workflow");
-        let agent_kind = AgentKind::Model;
-        on_stream_event(AgentStreamEvent::Planning {
-            message: "正在检查工具调用需求".to_string(),
-        });
-        let mut tool_outcome =
-            maybe_export_model(&request, agent_kind, trace_id.clone(), on_stream_event)?;
-
-        let llm_started = now_millis();
-        on_stream_event(AgentStreamEvent::LlmStarted {
-            provider: request.provider.clone(),
-        });
-
-        let final_prompt = compose_prompt(
-            agent_kind,
-            &request.prompt,
-            tool_outcome.tool_context.as_deref(),
-        );
-        let provider = parse_provider(&request.provider);
-
-        let llm_policy = llm::LlmGatewayPolicy {
-            timeout_secs: policy.llm_timeout_secs,
-            retry_policy: policy.llm_retry_policy,
-        };
-
-        let mut observer = |chunk: &str| {
-            on_stream_event(AgentStreamEvent::LlmDelta {
-                content: chunk.to_string(),
-            });
-        };
-
-        let run_result = llm::call_model_with_policy_and_stream(
-            provider,
-            &final_prompt,
-            request.workdir.as_deref(),
-            llm_policy,
-            Some(&mut observer),
-        )
-        .map_err(|err| err.to_protocol_error())?;
-
-        let reply = run_result.content;
-        let llm_usage = run_result.usage;
-
-        on_stream_event(AgentStreamEvent::LlmFinished {
-            provider: request.provider.clone(),
-        });
-
-        on_stream_event(AgentStreamEvent::Final {
-            message: reply.clone(),
-        });
-
-        let llm_finished = now_millis();
-        tool_outcome.steps.push(ProtocolStepRecord {
-            index: tool_outcome.steps.len(),
-            code: "llm_call".to_string(),
-            status: ProtocolStepStatus::Success,
-            elapsed_ms: llm_finished.saturating_sub(llm_started),
-            summary: format!("provider={} 执行完成", request.provider),
-            error: None,
-            data: Some(json!({
-                "usage": llm_usage,
-            })),
-        });
-        tool_outcome.events.push(ProtocolEventRecord {
-            event: "llm_finished".to_string(),
-            step_index: Some(tool_outcome.steps.len().saturating_sub(1)),
-            timestamp_ms: llm_finished,
-            message: format!("provider={} finished", request.provider),
-        });
-
-        let message = match tool_outcome.tool_context {
-            Some(context) => format!("{}\n\n{}", context, reply),
-            None => reply,
-        };
-
-        Ok(AgentRunResult {
-            trace_id,
-            message,
-            usage: Some(llm_usage),
-            actions: tool_outcome.actions,
-            exported_file: tool_outcome.exported_file,
-            steps: tool_outcome.steps,
-            events: tool_outcome.events,
-            assets: tool_outcome.assets,
-            ui_hint: tool_outcome.ui_hint,
-        })
-    }
-}
-
-#[derive(Debug, Default)]
-struct ToolExecutionOutcome {
-    tool_context: Option<String>,
-    actions: Vec<String>,
-    exported_file: Option<String>,
-    steps: Vec<ProtocolStepRecord>,
-    events: Vec<ProtocolEventRecord>,
-    assets: Vec<ProtocolAssetRecord>,
-    ui_hint: Option<ProtocolUiHint>,
-}
-
-/// 描述：解析 agent_key 到内部智能体类型，未知值默认回退为 Code。
-fn parse_agent_kind(agent_key: &str) -> AgentKind {
-    match agent_key.trim().to_lowercase().as_str() {
-        "model" => AgentKind::Model,
-        _ => AgentKind::Code,
-    }
-}
-
-/// 描述：判断用户输入是否触发“模型导出”路径，用于决定是否调用 MCP 导出。
-fn should_trigger_export(prompt: &str) -> bool {
-    let content = prompt.to_lowercase();
-    if ["导出", "export", "导出模型"]
-        .iter()
-        .any(|keyword| content.contains(keyword))
-    {
-        return true;
-    }
-    let has_output_verb = ["输出", "生成", "export", "output"]
-        .iter()
-        .any(|keyword| content.contains(keyword));
-    let has_format_hint = ["glb", "gltf", "fbx", "obj"]
-        .iter()
-        .any(|keyword| content.contains(keyword));
-    has_output_verb && has_format_hint
-}
-
-#[cfg(feature = "with-mcp-model")]
-/// 描述：在模型能力启用时按需执行导出，并将 MCP 返回结构映射为统一结果。
-fn maybe_export_model<F>(
-    request: &AgentRunRequest,
-    agent_kind: AgentKind,
-    _trace_id: String,
-    on_stream_event: &mut F,
-) -> Result<ToolExecutionOutcome, ProtocolError>
-where
-    F: FnMut(AgentStreamEvent) + ?Sized,
-{
-    if agent_kind == AgentKind::Model
-        && request.model_export_enabled
-        && should_trigger_export(&request.prompt)
-    {
-        let project_name = request
-            .project_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("model-project")
-            .to_string();
-
-        let tool_name = "model.export.blender".to_string();
-        on_stream_event(AgentStreamEvent::ToolCallStarted {
-            name: tool_name.clone(),
-            args: format!("project_name={}", project_name),
-            args_data: json!({
-                "project_name": project_name,
-            }),
-        });
-
-        let export_result = mcp_model::export_model(mcp_model::ExportModelRequest {
-            project_name,
-            prompt: request.prompt.clone(),
-            output_dir: request
-                .output_dir
-                .clone()
-                .unwrap_or_else(|| "exports".to_string()),
-            export_format: None,
-            export_params: None,
-            blender_bridge_addr: request.blender_bridge_addr.clone(),
-            target: mcp_model::ModelToolTarget::Blender,
-        })
-        .map_err(|err| {
-            let protocol_err = err.to_protocol_error();
-            on_stream_event(AgentStreamEvent::Error {
-                code: protocol_err.code.clone(),
-                message: protocol_err.message.clone(),
-            });
-            protocol_err
-        })?;
-
-        on_stream_event(AgentStreamEvent::ToolCallFinished {
-            name: tool_name,
-            ok: true,
-            result: format!("exported_file={}", export_result.exported_file),
-            result_data: json!({
-                "exported_file": export_result.exported_file,
-            }),
-        });
-
-        return Ok(ToolExecutionOutcome {
-            tool_context: Some(format!(
-                "已执行模型导出，文件路径：{}",
-                export_result.exported_file
-            )),
-            actions: vec!["model.export.blender".to_string()],
-            exported_file: Some(export_result.exported_file),
-            steps: export_result.steps,
-            events: export_result.events,
-            assets: export_result.assets,
-            ui_hint: export_result.ui_hint,
-        });
-    }
-
-    Ok(ToolExecutionOutcome::default())
-}
-
-#[cfg(not(feature = "with-mcp-model"))]
-/// 描述：在模型能力未启用时返回明确错误，避免前端误判为运行时故障。
-fn maybe_export_model<F>(
-    request: &AgentRunRequest,
-    agent_kind: AgentKind,
-    _trace_id: String,
-    on_stream_event: &mut F,
-) -> Result<ToolExecutionOutcome, ProtocolError>
-where
-    F: FnMut(AgentStreamEvent) + ?Sized,
-{
-    if agent_kind == AgentKind::Model
-        && request.model_export_enabled
-        && should_trigger_export(&request.prompt)
-    {
-        let protocol_err = ProtocolError::new(
-            "core.agent.feature_disabled",
-            "model export feature is not enabled",
-        )
-        .with_suggestion("重新构建并启用 feature: with-mcp-model");
-
-        on_stream_event(AgentStreamEvent::Error {
-            code: protocol_err.code.clone(),
-            message: protocol_err.message.clone(),
-        });
-
-        return Err(protocol_err);
-    }
-    Ok(ToolExecutionOutcome::default())
+/// 描述：归一化 agent_key；当前统一智能体实现下，所有旧 key 均收敛到同一执行链。
+fn normalize_agent_key(agent_key: &str) -> &'static str {
+    let _ = agent_key;
+    "agent"
 }
 
 #[cfg(test)]
