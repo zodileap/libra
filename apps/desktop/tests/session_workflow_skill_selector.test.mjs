@@ -29,10 +29,10 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
 
   // 描述：
   //
-  //   - 会话页应加载已安装技能并支持本地持久化“工作流/技能”选择。
-  assert.match(sessionSource, /listInstalledSkills/);
-  assert.match(sessionSource, /MODEL_SKILL_SELECTED_KEY/);
-  assert.match(sessionSource, /CODE_SKILL_SELECTED_KEY/);
+  //   - 会话页应加载已安装技能并支持本地持久化“工作流/技能”选择，且只保留统一智能体持久化键。
+  assert.match(sessionSource, /listAgentSkills/);
+  assert.match(sessionSource, /AGENT_SKILL_SELECTED_KEY/);
+  assert.doesNotMatch(sessionSource, /MODEL_SKILL_SELECTED_KEY/);
   assert.match(sessionSource, /readSelectedSkillIds/);
   assert.match(sessionSource, /buildSessionSkillPrompt/);
 
@@ -68,7 +68,7 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(sessionSource, /const initialStreamText = "";/);
   assert.match(sessionSource, /mapAgentTextStreamToRunSegment\(/);
   assert.match(sessionSource, /resolveAssistantRunStageByAgentTextStream\(/);
-  assert.match(sessionSource, /buildAssistantHeartbeatSegment\([\s\S]*agentKind: "model" \| "code"/);
+  assert.match(sessionSource, /function buildAssistantHeartbeatSegment\(/);
   assert.match(sessionSource, /等待工具返回本步结果…/);
   assert.match(sessionSource, /setAssistantRunMetaMap\(normalizedRunMetaMap\);/);
   assert.match(sessionSource, /const \[expandedRunSegmentDetailMap, setExpandedRunSegmentDetailMap\] = useState<Record<string, boolean>>\(\{\}\);/);
@@ -89,11 +89,11 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(sessionSource, /const agentStreamSeenKeysRef = useRef<Set<string>>\(new Set\(\)\);/);
   assert.match(sessionSource, /finishAssistantRunMessage\(streamMessageId, "finished", response\.message\);/);
   assert.match(sessionSource, /if \(streamMessageIdRef\.current\) \{\s*setStreamingAssistantTarget\(`执行失败：\$\{reason\}`\);\s*finishAssistantRunMessage\(streamMessageIdRef\.current, "failed", `执行失败：\$\{reason\}`\);/s);
-  assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.STARTED\) \{\s*(?:codeAgentLlmDeltaBufferRef\.current = "";\s*)?(?:setSessionAiResponseRaw\(""\);\s*)?setStreamingAssistantTarget\("正在准备执行\.\.\."\);/s);
-  assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.LLM_STARTED\) \{\s*(?:codeAgentLlmDeltaBufferRef\.current = "";\s*)?(?:setSessionAiResponseRaw\(""\);\s*)?setStreamingAssistantTarget\("模型会话已开始，正在执行策略…"\);/s);
+  assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.STARTED\) \{\s*(?:agentLlmDeltaBufferRef\.current = "";\s*)?(?:setSessionAiResponseRaw\(""\);\s*)?setStreamingAssistantTarget\("正在准备执行\.\.\."\);/s);
+  assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.LLM_STARTED\) \{\s*(?:agentLlmDeltaBufferRef\.current = "";\s*)?(?:setSessionAiResponseRaw\(""\);\s*)?setStreamingAssistantTarget\("正在生成执行结果…"\);/s);
   assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.LLM_FINISHED\) \{/);
   assert.match(sessionSource, /if \(\s*payload\.kind === STREAM_KINDS\.DELTA[\s\S]*payload\.kind === STREAM_KINDS\.STARTED[\s\S]*payload\.kind === STREAM_KINDS\.LLM_STARTED[\s\S]*payload\.kind === STREAM_KINDS\.LLM_FINISHED[\s\S]*return null;\s*\}/s);
-  assert.match(sessionSource, /buildCodeSessionContextPrompt\(/);
+  assert.match(sessionSource, /buildSessionContextPrompt\(/);
   assert.match(sessionSource, /if \(normalizedSkillIds\.length > 0\) \{\s*setDraftWorkflowId\(""\);\s*setDraftSkillIds\(normalizedSkillIds\);/s);
   assert.match(sessionSource, /setDraftWorkflowId\(item\.key\);\s*setDraftSkillIds\(\[\]\);/s);
   assert.match(sessionSource, /setDraftWorkflowId\(""\);/);
@@ -110,13 +110,13 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(sessionSource, /const streamMessageId = String\(options\?\.replaceAssistantMessageId \|\| ""\)\.trim\(\)/);
   assert.match(sessionSource, /contextMessages\?: MessageItem\[\];/);
   assert.match(sessionSource, /const contextMessages = options\?\.contextMessages \|\| messages;/);
-  assert.match(sessionSource, /function buildCodeSessionContextPrompt\(/);
+  assert.match(sessionSource, /function buildSessionContextPrompt\(/);
   assert.match(sessionSource, /workspacePath\?: string/);
-  assert.match(sessionSource, /projectProfile\?: CodeWorkspaceProjectProfile \| null/);
+  assert.match(sessionSource, /projectProfile\?: ProjectWorkspaceProfile \| null/);
   assert.match(sessionSource, /路径：\$\{normalizedWorkspacePath\}/);
-  assert.match(sessionSource, /buildCodeSessionContextPrompt\(\s*contextMessages,\s*normalizedContent,\s*String\(activeCodeWorkspace\?\.path \|\| ""\)\.trim\(\) \|\| undefined,\s*latestCodeProjectProfile,\s*\)/s);
-  assert.match(sessionSource, /getCodeWorkspaceProjectProfile\(activeCodeWorkspace\.id\)/);
-  assert.match(sessionSource, /workdir: String\(activeCodeWorkspace\?\.path \|\| ""\)\.trim\(\) \|\| undefined,/);
+  assert.match(sessionSource, /buildSessionContextPrompt\(\s*contextMessages,\s*normalizedContent,\s*String\(activeWorkspace\?\.path \|\| ""\)\.trim\(\) \|\| undefined,\s*latestProjectProfile,\s*\)/s);
+  assert.match(sessionSource, /getProjectWorkspaceProfile\(activeWorkspace\.id\)/);
+  assert.match(sessionSource, /workdir: String\(activeWorkspace\?\.path \|\| ""\)\.trim\(\) \|\| undefined,/);
   assert.match(sessionSource, /function pruneAssistantRetryTail\(/);
   assert.match(sessionSource, /const PLANNING_META_PREFIX = "__libra_planning__:";/);
   assert.match(sessionSource, /const INITIAL_THINKING_SEGMENT_ROLE = "initial_thinking";/);
@@ -210,9 +210,7 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(sessionSource, /className="desk-msg-user-surface"/);
   assert.match(sessionSource, /className="desk-msg-assistant-surface"/);
   assert.match(sessionSource, /className="desk-run-failure-card"/);
-  assert.match(sessionSource, /if \(nextSkillIds\.length > 0\) \{\s*setSelectedModelSkillIds\(nextSkillIds\);\s*setSelectedModelWorkflowId\(""\);/s);
-  assert.match(sessionSource, /if \(nextSkillIds\.length > 0\) \{\s*setSelectedCodeSkillIds\(nextSkillIds\);\s*setSelectedCodeWorkflowId\(""\);/s);
-
+  assert.match(sessionSource, /if \(nextSkillIds\.length > 0\) \{\s*setSelectedSkillIds\(nextSkillIds\);\s*setSelectedWorkflowId\(""\);/s);
   // 描述：
   //
   //   - 样式层应提供弹窗列表与选中态样式，确保与设计图一致的列表结构。

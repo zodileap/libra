@@ -1,0 +1,223 @@
+version: 2
+service:
+  name: libra-backend
+  kind: monolith-http-service
+  language: go
+  module: github.com/zodileap/libra/services
+  entrypoint:
+    command: go run ./cmd/server
+    source: services/cmd/server/main.go
+  public_base_url:
+    default: http://127.0.0.1:10001
+  listen:
+    host_default: 127.0.0.1
+    port_default: 10001
+  deployment_model:
+    external_address_count: 1
+    desktop_configuration_mode: single_base_url
+repository_layout:
+  root: services
+  directories:
+    - path: services/cmd/server
+      purpose: unified backend startup entry
+    - path: services/internal/backend
+      purpose: unified backend config loader and route dispatcher
+    - path: services/internal/account
+      purpose: account domain implementation
+    - path: services/internal/runtime
+      purpose: runtime domain implementation
+    - path: services/internal/setup
+      purpose: setup domain implementation and embedded setup page
+    - path: services/contracts
+      purpose: structured contracts for cross-language reimplementation
+    - path: services/data/account
+      purpose: account local state storage
+    - path: services/data/runtime
+      purpose: runtime local state storage
+    - path: services/data/setup
+      purpose: setup local state storage
+routing:
+  dispatcher_source: services/internal/backend/server.go
+  rules:
+    - match_prefix: /auth/v1/
+      domain: account
+      contract: services/contracts/account.yaml
+      handler_package: services/internal/account/api
+    - match_prefix: /workflow/v1/
+      domain: runtime
+      contract: services/contracts/runtime.yaml
+      handler_package: services/internal/runtime/api
+    - match_prefix: /
+      domain: setup
+      contract: services/contracts/setup.yaml
+      handler_package: services/internal/setup/api
+http_conventions:
+  cors:
+    allow_origin:
+      default: "*"
+      env: LIBRA_BACKEND_ALLOWED_ORIGINS
+    allow_methods:
+      - GET
+      - POST
+      - PUT
+      - DELETE
+      - OPTIONS
+  content_type:
+    success_json: application/json; charset=utf-8
+    html_setup_page: text/html; charset=utf-8
+  envelope:
+    success_schema: SuccessEnvelope
+    error_schema: ErrorEnvelope
+schemas:
+  SuccessEnvelope:
+    type: object
+    required:
+      - code
+      - message
+      - data
+    properties:
+      code:
+        type: integer
+        required: true
+        enum:
+          - 200
+      message:
+        type: string
+        required: true
+        enum:
+          - ok
+      data:
+        type: object
+        required: true
+        description: domain-specific payload defined in account/runtime/setup contract
+  ErrorEnvelope:
+    type: object
+    required:
+      - code
+      - message
+      - data
+    properties:
+      code:
+        type: integer
+        required: true
+        description: domain-specific business code
+      message:
+        type: string
+        required: true
+        description: user-facing localized message
+      data:
+        type: object
+        required: true
+        fixed_value: {}
+shared_environment:
+  - name: LIBRA_BACKEND_PORT
+    type: integer
+    required: false
+    default: 10001
+    effect: unified backend listen port
+  - name: LIBRA_BACKEND_HOST
+    type: string
+    required: false
+    default: 127.0.0.1
+    effect: public host used to derive base url when explicit base url is absent
+  - name: LIBRA_BACKEND_BASE_URL
+    type: string
+    required: false
+    default: http://127.0.0.1:10001
+    effect: explicit external base url used by setup domain when it renders absolute links
+  - name: LIBRA_BACKEND_ALLOWED_ORIGINS
+    type: string
+    required: false
+    default: "*"
+    format: comma-separated origins
+    effect: cors allow list
+  - name: LIBRA_BACKEND_DATA_DIR
+    type: string
+    required: false
+    default: ./data
+    effect: shared root for account/runtime/setup data directories when domain-specific overrides are absent
+  - name: LIBRA_ACCOUNT_DATA_DIR
+    type: string
+    required: false
+    default: services/data/account
+    effect: account state directory override
+  - name: LIBRA_RUNTIME_DATA_DIR
+    type: string
+    required: false
+    default: services/data/runtime
+    effect: runtime state directory override
+  - name: LIBRA_SETUP_DATA_DIR
+    type: string
+    required: false
+    default: services/data/setup
+    effect: setup state directory override
+  - name: LIBRA_ACCOUNT_TOKEN_TTL_SECONDS
+    type: integer
+    required: false
+    default: 86400
+    effect: account bearer token ttl in seconds
+  - name: LIBRA_SETUP_TOKEN
+    type: string
+    required: false
+    default: ""
+    effect: bootstrap token used during first admin creation
+  - name: LIBRA_ACCOUNT_BOOTSTRAP_TOKEN
+    type: string
+    required: false
+    default: ""
+    effect: legacy-compatible fallback when LIBRA_SETUP_TOKEN is empty
+  - name: LIBRA_SETUP_VERSION
+    type: string
+    required: false
+    default: 0.1.0
+    effect: version written into finalize result and installation metadata
+startup:
+  recommended_script:
+    path: scripts/start-open-source-stack.sh
+    behavior:
+      - create services/data/account, services/data/runtime, services/data/setup
+      - create tmp/open-source-stack/logs
+      - run go run ./cmd/server inside services
+      - wait for GET /setup/v1/status to return 200
+      - print backend base url and setup page url
+  direct_command:
+    cwd: services
+    command: go run ./cmd/server
+examples:
+  startup:
+    command:
+      cwd: services
+      run: go run ./cmd/server
+    base_url: http://127.0.0.1:10001
+    setup_page: http://127.0.0.1:10001/setup
+  route_dispatch:
+    - request_path: /auth/v1/login
+      resolved_domain: account
+    - request_path: /workflow/v1/session
+      resolved_domain: runtime
+    - request_path: /setup/v1/status
+      resolved_domain: setup
+  envelope:
+    success:
+      code: 200
+      message: ok
+      data:
+        anyDomainPayload: true
+    error:
+      code: 500001
+      message: 服务暂时不可用，请稍后重试。
+      data: {}
+contract_sync_rules:
+  must_update_same_change_when:
+    - route is added, removed, renamed, or re-routed
+    - request schema changes
+    - response schema changes
+    - error code or message contract changes
+    - environment variable changes
+    - local file storage schema changes
+    - setup database metadata table changes
+    - startup command or deployment model changes
+notes:
+  - initialization ui is embedded into setup domain and served by the unified backend
+  - desktop should only configure one backend base url
+  - cmd/account, cmd/runtime, and cmd/setup remain debug entries and are not the default deployment model

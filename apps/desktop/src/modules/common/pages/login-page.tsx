@@ -79,7 +79,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
       <AriCard className="desk-login-card">
         <AriFlex vertical align="flex-start" justify="flex-start" space={14}>
           <AriTypography variant="h1" value="Libra" />
-          <AriTypography variant="caption" value="登录后访问代码智能体和模型智能体" />
+          <AriTypography variant="caption" value="登录后访问统一智能体工作台" />
 
           <AriInput
             label="账号"

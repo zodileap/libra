@@ -57,7 +57,7 @@ export function DevDebugFloat({ visible = true }: DevDebugFloatProps) {
       return "";
     }
     const pathname = String(window.location.pathname || "");
-    const matched = pathname.match(/\/agents\/(?:code|model)\/session\/([^/?#]+)/i);
+    const matched = pathname.match(/\/session\/([^/?#]+)/i);
     if (!matched?.[1]) {
       return "";
     }

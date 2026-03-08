@@ -1,0 +1,617 @@
+version: 2
+domain: setup
+route_prefixes:
+  - /
+  - /setup
+  - /setup/v1
+source:
+  handler: services/internal/setup/api/setup.go
+  page_assets: services/internal/setup/api/web/setup.html
+  specs: services/internal/setup/specs/setup.go
+  service: services/internal/setup/service/setup_service.go
+  errors: services/internal/setup/service/errors.go
+  storage: services/internal/setup/service/store.go
+  database_logic: services/internal/setup/service/database.go
+conventions:
+  envelope_ref: services/contracts/backend.yaml#/schemas/SuccessEnvelope
+  error_envelope_ref: services/contracts/backend.yaml#/schemas/ErrorEnvelope
+  auth: none
+  page_delivery:
+    route: /setup
+    content_type: text/html; charset=utf-8
+storage:
+  local_state:
+    type: local_json_file
+    path: services/data/setup/setup-state.json
+    file_permissions: "0600"
+    root_object: setupState
+    fields:
+      setupStatus:
+        type: string
+        required: true
+        enum_ref: setup_status
+      currentStep:
+        type: string
+        required: true
+        enum_ref: setup_step
+      installed:
+        type: boolean
+        required: true
+      installedAt:
+        type: string
+        required: false
+        format: date-time
+      installedVersion:
+        type: string
+        required: false
+      lastError:
+        type: string
+        required: false
+      database:
+        schema: SetupDatabaseState
+        required: false
+      systemConfig:
+        schema: SetupSystemConfigReq
+        required: false
+      admin:
+        schema: SetupAdminSummary
+        required: false
+  postgres_metadata_tables:
+    enabled_when:
+      - ValidateDatabase succeeded with type=postgres
+      - MigrateDatabase or Finalize is executed
+    tables:
+      libra_installation:
+        primary_key: id
+        columns:
+          - { name: id, type: INTEGER, required: true, default: none }
+          - { name: setup_status, type: TEXT, required: true }
+          - { name: current_step, type: TEXT, required: true }
+          - { name: system_name, type: TEXT, required: true, default: '' }
+          - { name: admin_user_id, type: TEXT, required: true, default: '' }
+          - { name: installed, type: BOOLEAN, required: true, default: false }
+          - { name: installed_at, type: TIMESTAMPTZ, required: false }
+          - { name: installed_version, type: TEXT, required: true, default: '' }
+          - { name: updated_at, type: TIMESTAMPTZ, required: true, default: now() }
+      libra_system_settings:
+        primary_key: key
+        columns:
+          - { name: key, type: TEXT, required: true }
+          - { name: value, type: TEXT, required: true }
+          - { name: updated_at, type: TIMESTAMPTZ, required: true, default: now() }
+    finalize_written_keys:
+      - system_name
+      - base_url
+      - default_language
+      - timezone
+      - allow_public_signup
+enums:
+  setup_status:
+    type: string
+    values:
+      - pending
+      - failed
+      - completed
+  setup_step:
+    type: string
+    values:
+      - pending
+      - database_ready
+      - system_ready
+      - admin_ready
+      - completed
+  database_type:
+    type: string
+    values:
+      - postgres
+error_catalog:
+  invalid_param:
+    code: 100002002
+    http_status: 400
+    default_message_examples:
+      - 当前仅支持 PostgreSQL 初始化。
+      - 数据库连接信息不完整，请检查后重试。
+      - 平台访问地址格式不正确，请检查后重试。
+      - 管理员密码长度至少为 6 位。
+  conflict:
+    code: 100004001
+    http_status: 409
+    default_message_examples:
+      - 请先完成数据库连接校验。
+      - 请先完成数据库迁移。
+      - 请先保存系统设置。
+      - 请先创建管理员。
+      - 系统已完成初始化，不能重复执行 finalize。
+  not_found:
+    code: 100005001
+    http_status: 404
+    default_message_examples:
+      - 缺少依赖资源
+  method_not_allowed:
+    code: 100006001
+    http_status: 405
+    default_message_template: "不支持的请求方法: <method>"
+  decode_error:
+    code: 100007001
+    http_status: 400
+    default_message: 请求数据不合法，请检查输入后重试。
+  dependency_error:
+    code: 100009001
+    http_status: 502
+    default_message_examples:
+      - 无法连接数据库，请检查地址、账号和密码后重试。
+      - 执行数据库迁移失败，请检查数据库权限和目标 schema。
+      - 写入系统设置失败，请检查数据库权限。
+  internal_error:
+    code: 500001
+    http_status: 500
+    default_message: 服务暂时不可用，请稍后重试。
+schemas:
+  SetupDatabaseState:
+    type: object
+    required: [type, host, port, user, password, database, isValidated, isMigrated]
+    properties:
+      type: { type: string, required: true, enum_ref: database_type }
+      host: { type: string, required: true }
+      port: { type: integer, required: true }
+      user: { type: string, required: true }
+      password: { type: string, required: true, sensitive: true }
+      database: { type: string, required: true }
+      sslMode: { type: string, required: false, default: disable }
+      validatedAt: { type: string, required: false, format: date-time }
+      migratedAt: { type: string, required: false, format: date-time }
+      isValidated: { type: boolean, required: true }
+      isMigrated: { type: boolean, required: true }
+      lastMigrationReport:
+        type: array
+        required: false
+        items: { type: string }
+  SetupDatabaseConfigReq:
+    type: object
+    required: [type, host, port, user, password, database]
+    properties:
+      type: { type: string, required: true, enum_ref: database_type }
+      host: { type: string, required: true }
+      port: { type: integer, required: true, minimum: 1 }
+      user: { type: string, required: true }
+      password: { type: string, required: true }
+      database: { type: string, required: true }
+      sslMode: { type: string, required: false, default: disable }
+  SetupDatabaseSummary:
+    type: object
+    required: [type, host, port, user, database, isValidated, isMigrated]
+    properties:
+      type: { type: string, required: true, enum_ref: database_type }
+      host: { type: string, required: true }
+      port: { type: integer, required: true }
+      user: { type: string, required: true }
+      database: { type: string, required: true }
+      sslMode: { type: string, required: false }
+      validatedAt: { type: string, required: false, format: date-time }
+      migratedAt: { type: string, required: false, format: date-time }
+      isValidated: { type: boolean, required: true }
+      isMigrated: { type: boolean, required: true }
+      driverRemark: { type: string, required: false, enum: [postgres] }
+  SetupDatabaseValidateResp:
+    type: object
+    required: [validated, summary]
+    properties:
+      validated: { type: boolean, required: true }
+      summary: { schema: SetupDatabaseSummary, required: true }
+  SetupDatabaseMigrateResp:
+    type: object
+    required: [migrated, executedStatements, summary]
+    properties:
+      migrated: { type: boolean, required: true }
+      executedStatements:
+        type: array
+        required: true
+        items: { type: string }
+      summary: { schema: SetupDatabaseSummary, required: true }
+  SetupSystemConfigReq:
+    type: object
+    required: [systemName, baseUrl, defaultLanguage, timezone, allowPublicSignup]
+    properties:
+      systemName: { type: string, required: true }
+      baseUrl: { type: string, required: true, format: uri }
+      defaultLanguage: { type: string, required: true }
+      timezone: { type: string, required: true }
+      allowPublicSignup: { type: boolean, required: true }
+  SetupSystemConfigResp:
+    type: object
+    required: [saved, config]
+    properties:
+      saved: { type: boolean, required: true }
+      config: { schema: SetupSystemConfigReq, required: true }
+  SetupAdminReq:
+    type: object
+    required: [name, email, password]
+    properties:
+      name: { type: string, required: true }
+      email: { type: string, required: true, format: email_like, validation: contains_at_sign }
+      password: { type: string, required: true, min_length: 6 }
+      organizationName: { type: string, required: false }
+  SetupAdminSummary:
+    type: object
+    required: []
+    properties:
+      adminUserId: { type: string, required: false }
+      name: { type: string, required: false }
+      email: { type: string, required: false, format: email }
+  SetupAdminResp:
+    type: object
+    required: [created, admin]
+    properties:
+      created: { type: boolean, required: true }
+      admin: { schema: SetupAdminSummary, required: true }
+  SetupStatusResp:
+    type: object
+    required: [setupStatus, currentStep, installed, accountAvailable, accountInitialized]
+    properties:
+      setupStatus: { type: string, required: true, enum_ref: setup_status }
+      currentStep: { type: string, required: true, enum_ref: setup_step }
+      installed: { type: boolean, required: true }
+      installedAt: { type: string, required: false, format: date-time }
+      installedVersion: { type: string, required: false }
+      lastError: { type: string, required: false }
+      database: { schema: SetupDatabaseSummary, required: false }
+      systemConfig: { schema: SetupSystemConfigReq, required: false }
+      admin: { schema: SetupAdminSummary, required: false }
+      accountAvailable: { type: boolean, required: true }
+      accountInitialized: { type: boolean, required: true }
+      accountMessage: { type: string, required: false }
+  SetupFinalizeReq:
+    type: object
+    required: []
+    properties:
+      installedVersion: { type: string, required: false, default: LIBRA_SETUP_VERSION or service version }
+  SetupFinalizeResp:
+    type: object
+    required: [completed, status]
+    properties:
+      completed: { type: boolean, required: true }
+      status: { schema: SetupStatusResp, required: true }
+workflow_constraints:
+  database_validate:
+    must_fail_when:
+      - setup already installed
+      - database type is not postgres
+      - host, port, user, password, or database is empty
+  database_migrate:
+    prerequisites:
+      - database has been validated
+      - setup is not installed
+  system_config:
+    prerequisites:
+      - database has been migrated
+      - setup is not installed
+  create_admin:
+    prerequisites:
+      - system config has been saved
+      - setup is not installed
+  finalize:
+    prerequisites:
+      - database migrated
+      - system config saved
+      - admin exists
+      - setup not already completed
+endpoints:
+  - operation_id: rootRedirect
+    method: GET
+    path: /
+    auth: none
+    request:
+      query: []
+      body_schema: null
+    response:
+      type: redirect
+      status_code: 302
+      location: /setup
+    errors: []
+    examples:
+      request:
+        headers: {}
+        query: {}
+        body: null
+      success:
+        status_code: 302
+        headers:
+          Location: /setup
+  - operation_id: setupPage
+    method: GET
+    path: /setup
+    auth: none
+    request:
+      query: []
+      body_schema: null
+    response:
+      type: html
+      source: services/internal/setup/api/web/setup.html
+    errors: []
+    examples:
+      request:
+        headers: {}
+        query: {}
+        body: null
+      success:
+        status_code: 200
+        body_preview: "<!DOCTYPE html>"
+  - operation_id: status
+    method: GET
+    path: /setup/v1/status
+    auth: none
+    request:
+      query: []
+      body_schema: null
+    response:
+      success_schema: SetupStatusResp
+    errors:
+      - internal_error
+    examples:
+      request:
+        headers: {}
+        query: {}
+        body: null
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            setupStatus: pending
+            currentStep: pending
+            installed: false
+            accountAvailable: true
+            accountInitialized: false
+      error:
+        case: internal_error
+        status_code: 500
+        body:
+          code: 500001
+          message: 服务暂时不可用，请稍后重试。
+          data: {}
+  - operation_id: validateDatabase
+    method: POST
+    path: /setup/v1/database/validate
+    auth: none
+    request:
+      query: []
+      body_schema: SetupDatabaseConfigReq
+    response:
+      success_schema: SetupDatabaseValidateResp
+    errors:
+      - invalid_param
+      - conflict
+      - dependency_error
+      - internal_error
+    examples:
+      request:
+        headers: {}
+        query: {}
+        body:
+          type: postgres
+          host: 127.0.0.1
+          port: 5432
+          user: postgres
+          password: secret
+          database: libra
+          sslMode: disable
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            validated: true
+            summary:
+              type: postgres
+              host: 127.0.0.1
+              port: 5432
+              user: postgres
+              database: libra
+              sslMode: disable
+              validatedAt: "2026-03-07T12:00:00Z"
+              isValidated: true
+              isMigrated: false
+              driverRemark: postgres
+      error:
+        case: invalid_param
+        status_code: 400
+        body:
+          code: 100002002
+          message: 当前仅支持 PostgreSQL 初始化。
+          data: {}
+  - operation_id: migrateDatabase
+    method: POST
+    path: /setup/v1/database/migrate
+    auth: none
+    request:
+      query: []
+      body_schema: null
+    response:
+      success_schema: SetupDatabaseMigrateResp
+    errors:
+      - conflict
+      - dependency_error
+      - internal_error
+    examples:
+      request:
+        headers: {}
+        query: {}
+        body: null
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            migrated: true
+            executedStatements:
+              - CREATE TABLE IF NOT EXISTS libra_installation (...)
+              - CREATE TABLE IF NOT EXISTS libra_system_settings (...)
+            summary:
+              type: postgres
+              host: 127.0.0.1
+              port: 5432
+              user: postgres
+              database: libra
+              sslMode: disable
+              validatedAt: "2026-03-07T12:00:00Z"
+              migratedAt: "2026-03-07T12:01:00Z"
+              isValidated: true
+              isMigrated: true
+              driverRemark: postgres
+      error:
+        case: conflict
+        status_code: 409
+        body:
+          code: 100004001
+          message: 请先完成数据库连接校验。
+          data: {}
+  - operation_id: saveSystemConfig
+    method: POST
+    path: /setup/v1/system-config
+    auth: none
+    request:
+      query: []
+      body_schema: SetupSystemConfigReq
+    response:
+      success_schema: SetupSystemConfigResp
+    errors:
+      - invalid_param
+      - conflict
+      - internal_error
+    examples:
+      request:
+        headers: {}
+        query: {}
+        body:
+          systemName: Libra
+          baseUrl: http://127.0.0.1:10001
+          defaultLanguage: zh-CN
+          timezone: Asia/Shanghai
+          allowPublicSignup: false
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            saved: true
+            config:
+              systemName: Libra
+              baseUrl: http://127.0.0.1:10001
+              defaultLanguage: zh-CN
+              timezone: Asia/Shanghai
+              allowPublicSignup: false
+      error:
+        case: invalid_param
+        status_code: 400
+        body:
+          code: 100002002
+          message: 平台访问地址格式不正确，请检查后重试。
+          data: {}
+  - operation_id: createAdmin
+    method: POST
+    path: /setup/v1/admin
+    auth: none
+    request:
+      query: []
+      body_schema: SetupAdminReq
+    response:
+      success_schema: SetupAdminResp
+    errors:
+      - invalid_param
+      - conflict
+      - dependency_error
+      - internal_error
+    examples:
+      request:
+        headers: {}
+        query: {}
+        body:
+          name: Libra Admin
+          email: admin@example.com
+          password: secret123
+          organizationName: Libra
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            created: true
+            admin:
+              adminUserId: usr_example_admin
+              name: Libra Admin
+              email: admin@example.com
+      error:
+        case: conflict
+        status_code: 409
+        body:
+          code: 100004001
+          message: 请先保存系统设置。
+          data: {}
+  - operation_id: finalize
+    method: POST
+    path: /setup/v1/finalize
+    auth: none
+    request:
+      query: []
+      body_schema: SetupFinalizeReq
+    response:
+      success_schema: SetupFinalizeResp
+    errors:
+      - conflict
+      - dependency_error
+      - internal_error
+    examples:
+      request:
+        headers: {}
+        query: {}
+        body:
+          installedVersion: 0.1.0
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            completed: true
+            status:
+              setupStatus: completed
+              currentStep: completed
+              installed: true
+              installedAt: "2026-03-07T12:10:00Z"
+              installedVersion: 0.1.0
+              database:
+                type: postgres
+                host: 127.0.0.1
+                port: 5432
+                user: postgres
+                database: libra
+                sslMode: disable
+                validatedAt: "2026-03-07T12:00:00Z"
+                migratedAt: "2026-03-07T12:01:00Z"
+                isValidated: true
+                isMigrated: true
+                driverRemark: postgres
+              systemConfig:
+                systemName: Libra
+                baseUrl: http://127.0.0.1:10001
+                defaultLanguage: zh-CN
+                timezone: Asia/Shanghai
+                allowPublicSignup: false
+              admin:
+                adminUserId: usr_example_admin
+                name: Libra Admin
+                email: admin@example.com
+              accountAvailable: true
+              accountInitialized: true
+      error:
+        case: conflict
+        status_code: 409
+        body:
+          code: 100004001
+          message: 请先创建管理员。
+          data: {}

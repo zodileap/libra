@@ -19,7 +19,7 @@ function readDesktopSource(relativePath) {
   return fs.readFileSync(absolutePath, "utf8");
 }
 
-test("TestWorkflowSkillExecutionPlanShouldValidateInstallStateAndBuildPrompt", () => {
+test("TestWorkflowSkillExecutionPlanShouldValidateRegistryStateAndBuildPrompt", () => {
   const skillPlanSource = readDesktopSource("src/shared/workflow/skill-plan.ts");
   const workflowStorageSource = readDesktopSource("src/shared/workflow/storage.ts");
   const promptGuidanceSource = readDesktopSource("src/shared/workflow/prompt-guidance.ts");
@@ -31,31 +31,29 @@ test("TestWorkflowSkillExecutionPlanShouldValidateInstallStateAndBuildPrompt", (
 
   // 描述：
   //
-  //   - Skill 计划构建器应通过统一服务读取安装态、识别阻塞项，并生成 Skill 执行计划提示词。
-  assert.match(skillPlanSource, /readInstalledSkillIdsFromStorage/);
+  //   - Skill 计划构建器应基于真实技能注册表校验技能是否存在，并将 `SKILL.md` 正文拼接到执行计划中。
+  assert.match(skillPlanSource, /buildAgentSkillMap/);
   assert.match(skillPlanSource, /status: "missing_skill_id"/);
-  assert.match(skillPlanSource, /status: "not_installed"/);
+  assert.match(skillPlanSource, /status: "not_found"/);
   assert.match(skillPlanSource, /blockingIssues/);
   assert.match(skillPlanSource, /"【Skill 执行计划】"/);
-  assert.match(skillPlanSource, /resolveCodeSkillPromptGuide/);
-  assert.match(skillPlanSource, /能力：/);
-  assert.match(skillPlanSource, /产出：/);
-  assert.match(skillPlanSource, /buildCodeWorkflowSkillExecutionPlan/);
+  assert.match(skillPlanSource, /"【Skill 定义】"/);
+  assert.match(skillPlanSource, /skillMarkdownBody/);
+  assert.match(skillPlanSource, /normalizeAgentSkillId/);
+  assert.match(skillPlanSource, /buildAgentWorkflowSkillExecutionPlan/);
 
   // 描述：
   //
-  //   - 工作流 Prompt 构建应拼接“可用工具集”，并通过技能语义引导替代纯版本号链路。
-  assert.match(promptGuidanceSource, /CODE_AGENT_TOOLSET_LINES/);
+  //   - 工作流 Prompt 构建应仍然拼接“可用工具集”，同时通过技能别名归一化兼容旧工作流。
+  assert.match(promptGuidanceSource, /AGENT_TOOLSET_LINES/);
   assert.match(promptGuidanceSource, /禁止 import 第三方工具模块/);
   assert.match(promptGuidanceSource, /工具调用签名与示例/);
   assert.match(promptGuidanceSource, /todo_write\(items\)/);
-  assert.match(promptGuidanceSource, /错误示例（禁止）：todo_write\(\\"NEXT_STEP\\", \\"设计前端框架\\"\)/);
-  assert.match(promptGuidanceSource, /tool_search\(\\"todo_write\\", 1\)/);
-  assert.match(promptGuidanceSource, /resolveCodeSkillPromptGuide/);
-  assert.match(workflowStorageSource, /CODE_AGENT_TOOLSET_LINES/);
-  assert.match(workflowStorageSource, /const toolsetBlock = \["", \.\.\.CODE_AGENT_TOOLSET_LINES\];/);
-  assert.match(workflowStorageSource, /能力：\$\{normalizedSkill\.objective\}/);
-  assert.match(workflowStorageSource, /产出：\$\{normalizedSkill\.deliverable\}/);
+  assert.match(promptGuidanceSource, /LEGACY_AGENT_SKILL_ID_ALIASES/);
+  assert.match(promptGuidanceSource, /normalizeAgentSkillId/);
+  assert.match(workflowStorageSource, /AGENT_TOOLSET_LINES/);
+  assert.match(workflowStorageSource, /normalizeAgentSkillId/);
+  assert.match(workflowStorageSource, /技能编码 \$\{skillId\}/);
 
   // 描述：
   //
@@ -64,21 +62,22 @@ test("TestWorkflowSkillExecutionPlanShouldValidateInstallStateAndBuildPrompt", (
 
   // 描述：
   //
-  //   - 代码智能体发送前应执行 Skill 计划校验，失败时阻断；成功时将计划拼接到 prompt。
-  assert.match(sessionPageSource, /buildCodeWorkflowSkillExecutionPlan\(selectedCodeWorkflow\)/);
+  //   - 统一智能体发送前应执行 Skill 计划校验，失败时阻断；成功时将计划拼接到 prompt。
+  assert.match(sessionPageSource, /buildAgentWorkflowSkillExecutionPlan\(selectedWorkflow, availableSkills\)/);
   assert.match(sessionPageSource, /if \(skillExecutionPlan\.blockingIssues\.length > 0\)/);
   assert.match(sessionPageSource, /throw new Error\(`技能执行前检查未通过：\$\{skillExecutionPlan\.blockingIssues\.join\("；"\)\}`\)/);
-  assert.match(sessionPageSource, /const latestCodeProjectProfile = activeCodeWorkspace\?\.id\s*\?\s*\(activeCodeProjectProfile \|\| getCodeWorkspaceProjectProfile\(activeCodeWorkspace\.id\)\)\s*:\s*null;/s);
-  assert.match(sessionPageSource, /const codeRequestPrompt = buildCodeSessionContextPrompt\(\s*messages,\s*normalizedContent,\s*undefined,\s*latestCodeProjectProfile,\s*\);/s);
-  assert.match(sessionPageSource, /const contextualCodeRequestPrompt = buildCodeSessionContextPrompt\(\s*contextMessages,\s*normalizedContent,\s*String\(activeCodeWorkspace\?\.path \|\| ""\)\.trim\(\) \|\| undefined,\s*latestCodeProjectProfile,\s*\);/s);
-  assert.match(sessionPageSource, /const codePrompt = skillExecutionPlan\.planPrompt/);
+  assert.match(sessionPageSource, /const latestProjectProfile = activeWorkspace\?\.id\s*\?\s*\(activeProjectProfile \|\| getProjectWorkspaceProfile\(activeWorkspace\.id\)\)\s*:\s*null;/s);
+  assert.match(sessionPageSource, /const currentRequestPrompt = buildSessionContextPrompt\(\s*messages,\s*normalizedContent,\s*undefined,\s*latestProjectProfile,\s*\);/s);
+  assert.match(sessionPageSource, /const contextualRequestPrompt = buildSessionContextPrompt\(\s*contextMessages,\s*normalizedContent,\s*String\(activeWorkspace\?\.path \|\| ""\)\.trim\(\) \|\| undefined,\s*latestProjectProfile,\s*\);/s);
+  assert.match(sessionPageSource, /const agentPrompt = skillExecutionPlan\.planPrompt/);
   assert.match(sessionPageSource, /source: "workflow:skill_plan"/);
-  assert.match(sessionPageSource, /prompt: codePrompt/);
+  assert.match(sessionPageSource, /prompt: agentPrompt/);
+  assert.match(skillPlanSource, /lines\.push\(item\.skillMarkdownBody\);/);
 
   // 描述：
   //
   //   - 结构化项目信息应按需注入，避免首轮请求默认拼接全量项目语义基线。
-  assert.match(sessionPageSource, /const CODE_PROFILE_ON_DEMAND_KEYWORDS = \[/);
+  assert.match(sessionPageSource, /const AGENT_PROFILE_ON_DEMAND_KEYWORDS = \[/);
   assert.match(sessionPageSource, /const shouldAttachProfileContext = isRetryOnlyPrompt\(normalizedCurrentPrompt\)/);
-  assert.match(sessionPageSource, /CODE_PROFILE_ON_DEMAND_KEYWORDS\.some\(\(keyword\) => normalizedCurrentPrompt\.toLowerCase\(\)\.includes\(keyword\.toLowerCase\(\)\)\)/);
+  assert.match(sessionPageSource, /AGENT_PROFILE_ON_DEMAND_KEYWORDS\.some\(\(keyword\) => normalizedCurrentPrompt\.toLowerCase\(\)\.includes\(keyword\.toLowerCase\(\)\)\)/);
 });

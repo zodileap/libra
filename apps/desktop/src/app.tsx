@@ -3,18 +3,31 @@ import { AriApp, AriMessage, setAppConfig, setColorTheme } from "aries_react";
 import { invoke } from "@tauri-apps/api/core";
 import { HashRouter } from "react-router-dom";
 import { DesktopRouter } from "./router";
+import { SetupRequiredPage } from "./modules/common/pages/setup-required-page";
 import { ensureBlenderBridge } from "./shared/services/blender-bridge";
 import {
 	checkDesktopUpdate as requestDesktopUpdateCheck,
 	clearAuthToken,
+	getSetupStatus,
 	getAuthToken,
 	getCurrentUser,
+	getLocalAvailableAgents,
+	getLocalConsoleIdentities,
+	getLocalDesktopUser,
 	listAvailableAgents,
+	listAccountIdentities,
 	loginByPassword,
 	logoutCurrentUser,
 	setAuthToken,
 	setUnauthorizedHandler,
 } from "./shared/services/backend-api";
+import {
+	buildDesktopWebSetupUrl,
+	hasEnabledDesktopBackend,
+	readDesktopBackendConfig,
+	resetDesktopBackendConfig,
+	saveDesktopBackendConfig,
+} from "./shared/services/service-endpoints";
 import type { AuthState } from "./router/types";
 import type {
 	AiKeyItem,
@@ -23,11 +36,18 @@ import type {
 	BlenderBridgeEnsureResult,
 	BlenderBridgeRuntime,
 	ColorThemeMode,
+	ConsoleIdentityItem,
+	DesktopBackendConfig,
 	DesktopUpdateState,
 	LoginUser,
-	ModelMcpCapabilities,
+	DccMcpCapabilities,
+	SetupStatus,
 } from "./shared/types";
-import { COMMANDS, defaultServiceUrl, STORAGE_KEYS } from "./shared/constants";
+import {
+	COMMANDS,
+	defaultServiceUrl,
+	STORAGE_KEYS,
+} from "./shared/constants";
 
 // 描述:
 //
@@ -72,6 +92,42 @@ interface DesktopUpdateStateResponse {
 	progress: number;
 	message: string;
 	download_path?: string;
+}
+
+// 描述：
+//
+//   - 定义桌面端启动初始化检测状态，统一承载是否已安装、提示文案和 Web 初始化地址。
+interface DesktopSetupGateState {
+	checking: boolean;
+	installed: boolean | null;
+	setupUrl: string;
+	message: string;
+	currentStep: string;
+	systemName: string;
+}
+
+// 描述：
+//
+//   - 将 setup 服务状态转换为桌面端可读文案，避免把原始状态枚举直接暴露给最终用户。
+//
+// Params:
+//
+//   - status: setup 服务返回的初始化状态。
+//
+// Returns:
+//
+//   - 面向用户的提示文案。
+function buildSetupGateMessage(status: SetupStatus): string {
+	if (status.lastError) {
+		return `系统尚未完成初始化，最近一次安装错误：${status.lastError}`;
+	}
+	if (status.accountAvailable === false) {
+		return "系统尚未完成初始化，account 服务当前不可用，请先启动 account 和 setup 服务。";
+	}
+	if (status.currentStep) {
+		return `系统尚未完成初始化，请继续执行 ${status.currentStep} 步骤。`;
+	}
+	return "系统尚未完成初始化，请先在 Web 完成安装向导。";
 }
 
 // 描述：
@@ -224,6 +280,63 @@ function mapDesktopUpdateStateResponse(payload: DesktopUpdateStateResponse): Des
 	};
 }
 
+// 描述：
+//
+//   - 读取当前缓存的身份 ID，用于恢复 Desktop 当前管理上下文。
+//
+// Returns:
+//
+//   - 已缓存的身份 ID；不存在时返回空字符串。
+function readStoredSelectedIdentityId(): string {
+	return localStorage.getItem(STORAGE_KEYS.DESKTOP_SELECTED_IDENTITY_ID) || "";
+}
+
+// 描述：
+//
+//   - 持久化当前选中的身份 ID；空值时清理缓存。
+//
+// Params:
+//
+//   - identityId: 当前选中的身份 ID。
+function writeStoredSelectedIdentityId(identityId: string) {
+	if (identityId) {
+		localStorage.setItem(STORAGE_KEYS.DESKTOP_SELECTED_IDENTITY_ID, identityId);
+		return;
+	}
+	localStorage.removeItem(STORAGE_KEYS.DESKTOP_SELECTED_IDENTITY_ID);
+}
+
+// 描述：
+//
+//   - 根据身份列表和缓存 ID 解析当前应选中的身份；若只有一个身份则自动选中。
+//
+// Params:
+//
+//   - identities: 当前可用身份列表。
+//   - preferredIdentityId: 优先尝试恢复的身份 ID。
+//
+// Returns:
+//
+//   - 当前应使用的身份；无可用身份时返回 null。
+function resolveSelectedDesktopIdentity(
+	identities: ConsoleIdentityItem[],
+	preferredIdentityId: string,
+): ConsoleIdentityItem | null {
+	if (!identities.length) {
+		return null;
+	}
+	if (preferredIdentityId) {
+		const matchedIdentity = identities.find((item) => item.id === preferredIdentityId);
+		if (matchedIdentity) {
+			return matchedIdentity;
+		}
+	}
+	if (identities.length === 1) {
+		return identities[0];
+	}
+	return identities[0];
+}
+
 // 描述:
 //
 //   - 初始化全局应用配置。
@@ -237,12 +350,36 @@ const appConfig = setAppConfig({
 //
 //   - 渲染桌面端应用根组件，负责认证恢复、主题同步与全局能力注入。
 export default function App() {
+	// 描述：桌面端启动前的初始化状态检测结果；未完成安装时用于阻断登录入口。
+	const [desktopSetupGate, setDesktopSetupGate] = useState<DesktopSetupGateState>({
+		checking: hasEnabledDesktopBackend(readDesktopBackendConfig()),
+		installed: hasEnabledDesktopBackend(readDesktopBackendConfig()) ? null : true,
+		setupUrl: buildDesktopWebSetupUrl(readDesktopBackendConfig()),
+		message: hasEnabledDesktopBackend(readDesktopBackendConfig())
+			? "正在检查系统初始化状态..."
+			: "当前未接入后端，Desktop 将使用本地模式运行。",
+		currentStep: "",
+		systemName: "",
+	});
+	// 描述：桌面端后端接入配置；未启用时整体走本地模式。
+	const [backendConfig, setBackendConfig] = useState<DesktopBackendConfig>(() => readDesktopBackendConfig());
 	// 描述：当前登录用户状态。
-	const [user, setUser] = useState<LoginUser | null>(null);
+	const [user, setUser] = useState<LoginUser | null>(() => (
+		hasEnabledDesktopBackend(readDesktopBackendConfig()) ? null : getLocalDesktopUser()
+	));
 	// 描述：当前用户可访问的智能体列表。
-	const [availableAgents, setAvailableAgents] = useState<AuthAvailableAgentItem[]>([]);
+	const [availableAgents, setAvailableAgents] = useState<AuthAvailableAgentItem[]>(() => (
+		hasEnabledDesktopBackend(readDesktopBackendConfig()) ? [] : getLocalAvailableAgents()
+	));
+	// 描述：当前生效的身份上下文，供管理页和用户入口展示。
+	const [selectedIdentity, setSelectedIdentityState] = useState<ConsoleIdentityItem | null>(() => {
+		if (hasEnabledDesktopBackend(readDesktopBackendConfig())) {
+			return null;
+		}
+		return resolveSelectedDesktopIdentity(getLocalConsoleIdentities(), readStoredSelectedIdentityId());
+	});
 	// 描述：认证恢复中标记，用于首屏路由守卫。
-	const [restoringAuth, setRestoringAuth] = useState(true);
+	const [restoringAuth, setRestoringAuth] = useState(hasEnabledDesktopBackend(readDesktopBackendConfig()));
 	// 描述：主题模式（亮色/暗色/跟随系统）。
 	const [colorThemeMode, setColorThemeMode] = useState<ColorThemeMode>(() => {
 		const saved = localStorage.getItem(STORAGE_KEYS.COLOR_THEME_MODE);
@@ -251,9 +388,9 @@ export default function App() {
 		}
 		return "system";
 	});
-	// 描述：模型智能体 MCP 能力开关集合。
-	const [modelMcpCapabilities, setModelMcpCapabilities] = useState<ModelMcpCapabilities>(() => {
-		const saved = localStorage.getItem(STORAGE_KEYS.MODEL_MCP_CAPABILITIES);
+	// 描述：DCC MCP 能力开关集合；统一使用单智能体存储键持久化。
+	const [dccMcpCapabilities, setDccMcpCapabilities] = useState<DccMcpCapabilities>(() => {
+		const saved = localStorage.getItem(STORAGE_KEYS.DCC_MCP_CAPABILITIES);
 		if (saved) {
 			try {
 				const parsed = JSON.parse(saved);
@@ -326,6 +463,15 @@ export default function App() {
 	const codexPopupShownRef = useRef<Set<string>>(new Set());
 	// 描述：记录已展示过的 Gemini CLI 提示弹窗，防止同一提示重复弹出。
 	const geminiCliPopupShownRef = useRef<Set<string>>(new Set());
+	// 描述：根据当前配置判断 Desktop 是否已接入远端后端。
+	const backendEnabled = hasEnabledDesktopBackend(backendConfig);
+
+	// 描述：保存当前选中的身份上下文，并同步到本地缓存供 Desktop 重启恢复。
+	const updateSelectedIdentity = useCallback((value: ConsoleIdentityItem | null) => {
+		setSelectedIdentityState(value);
+		writeStoredSelectedIdentityId(value?.id || "");
+		return value;
+	}, []);
 
 	useEffect(() => {
 		localStorage.setItem(STORAGE_KEYS.COLOR_THEME_MODE, colorThemeMode);
@@ -354,50 +500,239 @@ export default function App() {
 
 	useEffect(() => {
 		localStorage.setItem(
-			STORAGE_KEYS.MODEL_MCP_CAPABILITIES,
-			JSON.stringify(modelMcpCapabilities)
+			STORAGE_KEYS.DCC_MCP_CAPABILITIES,
+			JSON.stringify(dccMcpCapabilities)
 		);
-	}, [modelMcpCapabilities]);
+	}, [dccMcpCapabilities]);
 
 	useEffect(() => {
 		localStorage.setItem(STORAGE_KEYS.AI_KEYS, JSON.stringify(aiKeys));
 	}, [aiKeys]);
 
+	// 描述：保存桌面端后端接入配置，并立即同步到当前运行时状态。
+	const updateBackendConfig = useCallback((nextConfig: DesktopBackendConfig) => {
+		const saved = saveDesktopBackendConfig(nextConfig);
+		setBackendConfig(saved);
+		if (hasEnabledDesktopBackend(saved)) {
+			setUser(null);
+			setAvailableAgents([]);
+			setSelectedIdentityState(null);
+			setDesktopSetupGate({
+				checking: true,
+				installed: null,
+				setupUrl: buildDesktopWebSetupUrl(saved),
+				message: "正在检查系统初始化状态...",
+				currentStep: "",
+				systemName: "",
+			});
+			setRestoringAuth(true);
+		}
+		if (!hasEnabledDesktopBackend(saved)) {
+			updateSelectedIdentity(
+				resolveSelectedDesktopIdentity(getLocalConsoleIdentities(), readStoredSelectedIdentityId()),
+			);
+			setDesktopSetupGate({
+				checking: false,
+				installed: true,
+				setupUrl: buildDesktopWebSetupUrl(saved),
+				message: "当前未接入后端，Desktop 将使用本地模式运行。",
+				currentStep: "",
+				systemName: "",
+			});
+		}
+		return saved;
+	}, [updateSelectedIdentity]);
+
+	// 描述：将桌面端后端接入配置恢复为默认值，便于快速回退到纯本地模式。
+	const restoreBackendConfig = useCallback(() => {
+		const restored = resetDesktopBackendConfig();
+		setBackendConfig(restored);
+		updateSelectedIdentity(
+			resolveSelectedDesktopIdentity(getLocalConsoleIdentities(), readStoredSelectedIdentityId()),
+		);
+		setDesktopSetupGate({
+			checking: false,
+			installed: true,
+			setupUrl: buildDesktopWebSetupUrl(restored),
+			message: "当前未接入后端，Desktop 将使用本地模式运行。",
+			currentStep: "",
+			systemName: "",
+		});
+		return restored;
+	}, [updateSelectedIdentity]);
+
+	// 描述：按指定后端配置检查 setup 服务安装状态；未完成安装时仅提示用户去初始化，仍允许切回本地模式。
+	const refreshDesktopSetupGateByConfig = useCallback(async (config: DesktopBackendConfig) => {
+		if (!hasEnabledDesktopBackend(config)) {
+			setDesktopSetupGate({
+				checking: false,
+				installed: true,
+				setupUrl: buildDesktopWebSetupUrl(config),
+				message: "当前未接入后端，Desktop 将使用本地模式运行。",
+				currentStep: "",
+				systemName: "",
+			});
+			return;
+		}
+
+		setDesktopSetupGate((prev) => ({
+			...prev,
+			checking: true,
+			message: "正在检查系统初始化状态...",
+			setupUrl: buildDesktopWebSetupUrl(config),
+		}));
+
+		try {
+			const status = await getSetupStatus();
+			const nextSetupUrl = buildDesktopWebSetupUrl(config);
+			if (status.installed) {
+				setDesktopSetupGate({
+					checking: false,
+					installed: true,
+					setupUrl: nextSetupUrl,
+					message: "系统初始化已完成。",
+					currentStep: status.currentStep || "",
+					systemName: status.systemConfig?.systemName || "",
+				});
+				return;
+			}
+
+			setDesktopSetupGate({
+				checking: false,
+				installed: false,
+				setupUrl: nextSetupUrl,
+				message: buildSetupGateMessage(status),
+				currentStep: status.currentStep || "",
+				systemName: status.systemConfig?.systemName || "",
+			});
+		} catch (err) {
+			const detail = err instanceof Error ? err.message : String(err);
+			setDesktopSetupGate((prev) => ({
+				...prev,
+				checking: false,
+				installed: false,
+				setupUrl: buildDesktopWebSetupUrl(config),
+				message: `初始化状态检查失败：${detail}`,
+			}));
+			console.warn("check setup status failed:", err);
+		}
+	}, []);
+
+	// 描述：使用当前后端配置重新检查 setup 服务状态；本地模式下直接跳过远端初始化检测。
+	const refreshDesktopSetupGate = useCallback(async () => {
+		await refreshDesktopSetupGateByConfig(backendConfig);
+	}, [backendConfig, refreshDesktopSetupGateByConfig]);
+
+	useEffect(() => {
+		if (!backendEnabled) {
+			setRestoringAuth(false);
+			setUser(getLocalDesktopUser());
+			setAvailableAgents(getLocalAvailableAgents());
+			updateSelectedIdentity(
+				resolveSelectedDesktopIdentity(getLocalConsoleIdentities(), readStoredSelectedIdentityId()),
+			);
+			return;
+		}
+		void refreshDesktopSetupGate();
+	}, [backendEnabled, refreshDesktopSetupGate, updateSelectedIdentity]);
+
+	// 描述：在初始化引导页保存后端地址，并在保存后立即重试 setup 检查。
+	const saveSetupGateBackendConfig = useCallback(
+		async (nextConfig: DesktopBackendConfig) => {
+			const saved = updateBackendConfig(nextConfig);
+			setDesktopSetupGate((prev) => ({
+				...prev,
+				setupUrl: buildDesktopWebSetupUrl(saved),
+			}));
+			await refreshDesktopSetupGateByConfig(saved);
+		},
+		[refreshDesktopSetupGateByConfig, updateBackendConfig],
+	);
+
+	// 描述：从初始化引导页直接切回本地模式；保存后新的会话与工作流将仅写入本地存储。
+	const switchToLocalDesktopMode = useCallback(async () => {
+		restoreBackendConfig();
+		clearAuthToken();
+		setUser(getLocalDesktopUser());
+		setAvailableAgents(getLocalAvailableAgents());
+		updateSelectedIdentity(
+			resolveSelectedDesktopIdentity(getLocalConsoleIdentities(), readStoredSelectedIdentityId()),
+		);
+		setRestoringAuth(false);
+	}, [restoreBackendConfig, updateSelectedIdentity]);
+
 	// 描述：读取当前登录态并同步用户信息与可用智能体。
 	const refreshAuthState = useCallback(async () => {
+		if (!backendEnabled) {
+			setUser(getLocalDesktopUser());
+			setAvailableAgents(getLocalAvailableAgents());
+			updateSelectedIdentity(
+				resolveSelectedDesktopIdentity(getLocalConsoleIdentities(), readStoredSelectedIdentityId()),
+			);
+			setRestoringAuth(false);
+			return;
+		}
 		try {
 			const currentUser = await getCurrentUser();
 			setUser(currentUser);
-			const agents = await listAvailableAgents();
+			const [agents, identities] = await Promise.all([
+				listAvailableAgents(),
+				listAccountIdentities().catch(() => [] as ConsoleIdentityItem[]),
+			]);
 			setAvailableAgents(agents);
+			updateSelectedIdentity(
+				resolveSelectedDesktopIdentity(identities, readStoredSelectedIdentityId()),
+			);
 		} catch (_err) {
 			clearAuthToken();
 			setUser(null);
 			setAvailableAgents([]);
+			updateSelectedIdentity(null);
 		} finally {
 			setRestoringAuth(false);
 		}
-	}, []);
+	}, [backendEnabled, updateSelectedIdentity]);
 
 	useEffect(() => {
 		setUnauthorizedHandler(() => {
 			clearAuthToken();
-			setUser(null);
-			setAvailableAgents([]);
+			if (backendEnabled) {
+				setUser(null);
+				setAvailableAgents([]);
+				updateSelectedIdentity(null);
+				return;
+			}
+			setUser(getLocalDesktopUser());
+			setAvailableAgents(getLocalAvailableAgents());
+			updateSelectedIdentity(
+				resolveSelectedDesktopIdentity(getLocalConsoleIdentities(), readStoredSelectedIdentityId()),
+			);
 		});
 		return () => {
 			setUnauthorizedHandler(null);
 		};
-	}, []);
+	}, [backendEnabled]);
 
 	useEffect(() => {
+		if (!backendEnabled) {
+			setUser(getLocalDesktopUser());
+			setAvailableAgents(getLocalAvailableAgents());
+			updateSelectedIdentity(
+				resolveSelectedDesktopIdentity(getLocalConsoleIdentities(), readStoredSelectedIdentityId()),
+			);
+			setRestoringAuth(false);
+			return;
+		}
 		const token = getAuthToken();
 		if (!token) {
+			setUser(null);
+			setAvailableAgents([]);
+			updateSelectedIdentity(null);
 			setRestoringAuth(false);
 			return;
 		}
 		void refreshAuthState();
-	}, [refreshAuthState]);
+	}, [backendEnabled, refreshAuthState, updateSelectedIdentity]);
 
 	useEffect(() => {
 		// 描述：仅当启用对应 CLI Provider 时执行本地可用性探测。
@@ -532,6 +867,14 @@ export default function App() {
 
 	// 描述：检查桌面端更新；命中新版时自动后台下载。
 	const checkDesktopUpdate = useCallback(async () => {
+		if (!backendEnabled) {
+			setDesktopUpdateState((prev) => ({
+				...prev,
+				status: "idle",
+				message: "当前为本地模式，未接入后端更新服务。",
+			}));
+			return;
+		}
 		if (checkingDesktopUpdateRef.current) {
 			return;
 		}
@@ -601,7 +944,7 @@ export default function App() {
 		} finally {
 			checkingDesktopUpdateRef.current = false;
 		}
-	}, [stopDesktopUpdatePolling, syncDesktopUpdateState]);
+	}, [backendEnabled, stopDesktopUpdatePolling, syncDesktopUpdateState]);
 
 	// 描述：触发桌面端安装更新（打开系统安装器）。
 	const installDesktopUpdate = useCallback(async () => {
@@ -623,8 +966,20 @@ export default function App() {
 		}
 	}, []);
 
+	// 描述：打开 Web 初始化页，便于用户在未安装状态下直接进入浏览器完成 setup。
+	const openDesktopSetupUrl = useCallback(async () => {
+		try {
+			await invoke<boolean>("open_external_url", { url: desktopSetupGate.setupUrl });
+		} catch (_err) {
+			AriMessage.warning({
+				content: "无法打开浏览器，请手动访问初始化地址完成安装。",
+				duration: 3000,
+			});
+		}
+	}, [desktopSetupGate.setupUrl]);
+
 	useEffect(() => {
-		if (!user) {
+		if (!backendEnabled || !user) {
 			stopDesktopUpdatePolling();
 			return;
 		}
@@ -635,7 +990,7 @@ export default function App() {
 		return () => {
 			window.clearInterval(timer);
 		};
-	}, [user, checkDesktopUpdate, stopDesktopUpdatePolling]);
+	}, [backendEnabled, user, checkDesktopUpdate, stopDesktopUpdatePolling]);
 
 	useEffect(() => {
 		return () => {
@@ -649,14 +1004,36 @@ export default function App() {
 			user,
 			restoringAuth,
 			availableAgents,
+			selectedIdentity,
 			login: async (account: string, password: string) => {
 				const result = await loginByPassword(account, password);
-				setAuthToken(result.token);
+				if (backendEnabled) {
+					setAuthToken(result.token);
+				}
+				const [agents, identities] = await Promise.all([
+					listAvailableAgents(),
+					listAccountIdentities().catch(() => [] as ConsoleIdentityItem[]),
+				]);
 				setUser(result.user);
-				const agents = await listAvailableAgents();
 				setAvailableAgents(agents);
+				const nextSelectedIdentity = updateSelectedIdentity(
+					resolveSelectedDesktopIdentity(identities, readStoredSelectedIdentityId()),
+				);
+				AriMessage.success({
+					content: nextSelectedIdentity
+						? `登录成功，当前身份已切换为 ${nextSelectedIdentity.scopeName}。`
+						: "登录成功。",
+					duration: 2600,
+				});
 			},
 			logout: async () => {
+				if (!backendEnabled) {
+					AriMessage.info({
+						content: "当前为本地模式，可在设置中接入后端服务。",
+						duration: 2400,
+					});
+					return;
+				}
 				try {
 					await logoutCurrentUser();
 				} catch (_err) {
@@ -665,13 +1042,18 @@ export default function App() {
 				clearAuthToken();
 				setUser(null);
 				setAvailableAgents([]);
+				updateSelectedIdentity(null);
 			},
+			setSelectedIdentity: updateSelectedIdentity,
 			colorThemeMode,
 			setColorThemeMode,
-			modelMcpCapabilities,
-			setModelMcpCapabilities,
+			dccMcpCapabilities,
+			setDccMcpCapabilities,
 			aiKeys,
 			setAiKeys,
+			backendConfig,
+			setBackendConfig: updateBackendConfig,
+			resetBackendConfig: restoreBackendConfig,
 			desktopUpdateState,
 			checkDesktopUpdate,
 			installDesktopUpdate,
@@ -682,23 +1064,45 @@ export default function App() {
 			user,
 			restoringAuth,
 			availableAgents,
+			selectedIdentity,
 			colorThemeMode,
-			modelMcpCapabilities,
+			dccMcpCapabilities,
 			aiKeys,
+			backendConfig,
 			desktopUpdateState,
 			checkDesktopUpdate,
 			installDesktopUpdate,
 			blenderBridgeRuntime,
 			ensureBlenderBridgeRuntime,
+			updateBackendConfig,
+			restoreBackendConfig,
+			updateSelectedIdentity,
+			backendEnabled,
 		]
 	);
+	// 描述：仅在已启用后端且初始化未完成时显示初始化引导页；未接入后端时直接进入本地模式。
+	const shouldShowSetupGate = backendEnabled && (desktopSetupGate.checking || desktopSetupGate.installed !== true);
 
 	return (
 		<StrictMode>
 			<AriApp appConfig={appConfig}>
-				<HashRouter>
-					<DesktopRouter auth={auth} />
-				</HashRouter>
+				{shouldShowSetupGate ? (
+					<SetupRequiredPage
+						checking={desktopSetupGate.checking}
+						setupUrl={desktopSetupGate.setupUrl}
+						message={desktopSetupGate.message}
+						currentStep={desktopSetupGate.currentStep}
+						systemName={desktopSetupGate.systemName}
+						backendConfig={backendConfig}
+						onOpenSetup={openDesktopSetupUrl}
+						onUseLocalMode={switchToLocalDesktopMode}
+						onSaveBackendConfig={saveSetupGateBackendConfig}
+					/>
+				) : (
+					<HashRouter>
+						<DesktopRouter auth={auth} />
+					</HashRouter>
+				)}
 			</AriApp>
 		</StrictMode>
 	);

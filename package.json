@@ -5,10 +5,7 @@
   "packageManager": "pnpm@10.0.0",
   "scripts": {
     "dev": "pnpm run dev:desktop",
-    "dev:web": "pnpm --dir apps/web dev",
-    "build:web": "pnpm --dir apps/web build",
-    "sync:aries:web": "bash scripts/sync-aries-web.sh",
-    "sync:aries:web:dev": "bash scripts/sync-aries-web.sh --dev",
+    "dev:backend": "cd services && go run ./cmd/server",
     "dev:desktop": "pnpm --dir apps/desktop dev",
     "build:desktop": "pnpm --dir apps/desktop build",
     "package:desktop": "pnpm --dir apps/desktop package",

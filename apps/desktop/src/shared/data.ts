@@ -1,4 +1,4 @@
-import type { AgentSession, AgentSummary, ShortcutItem } from "./types";
+import type { AgentKey, AgentSession, AgentSummary, ShortcutItem } from "./types";
 import { IS_BROWSER } from "./constants";
 
 // 描述:
@@ -6,16 +6,10 @@ import { IS_BROWSER } from "./constants";
 //   - 定义桌面端可用智能体摘要列表，供导航与页面入口渲染使用。
 export const AGENTS: AgentSummary[] = [
   {
-    key: "code",
-    name: "代码智能体",
-    description: "代码生成、重构与沙盒预览",
-    hint: "Build AI apps"
-  },
-  {
-    key: "model",
-    name: "模型智能体",
-    description: "三维模型生成与桌面软件联动",
-    hint: "3D workflows"
+    key: "agent",
+    name: "智能体",
+    description: "项目开发、工作流编排与工具执行",
+    hint: "Build with workflows"
   }
 ];
 
@@ -26,7 +20,7 @@ export const SHORTCUTS: ShortcutItem[] = [
   {
     id: "shortcut-build",
     title: "Build AI apps",
-    description: "快速创建代码项目与页面框架"
+    description: "快速创建项目与页面框架"
   },
   {
     id: "shortcut-chat",
@@ -44,16 +38,16 @@ export const SHORTCUTS: ShortcutItem[] = [
 //
 //   - 定义本地会话初始数据快照，供未登录或离线场景兜底展示。
 export const AGENT_SESSIONS: AgentSession[] = [
-  { id: "code-001", agentKey: "code", title: "React + aries_react 脚手架", updatedAt: "今天 09:40" },
-  { id: "code-002", agentKey: "code", title: "权限后台页面重构", updatedAt: "昨天 21:15" },
-  { id: "model-001", agentKey: "model", title: "机械臂材质方案", updatedAt: "今天 10:12" },
-  { id: "model-002", agentKey: "model", title: "低模角色风格探索", updatedAt: "昨天 18:22" }
+  { id: "agent-001", agentKey: "agent", title: "React + aries_react 脚手架", updatedAt: "今天 09:40" },
+  { id: "agent-002", agentKey: "agent", title: "权限后台页面重构", updatedAt: "昨天 21:15" },
+  { id: "agent-003", agentKey: "agent", title: "工作流节点编排", updatedAt: "今天 10:12" },
+  { id: "agent-004", agentKey: "agent", title: "MCP 接入验证", updatedAt: "昨天 18:22" }
 ];
 
 // 描述:
 //
-//   - 模型项目本地存储键。
-const MODEL_PROJECT_STORAGE_KEY = "libra.desktop.model.projects";
+//   - 智能体项目本地存储键，统一记录会话级项目快照。
+const AGENT_PROJECT_STORAGE_KEY = "libra.desktop.agent.projects";
 
 // 描述:
 //
@@ -77,23 +71,23 @@ const SESSION_DEBUG_ARTIFACT_STORAGE_KEY = "libra.desktop.session.debug.artifact
 
 // 描述:
 //
-//   - 代码目录分组本地存储键。
-const CODE_WORKSPACE_GROUP_STORAGE_KEY = "libra.desktop.code.workspace.groups";
+//   - 项目目录分组本地存储键。
+const PROJECT_WORKSPACE_GROUP_STORAGE_KEY = "libra.desktop.project.workspace.groups";
 
 // 描述:
 //
-//   - 代码会话与目录映射本地存储键。
-const CODE_SESSION_WORKSPACE_MAP_STORAGE_KEY = "libra.desktop.code.session.workspace.map";
+//   - 会话与目录映射本地存储键。
+const PROJECT_SESSION_WORKSPACE_MAP_STORAGE_KEY = "libra.desktop.project.session.workspace.map";
 
 // 描述:
 //
-//   - 最近使用代码目录 ID 本地存储键。
-const CODE_LAST_WORKSPACE_ID_STORAGE_KEY = "libra.desktop.code.workspace.last";
+//   - 最近使用项目目录 ID 本地存储键。
+const PROJECT_LAST_WORKSPACE_ID_STORAGE_KEY = "libra.desktop.project.workspace.last";
 
 // 描述:
 //
-//   - 代码项目结构化信息本地存储键（workspaceId -> profile）。
-const CODE_WORKSPACE_PROFILE_STORAGE_KEY = "libra.desktop.code.workspace.profiles";
+//   - 项目结构化信息本地存储键（workspaceId -> profile）。
+const PROJECT_WORKSPACE_PROFILE_STORAGE_KEY = "libra.desktop.project.workspace.profiles";
 
 // 描述:
 //
@@ -107,18 +101,18 @@ export const SESSION_RUN_STATE_UPDATED_EVENT = "libra:session-run-state-updated"
 
 // 描述:
 //
-//   - 代码目录分组更新广播事件名。
-export const CODE_WORKSPACE_GROUPS_UPDATED_EVENT = "libra:code-workspace-groups-updated";
+//   - 项目目录分组更新广播事件名。
+export const PROJECT_WORKSPACE_GROUPS_UPDATED_EVENT = "libra:project-workspace-groups-updated";
 
 // 描述:
 //
-//   - 代码项目结构化信息更新广播事件名。
-export const CODE_WORKSPACE_PROFILE_UPDATED_EVENT = "libra:code-workspace-profile-updated";
+//   - 项目结构化信息更新广播事件名。
+export const PROJECT_WORKSPACE_PROFILE_UPDATED_EVENT = "libra:project-workspace-profile-updated";
 
 // 描述:
 //
-//   - 定义本地模型项目存储结构。
-interface StoredModelProject {
+//   - 定义本地智能体项目存储结构。
+interface StoredAgentProject {
   id: string;
   title: string;
   prompt: string;
@@ -157,7 +151,7 @@ interface StoredSessionMessage {
 //   - 定义会话消息分组存储结构。
 interface StoredSessionMessageGroup {
   sessionId: string;
-  agentKey: "code" | "model";
+  agentKey: AgentKey;
   messages: StoredSessionMessage[];
 }
 
@@ -193,7 +187,7 @@ export interface SessionRunMeta {
 //
 //   - 会话运行态快照结构。
 export interface SessionRunStateSnapshot {
-  agentKey: "code" | "model";
+  agentKey: AgentKey;
   sessionId: string;
   activeMessageId: string;
   sending: boolean;
@@ -233,7 +227,7 @@ export interface SessionDebugFlowRecordSnapshot {
 //
 //   - 会话调试资产快照结构。
 export interface SessionDebugArtifactSnapshot {
-  agentKey: "code" | "model";
+  agentKey: AgentKey;
   sessionId: string;
   traceRecords: SessionTraceRecordSnapshot[];
   debugFlowRecords: SessionDebugFlowRecordSnapshot[];
@@ -250,8 +244,8 @@ interface StoredSessionDebugArtifact extends SessionDebugArtifactSnapshot {}
 
 // 描述:
 //
-//   - 定义代码目录分组结构。
-export interface CodeWorkspaceGroup {
+//   - 定义项目目录分组结构。
+export interface ProjectWorkspaceGroup {
   id: string;
   path: string;
   name: string;
@@ -262,7 +256,7 @@ export interface CodeWorkspaceGroup {
 // 描述:
 //
 //   - 定义项目 API 数据模型结构化信息。
-export interface CodeWorkspaceProjectApiDataModel {
+export interface ProjectWorkspaceApiDataModel {
   entities: string[];
   requestModels: string[];
   responseModels: string[];
@@ -272,7 +266,7 @@ export interface CodeWorkspaceProjectApiDataModel {
 // 描述:
 //
 //   - 定义项目前端页面布局结构化信息。
-export interface CodeWorkspaceProjectFrontendPageLayout {
+export interface ProjectWorkspaceFrontendPageLayout {
   pages: string[];
   navigation: string[];
   pageElements: string[];
@@ -281,7 +275,7 @@ export interface CodeWorkspaceProjectFrontendPageLayout {
 // 描述:
 //
 //   - 定义项目前端代码结构结构化信息。
-export interface CodeWorkspaceProjectFrontendCodeStructure {
+export interface ProjectWorkspaceFrontendCodeStructure {
   directories: string[];
   moduleBoundaries: string[];
   implementationConstraints: string[];
@@ -290,7 +284,7 @@ export interface CodeWorkspaceProjectFrontendCodeStructure {
 // 描述:
 //
 //   - 定义结构化项目信息“分类-条目”中的细分维度，支持一个分类下维护多组语义条目。
-export interface CodeWorkspaceProjectKnowledgeFacet {
+export interface ProjectWorkspaceKnowledgeFacet {
   key: string;
   label: string;
   entries: string[];
@@ -299,17 +293,17 @@ export interface CodeWorkspaceProjectKnowledgeFacet {
 // 描述:
 //
 //   - 定义结构化项目信息通用分类，后续可在不改动存储协议的前提下扩展更多分类。
-export interface CodeWorkspaceProjectKnowledgeSection {
+export interface ProjectWorkspaceKnowledgeSection {
   key: string;
   title: string;
   description: string;
-  facets: CodeWorkspaceProjectKnowledgeFacet[];
+  facets: ProjectWorkspaceKnowledgeFacet[];
 }
 
 // 描述:
 //
 //   - 定义结构化项目信息分类更新入参。
-export interface CodeWorkspaceProjectKnowledgeSectionInput {
+export interface ProjectWorkspaceKnowledgeSectionInput {
   key?: string;
   title?: string;
   description?: string;
@@ -322,8 +316,8 @@ export interface CodeWorkspaceProjectKnowledgeSectionInput {
 
 // 描述:
 //
-//   - 定义代码项目结构化信息（项目级共享资产）。
-export interface CodeWorkspaceProjectProfile {
+//   - 定义项目结构化信息（项目级共享资产）。
+export interface ProjectWorkspaceProfile {
   schemaVersion: number;
   workspaceId: string;
   workspacePathHash: string;
@@ -332,55 +326,55 @@ export interface CodeWorkspaceProjectProfile {
   updatedAt: string;
   updatedBy: string;
   summary: string;
-  knowledgeSections: CodeWorkspaceProjectKnowledgeSection[];
-  apiDataModel: CodeWorkspaceProjectApiDataModel;
-  frontendPageLayout: CodeWorkspaceProjectFrontendPageLayout;
-  frontendCodeStructure: CodeWorkspaceProjectFrontendCodeStructure;
+  knowledgeSections: ProjectWorkspaceKnowledgeSection[];
+  apiDataModel: ProjectWorkspaceApiDataModel;
+  frontendPageLayout: ProjectWorkspaceFrontendPageLayout;
+  frontendCodeStructure: ProjectWorkspaceFrontendCodeStructure;
   codingConventions: string[];
 }
 
 // 描述:
 //
-//   - 定义代码项目结构化信息更新入参。
-export interface CodeWorkspaceProjectProfileInput {
+//   - 定义项目结构化信息更新入参。
+export interface ProjectWorkspaceProfileInput {
   summary?: string;
-  knowledgeSections?: CodeWorkspaceProjectKnowledgeSectionInput[];
-  apiDataModel?: Partial<CodeWorkspaceProjectApiDataModel>;
-  frontendPageLayout?: Partial<CodeWorkspaceProjectFrontendPageLayout>;
-  frontendCodeStructure?: Partial<CodeWorkspaceProjectFrontendCodeStructure>;
+  knowledgeSections?: ProjectWorkspaceKnowledgeSectionInput[];
+  apiDataModel?: Partial<ProjectWorkspaceApiDataModel>;
+  frontendPageLayout?: Partial<ProjectWorkspaceFrontendPageLayout>;
+  frontendCodeStructure?: Partial<ProjectWorkspaceFrontendCodeStructure>;
   codingConventions?: string[];
 }
 
 // 描述:
 //
-//   - 定义代码项目结构化信息保存结果。
-export interface CodeWorkspaceProjectProfileSaveResult {
+//   - 定义项目结构化信息保存结果。
+export interface ProjectWorkspaceProfileSaveResult {
   ok: boolean;
   conflict: boolean;
-  profile: CodeWorkspaceProjectProfile | null;
+  profile: ProjectWorkspaceProfile | null;
   message: string;
 }
 
 // 描述:
 //
-//   - 定义代码会话与目录映射结构。
-interface StoredCodeSessionWorkspace {
+//   - 定义会话与目录映射结构。
+interface StoredProjectSessionWorkspace {
   sessionId: string;
   workspaceId: string;
 }
 
 // 描述:
 //
-//   - 读取本地模型项目列表。
+//   - 读取本地智能体项目列表。
 //
 // Returns:
 //
-//   - 模型项目数组。
-function readModelProjects(): StoredModelProject[] {
+//   - 智能体项目数组。
+function readAgentProjects(): StoredAgentProject[] {
   if (!IS_BROWSER) {
     return [];
   }
-  const raw = window.localStorage.getItem(MODEL_PROJECT_STORAGE_KEY);
+  const raw = window.localStorage.getItem(AGENT_PROJECT_STORAGE_KEY);
   if (!raw) {
     return [];
   }
@@ -398,16 +392,16 @@ function readModelProjects(): StoredModelProject[] {
 
 // 描述:
 //
-//   - 写入本地模型项目列表。
+//   - 写入本地智能体项目列表。
 //
 // Params:
 //
-//   - list: 模型项目数组。
-function writeModelProjects(list: StoredModelProject[]) {
+//   - list: 智能体项目数组。
+function writeAgentProjects(list: StoredAgentProject[]) {
   if (!IS_BROWSER) {
     return;
   }
-  window.localStorage.setItem(MODEL_PROJECT_STORAGE_KEY, JSON.stringify(list));
+  window.localStorage.setItem(AGENT_PROJECT_STORAGE_KEY, JSON.stringify(list));
 }
 
 // 描述:
@@ -490,17 +484,17 @@ function emitSessionTitleUpdated(sessionId: string, title: string) {
   );
 }
 
-// 描述：向当前窗口广播代码目录分组变更事件，供侧边栏即时同步目录树数据。
+// 描述：向当前窗口广播项目目录分组变更事件，供侧边栏即时同步目录树数据。
 //
 // Params:
 //
 //   - reason: 触发更新的动作标识。
-function emitCodeWorkspaceGroupsUpdated(reason: string) {
+function emitProjectWorkspaceGroupsUpdated(reason: string) {
   if (!IS_BROWSER) {
     return;
   }
   window.dispatchEvent(
-    new CustomEvent(CODE_WORKSPACE_GROUPS_UPDATED_EVENT, {
+    new CustomEvent(PROJECT_WORKSPACE_GROUPS_UPDATED_EVENT, {
       detail: {
         reason,
       },
@@ -508,19 +502,19 @@ function emitCodeWorkspaceGroupsUpdated(reason: string) {
   );
 }
 
-// 描述：向当前窗口广播代码项目结构化信息变更事件，供会话页和设置页同步最新项目语义上下文。
+// 描述：向当前窗口广播项目结构化信息变更事件，供会话页和设置页同步最新项目语义上下文。
 //
 // Params:
 //
 //   - workspaceId: 项目 ID。
 //   - reason: 触发原因（bootstrap/settings/manual 等）。
 //   - revision: 最新结构化信息版本号。
-function emitCodeWorkspaceProfileUpdated(workspaceId: string, reason: string, revision: number) {
+function emitProjectWorkspaceProfileUpdated(workspaceId: string, reason: string, revision: number) {
   if (!IS_BROWSER || !workspaceId) {
     return;
   }
   window.dispatchEvent(
-    new CustomEvent(CODE_WORKSPACE_PROFILE_UPDATED_EVENT, {
+    new CustomEvent(PROJECT_WORKSPACE_PROFILE_UPDATED_EVENT, {
       detail: {
         workspaceId,
         reason,
@@ -553,7 +547,7 @@ function readSessionMessages(): StoredSessionMessageGroup[] {
     return parsed.filter(
       (item) =>
         item?.sessionId &&
-        (item?.agentKey === "code" || item?.agentKey === "model") &&
+        Boolean(item?.agentKey) &&
         Array.isArray(item?.messages),
     );
   } catch (_err) {
@@ -581,7 +575,7 @@ function writeSessionMessages(groups: StoredSessionMessageGroup[]) {
 //
 //   - input: 运行态快照（可选）。
 function emitSessionRunStateUpdated(input?: {
-  agentKey?: "code" | "model";
+  agentKey?: AgentKey;
   sessionId?: string;
 }) {
   if (!IS_BROWSER) {
@@ -616,10 +610,10 @@ function readSessionRunStates(): StoredSessionRunState[] {
       return [];
     }
     return parsed
-      .filter((item) => item?.sessionId && (item?.agentKey === "code" || item?.agentKey === "model"))
+      .filter((item) => item?.sessionId && Boolean(item?.agentKey))
       .map((item) => ({
         sessionId: String(item.sessionId),
-        agentKey: item.agentKey === "model" ? "model" : "code",
+        agentKey: "agent",
         activeMessageId: String(item.activeMessageId || "").trim(),
         sending: Boolean(item.sending),
         runMetaMap: typeof item.runMetaMap === "object" && item.runMetaMap ? item.runMetaMap : {},
@@ -668,7 +662,7 @@ function readSessionDebugArtifacts(): StoredSessionDebugArtifact[] {
       return [];
     }
     return parsed
-      .filter((item) => item?.sessionId && (item?.agentKey === "code" || item?.agentKey === "model"))
+      .filter((item) => item?.sessionId && Boolean(item?.agentKey))
       .map((item) => {
         const traceRecords = Array.isArray(item.traceRecords)
           ? item.traceRecords
@@ -716,7 +710,7 @@ function readSessionDebugArtifacts(): StoredSessionDebugArtifact[] {
           : [];
         return {
           sessionId: String(item.sessionId).trim(),
-          agentKey: item.agentKey === "model" ? "model" : "code",
+          agentKey: "agent",
           traceRecords,
           debugFlowRecords,
           aiPromptRaw: String(item.aiPromptRaw || ""),
@@ -796,7 +790,7 @@ function normalizeWorkspaceDependencyRules(rules: unknown): string[] {
 // 描述:
 //
 //   - 结构化项目信息 schema 版本，后续字段扩展时用于迁移判断。
-const CODE_WORKSPACE_PROFILE_SCHEMA_VERSION = 3;
+const PROJECT_WORKSPACE_PROFILE_SCHEMA_VERSION = 3;
 
 // 描述:
 //
@@ -852,7 +846,7 @@ const PROJECT_PROFILE_SECTION_TEMPLATES: Array<{
   {
     key: PROJECT_PROFILE_SECTION_KEYS.frontendImplementationArchitecture,
     title: "前端实现架构",
-    description: "描述代码目录、模块边界与实现约束。",
+    description: "描述项目目录、模块边界与实现约束。",
     facets: [
       { key: "directories", label: "前端目录结构" },
       { key: "moduleBoundaries", label: "前端模块边界" },
@@ -906,7 +900,7 @@ function buildWorkspacePathHash(workspacePath: string): string {
 // Returns:
 //
 //   - 项目结构化信息签名。
-function buildWorkspaceProfileSignature(workspace: CodeWorkspaceGroup, schemaVersion: number): string {
+function buildWorkspaceProfileSignature(workspace: ProjectWorkspaceGroup, schemaVersion: number): string {
   const pathHash = buildWorkspacePathHash(workspace.path);
   return `${workspace.id}:${pathHash}:v${schemaVersion}`;
 }
@@ -947,8 +941,8 @@ function normalizeStringList(value: unknown): string[] {
 function normalizeProjectKnowledgeFacet(
   source: unknown,
   fallback: { key: string; label: string; entries?: string[] },
-): CodeWorkspaceProjectKnowledgeFacet {
-  const value = (source || {}) as Partial<CodeWorkspaceProjectKnowledgeFacet>;
+): ProjectWorkspaceKnowledgeFacet {
+  const value = (source || {}) as Partial<ProjectWorkspaceKnowledgeFacet>;
   const key = String(value.key || "").trim() || fallback.key;
   const label = String(value.label || "").trim() || fallback.label;
   return {
@@ -967,7 +961,7 @@ function normalizeProjectKnowledgeFacet(
 // Returns:
 //
 //   - 分类模板数组。
-function buildProjectProfileSectionTemplateDraft(): CodeWorkspaceProjectKnowledgeSection[] {
+function buildProjectProfileSectionTemplateDraft(): ProjectWorkspaceKnowledgeSection[] {
   return PROJECT_PROFILE_SECTION_TEMPLATES.map((section) => ({
     key: section.key,
     title: section.title,
@@ -997,11 +991,11 @@ function buildProjectProfileSectionTemplateDraft(): CodeWorkspaceProjectKnowledg
 //   - 通用分类数组。
 function buildProjectKnowledgeSectionsFromLegacyFields(
   summary: string,
-  apiDataModel: CodeWorkspaceProjectApiDataModel,
-  frontendPageLayout: CodeWorkspaceProjectFrontendPageLayout,
-  frontendCodeStructure: CodeWorkspaceProjectFrontendCodeStructure,
+  apiDataModel: ProjectWorkspaceApiDataModel,
+  frontendPageLayout: ProjectWorkspaceFrontendPageLayout,
+  frontendCodeStructure: ProjectWorkspaceFrontendCodeStructure,
   codingConventions: string[],
-): CodeWorkspaceProjectKnowledgeSection[] {
+): ProjectWorkspaceKnowledgeSection[] {
   const sections = buildProjectProfileSectionTemplateDraft();
   const summaryLines = normalizeStringList(
     String(summary || "")
@@ -1081,14 +1075,14 @@ function buildProjectKnowledgeSectionsFromLegacyFields(
 //   - 规范化后的分类列表。
 function normalizeProjectKnowledgeSections(
   source: unknown,
-  fallback: CodeWorkspaceProjectKnowledgeSection[],
-): CodeWorkspaceProjectKnowledgeSection[] {
+  fallback: ProjectWorkspaceKnowledgeSection[],
+): ProjectWorkspaceKnowledgeSection[] {
   const sourceList = Array.isArray(source) ? source : [];
   const normalizedKnown = fallback.map((fallbackSection) => {
     const hit = sourceList.find((item) => {
-      const value = item as Partial<CodeWorkspaceProjectKnowledgeSection>;
+      const value = item as Partial<ProjectWorkspaceKnowledgeSection>;
       return String(value?.key || "").trim() === fallbackSection.key;
-    }) as Partial<CodeWorkspaceProjectKnowledgeSection> | undefined;
+    }) as Partial<ProjectWorkspaceKnowledgeSection> | undefined;
     const sourceFacets = Array.isArray(hit?.facets) ? hit?.facets : [];
     return {
       key: fallbackSection.key,
@@ -1096,7 +1090,7 @@ function normalizeProjectKnowledgeSections(
       description: String(hit?.description || "").trim() || fallbackSection.description,
       facets: fallbackSection.facets.map((fallbackFacet) => {
         const facetHit = sourceFacets.find((item) => {
-          const value = item as Partial<CodeWorkspaceProjectKnowledgeFacet>;
+          const value = item as Partial<ProjectWorkspaceKnowledgeFacet>;
           return String(value?.key || "").trim() === fallbackFacet.key;
         });
         return normalizeProjectKnowledgeFacet(facetHit, fallbackFacet);
@@ -1106,7 +1100,7 @@ function normalizeProjectKnowledgeSections(
 
   const normalizedCustom = sourceList
     .map((item) => {
-      const value = (item || {}) as Partial<CodeWorkspaceProjectKnowledgeSection>;
+      const value = (item || {}) as Partial<ProjectWorkspaceKnowledgeSection>;
       const key = String(value.key || "").trim();
       if (!key || PROJECT_PROFILE_KNOWN_SECTION_KEY_SET.has(key)) {
         return null;
@@ -1114,7 +1108,7 @@ function normalizeProjectKnowledgeSections(
       const rawFacets = Array.isArray(value.facets) ? value.facets : [];
       const facets = rawFacets
         .map((facetItem, index) => {
-          const facetValue = (facetItem || {}) as Partial<CodeWorkspaceProjectKnowledgeFacet>;
+          const facetValue = (facetItem || {}) as Partial<ProjectWorkspaceKnowledgeFacet>;
           const facetKey = String(facetValue.key || "").trim() || `facet_${index + 1}`;
           const facetLabel = String(facetValue.label || "").trim() || `字段 ${index + 1}`;
           return normalizeProjectKnowledgeFacet(facetValue, {
@@ -1131,9 +1125,9 @@ function normalizeProjectKnowledgeSections(
         title: String(value.title || "").trim() || key,
         description: String(value.description || "").trim(),
         facets,
-      } as CodeWorkspaceProjectKnowledgeSection;
+      } as ProjectWorkspaceKnowledgeSection;
     })
-    .filter((item): item is CodeWorkspaceProjectKnowledgeSection => Boolean(item));
+    .filter((item): item is ProjectWorkspaceKnowledgeSection => Boolean(item));
 
   return [...normalizedKnown, ...normalizedCustom];
 }
@@ -1151,9 +1145,9 @@ function normalizeProjectKnowledgeSections(
 //
 //   - 合并后的分类列表。
 function mergeProjectKnowledgeSectionsWithCustom(
-  knownDefaults: CodeWorkspaceProjectKnowledgeSection[],
-  currentSections: CodeWorkspaceProjectKnowledgeSection[],
-): CodeWorkspaceProjectKnowledgeSection[] {
+  knownDefaults: ProjectWorkspaceKnowledgeSection[],
+  currentSections: ProjectWorkspaceKnowledgeSection[],
+): ProjectWorkspaceKnowledgeSection[] {
   const normalizedCurrent = normalizeProjectKnowledgeSections(currentSections, knownDefaults);
   const customSections = normalizedCurrent.filter((item) => !PROJECT_PROFILE_KNOWN_SECTION_KEY_SET.has(item.key));
   const knownSections = knownDefaults.map((section) => {
@@ -1185,7 +1179,7 @@ function mergeProjectKnowledgeSectionsWithCustom(
 //
 //   - 条目数组。
 function readProjectSectionFacetEntries(
-  sections: CodeWorkspaceProjectKnowledgeSection[],
+  sections: ProjectWorkspaceKnowledgeSection[],
   sectionKey: string,
   facetKey: string,
   fallback: string[],
@@ -1208,17 +1202,17 @@ function readProjectSectionFacetEntries(
 //
 //   - 旧字段结构。
 function buildLegacyFieldsFromProjectKnowledgeSections(
-  sections: CodeWorkspaceProjectKnowledgeSection[],
+  sections: ProjectWorkspaceKnowledgeSection[],
   fallback: {
-    apiDataModel: CodeWorkspaceProjectApiDataModel;
-    frontendPageLayout: CodeWorkspaceProjectFrontendPageLayout;
-    frontendCodeStructure: CodeWorkspaceProjectFrontendCodeStructure;
+    apiDataModel: ProjectWorkspaceApiDataModel;
+    frontendPageLayout: ProjectWorkspaceFrontendPageLayout;
+    frontendCodeStructure: ProjectWorkspaceFrontendCodeStructure;
     codingConventions: string[];
   },
 ): {
-  apiDataModel: CodeWorkspaceProjectApiDataModel;
-  frontendPageLayout: CodeWorkspaceProjectFrontendPageLayout;
-  frontendCodeStructure: CodeWorkspaceProjectFrontendCodeStructure;
+  apiDataModel: ProjectWorkspaceApiDataModel;
+  frontendPageLayout: ProjectWorkspaceFrontendPageLayout;
+  frontendCodeStructure: ProjectWorkspaceFrontendCodeStructure;
   codingConventions: string[];
 } {
   return {
@@ -1300,17 +1294,17 @@ function buildLegacyFieldsFromProjectKnowledgeSections(
 // 描述:
 //
 //   - 基于项目基础信息生成结构化项目信息默认草稿。
-function buildDefaultCodeWorkspaceProjectProfile(
-  workspace: CodeWorkspaceGroup,
+function buildDefaultProjectWorkspaceProfile(
+  workspace: ProjectWorkspaceGroup,
   updatedBy = "system_bootstrap",
-): CodeWorkspaceProjectProfile {
+): ProjectWorkspaceProfile {
   const now = new Date().toISOString();
   const dependencyConstraintLines = normalizeWorkspaceDependencyRules(workspace.dependencyRules || [])
     .map((item) => `依赖规范：${item}`)
     .slice(0, 20);
   const moduleName = String(workspace.name || "").trim() || resolveWorkspaceNameFromPath(workspace.path || "");
-  const summary = `项目「${moduleName || "未命名项目"}」结构化语义基线，供代码智能体跨话题复用。`;
-  const apiDataModel: CodeWorkspaceProjectApiDataModel = {
+  const summary = `项目「${moduleName || "未命名项目"}」结构化语义基线，供智能体跨话题复用。`;
+  const apiDataModel: ProjectWorkspaceApiDataModel = {
     entities: [
       "核心业务实体（待补充字段）",
     ],
@@ -1324,7 +1318,7 @@ function buildDefaultCodeWorkspaceProjectProfile(
       "核心接口 mock 场景（成功/失败/边界）",
     ],
   };
-  const frontendPageLayout: CodeWorkspaceProjectFrontendPageLayout = {
+  const frontendPageLayout: ProjectWorkspaceFrontendPageLayout = {
     pages: [
       "页面清单（首页/列表/详情等）",
     ],
@@ -1335,7 +1329,7 @@ function buildDefaultCodeWorkspaceProjectProfile(
       "页面元素（筛选区/列表区/详情区/操作区）",
     ],
   };
-  const frontendCodeStructure: CodeWorkspaceProjectFrontendCodeStructure = {
+  const frontendCodeStructure: ProjectWorkspaceFrontendCodeStructure = {
     directories: [
       "src/pages",
       "src/components",
@@ -1365,10 +1359,10 @@ function buildDefaultCodeWorkspaceProjectProfile(
   );
 
   return {
-    schemaVersion: CODE_WORKSPACE_PROFILE_SCHEMA_VERSION,
+    schemaVersion: PROJECT_WORKSPACE_PROFILE_SCHEMA_VERSION,
     workspaceId: workspace.id,
     workspacePathHash: buildWorkspacePathHash(workspace.path),
-    workspaceSignature: buildWorkspaceProfileSignature(workspace, CODE_WORKSPACE_PROFILE_SCHEMA_VERSION),
+    workspaceSignature: buildWorkspaceProfileSignature(workspace, PROJECT_WORKSPACE_PROFILE_SCHEMA_VERSION),
     revision: 1,
     updatedAt: now,
     updatedBy,
@@ -1384,23 +1378,23 @@ function buildDefaultCodeWorkspaceProjectProfile(
 // 描述:
 //
 //   - 规范化单条结构化项目信息，兜底修复缺失字段并保证数据可读写。
-function normalizeCodeWorkspaceProjectProfile(
+function normalizeProjectWorkspaceProfile(
   source: unknown,
-  workspace: CodeWorkspaceGroup,
-): CodeWorkspaceProjectProfile {
-  const fallback = buildDefaultCodeWorkspaceProjectProfile(workspace);
-  const value = (source || {}) as Partial<CodeWorkspaceProjectProfile> & Record<string, unknown>;
-  const apiDataModel = (value.apiDataModel || {}) as Partial<CodeWorkspaceProjectApiDataModel>;
-  const frontendPageLayout = (value.frontendPageLayout || {}) as Partial<CodeWorkspaceProjectFrontendPageLayout>;
-  const frontendCodeStructure = (value.frontendCodeStructure || {}) as Partial<CodeWorkspaceProjectFrontendCodeStructure>;
+  workspace: ProjectWorkspaceGroup,
+): ProjectWorkspaceProfile {
+  const fallback = buildDefaultProjectWorkspaceProfile(workspace);
+  const value = (source || {}) as Partial<ProjectWorkspaceProfile> & Record<string, unknown>;
+  const apiDataModel = (value.apiDataModel || {}) as Partial<ProjectWorkspaceApiDataModel>;
+  const frontendPageLayout = (value.frontendPageLayout || {}) as Partial<ProjectWorkspaceFrontendPageLayout>;
+  const frontendCodeStructure = (value.frontendCodeStructure || {}) as Partial<ProjectWorkspaceFrontendCodeStructure>;
   const legacyArchitecture = (value.architecture || {}) as Record<string, unknown>;
   const legacyUiSpec = (value.uiSpec || {}) as Record<string, unknown>;
   const legacyApiSpec = (value.apiSpec || {}) as Record<string, unknown>;
   const summary = String(value.summary || "").trim() || fallback.summary;
   const sourceSchemaVersion = Number(value.schemaVersion);
   const normalizedSchemaVersion = Number.isFinite(sourceSchemaVersion) && sourceSchemaVersion > 0
-    ? Math.max(CODE_WORKSPACE_PROFILE_SCHEMA_VERSION, Math.trunc(sourceSchemaVersion))
-    : CODE_WORKSPACE_PROFILE_SCHEMA_VERSION;
+    ? Math.max(PROJECT_WORKSPACE_PROFILE_SCHEMA_VERSION, Math.trunc(sourceSchemaVersion))
+    : PROJECT_WORKSPACE_PROFILE_SCHEMA_VERSION;
   const revision = Number.isFinite(Number(value.revision)) && Number(value.revision) > 0
     ? Math.trunc(Number(value.revision))
     : fallback.revision;
@@ -1460,11 +1454,11 @@ function normalizeCodeWorkspaceProjectProfile(
 // 描述:
 //
 //   - 读取全部项目结构化信息映射，并按当前存在的 workspace 进行归一化。
-function readCodeWorkspaceProjectProfileMap(): Record<string, CodeWorkspaceProjectProfile> {
+function readProjectWorkspaceProfileMap(): Record<string, ProjectWorkspaceProfile> {
   if (!IS_BROWSER) {
     return {};
   }
-  const raw = window.localStorage.getItem(CODE_WORKSPACE_PROFILE_STORAGE_KEY);
+  const raw = window.localStorage.getItem(PROJECT_WORKSPACE_PROFILE_STORAGE_KEY);
   if (!raw) {
     return {};
   }
@@ -1473,14 +1467,14 @@ function readCodeWorkspaceProjectProfileMap(): Record<string, CodeWorkspaceProje
     if (!parsed || typeof parsed !== "object") {
       return {};
     }
-    const workspaceById = new Map(readCodeWorkspaceGroups().map((item) => [item.id, item]));
-    const next: Record<string, CodeWorkspaceProjectProfile> = {};
+    const workspaceById = new Map(readProjectWorkspaceGroups().map((item) => [item.id, item]));
+    const next: Record<string, ProjectWorkspaceProfile> = {};
     Object.entries(parsed).forEach(([workspaceId, profile]) => {
       const workspace = workspaceById.get(workspaceId);
       if (!workspace) {
         return;
       }
-      next[workspaceId] = normalizeCodeWorkspaceProjectProfile(profile, workspace);
+      next[workspaceId] = normalizeProjectWorkspaceProfile(profile, workspace);
     });
     return next;
   } catch (_err) {
@@ -1491,23 +1485,23 @@ function readCodeWorkspaceProjectProfileMap(): Record<string, CodeWorkspaceProje
 // 描述:
 //
 //   - 写入全部项目结构化信息映射到本地存储。
-function writeCodeWorkspaceProjectProfileMap(profiles: Record<string, CodeWorkspaceProjectProfile>) {
+function writeProjectWorkspaceProfileMap(profiles: Record<string, ProjectWorkspaceProfile>) {
   if (!IS_BROWSER) {
     return;
   }
-  window.localStorage.setItem(CODE_WORKSPACE_PROFILE_STORAGE_KEY, JSON.stringify(profiles));
+  window.localStorage.setItem(PROJECT_WORKSPACE_PROFILE_STORAGE_KEY, JSON.stringify(profiles));
 }
 
-// 描述：读取代码目录分组列表。
+// 描述：读取项目目录分组列表。
 //
 // Returns:
 //
-//   - 代码目录分组数组。
-function readCodeWorkspaceGroups(): CodeWorkspaceGroup[] {
+//   - 项目目录分组数组。
+function readProjectWorkspaceGroups(): ProjectWorkspaceGroup[] {
   if (!IS_BROWSER) {
     return [];
   }
-  const raw = window.localStorage.getItem(CODE_WORKSPACE_GROUP_STORAGE_KEY);
+  const raw = window.localStorage.getItem(PROJECT_WORKSPACE_GROUP_STORAGE_KEY);
   if (!raw) {
     return [];
   }
@@ -1531,28 +1525,28 @@ function readCodeWorkspaceGroups(): CodeWorkspaceGroup[] {
   }
 }
 
-// 描述：写入代码目录分组列表到本地存储。
+// 描述：写入项目目录分组列表到本地存储。
 //
 // Params:
 //
 //   - groups: 目录分组数组。
-function writeCodeWorkspaceGroups(groups: CodeWorkspaceGroup[]) {
+function writeProjectWorkspaceGroups(groups: ProjectWorkspaceGroup[]) {
   if (!IS_BROWSER) {
     return;
   }
-  window.localStorage.setItem(CODE_WORKSPACE_GROUP_STORAGE_KEY, JSON.stringify(groups));
+  window.localStorage.setItem(PROJECT_WORKSPACE_GROUP_STORAGE_KEY, JSON.stringify(groups));
 }
 
-// 描述：读取“会话 -> 代码目录分组”映射。
+// 描述：读取“会话 -> 项目目录分组”映射。
 //
 // Returns:
 //
 //   - 映射数组。
-function readCodeSessionWorkspaceMap(): StoredCodeSessionWorkspace[] {
+function readProjectSessionWorkspaceMap(): StoredProjectSessionWorkspace[] {
   if (!IS_BROWSER) {
     return [];
   }
-  const raw = window.localStorage.getItem(CODE_SESSION_WORKSPACE_MAP_STORAGE_KEY);
+  const raw = window.localStorage.getItem(PROJECT_SESSION_WORKSPACE_MAP_STORAGE_KEY);
   if (!raw) {
     return [];
   }
@@ -1572,58 +1566,59 @@ function readCodeSessionWorkspaceMap(): StoredCodeSessionWorkspace[] {
   }
 }
 
-// 描述：写入“会话 -> 代码目录分组”映射。
+// 描述：写入“会话 -> 项目目录分组”映射。
 //
 // Params:
 //
 //   - mapItems: 映射数组。
-function writeCodeSessionWorkspaceMap(mapItems: StoredCodeSessionWorkspace[]) {
+function writeProjectSessionWorkspaceMap(mapItems: StoredProjectSessionWorkspace[]) {
   if (!IS_BROWSER) {
     return;
   }
-  window.localStorage.setItem(CODE_SESSION_WORKSPACE_MAP_STORAGE_KEY, JSON.stringify(mapItems));
+  window.localStorage.setItem(PROJECT_SESSION_WORKSPACE_MAP_STORAGE_KEY, JSON.stringify(mapItems));
 }
 
-// 描述：读取最近一次使用的代码目录分组 ID。
+// 描述：读取最近一次使用的项目目录分组 ID。
 //
 // Returns:
 //
 //   - 分组 ID；未命中时返回空字符串。
-function readLastCodeWorkspaceId(): string {
+function readLastProjectWorkspaceId(): string {
   if (!IS_BROWSER) {
     return "";
   }
-  return String(window.localStorage.getItem(CODE_LAST_WORKSPACE_ID_STORAGE_KEY) || "").trim();
+  return String(window.localStorage.getItem(PROJECT_LAST_WORKSPACE_ID_STORAGE_KEY) || "").trim();
 }
 
-// 描述：写入最近一次使用的代码目录分组 ID。
+// 描述：写入最近一次使用的项目目录分组 ID。
 //
 // Params:
 //
 //   - workspaceId: 分组 ID。
-function writeLastCodeWorkspaceId(workspaceId: string) {
+function writeLastProjectWorkspaceId(workspaceId: string) {
   if (!IS_BROWSER) {
     return;
   }
-  window.localStorage.setItem(CODE_LAST_WORKSPACE_ID_STORAGE_KEY, workspaceId);
+  window.localStorage.setItem(PROJECT_LAST_WORKSPACE_ID_STORAGE_KEY, workspaceId);
 }
 
-// 描述：按 ID 查询模型项目详情。
-export function getModelProjectById(id: string): StoredModelProject | null {
-  return readModelProjects().find((item) => item.id === id) || null;
+// 描述：按 ID 查询智能体项目详情。
+export function getAgentProjectById(id: string): StoredAgentProject | null {
+  return readAgentProjects().find((item) => item.id === id) || null;
 }
 
 // 描述：统一解析会话展示标题，确保侧边栏与会话内容区标题口径一致。
 //
 // Params:
 //
-//   - agentKey: 智能体类型（code/model）。
+//   - agentKey: 智能体标识。
 //   - sessionId: 会话 ID。
 //
 // Returns:
 //
 //   会话展示标题。
-export function resolveAgentSessionTitle(agentKey: "code" | "model", sessionId?: string | null): string {
+export function resolveAgentSessionTitle(agentKey: AgentKey, sessionId?: string | null): string {
+  void agentKey;
   if (!sessionId) {
     return "会话详情";
   }
@@ -1634,11 +1629,9 @@ export function resolveAgentSessionTitle(agentKey: "code" | "model", sessionId?:
     return renamedTitle;
   }
 
-  if (agentKey === "model") {
-    const modelProject = getModelProjectById(sessionId);
-    if (modelProject?.title?.trim()) {
-      return modelProject.title.trim();
-    }
+  const agentProject = getAgentProjectById(sessionId);
+  if (agentProject?.title?.trim()) {
+    return agentProject.title.trim();
   }
 
   const presetSession = AGENT_SESSIONS.find((item) => item.id === sessionId && item.agentKey === agentKey);
@@ -1649,19 +1642,19 @@ export function resolveAgentSessionTitle(agentKey: "code" | "model", sessionId?:
   return "会话详情";
 }
 
-// 描述：新增或覆盖模型项目记录，保持最近项目排在最前并限制数量。
-export function upsertModelProject(input: {
+// 描述：新增或覆盖智能体项目记录，保持最近项目排在最前并限制数量。
+export function upsertAgentProject(input: {
   id: string;
   title: string;
   prompt: string;
   updatedAt: string;
 }) {
-  const list = readModelProjects();
+  const list = readAgentProjects();
   const next = [
     input,
     ...list.filter((item) => item.id !== input.id),
   ].slice(0, 50);
-  writeModelProjects(next);
+  writeAgentProjects(next);
 }
 
 // 描述：重命名会话标题并同步广播，确保侧边栏与会话页即时更新。
@@ -1675,18 +1668,15 @@ export function renameAgentSession(sessionId: string, title: string) {
   }
   writeSessionMeta(meta);
 
-  const projects = readModelProjects();
+  const projects = readAgentProjects();
   const target = projects.find((item) => item.id === sessionId);
   if (target && trimmed) {
-    writeModelProjects(
+    writeAgentProjects(
       projects.map((item) => (item.id === sessionId ? { ...item, title: trimmed } : item)),
     );
   }
 
-  const inferredAgentKey = target
-    ? "model"
-    : (AGENT_SESSIONS.find((item) => item.id === sessionId)?.agentKey || "code");
-  const nextTitle = resolveAgentSessionTitle(inferredAgentKey, sessionId);
+  const nextTitle = resolveAgentSessionTitle("agent", sessionId);
   emitSessionTitleUpdated(sessionId, nextTitle);
 }
 
@@ -1707,13 +1697,11 @@ export function isAgentSessionPinned(sessionId: string): boolean {
 }
 
 // 描述：移除会话及其关联本地数据（标题、固定态、消息、目录绑定）。
-export function removeAgentSession(agentKey: "code" | "model", sessionId: string) {
-  if (agentKey === "model") {
-    const projects = readModelProjects();
-    const hasDynamic = projects.some((item) => item.id === sessionId);
-    if (hasDynamic) {
-      writeModelProjects(projects.filter((item) => item.id !== sessionId));
-    }
+export function removeAgentSession(agentKey: AgentKey, sessionId: string) {
+  const projects = readAgentProjects();
+  const hasDynamic = projects.some((item) => item.id === sessionId);
+  if (hasDynamic) {
+    writeAgentProjects(projects.filter((item) => item.id !== sessionId));
   }
 
   const meta = readSessionMeta();
@@ -1731,16 +1719,13 @@ export function removeAgentSession(agentKey: "code" | "model", sessionId: string
   removeSessionRunState(agentKey, sessionId);
   removeSessionDebugArtifact(agentKey, sessionId);
 
-  if (agentKey === "code") {
-// 描述：按会话维度读取本地消息列表。
-    const mapItems = readCodeSessionWorkspaceMap();
-    writeCodeSessionWorkspaceMap(mapItems.filter((item) => item.sessionId !== sessionId));
-  }
+  const mapItems = readProjectSessionWorkspaceMap();
+  writeProjectSessionWorkspaceMap(mapItems.filter((item) => item.sessionId !== sessionId));
 }
 
 // 描述：按智能体与会话 ID 读取本地会话消息列表。
 export function getSessionMessages(
-  agentKey: "code" | "model",
+  agentKey: AgentKey,
   sessionId: string,
 ): Array<{ id?: string; role: "user" | "assistant"; text: string }> {
   const group = readSessionMessages().find(
@@ -1751,7 +1736,7 @@ export function getSessionMessages(
 
 // 描述：写入会话消息并按会话维度覆盖，限制总存储分组数量。
 export function upsertSessionMessages(input: {
-  agentKey: "code" | "model";
+  agentKey: AgentKey;
   sessionId: string;
   messages: Array<{ id?: string; role: "user" | "assistant"; text: string }>;
 }) {
@@ -1900,7 +1885,7 @@ export function upsertSessionRunState(input: SessionRunStateSnapshot) {
 export function upsertSessionDebugArtifact(input: SessionDebugArtifactSnapshot) {
   const items = readSessionDebugArtifacts();
   const nextArtifact: StoredSessionDebugArtifact = {
-    agentKey: input.agentKey === "model" ? "model" : "code",
+    agentKey: "agent",
     sessionId: String(input.sessionId || "").trim(),
     traceRecords: (input.traceRecords || [])
       .map((record) => ({
@@ -1964,7 +1949,7 @@ export function upsertSessionDebugArtifact(input: SessionDebugArtifactSnapshot) 
 //
 //   - 调试资产快照；未命中返回 null。
 export function getSessionDebugArtifact(
-  agentKey: "code" | "model",
+  agentKey: AgentKey,
   sessionId: string,
 ): SessionDebugArtifactSnapshot | null {
   const normalizedSessionId = String(sessionId || "").trim();
@@ -1983,7 +1968,7 @@ export function getSessionDebugArtifact(
 //
 //   - agentKey: 智能体类型。
 //   - sessionId: 会话 ID。
-export function removeSessionDebugArtifact(agentKey: "code" | "model", sessionId: string) {
+export function removeSessionDebugArtifact(agentKey: AgentKey, sessionId: string) {
   const normalizedSessionId = String(sessionId || "").trim();
   if (!normalizedSessionId) {
     return;
@@ -2006,7 +1991,7 @@ export function removeSessionDebugArtifact(agentKey: "code" | "model", sessionId
 //
 //   - 会话运行态快照；未命中返回 null。
 export function getSessionRunState(
-  agentKey: "code" | "model",
+  agentKey: AgentKey,
   sessionId: string,
 ): SessionRunStateSnapshot | null {
   const hit = readSessionRunStates().find(
@@ -2021,7 +2006,7 @@ export function getSessionRunState(
 //
 //   - agentKey: 智能体类型。
 //   - sessionId: 会话 ID。
-export function removeSessionRunState(agentKey: "code" | "model", sessionId: string) {
+export function removeSessionRunState(agentKey: AgentKey, sessionId: string) {
   const states = readSessionRunStates();
   const next = states.filter((item) => !(item.agentKey === agentKey && item.sessionId === sessionId));
   writeSessionRunStates(next);
@@ -2041,7 +2026,7 @@ export function removeSessionRunState(agentKey: "code" | "model", sessionId: str
 // Returns:
 //
 //   - 是否执行中。
-export function isSessionRunning(agentKey: "code" | "model", sessionId: string): boolean {
+export function isSessionRunning(agentKey: AgentKey, sessionId: string): boolean {
   const snapshot = getSessionRunState(agentKey, sessionId);
   if (!snapshot?.sending) {
     return false;
@@ -2049,19 +2034,74 @@ export function isSessionRunning(agentKey: "code" | "model", sessionId: string):
   return Object.values(snapshot.runMetaMap || {}).some((item) => item.status === "running");
 }
 
+// 描述：收集本地会话动态记录，确保未接入后端时新建的话题也能出现在侧边栏。
+//
+// Returns:
+//
+//   - 动态会话列表。
+function listDynamicAgentSessions(): AgentSession[] {
+  const updatedAtMap = new Map<string, number>();
+  const now = Date.now();
+
+  readSessionRunStates()
+    .filter((item) => item.agentKey === "agent" && item.sessionId)
+    .forEach((item) => {
+      updatedAtMap.set(item.sessionId, Number(item.updatedAt || now));
+    });
+
+  readSessionDebugArtifacts()
+    .filter((item) => item.agentKey === "agent" && item.sessionId)
+    .forEach((item) => {
+      const current = updatedAtMap.get(item.sessionId) || 0;
+      updatedAtMap.set(item.sessionId, Math.max(current, Number(item.updatedAt || now)));
+    });
+
+  readSessionMessages()
+    .filter((item) => item.agentKey === "agent" && item.sessionId)
+    .forEach((item) => {
+      if (!updatedAtMap.has(item.sessionId)) {
+        updatedAtMap.set(item.sessionId, now);
+      }
+    });
+
+  readProjectSessionWorkspaceMap()
+    .filter((item) => item.sessionId)
+    .forEach((item) => {
+      if (!updatedAtMap.has(item.sessionId)) {
+        updatedAtMap.set(item.sessionId, now);
+      }
+    });
+
+  return Array.from(updatedAtMap.entries()).map(([sessionId, updatedAt]) => ({
+    id: sessionId,
+    agentKey: "agent",
+    title: resolveAgentSessionTitle("agent", sessionId),
+    updatedAt: new Date(updatedAt).toLocaleString("zh-CN", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    }),
+  }));
+}
+
 // 描述：返回指定智能体可见会话列表，融合默认会话、动态会话与本地元数据。
-export function getAgentSessions(agentKey: "code" | "model"): AgentSession[] {
+export function getAgentSessions(agentKey: AgentKey): AgentSession[] {
+  void agentKey;
   const meta = readSessionMeta();
-  const defaults = AGENT_SESSIONS.filter((item) => item.agentKey === agentKey);
-  const dynamic =
-    agentKey === "model"
-      ? readModelProjects().map<AgentSession>((item) => ({
-          id: item.id,
-          agentKey: "model",
-          title: item.title,
-          updatedAt: item.updatedAt,
-        }))
-      : [];
+  const defaults = AGENT_SESSIONS.filter((item) => item.agentKey === "agent");
+  const dynamicProjects = readAgentProjects().map<AgentSession>((item) => ({
+    id: item.id,
+    agentKey: "agent",
+    title: item.title,
+    updatedAt: item.updatedAt,
+  }));
+  const dynamic = [
+    ...dynamicProjects,
+    ...listDynamicAgentSessions().filter(
+      (item) => !dynamicProjects.some((projectItem) => projectItem.id === item.id),
+    ),
+  ];
 
   const merged = [
     ...dynamic,
@@ -2082,13 +2122,13 @@ export function getAgentSessions(agentKey: "code" | "model"): AgentSession[] {
   });
 }
 
-// 描述：返回当前代码目录分组列表，按最近更新时间倒序排列。
+// 描述：返回当前项目目录分组列表，按最近更新时间倒序排列。
 //
 // Returns:
 //
 //   - 目录分组数组。
-export function listCodeWorkspaceGroups(): CodeWorkspaceGroup[] {
-  const groups = readCodeWorkspaceGroups();
+export function listProjectWorkspaceGroups(): ProjectWorkspaceGroup[] {
+  const groups = readProjectWorkspaceGroups();
   return [...groups].sort((a, b) => {
     const aTs = new Date(a.updatedAt || 0).getTime();
     const bTs = new Date(b.updatedAt || 0).getTime();
@@ -2096,7 +2136,7 @@ export function listCodeWorkspaceGroups(): CodeWorkspaceGroup[] {
   });
 }
 
-// 描述：创建或更新代码目录分组，路径相同则复用已有分组并刷新最近使用时间。
+// 描述：创建或更新项目目录分组，路径相同则复用已有分组并刷新最近使用时间。
 //
 // Params:
 //
@@ -2105,55 +2145,55 @@ export function listCodeWorkspaceGroups(): CodeWorkspaceGroup[] {
 // Returns:
 //
 //   - 新建或命中的目录分组。
-export function upsertCodeWorkspaceGroup(path: string): CodeWorkspaceGroup | null {
+export function upsertProjectWorkspaceGroup(path: string): ProjectWorkspaceGroup | null {
   const normalizedPath = normalizeWorkspacePath(path);
   if (!normalizedPath) {
     return null;
   }
   const now = new Date().toISOString();
-  const groups = readCodeWorkspaceGroups();
+  const groups = readProjectWorkspaceGroups();
   const hit = groups.find((item) => normalizeWorkspacePath(item.path) === normalizedPath);
   if (hit) {
-    const next: CodeWorkspaceGroup = {
+    const next: ProjectWorkspaceGroup = {
       ...hit,
       path: normalizedPath,
       name: hit.name || resolveWorkspaceNameFromPath(normalizedPath),
       dependencyRules: normalizeWorkspaceDependencyRules(hit.dependencyRules),
       updatedAt: now,
     };
-    writeCodeWorkspaceGroups([
+    writeProjectWorkspaceGroups([
       next,
       ...groups.filter((item) => item.id !== hit.id),
     ]);
-    writeLastCodeWorkspaceId(next.id);
-    bootstrapCodeWorkspaceProjectProfile(next.id, {
+    writeLastProjectWorkspaceId(next.id);
+    bootstrapProjectWorkspaceProfile(next.id, {
       force: false,
       updatedBy: "workspace_upsert",
       reason: "workspace_upsert",
     });
-    emitCodeWorkspaceGroupsUpdated("upsert");
+    emitProjectWorkspaceGroupsUpdated("upsert");
     return next;
   }
 
-  const created: CodeWorkspaceGroup = {
-    id: `code-ws-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+  const created: ProjectWorkspaceGroup = {
+    id: `workspace-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     path: normalizedPath,
     name: resolveWorkspaceNameFromPath(normalizedPath),
     dependencyRules: [],
     updatedAt: now,
   };
-  writeCodeWorkspaceGroups([created, ...groups]);
-  writeLastCodeWorkspaceId(created.id);
-  bootstrapCodeWorkspaceProjectProfile(created.id, {
+  writeProjectWorkspaceGroups([created, ...groups]);
+  writeLastProjectWorkspaceId(created.id);
+  bootstrapProjectWorkspaceProfile(created.id, {
     force: false,
     updatedBy: "workspace_create",
     reason: "workspace_create",
   });
-  emitCodeWorkspaceGroupsUpdated("upsert");
+  emitProjectWorkspaceGroupsUpdated("upsert");
   return created;
 }
 
-// 描述：重命名代码目录分组。
+// 描述：重命名项目目录分组。
 //
 // Params:
 //
@@ -2163,17 +2203,17 @@ export function upsertCodeWorkspaceGroup(path: string): CodeWorkspaceGroup | nul
 // Returns:
 //
 //   - 是否重命名成功。
-export function renameCodeWorkspaceGroup(workspaceId: string, name: string): boolean {
+export function renameProjectWorkspaceGroup(workspaceId: string, name: string): boolean {
   const trimmed = name.trim();
   if (!workspaceId || !trimmed) {
     return false;
   }
-  const groups = readCodeWorkspaceGroups();
+  const groups = readProjectWorkspaceGroups();
   const hit = groups.find((item) => item.id === workspaceId);
   if (!hit) {
     return false;
   }
-  writeCodeWorkspaceGroups(
+  writeProjectWorkspaceGroups(
     groups.map((item) => (item.id === workspaceId
       ? {
         ...item,
@@ -2182,11 +2222,11 @@ export function renameCodeWorkspaceGroup(workspaceId: string, name: string): boo
       }
       : item)),
   );
-  emitCodeWorkspaceGroupsUpdated("rename");
+  emitProjectWorkspaceGroupsUpdated("rename");
   return true;
 }
 
-// 描述：更新代码目录分组设置，统一维护项目名称与依赖限制列表。
+// 描述：更新项目目录分组设置，统一维护项目名称与依赖限制列表。
 //
 // Params:
 //
@@ -2196,7 +2236,7 @@ export function renameCodeWorkspaceGroup(workspaceId: string, name: string): boo
 // Returns:
 //
 //   - 是否更新成功。
-export function updateCodeWorkspaceGroupSettings(
+export function updateProjectWorkspaceGroupSettings(
   workspaceId: string,
   settings: {
     name: string;
@@ -2213,13 +2253,13 @@ export function updateCodeWorkspaceGroupSettings(
   }
 
   const normalizedRules = normalizeWorkspaceDependencyRules(settings.dependencyRules);
-  const groups = readCodeWorkspaceGroups();
+  const groups = readProjectWorkspaceGroups();
   const hit = groups.find((item) => item.id === workspaceId);
   if (!hit) {
     return false;
   }
 
-  writeCodeWorkspaceGroups(
+  writeProjectWorkspaceGroups(
     groups.map((item) => (item.id === workspaceId
       ? {
         ...item,
@@ -2229,11 +2269,11 @@ export function updateCodeWorkspaceGroupSettings(
       }
       : item)),
   );
-  const currentProfile = getCodeWorkspaceProjectProfile(workspaceId);
+  const currentProfile = getProjectWorkspaceProfile(workspaceId);
   if (currentProfile) {
     const stableConstraints = currentProfile.frontendCodeStructure.implementationConstraints
       .filter((item) => !item.startsWith("依赖规范："));
-    saveCodeWorkspaceProjectProfile(
+    saveProjectWorkspaceProfile(
       workspaceId,
       {
         frontendCodeStructure: {
@@ -2249,73 +2289,73 @@ export function updateCodeWorkspaceGroupSettings(
       },
     );
   } else {
-    bootstrapCodeWorkspaceProjectProfile(workspaceId, {
+    bootstrapProjectWorkspaceProfile(workspaceId, {
       force: false,
       updatedBy: "workspace_settings",
       reason: "workspace_settings_sync",
     });
   }
-  emitCodeWorkspaceGroupsUpdated("settings");
+  emitProjectWorkspaceGroupsUpdated("settings");
   return true;
 }
 
-// 描述：删除代码目录分组，并清理关联会话映射与最近使用目录引用。
+// 描述：删除项目目录分组，并清理关联会话映射与最近使用目录引用。
 //
 // Params:
 //
 //   - workspaceId: 分组 ID。
-export function removeCodeWorkspaceGroup(workspaceId: string) {
+export function removeProjectWorkspaceGroup(workspaceId: string) {
   if (!workspaceId) {
     return;
   }
-  const groups = readCodeWorkspaceGroups();
-  const mapItems = readCodeSessionWorkspaceMap();
+  const groups = readProjectWorkspaceGroups();
+  const mapItems = readProjectSessionWorkspaceMap();
   const sessionIds = mapItems
     .filter((item) => item.workspaceId === workspaceId)
     .map((item) => item.sessionId);
 
   // 描述：删除项目时同步移除该项目下所有会话，避免会话在后续刷新时被自动重新绑定到新项目。
   sessionIds.forEach((sessionId) => {
-    removeAgentSession("code", sessionId);
+    removeAgentSession("agent", sessionId);
   });
 
-  writeCodeWorkspaceGroups(groups.filter((item) => item.id !== workspaceId));
-  const profiles = readCodeWorkspaceProjectProfileMap();
+  writeProjectWorkspaceGroups(groups.filter((item) => item.id !== workspaceId));
+  const profiles = readProjectWorkspaceProfileMap();
   if (profiles[workspaceId]) {
     delete profiles[workspaceId];
-    writeCodeWorkspaceProjectProfileMap(profiles);
+    writeProjectWorkspaceProfileMap(profiles);
   }
-  const latestMapItems = readCodeSessionWorkspaceMap();
-  writeCodeSessionWorkspaceMap(latestMapItems.filter((item) => item.workspaceId !== workspaceId));
-  if (readLastCodeWorkspaceId() === workspaceId) {
-    const next = listCodeWorkspaceGroups()[0];
-    writeLastCodeWorkspaceId(next?.id || "");
+  const latestMapItems = readProjectSessionWorkspaceMap();
+  writeProjectSessionWorkspaceMap(latestMapItems.filter((item) => item.workspaceId !== workspaceId));
+  if (readLastProjectWorkspaceId() === workspaceId) {
+    const next = listProjectWorkspaceGroups()[0];
+    writeLastProjectWorkspaceId(next?.id || "");
   }
-  emitCodeWorkspaceProfileUpdated(workspaceId, "workspace_remove", 0);
-  emitCodeWorkspaceGroupsUpdated("remove");
+  emitProjectWorkspaceProfileUpdated(workspaceId, "workspace_remove", 0);
+  emitProjectWorkspaceGroupsUpdated("remove");
 }
 
-// 描述：记录代码会话所属目录分组，并刷新该目录分组的最近使用时间。
+// 描述：记录会话所属目录分组，并刷新该目录分组的最近使用时间。
 //
 // Params:
 //
 //   - sessionId: 会话 ID。
 //   - workspaceId: 目录分组 ID。
-export function bindCodeSessionWorkspace(sessionId: string, workspaceId: string) {
+export function bindProjectSessionWorkspace(sessionId: string, workspaceId: string) {
   if (!sessionId || !workspaceId) {
     return;
   }
-  const mapItems = readCodeSessionWorkspaceMap();
-  const nextItems: StoredCodeSessionWorkspace[] = [
+  const mapItems = readProjectSessionWorkspaceMap();
+  const nextItems: StoredProjectSessionWorkspace[] = [
     { sessionId, workspaceId },
     ...mapItems.filter((item) => item.sessionId !== sessionId),
   ];
-  writeCodeSessionWorkspaceMap(nextItems);
+  writeProjectSessionWorkspaceMap(nextItems);
 
-  const groups = readCodeWorkspaceGroups();
+  const groups = readProjectWorkspaceGroups();
   const hit = groups.find((item) => item.id === workspaceId);
   if (hit) {
-    writeCodeWorkspaceGroups([
+    writeProjectWorkspaceGroups([
       {
         ...hit,
         dependencyRules: normalizeWorkspaceDependencyRules(hit.dependencyRules),
@@ -2324,11 +2364,11 @@ export function bindCodeSessionWorkspace(sessionId: string, workspaceId: string)
       ...groups.filter((item) => item.id !== workspaceId),
     ]);
   }
-  writeLastCodeWorkspaceId(workspaceId);
-  emitCodeWorkspaceGroupsUpdated("bind-session");
+  writeLastProjectWorkspaceId(workspaceId);
+  emitProjectWorkspaceGroupsUpdated("bind-session");
 }
 
-// 描述：读取代码会话绑定的目录分组 ID。
+// 描述：读取会话绑定的目录分组 ID。
 //
 // Params:
 //
@@ -2337,11 +2377,11 @@ export function bindCodeSessionWorkspace(sessionId: string, workspaceId: string)
 // Returns:
 //
 //   - 目录分组 ID；未命中返回空字符串。
-export function getCodeWorkspaceIdBySessionId(sessionId: string): string {
+export function getProjectWorkspaceIdBySessionId(sessionId: string): string {
   if (!sessionId) {
     return "";
   }
-  const hit = readCodeSessionWorkspaceMap().find((item) => item.sessionId === sessionId);
+  const hit = readProjectSessionWorkspaceMap().find((item) => item.sessionId === sessionId);
   return hit?.workspaceId || "";
 }
 
@@ -2354,11 +2394,11 @@ export function getCodeWorkspaceIdBySessionId(sessionId: string): string {
 // Returns:
 //
 //   - 目录分组详情；未命中返回 null。
-export function getCodeWorkspaceGroupById(workspaceId: string): CodeWorkspaceGroup | null {
+export function getProjectWorkspaceGroupById(workspaceId: string): ProjectWorkspaceGroup | null {
   if (!workspaceId) {
     return null;
   }
-  return readCodeWorkspaceGroups().find((item) => item.id === workspaceId) || null;
+  return readProjectWorkspaceGroups().find((item) => item.id === workspaceId) || null;
 }
 
 // 描述：读取指定项目的结构化项目信息，未命中时返回 null。
@@ -2370,20 +2410,20 @@ export function getCodeWorkspaceGroupById(workspaceId: string): CodeWorkspaceGro
 // Returns:
 //
 //   - 项目结构化信息；未命中返回 null。
-export function getCodeWorkspaceProjectProfile(workspaceId: string): CodeWorkspaceProjectProfile | null {
+export function getProjectWorkspaceProfile(workspaceId: string): ProjectWorkspaceProfile | null {
   if (!workspaceId) {
     return null;
   }
-  const workspace = getCodeWorkspaceGroupById(workspaceId);
+  const workspace = getProjectWorkspaceGroupById(workspaceId);
   if (!workspace) {
     return null;
   }
-  const profiles = readCodeWorkspaceProjectProfileMap();
+  const profiles = readProjectWorkspaceProfileMap();
   const hit = profiles[workspaceId];
   if (!hit) {
     return null;
   }
-  return normalizeCodeWorkspaceProjectProfile(hit, workspace);
+  return normalizeProjectWorkspaceProfile(hit, workspace);
 }
 
 // 描述：将结构化项目信息补丁合并到目标项目，并进行版本冲突检测。
@@ -2397,16 +2437,16 @@ export function getCodeWorkspaceProjectProfile(workspaceId: string): CodeWorkspa
 // Returns:
 //
 //   - 保存结果（成功/冲突/失败）。
-export function saveCodeWorkspaceProjectProfile(
+export function saveProjectWorkspaceProfile(
   workspaceId: string,
-  input: CodeWorkspaceProjectProfileInput,
+  input: ProjectWorkspaceProfileInput,
   options?: {
     expectedRevision?: number;
     updatedBy?: string;
     reason?: string;
   },
-): CodeWorkspaceProjectProfileSaveResult {
-  const workspace = getCodeWorkspaceGroupById(workspaceId);
+): ProjectWorkspaceProfileSaveResult {
+  const workspace = getProjectWorkspaceGroupById(workspaceId);
   if (!workspace) {
     return {
       ok: false,
@@ -2416,9 +2456,9 @@ export function saveCodeWorkspaceProjectProfile(
     };
   }
 
-  const profiles = readCodeWorkspaceProjectProfileMap();
+  const profiles = readProjectWorkspaceProfileMap();
   const hasCurrent = Boolean(profiles[workspaceId]);
-  const current = profiles[workspaceId] || buildDefaultCodeWorkspaceProjectProfile(workspace);
+  const current = profiles[workspaceId] || buildDefaultProjectWorkspaceProfile(workspace);
   const expectedRevision = options?.expectedRevision;
   if (Number.isFinite(expectedRevision) && typeof expectedRevision === "number") {
     if (current.revision !== expectedRevision) {
@@ -2486,12 +2526,12 @@ export function saveCodeWorkspaceProjectProfile(
     ? mergeProjectKnowledgeSectionsWithCustom(knownDefaultSections, current.knowledgeSections || [])
     : normalizeProjectKnowledgeSections(input.knowledgeSections, knownDefaultSections);
   const mergedLegacyFields = buildLegacyFieldsFromProjectKnowledgeSections(nextKnowledgeSections, nextLegacyFields);
-  const next: CodeWorkspaceProjectProfile = {
+  const next: ProjectWorkspaceProfile = {
     ...current,
     workspaceId,
-    schemaVersion: CODE_WORKSPACE_PROFILE_SCHEMA_VERSION,
+    schemaVersion: PROJECT_WORKSPACE_PROFILE_SCHEMA_VERSION,
     workspacePathHash: buildWorkspacePathHash(workspace.path),
-    workspaceSignature: buildWorkspaceProfileSignature(workspace, CODE_WORKSPACE_PROFILE_SCHEMA_VERSION),
+    workspaceSignature: buildWorkspaceProfileSignature(workspace, PROJECT_WORKSPACE_PROFILE_SCHEMA_VERSION),
     revision: hasCurrent ? current.revision + 1 : 1,
     updatedAt: new Date().toISOString(),
     updatedBy: String(options?.updatedBy || "").trim() || "manual_update",
@@ -2503,9 +2543,9 @@ export function saveCodeWorkspaceProjectProfile(
     codingConventions: mergedLegacyFields.codingConventions,
   };
 
-  profiles[workspaceId] = normalizeCodeWorkspaceProjectProfile(next, workspace);
-  writeCodeWorkspaceProjectProfileMap(profiles);
-  emitCodeWorkspaceProfileUpdated(
+  profiles[workspaceId] = normalizeProjectWorkspaceProfile(next, workspace);
+  writeProjectWorkspaceProfileMap(profiles);
+  emitProjectWorkspaceProfileUpdated(
     workspaceId,
     String(options?.reason || "").trim() || "manual_update",
     profiles[workspaceId].revision,
@@ -2528,35 +2568,35 @@ export function saveCodeWorkspaceProjectProfile(
 // Returns:
 //
 //   - 初始化后的结构化信息；项目不存在时返回 null。
-export function bootstrapCodeWorkspaceProjectProfile(
+export function bootstrapProjectWorkspaceProfile(
   workspaceId: string,
   options?: {
     force?: boolean;
     updatedBy?: string;
     reason?: string;
   },
-): CodeWorkspaceProjectProfile | null {
-  const workspace = getCodeWorkspaceGroupById(workspaceId);
+): ProjectWorkspaceProfile | null {
+  const workspace = getProjectWorkspaceGroupById(workspaceId);
   if (!workspace) {
     return null;
   }
-  const profiles = readCodeWorkspaceProjectProfileMap();
+  const profiles = readProjectWorkspaceProfileMap();
   const current = profiles[workspaceId];
   if (current && !options?.force) {
     return current;
   }
 
-  const bootstrap = buildDefaultCodeWorkspaceProjectProfile(
+  const bootstrap = buildDefaultProjectWorkspaceProfile(
     workspace,
     String(options?.updatedBy || "").trim() || "system_bootstrap",
   );
-  const next: CodeWorkspaceProjectProfile = {
+  const next: ProjectWorkspaceProfile = {
     ...bootstrap,
     revision: current?.revision ? current.revision + 1 : bootstrap.revision,
   };
-  profiles[workspaceId] = normalizeCodeWorkspaceProjectProfile(next, workspace);
-  writeCodeWorkspaceProjectProfileMap(profiles);
-  emitCodeWorkspaceProfileUpdated(
+  profiles[workspaceId] = normalizeProjectWorkspaceProfile(next, workspace);
+  writeProjectWorkspaceProfileMap(profiles);
+  emitProjectWorkspaceProfileUpdated(
     workspaceId,
     String(options?.reason || "").trim() || "bootstrap",
     profiles[workspaceId].revision,
@@ -2575,16 +2615,16 @@ export function bootstrapCodeWorkspaceProjectProfile(
 // Returns:
 //
 //   - 保存结果（成功/冲突/失败）。
-export function upsertCodeWorkspaceProjectProfile(
+export function upsertProjectWorkspaceProfile(
   workspaceId: string,
-  input: CodeWorkspaceProjectProfileInput,
+  input: ProjectWorkspaceProfileInput,
   options?: {
     expectedRevision?: number;
     updatedBy?: string;
     reason?: string;
   },
-): CodeWorkspaceProjectProfileSaveResult {
-  return saveCodeWorkspaceProjectProfile(workspaceId, input, options);
+): ProjectWorkspaceProfileSaveResult {
+  return saveProjectWorkspaceProfile(workspaceId, input, options);
 }
 
 // 描述：向外暴露“patch”语义的结构化项目信息保存接口，语义上强调局部字段更新。
@@ -2598,39 +2638,39 @@ export function upsertCodeWorkspaceProjectProfile(
 // Returns:
 //
 //   - 保存结果（成功/冲突/失败）。
-export function patchCodeWorkspaceProjectProfile(
+export function patchProjectWorkspaceProfile(
   workspaceId: string,
-  patch: CodeWorkspaceProjectProfileInput,
+  patch: ProjectWorkspaceProfileInput,
   options?: {
     expectedRevision?: number;
     updatedBy?: string;
     reason?: string;
   },
-): CodeWorkspaceProjectProfileSaveResult {
-  return saveCodeWorkspaceProjectProfile(workspaceId, patch, options);
+): ProjectWorkspaceProfileSaveResult {
+  return saveProjectWorkspaceProfile(workspaceId, patch, options);
 }
 
-// 描述：读取最近一次编辑会话使用的代码目录分组 ID。
+// 描述：读取最近一次编辑会话使用的项目目录分组 ID。
 //
 // Returns:
 //
 //   - 最近目录分组 ID；若不存在则回退首个目录分组。
-export function getLastUsedCodeWorkspaceId(): string {
-  const lastId = readLastCodeWorkspaceId();
-  if (lastId && readCodeWorkspaceGroups().some((item) => item.id === lastId)) {
+export function getLastUsedProjectWorkspaceId(): string {
+  const lastId = readLastProjectWorkspaceId();
+  if (lastId && readProjectWorkspaceGroups().some((item) => item.id === lastId)) {
     return lastId;
   }
-  return listCodeWorkspaceGroups()[0]?.id || "";
+  return listProjectWorkspaceGroups()[0]?.id || "";
 }
 
-// 描述：显式设置最近使用代码目录分组。
+// 描述：显式设置最近使用项目目录分组。
 //
 // Params:
 //
 //   - workspaceId: 目录分组 ID。
-export function setLastUsedCodeWorkspaceId(workspaceId: string) {
+export function setLastUsedProjectWorkspaceId(workspaceId: string) {
   if (!workspaceId) {
     return;
   }
-  writeLastCodeWorkspaceId(workspaceId);
+  writeLastProjectWorkspaceId(workspaceId);
 }

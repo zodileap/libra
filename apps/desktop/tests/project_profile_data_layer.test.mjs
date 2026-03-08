@@ -25,11 +25,11 @@ test("TestProjectProfileDataShouldProvideCrudAndRevisionConflictGuard", () => {
   // 描述：
   //
   //   - 数据层应暴露 get/save/upsert/patch/bootstrap 全量接口，支持项目级共享结构化信息维护。
-  assert.match(source, /export function getCodeWorkspaceProjectProfile\(/);
-  assert.match(source, /export function saveCodeWorkspaceProjectProfile\(/);
-  assert.match(source, /export function upsertCodeWorkspaceProjectProfile\(/);
-  assert.match(source, /export function patchCodeWorkspaceProjectProfile\(/);
-  assert.match(source, /export function bootstrapCodeWorkspaceProjectProfile\(/);
+  assert.match(source, /export function getProjectWorkspaceProfile\(/);
+  assert.match(source, /export function saveProjectWorkspaceProfile\(/);
+  assert.match(source, /export function upsertProjectWorkspaceProfile\(/);
+  assert.match(source, /export function patchProjectWorkspaceProfile\(/);
+  assert.match(source, /export function bootstrapProjectWorkspaceProfile\(/);
 
   // 描述：
   //
@@ -58,7 +58,7 @@ test("TestProjectProfileNormalizeShouldUpgradeSchemaAndKeepEmptyLists", () => {
   // 描述：
   //
   //   - 归一化时应自动提升 schemaVersion 到当前版本，避免旧版本签名长期滞留。
-  assert.match(source, /Math\.max\(CODE_WORKSPACE_PROFILE_SCHEMA_VERSION, Math\.trunc\(sourceSchemaVersion\)\)/);
+  assert.match(source, /Math\.max\(PROJECT_WORKSPACE_PROFILE_SCHEMA_VERSION, Math\.trunc\(sourceSchemaVersion\)\)/);
 
   // 描述：
   //

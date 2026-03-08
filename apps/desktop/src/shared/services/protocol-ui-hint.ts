@@ -8,6 +8,11 @@ export interface ProtocolUiHintError {
   retryable: boolean;
 }
 
+// 描述：归一化协议动作类型，统一输出当前支持的工作流动作键。
+function normalizeUiHintActionKind(actionKey: string): WorkflowUiHint["actions"][number]["kind"] {
+  return actionKey as WorkflowUiHint["actions"][number]["kind"];
+}
+
 // 描述：将 Core 协议 UI Hint 转换为前端工作流可消费结构。
 export function mapProtocolUiHint(hint: ProtocolUiHint): WorkflowUiHint {
   return {
@@ -16,7 +21,7 @@ export function mapProtocolUiHint(hint: ProtocolUiHint): WorkflowUiHint {
     title: hint.title,
     message: hint.message,
     actions: hint.actions.map((action) => ({
-      kind: action.key as WorkflowUiHint["actions"][number]["kind"],
+      kind: normalizeUiHintActionKind(action.key),
       label: action.label,
       intent: action.intent,
     })),
@@ -59,9 +64,9 @@ export function buildUiHintFromProtocolError(
       title: "导出能力已关闭",
       message:
         error.suggestion
-        || "当前会话仍可执行编辑操作；如需导出，请在模型设置里开启导出能力。",
+        || "当前会话仍可执行编辑操作；如需导出，请在智能体设置里开启导出能力。",
       actions: [
-        { kind: "open_model_settings", label: "打开模型设置", intent: "primary" },
+        { kind: "open_agent_settings", label: "打开智能体设置", intent: "primary" },
         { kind: "dismiss", label: "知道了", intent: "default" },
       ],
     };

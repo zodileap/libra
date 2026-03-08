@@ -25,18 +25,24 @@ test("TestDesktopRouterShouldUseModuleFoldersAndBuildTimeModuleFilter", () => {
 
   // 描述:
   //
-  //   - 通用页面应从 common 模块暴露；业务模块继续走白名单构建期过滤。
+  //   - 通用页面应从 common 模块暴露；单智能体页面统一从 agent 模块收口。
   assert.match(routerSource, /resolveBuildEnabledModules\(__DESKTOP_ENABLED_MODULES__\)/);
   assert.match(routerSource, /from "\.\.\/modules\/common\/routes"/);
-  assert.match(routerSource, /from "\.\.\/modules\/code\/routes"/);
-  assert.match(routerSource, /from "\.\.\/modules\/model\/routes"/);
+  assert.match(routerSource, /from "\.\.\/modules\/agent\/routes"/);
+  assert.doesNotMatch(routerSource, /from "\.\.\/modules\/model\/routes"/);
   assert.match(routerSource, /CommonWorkflowsPageLazy/);
   assert.match(routerSource, /CommonMcpPageLazy/);
-  assert.match(routerSource, /LegacyWorkflowRedirect/);
+  assert.doesNotMatch(routerSource, /LegacyWorkflowRedirect/);
+  assert.match(routerSource, /path="home"/);
+  assert.match(routerSource, /path="settings\/agent"/);
+  assert.match(routerSource, /path="project-settings"/);
   assert.match(routerSource, /path=\{WORKFLOW_PAGE_PATH\.slice\(1\)\}/);
   assert.match(routerSource, /path=\{MCP_PAGE_PATH\.slice\(1\)\}/);
-  assert.match(routerSource, /path="agents\/code\/workflows"/);
-  assert.match(routerSource, /path="agents\/model\/workflows"/);
+  assert.doesNotMatch(routerSource, /agents\/code/);
+  assert.doesNotMatch(routerSource, /agents\/model/);
+  assert.match(routerSource, /function shouldPreferAdminOverview\(auth: AuthState\): boolean/);
+  assert.match(routerSource, /auth\.selectedIdentity\.roles\.some\(\(role\) => role === "permission_admin"\)/);
+  assert.match(routerSource, /if \(routeAccess\.isModuleEnabled\(SETTINGS_MODULE_KEY\) && shouldPreferAdminOverview\(auth\)\) \{\s*return SETTINGS_OVERVIEW_PATH;\s*\}/s);
   assert.match(moduleAccessSource, /export function resolveBuildEnabledModules/);
   assert.match(moduleAccessSource, /from "\.\.\/modules\/manifest"/);
   assert.match(manifestSource, /DESKTOP_ROUTE_MODULE_MANIFEST/);
@@ -59,6 +65,8 @@ test("TestDesktopSidebarShouldRespectRouteAccessVisibility", () => {
   assert.match(layoutSource, /routeAccess: RouteAccess;/);
   assert.match(layoutSource, /<ClientSidebar[\s\S]*routeAccess=\{routeAccess\}/);
   assert.match(sidebarSource, /resolveSettingsSidebarItems\(routeAccess\)/);
+  assert.match(userMenuSource, /key: "overview"/);
+  assert.match(userMenuSource, /navigate\("\/settings\/overview"\)/);
   assert.match(userMenuSource, /key: "ai-key"/);
   assert.match(commonRoutesSource, /routeAccess\.isAgentEnabled\(agent\.key\)/);
   assert.match(sidebarSource, /routeAccess\.isModuleEnabled\("workflow"\)/);

@@ -1,334 +1,153 @@
-import { IS_BROWSER, STORAGE_KEYS } from "../../../shared/constants";
+import { invoke } from "@tauri-apps/api/core";
+import { COMMANDS } from "../../../shared/constants";
 
 // 描述：
 //
-//   - 定义技能目录项结构，供技能页渲染“已安装/推荐”列表。
-export interface SkillCatalogItem {
+//   - 定义单个 Agent Skill 结构，统一承载标准技能包的元信息、正文与来源。
+export interface AgentSkillItem {
   id: string;
   name: string;
   description: string;
-  icon: string;
-  versions: string[];
-  installedByDefault?: boolean;
+  source: "builtin" | "external" | string;
+  rootPath: string;
+  skillFilePath: string;
+  markdownBody: string;
+  removable: boolean;
 }
 
 // 描述：
 //
-//   - 定义技能页总览结构。
+//   - 定义技能页总览结构，按“应用内置 / 外部技能”分组返回。
 export interface SkillOverview {
-  installed: SkillCatalogItem[];
-  marketplace: SkillCatalogItem[];
+  builtin: AgentSkillItem[];
+  external: AgentSkillItem[];
+  all: AgentSkillItem[];
 }
 
-
-
-// 描述：
-//
-//   - 技能目录清单；MVP 阶段先由前端内置，后续替换为服务端目录接口。
-const SKILL_CATALOG: SkillCatalogItem[] = [
-  {
-    id: "skill_creator",
-    name: "Skill Creator",
-    description: "创建或维护技能定义模板。",
-    icon: "note_stack_add",
-    versions: ["1.0.0"],
-    installedByDefault: true,
-  },
-  {
-    id: "skill_installer",
-    name: "Skill Installer",
-    description: "安装官方技能并管理版本。",
-    icon: "download",
-    versions: ["1.0.0"],
-    installedByDefault: true,
-  },
-  {
-    id: "requirements_analyst",
-    name: "需求分析",
-    description: "将自然语言需求拆解为可执行任务与验收项。",
-    icon: "description",
-    versions: ["1.0.0"],
-  },
-  {
-    id: "apifox_model_designer",
-    name: "Apifox 数据模型",
-    description: "根据需求构建前后端交互数据模型，并通过 Apifox 官方 MCP Server 同步。",
-    icon: "dataset",
-    versions: ["1.0.0"],
-  },
-  {
-    id: "frontend_architect",
-    name: "前端架构设计",
-    description: "输出前端目录结构、模块边界与实现约束。",
-    icon: "account_tree",
-    versions: ["1.0.0"],
-  },
-  {
-    id: "frontend_page_builder",
-    name: "前端页面构建",
-    description: "依据页面布局与元素结构实现前端页面与交互。",
-    icon: "dashboard_customize",
-    versions: ["1.0.0"],
-  },
-  {
-    id: "db_designer",
-    name: "数据库设计",
-    description: "根据需求输出数据库设计与迁移草案。",
-    icon: "database",
-    versions: ["1.0.0"],
-  },
-  {
-    id: "api_codegen",
-    name: "接口代码生成",
-    description: "基于设计结果生成接口代码与测试骨架。",
-    icon: "code",
-    versions: ["1.0.0"],
-  },
-  {
-    id: "test_runner",
-    name: "测试执行",
-    description: "统一触发测试并归档执行结果。",
-    icon: "play_arrow",
-    versions: ["1.0.0"],
-  },
-  {
-    id: "report_builder",
-    name: "报告生成",
-    description: "汇总执行结果并输出交付报告。",
-    icon: "article",
-    versions: ["1.0.0"],
-  },
-];
-
-// 描述：
-//
-//   - 解析并归一化技能版本列表，确保版本值为非空字符串集合。
-//
-// Params:
-//
-//   - rawVersions: 原始版本数据。
-//
-// Returns:
-//
-//   - 归一化后的版本数组；无可用版本时返回默认版本。
-function normalizeSkillVersions(rawVersions: unknown): string[] {
-  if (!Array.isArray(rawVersions)) {
-    return ["1.0.0"];
-  }
-  const normalized = rawVersions
-    .filter((item): item is string => typeof item === "string")
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
-  return normalized.length > 0 ? Array.from(new Set(normalized)) : ["1.0.0"];
+interface RawAgentSkillItem {
+  id?: unknown;
+  name?: unknown;
+  description?: unknown;
+  source?: unknown;
+  root_path?: unknown;
+  skill_file_path?: unknown;
+  markdown_body?: unknown;
+  removable?: unknown;
 }
 
 // 描述：
 //
-//   - 将单条目录项转换为统一结构，忽略缺失关键字段的数据。
+//   - 将 Tauri 返回的原始技能记录归一化为前端统一结构，过滤缺失关键字段的数据。
 //
 // Params:
 //
-//   - rawItem: 原始目录项对象。
+//   - rawItem: 原始技能记录。
 //
 // Returns:
 //
-//   - 归一化后的目录项；若不合法则返回 null。
-function normalizeSkillCatalogItem(rawItem: unknown): SkillCatalogItem | null {
+//   - 合法技能记录；若缺失关键字段则返回 null。
+function normalizeAgentSkillItem(rawItem: unknown): AgentSkillItem | null {
   if (!rawItem || typeof rawItem !== "object") {
     return null;
   }
-  const source = rawItem as Partial<SkillCatalogItem>;
+  const source = rawItem as RawAgentSkillItem;
   const id = String(source.id || "").trim();
   const name = String(source.name || "").trim();
-  if (!id || !name) {
+  const skillFilePath = String(source.skill_file_path || "").trim();
+  if (!id || !name || !skillFilePath) {
     return null;
   }
   return {
     id,
     name,
     description: String(source.description || "").trim(),
-    icon: String(source.icon || "new_releases").trim() || "new_releases",
-    versions: normalizeSkillVersions(source.versions),
-    installedByDefault: Boolean(source.installedByDefault),
+    source: String(source.source || "builtin").trim() || "builtin",
+    rootPath: String(source.root_path || "").trim(),
+    skillFilePath,
+    markdownBody: String(source.markdown_body || "").trim(),
+    removable: Boolean(source.removable),
   };
 }
 
 // 描述：
 //
-//   - 根据环境变量读取技能目录远端地址，未配置时返回空字符串。
+//   - 统一通过 Tauri 拉取 Agent Skills 注册表，确保技能发现来源于真实 `SKILL.md` 包目录。
 //
 // Returns:
 //
-//   - 远端技能目录地址。
-function resolveRemoteSkillCatalogUrl(): string {
-  return String(import.meta.env.VITE_SKILL_CATALOG_URL || "").trim();
+//   - 按后端排序返回的技能列表。
+export async function listAgentSkills(): Promise<AgentSkillItem[]> {
+  const payload = await invoke<unknown[]>(COMMANDS.LIST_AGENT_SKILLS);
+  return (Array.isArray(payload) ? payload : [])
+    .map((item) => normalizeAgentSkillItem(item))
+    .filter((item): item is AgentSkillItem => Boolean(item));
 }
 
 // 描述：
 //
-//   - 从远端目录服务加载技能清单；网络异常或返回结构不合法时返回 null 以触发本地回退。
+//   - 生成技能页总览结构，统一按来源分组，供页面层直接渲染。
 //
 // Returns:
 //
-//   - 远端目录列表；若加载失败则返回 null。
-async function loadRemoteSkillCatalog(): Promise<SkillCatalogItem[] | null> {
-  const remoteUrl = resolveRemoteSkillCatalogUrl();
-  if (!remoteUrl) {
-    return null;
-  }
-  try {
-    const response = await fetch(remoteUrl, { cache: "no-store" });
-    if (!response.ok) {
-      return null;
-    }
-    const payload = await response.json() as unknown;
-    const rawList = Array.isArray(payload)
-      ? payload
-      : payload && typeof payload === "object" && Array.isArray((payload as { items?: unknown[] }).items)
-        ? (payload as { items: unknown[] }).items
-        : null;
-    if (!rawList) {
-      return null;
-    }
-    const normalized = rawList
-      .map((item) => normalizeSkillCatalogItem(item))
-      .filter((item): item is SkillCatalogItem => Boolean(item));
-    return normalized;
-  } catch (_err) {
-    return null;
-  }
-}
-
-// 描述：
-//
-//   - 读取内置默认安装技能 ID 集合。
-//
-// Returns:
-//
-//   - 默认安装技能 ID 列表。
-function resolveDefaultInstalledSkillIds(): string[] {
-  return SKILL_CATALOG.filter((item) => item.installedByDefault).map((item) => item.id);
-}
-
-// 描述：
-//
-//   - 从本地存储读取已安装技能 ID；读取失败时回退到默认安装集合。
-//
-// Returns:
-//
-//   - 已安装技能 ID 列表。
-export function readInstalledSkillIdsFromStorage(): string[] {
-  const defaults = resolveDefaultInstalledSkillIds();
-  if (!IS_BROWSER) {
-    return defaults;
-  }
-  const rawValue = window.localStorage.getItem(STORAGE_KEYS.SKILL_INSTALLED_IDS);
-  if (!rawValue) {
-    return defaults;
-  }
-  try {
-    const parsed = JSON.parse(rawValue) as unknown;
-    if (!Array.isArray(parsed)) {
-      return defaults;
-    }
-    const normalized = parsed
-      .filter((item): item is string => typeof item === "string")
-      .map((item) => item.trim())
-      .filter((item) => item.length > 0);
-    return normalized.length > 0 ? Array.from(new Set(normalized)) : defaults;
-  } catch (_err) {
-    return defaults;
-  }
-}
-
-// 描述：
-//
-//   - 将已安装技能 ID 写入本地存储。
-//
-// Params:
-//
-//   - installedIds: 已安装技能 ID 列表。
-function writeInstalledSkillIdsToStorage(installedIds: string[]) {
-  if (!IS_BROWSER) {
-    return;
-  }
-  window.localStorage.setItem(STORAGE_KEYS.SKILL_INSTALLED_IDS, JSON.stringify(installedIds));
-}
-
-// 描述：
-//
-//   - 获取技能目录清单；当前先返回内置目录，后续可替换为服务端获取。
-//
-// Returns:
-//
-//   - 技能目录列表。
-export async function listSkillCatalog(): Promise<SkillCatalogItem[]> {
-  const remoteCatalog = await loadRemoteSkillCatalog();
-  if (remoteCatalog) {
-    return remoteCatalog;
-  }
-  return SKILL_CATALOG;
-}
-
-// 描述：
-//
-//   - 获取当前已安装技能目录项，供工作流节点选择器复用。
-//
-// Params:
-//
-//   - catalog: 可选技能目录缓存；传入时可避免重复读取目录。
-//
-// Returns:
-//
-//   - 已安装技能列表。
-export async function listInstalledSkills(catalog?: SkillCatalogItem[]): Promise<SkillCatalogItem[]> {
-  const nextCatalog = catalog || await listSkillCatalog();
-  const installedIds = new Set(readInstalledSkillIdsFromStorage());
-  return nextCatalog.filter((item) => installedIds.has(item.id));
-}
-
-// 描述：
-//
-//   - 获取技能总览（已安装/推荐）。
-//
-// Returns:
-//
-//   - 技能总览数据。
+//   - 技能总览结构。
 export async function listSkillOverview(): Promise<SkillOverview> {
-  const catalog = await listSkillCatalog();
-  const installed = await listInstalledSkills(catalog);
-  const installedIds = new Set(installed.map((item) => item.id));
-  const marketplace = catalog.filter((item) => !installedIds.has(item.id));
+  const all = await listAgentSkills();
   return {
-    installed,
-    marketplace,
+    builtin: all.filter((item) => item.source === "builtin"),
+    external: all.filter((item) => item.source !== "builtin"),
+    all,
   };
 }
 
 // 描述：
 //
-//   - 更新技能安装状态，并返回更新后的技能总览。
-//
-// Params:
-//
-//   - skillId: 目标技能 ID。
-//   - installed: true 表示安装，false 表示卸载。
+//   - 打开本地目录选择器，供用户选择待导入的标准技能包目录。
 //
 // Returns:
 //
-//   - 更新后的技能总览数据。
-export async function updateSkillInstalledState(skillId: string, installed: boolean): Promise<SkillOverview> {
-  const catalog = await listSkillCatalog();
-  const allowedIds = new Set(catalog.map((item) => item.id));
-  if (!allowedIds.has(skillId)) {
-    return listSkillOverview();
+//   - 选中的目录路径；若取消则返回 null。
+export async function pickLocalAgentSkillFolder(): Promise<string | null> {
+  const selectedPath = await invoke<string | null>(COMMANDS.PICK_AGENT_SKILL_FOLDER);
+  const normalizedPath = String(selectedPath || "").trim();
+  return normalizedPath || null;
+}
+
+// 描述：
+//
+//   - 将指定本地目录导入到外部技能根目录，并返回最新技能记录。
+//
+// Params:
+//
+//   - path: 本地技能目录路径。
+//
+// Returns:
+//
+//   - 导入后的技能记录。
+export async function importAgentSkillFromPath(path: string): Promise<AgentSkillItem> {
+  const payload = await invoke<unknown>(COMMANDS.IMPORT_AGENT_SKILL_FROM_PATH, {
+    path,
+  });
+  const normalized = normalizeAgentSkillItem(payload);
+  if (!normalized) {
+    throw new Error("导入技能后的返回结果无效。");
   }
-  const current = new Set(readInstalledSkillIdsFromStorage());
-  if (installed) {
-    current.add(skillId);
-  } else {
-    current.delete(skillId);
-  }
-  writeInstalledSkillIdsToStorage(Array.from(current));
+  return normalized;
+}
+
+// 描述：
+//
+//   - 移除外部技能目录，并返回最新总览，供页面层直接刷新展示。
+//
+// Params:
+//
+//   - skillId: 待移除的技能名称。
+//
+// Returns:
+//
+//   - 移除后的技能总览。
+export async function removeAgentSkill(skillId: string): Promise<SkillOverview> {
+  await invoke<boolean>(COMMANDS.REMOVE_USER_AGENT_SKILL, {
+    skillId,
+  });
   return listSkillOverview();
 }

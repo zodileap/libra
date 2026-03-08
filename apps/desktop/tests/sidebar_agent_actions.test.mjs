@@ -24,15 +24,14 @@ test("TestAgentSidebarHeaderUsesCreateActionInsteadOfRefresh", () => {
 
   // 描述:
   //
-  //   - 侧边栏头部按钮应改为新增会话入口，并跳转到独立代码项目选择页。
+  //   - 侧边栏头部按钮应改为新项目入口，并跳转到统一项目选择页。
   assert.match(source, /icon=\{createButtonHovered \? "note_stack_add_fill" : "note_stack_add"\}/);
   assert.match(source, /onMouseEnter=\{\(\) => \{\s*setCreateButtonHovered\(true\);\s*\}\}/s);
   assert.match(source, /onMouseLeave=\{\(\) => \{\s*setCreateButtonHovered\(false\);\s*\}\}/s);
   assert.match(source, /label="新增"/);
   assert.match(source, /const handleCreateSession = \(\) => \{/);
-  assert.match(source, /navigate\("\/agents\/code"\);/);
-  assert.match(source, /navigate\(`\/agents\/\$\{agentKey\}`\);/);
-  assert.match(source, /createRuntimeSession\(/);
+  assert.match(source, /navigate\(AGENT_HOME_PATH\);/);
+  assert.doesNotMatch(source, /navigate\(`\/agents\/\$\{agentKey\}`\);/);
 });
 
 test("TestAgentSidebarShouldSeparateAgentAndWorkflowSettingsWithUnifiedStyle", () => {
@@ -41,12 +40,12 @@ test("TestAgentSidebarShouldSeparateAgentAndWorkflowSettingsWithUnifiedStyle", (
 
   // 描述:
   //
-  //   - 当前实现将“智能体设置/工作流设置”收敛到设置菜单与工作流页，侧边栏风格统一走 AriMenu + desk-sidebar 样式体系。
+  //   - 当前实现将“智能体设置/工作流设置”收敛到设置菜单与工作流页，统一使用新路径与 AriMenu 风格体系。
   assert.match(source, /function SettingsSidebar/);
   assert.match(source, /resolveSettingsSidebarItems\(routeAccess\)/);
   assert.match(source, /selectedSettingKey/);
-  assert.match(source, /if \(location\.pathname\.includes\("\/agents\/model\/settings"\)/);
-  assert.match(source, /if \(location\.pathname\.includes\("\/agents\/code\/settings"\)/);
+  assert.match(source, /if \(location\.pathname\.includes\(AGENT_SETTINGS_PATH\) && routeAccess\.isAgentEnabled\("agent"\)\)/);
+  assert.doesNotMatch(source, /\/agents\/model\/settings/);
   assert.match(source, /<AriMenu/);
   assert.match(source, /items=\{settingItems\}/);
   assert.match(source, /className="desk-sidebar"/);
@@ -117,22 +116,22 @@ test("TestAgentSidebarSessionListFiltersDeletedItems", () => {
   assert.match(backendSource, /const query = toQueryString\(\{ userId, agentCode, status \}\);/);
 });
 
-test("TestCodeAgentSidebarShouldUseWorkspaceTreeAndWorkspaceActions", () => {
+test("TestAgentSidebarShouldUseWorkspaceTreeAndWorkspaceActions", () => {
   const source = readDesktopSource("src/sidebar/index.tsx");
 
   // 描述:
   //
-  //   - 代码智能体侧边栏应基于 AriMenu children 渲染“目录分组 -> 会话列表”多级菜单，并提供“更多/设置/新增话题”三类目录动作。
-  assert.match(source, /interface CodeWorkspaceSessionGroup/);
-  assert.match(source, /const codeWorkspaceSessionGroups = useMemo<CodeWorkspaceSessionGroup\[]>/);
+  //   - 统一智能体侧边栏应基于 AriMenu children 渲染“目录分组 -> 会话列表”多级菜单，并提供“更多/设置/新增话题”三类目录动作。
+  assert.match(source, /interface WorkspaceSessionGroup/);
+  assert.match(source, /const workspaceSessionGroups = useMemo<WorkspaceSessionGroup\[]>/);
   assert.match(source, /const buildWorkspaceMenuKey = \(workspaceId: string\) => `workspace:\$\{workspaceId\}`;/);
   assert.match(source, /children: buildSessionMenuItems\(group\.sessions\)/);
-  assert.match(source, /className="desk-sidebar-nav desk-code-workspace-tree"/);
+  assert.match(source, /className="desk-sidebar-nav desk-project-workspace-tree"/);
   assert.match(source, /mode="vertical"/);
-  assert.match(source, /items=\{codeWorkspaceMenuItems\}/);
+  assert.match(source, /items=\{projectWorkspaceMenuItems\}/);
   assert.match(source, /defaultExpandedKeys=\{defaultExpandedWorkspaceKeys\}/);
-  assert.match(source, /expandedKeys=\{codeWorkspaceExpandedKeys\}/);
-  assert.match(source, /onExpand=\{setCodeWorkspaceExpandedKeys\}/);
+  assert.match(source, /expandedKeys=\{projectWorkspaceExpandedKeys\}/);
+  assert.match(source, /onExpand=\{setProjectWorkspaceExpandedKeys\}/);
   assert.match(source, /icon="more_horiz"/);
   assert.match(source, /icon="settings"/);
   assert.match(source, /aria-label="项目设置"/);
@@ -148,9 +147,9 @@ test("TestAgentSidebarTitleUsesUnifiedResolver", () => {
 
   // 描述:
   //
-  //   - 侧边栏标题应与会话内容区共用统一标题解析逻辑，不再使用“模型会话 #id”默认拼接文案。
+  //   - 侧边栏标题应与会话内容区共用统一标题解析逻辑，不再使用“旧会话分支 #id”默认拼接文案。
   assert.match(sidebarSource, /resolveAgentSessionTitle\(agentKey, item\.id\)/);
-  assert.match(dataSource, /export function resolveAgentSessionTitle\(agentKey: "code" \| "model", sessionId\?: string \| null\): string/);
+  assert.match(dataSource, /export function resolveAgentSessionTitle\(agentKey: AgentKey, sessionId\?: string \| null\): string/);
   assert.match(dataSource, /return "会话详情";/);
 });
 

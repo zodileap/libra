@@ -39,7 +39,7 @@ test("TestSidebarDeleteButtonsShouldUseGhostAndColor", () => {
   );
   assert.match(
     source,
-    /key=\{`code-workspace-menu-\$\{sessionMenuRenderVersion\}`\}/,
+    /key=\{`project-workspace-menu-\$\{sessionMenuRenderVersion\}`\}/,
   );
   assert.match(
     source,

@@ -17,7 +17,7 @@ export function HomePage({ availableAgents }: HomePageProps) {
         <AriTypography variant="h1" value="欢迎使用 Libra" />
         <AriTypography
           variant="body"
-          value="平台是主入口，智能体是可拆分模块。你可以从左侧进入代码智能体或模型智能体。"
+          value="Home 已切换为统一智能体项目入口，左侧直接进入工作流、技能、MCP 与项目列表。"
         />
       </AriFlex>
 

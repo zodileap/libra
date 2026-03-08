@@ -47,10 +47,10 @@ test("TestDesktopUpdateFlowShouldConnectApiDownloadAndInstall", () => {
   const tauriSource = readDesktopSource("src-tauri/src/main.rs");
   const tauriCargoSource = readDesktopSource("src-tauri/Cargo.toml");
   const rootPackageSource = readRepoSource("package.json");
-  const runtimeApiSource = readRepoSource("services/runtime/api/v1/workflow.go");
-  const runtimeApiServerSource = readRepoSource("services/runtime/api/v1/server.go");
-  const runtimeServiceSource = readRepoSource("services/runtime/service/v1/workflow_service.go");
-  const runtimeSpecsSource = readRepoSource("services/runtime/specs/v1/workflow.go");
+  const runtimeApiSource = readRepoSource("services/internal/runtime/api/workflow.go");
+  const runtimeApiServerSource = readRepoSource("services/internal/runtime/api/server.go");
+  const runtimeServiceSource = readRepoSource("services/internal/runtime/service/workflow_service.go");
+  const runtimeSpecsSource = readRepoSource("services/internal/runtime/specs/workflow.go");
 
   // 描述：
   //

@@ -20,10 +20,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
-  CODE_WORKSPACE_PROFILE_UPDATED_EVENT,
-  getCodeWorkspaceProjectProfile,
-  getCodeWorkspaceGroupById,
-  getCodeWorkspaceIdBySessionId,
+  PROJECT_WORKSPACE_PROFILE_UPDATED_EVENT,
+  getProjectWorkspaceProfile,
+  getProjectWorkspaceGroupById,
+  getProjectWorkspaceIdBySessionId,
   getSessionDebugArtifact,
   getSessionRunState,
   getSessionMessages,
@@ -31,7 +31,6 @@ import {
   resolveAgentSessionTitle,
   removeSessionRunState,
   SESSION_TITLE_UPDATED_EVENT,
-  upsertModelProject,
   upsertSessionRunState,
   upsertSessionDebugArtifact,
   upsertSessionMessages,
@@ -39,7 +38,7 @@ import {
   removeAgentSession,
   renameAgentSession,
   togglePinnedAgentSession,
-  type CodeWorkspaceProjectProfile,
+  type ProjectWorkspaceProfile,
   type SessionRunMeta as PersistedSessionRunMeta,
 } from "../../shared/data";
 import { updateRuntimeSessionStatus } from "../../shared/services/backend-api";
@@ -55,45 +54,40 @@ import {
 } from "../../shared/services/protocol-ui-hint";
 import type {
   AgentKey,
-  ModelAssetRecord,
-  ModelEventRecord,
-  ModelStepRecord,
+  AgentAssetRecord,
+  AgentEventRecord,
+  AgentStepRecord,
   AiKeyItem,
   BlenderBridgeEnsureOptions,
   BlenderBridgeEnsureResult,
   BlenderBridgeRuntime,
   LoginUser,
-  ModelMcpCapabilities,
+  DccMcpCapabilities,
   ProtocolUiHint,
 } from "../../shared/types";
 import { ChatMarkdown } from "../chat-markdown";
 import {
-  buildCodeWorkflowSkillExecutionPlan,
-  buildCodeWorkflowPrompt,
-  listCodeWorkflows,
-  listModelWorkflows,
-  runModelWorkflow,
+  buildAgentWorkflowSkillExecutionPlan,
+  buildAgentWorkflowPrompt,
+  listAgentWorkflows,
 } from "../../shared/workflow";
-import { listInstalledSkills } from "../../modules/common/services";
-import type { SkillCatalogItem } from "../../modules/common/services";
+import { listAgentSkills } from "../../modules/common/services";
+import type { AgentSkillItem } from "../../modules/common/services";
+import {
+  AGENT_HOME_PATH,
+  AGENT_SETTINGS_PATH,
+} from "../../modules/agent/routes";
 import { useDesktopHeaderSlot } from "../app-header/header-slot-context";
 import type {
-  CodeWorkflowDefinition,
-  WorkflowDefinition,
+  AgentWorkflowDefinition,
   WorkflowUiHint,
 } from "../../shared/workflow";
 import { resolveSessionUiConfig, type SessionAgentUiConfig } from "./config";
 import {
-  buildCodeSessionContextPrompt,
+  buildSessionContextPrompt,
   buildSessionSkillPrompt,
-  buildUserReadableModelSummary,
-  CODE_SKILL_SELECTED_KEY,
-  CODE_WORKFLOW_SELECTED_KEY,
-  extractOutputDirFromPrompt,
-  mergeModelEventRecords,
-  mergeModelStepRecords,
-  MODEL_SKILL_SELECTED_KEY,
-  MODEL_WORKFLOW_SELECTED_KEY,
+  AGENT_SKILL_SELECTED_KEY,
+  AGENT_WORKFLOW_SELECTED_KEY,
   pruneAssistantRetryTail,
   readSelectedSkillIds,
   readSelectedWorkflowId,
@@ -107,14 +101,11 @@ import {
   IS_BROWSER,
   COMMANDS,
   EVENT_AGENT_TEXT_STREAM,
-  EVENT_MODEL_DEBUG_TRACE,
-  EVENT_MODEL_SESSION_STREAM,
   isCancelErrorCode,
   STREAM_KINDS,
 } from "../../shared/constants";
 import type {
   AgentTextStreamEvent,
-  ModelDebugTraceEvent,
 } from "../../shared/types";
 
 // 描述:
@@ -125,7 +116,7 @@ interface SessionPageProps {
   sessionId: string;
   sessionUiConfig?: SessionAgentUiConfig;
   currentUser?: LoginUser | null;
-  modelMcpCapabilities: ModelMcpCapabilities;
+  dccMcpCapabilities: DccMcpCapabilities;
   blenderBridgeRuntime: BlenderBridgeRuntime;
   ensureBlenderBridge: (options?: BlenderBridgeEnsureOptions) => Promise<BlenderBridgeEnsureResult>;
   aiKeys: AiKeyItem[];
@@ -159,9 +150,9 @@ interface AgentRunResponse {
   message: string;
   actions: string[];
   exported_file?: string;
-  steps: ModelStepRecord[];
-  events: ModelEventRecord[];
-  assets: ModelAssetRecord[];
+  steps: AgentStepRecord[];
+  events: AgentEventRecord[];
+  assets: AgentAssetRecord[];
   ui_hint?: ProtocolUiHint;
 }
 
@@ -266,19 +257,6 @@ interface DependencyRuleConfirmState {
 
 // 描述:
 //
-//   - 定义模型会话重试等流程的响应结构。
-interface ModelSessionRunResponse {
-  trace_id: string;
-  message: string;
-  steps: ModelStepRecord[];
-  events: ModelEventRecord[];
-  assets: ModelAssetRecord[];
-  exported_file?: string;
-  ui_hint?: ProtocolUiHint;
-}
-
-// 描述:
-//
 //   - 定义运行片段状态枚举。
 type AssistantRunSegmentStatus = "running" | "finished" | "failed";
 
@@ -331,29 +309,7 @@ interface AssistantRunMeta {
 //   - 定义助手运行阶段枚举，用于心跳与状态文案映射。
 type AssistantRunStage = "planning" | "bridge" | "executing" | "finalizing";
 
-// 描述:
-//
-//   - 定义模型会话流式事件结构，包含步骤与事件增量。
-interface ModelSessionStreamEvent {
-  session_id: string;
-  trace_id: string;
-  status: string;
-  message: string;
-  step?: ModelStepRecord;
-  event?: ModelEventRecord;
-}
-
-// AgentTextStreamEvent 和 ModelDebugTraceEvent 已提取至 shared/types.ts 统一定义。
-
-// 描述:
-//
-//   - 定义模型会话 AI 总结响应结构。
-interface ModelSessionAiSummaryResponse {
-  summary: string;
-  prompt: string;
-  raw_response: string;
-  provider: string;
-}
+// AgentTextStreamEvent 和 AgentDebugTraceEvent 已提取至 shared/types.ts 统一定义。
 
 // 描述:
 //
@@ -396,63 +352,6 @@ function formatElapsedDuration(startedAt: number, finishedAt?: number): string {
     return `${minutes}分${seconds}秒`;
   }
   return `${seconds}秒`;
-}
-
-// 描述：把模型会话流式事件映射为“说明 + 步骤”结构，用于进行中轨迹渲染。
-//
-// Params:
-//
-//   - payload: 模型会话流式事件。
-//   - segmentKey: 段唯一键。
-//
-// Returns:
-//
-//   - 轨迹段；若事件无有效文本则返回 null。
-function mapModelStreamToRunSegment(
-  payload: ModelSessionStreamEvent,
-  segmentKey: string,
-): AssistantRunSegment | null {
-  const stepText = (payload.step?.summary || payload.event?.message || payload.message || "").trim();
-  if (!stepText) {
-    return null;
-  }
-
-  const eventName = payload.event?.event || "";
-  const code = payload.step?.code || "";
-  const status: AssistantRunSegmentStatus =
-    payload.status === "failed" || payload.step?.status === "failed" || eventName === "step_failed"
-      ? "failed"
-      : payload.status === "finished" || payload.step?.status === "success" || eventName === "step_finished"
-        ? "finished"
-        : "running";
-
-  let intro = status === "running" ? "执行步骤推进中" : "步骤执行完成";
-  if (code) {
-    if (status === "running") {
-      intro = `执行步骤：${code}`;
-    } else if (status === "failed") {
-      intro = `步骤失败：${code}`;
-    } else {
-      intro = `步骤完成：${code}`;
-    }
-  } else if (eventName === "step_started") {
-    intro = "步骤开始执行";
-  } else if (eventName === "branch_selected") {
-    intro = "已选择执行分支";
-  } else if (eventName === "operation_transaction_started") {
-    intro = "事务开始执行";
-  } else if (eventName === "operation_transaction_committed") {
-    intro = "事务已提交";
-  } else if (status === "failed") {
-    intro = "执行失败";
-  }
-
-  return {
-    key: segmentKey,
-    intro,
-    step: stepText,
-    status,
-  };
 }
 
 // 描述:
@@ -746,11 +645,11 @@ function resolveStreamErrorCode(payload: AgentTextStreamEvent): string {
   return typeof data.code === "string" ? data.code : "";
 }
 
-// 描述：把代码智能体文本流事件映射为“说明 + 步骤”结构，用于统一的进行中轨迹渲染。
+// 描述：把智能体文本流事件映射为“说明 + 步骤”结构，用于统一的进行中轨迹渲染。
 //
 // Params:
 //
-//   - payload: 代码智能体文本流事件。
+//   - payload: 智能体文本流事件。
 //   - segmentKey: 段唯一键。
 //
 // Returns:
@@ -1291,37 +1190,11 @@ function buildRunSegmentGroups(segments: AssistantRunSegment[]): AssistantRunSeg
     .filter((group) => group.title || group.steps.length > 0);
 }
 
-// 描述：根据模型流式事件判断当前执行阶段，用于无事件时的“心跳提示”文案。
+// 描述：根据智能体文本流事件判断当前执行阶段，用于无事件时的“心跳提示”文案。
 //
 // Params:
 //
-//   - payload: 模型会话流式事件。
-//
-// Returns:
-//
-//   - 归一化后的执行阶段。
-function resolveAssistantRunStage(payload: ModelSessionStreamEvent): AssistantRunStage {
-  const eventName = payload.event?.event || "";
-  const code = payload.step?.code || "";
-  const lowerMessage = (payload.message || payload.event?.message || payload.step?.summary || "").toLowerCase();
-
-  if (payload.status === "finished") {
-    return "finalizing";
-  }
-  if (eventName.includes("transaction") || lowerMessage.includes("bridge") || lowerMessage.includes("blender")) {
-    return "bridge";
-  }
-  if (code || eventName.includes("step") || eventName.includes("branch")) {
-    return "executing";
-  }
-  return "planning";
-}
-
-// 描述：根据代码智能体文本流事件判断当前执行阶段，用于无事件时的“心跳提示”文案。
-//
-// Params:
-//
-//   - payload: 代码智能体文本流事件。
+//   - payload: 智能体文本流事件。
 //
 // Returns:
 //
@@ -1364,46 +1237,24 @@ function buildAssistantHeartbeatSegment(
   stage: AssistantRunStage,
   heartbeatCount: number,
   segmentKey: string,
-  agentKind: "model" | "code",
 ): AssistantRunSegment {
   let intro = "等待执行状态回传…";
   let step = "执行仍在进行中，正在同步最新状态。";
   if (stage === "planning") {
-    if (agentKind === "model") {
-      intro = heartbeatCount <= 1
-        ? "正在解析需求并规划执行步骤…"
-        : "正在确认本次操作所需的 Blender 指令…";
-      step = "等待模型返回可执行步骤与工具链配置。";
-    } else {
-      intro = heartbeatCount <= 1
-        ? "正在解析需求并规划执行步骤…"
-        : "正在确认本次操作所需的工具链与任务顺序…";
-      step = "等待模型返回可执行编排脚本。";
-    }
+    intro = heartbeatCount <= 1
+      ? "正在解析需求并规划执行步骤…"
+      : "正在确认本次操作所需的工具链与任务顺序…";
+    step = "等待模型返回可执行编排脚本。";
   } else if (stage === "bridge") {
-    if (agentKind === "model") {
-      intro = heartbeatCount <= 1
-        ? "正在检查 Blender Bridge 连接状态…"
-        : "等待 Blender 返回环境检查结果…";
-      step = "环境检查完成后将继续执行当前步骤。";
-    } else {
-      intro = heartbeatCount <= 1
-        ? "正在检查执行环境与权限状态…"
-        : "等待工具返回环境检查结果…";
-      step = "环境检查完成后将继续执行当前步骤。";
-    }
+    intro = heartbeatCount <= 1
+      ? "正在检查执行环境与权限状态…"
+      : "等待工具返回环境检查结果…";
+    step = "环境检查完成后将继续执行当前步骤。";
   } else if (stage === "executing") {
-    if (agentKind === "model") {
-      intro = heartbeatCount <= 1
-        ? "等待 Blender 返回本步结果…"
-        : "持续收集 Blender 事件回传…";
-      step = "当前步骤仍在执行，请稍候。";
-    } else {
-      intro = heartbeatCount <= 1
-        ? "等待工具返回本步结果…"
-        : "持续收集工具执行回传…";
-      step = "当前步骤仍在执行，请稍候。";
-    }
+    intro = heartbeatCount <= 1
+      ? "等待工具返回本步结果…"
+      : "持续收集工具执行回传…";
+    step = "当前步骤仍在执行，请稍候。";
   } else if (stage === "finalizing") {
     intro = "正在整理执行结果并生成最终总结…";
     step = "即将输出最终结果。";
@@ -1521,9 +1372,7 @@ export function SessionPage({
   sessionId,
   sessionUiConfig,
   currentUser,
-  modelMcpCapabilities,
-  blenderBridgeRuntime,
-  ensureBlenderBridge,
+  dccMcpCapabilities,
   aiKeys,
 }: SessionPageProps) {
   const navigate = useNavigate();
@@ -1569,8 +1418,8 @@ export function SessionPage({
     return () => clearInterval(timer);
   }, [sessionId]);
   const [sending, setSending] = useState(false);
-  const [stepRecords, setStepRecords] = useState<ModelStepRecord[]>([]);
-  const [eventRecords, setEventRecords] = useState<ModelEventRecord[]>([]);
+  const [stepRecords, setStepRecords] = useState<AgentStepRecord[]>([]);
+  const [eventRecords, setEventRecords] = useState<AgentEventRecord[]>([]);
   const [uiHint, setUiHint] = useState<WorkflowUiHint | null>(null);
   const [traceRecords, setTraceRecords] = useState<TraceRecord[]>([]);
   const [debugFlowRecords, setDebugFlowRecords] = useState<SessionDebugFlowRecord[]>([]);
@@ -1585,10 +1434,9 @@ export function SessionPage({
   const [dependencyRuleConfirmState, setDependencyRuleConfirmState] = useState<DependencyRuleConfirmState | null>(null);
   const [dependencyRuleUpgrading, setDependencyRuleUpgrading] = useState(false);
   const headerSlotElement = useDesktopHeaderSlot();
-  // 描述：解析当前会话 UI 配置，未传入时按智能体类型回退默认配置。
+  // 描述：解析当前会话 UI 配置，未传入时回退统一智能体默认配置。
   const resolvedSessionUiConfig = sessionUiConfig || resolveSessionUiConfig(agentKey);
-  const isWorkflowSession = resolvedSessionUiConfig.sessionKind === "workflow";
-  const normalizedAgentKey = agentKey;
+  const normalizedAgentKey: AgentKey = "agent";
   const [sessionTitle, setSessionTitle] = useState(() => resolveAgentSessionTitle(normalizedAgentKey, sessionId));
   const sessionStorageKey = `${normalizedAgentKey}:${sessionId || "__none__"}`;
   const title = sessionTitle || resolveAgentSessionTitle(normalizedAgentKey, sessionId);
@@ -1598,68 +1446,65 @@ export function SessionPage({
     () => new URLSearchParams(location.search).get("workspaceId")?.trim() || "",
     [location.search],
   );
-  // 描述：从本地会话绑定关系中恢复 code 会话所属目录。
+  // 描述：从本地会话绑定关系中恢复当前会话所属项目目录。
   const workspaceIdFromBinding = useMemo(
-    () => (normalizedAgentKey === "code" ? getCodeWorkspaceIdBySessionId(sessionId) : ""),
-    [normalizedAgentKey, sessionId],
+    () => getProjectWorkspaceIdBySessionId(sessionId),
+    [sessionId],
   );
-  // 描述：解析当前 code 会话所属目录详情（路径、名称、依赖规则），用于会话提示与规则校验。
-  const activeCodeWorkspace = useMemo(() => {
-    if (normalizedAgentKey !== "code") {
-      return null;
-    }
+  // 描述：解析当前会话所属目录详情（路径、名称、依赖规则），用于会话提示与规则校验。
+  const activeWorkspace = useMemo(() => {
     const workspaceId = workspaceIdFromRouteState || workspaceIdFromQuery || workspaceIdFromBinding;
     if (!workspaceId) {
       return null;
     }
-    return getCodeWorkspaceGroupById(workspaceId);
-  }, [normalizedAgentKey, workspaceIdFromBinding, workspaceIdFromQuery, workspaceIdFromRouteState]);
-  // 描述：提取当前 code 会话一级目录名称，展示在标题后方。
-  const codeWorkspaceGroupName = useMemo(() => {
-    return String(activeCodeWorkspace?.name || "").trim();
-  }, [activeCodeWorkspace?.name]);
-  // 描述：当会话处于二级目录（如 code workspace）时，在标题后展示一级菜单名（纯名字）。
-  const sessionHeadParentHint = codeWorkspaceGroupName;
+    return getProjectWorkspaceGroupById(workspaceId);
+  }, [workspaceIdFromBinding, workspaceIdFromQuery, workspaceIdFromRouteState]);
+  // 描述：提取当前会话一级目录名称，展示在标题后方。
+  const workspaceGroupName = useMemo(() => {
+    return String(activeWorkspace?.name || "").trim();
+  }, [activeWorkspace?.name]);
+  // 描述：当会话处于二级目录（如 project workspace）时，在标题后展示一级菜单名（纯名字）。
+  const sessionHeadParentHint = workspaceGroupName;
 
-  const [activeCodeProjectProfile, setActiveCodeProjectProfile] = useState<CodeWorkspaceProjectProfile | null>(null);
+  const [activeProjectProfile, setActiveProjectProfile] = useState<ProjectWorkspaceProfile | null>(null);
 
   // 描述：
   //
   //   - 会话切换目录时加载当前项目结构化信息缓存，供后续发送请求直接复用。
   useEffect(() => {
-    if (!activeCodeWorkspace?.id) {
-      setActiveCodeProjectProfile(null);
+    if (!activeWorkspace?.id) {
+      setActiveProjectProfile(null);
       return;
     }
-    setActiveCodeProjectProfile(getCodeWorkspaceProjectProfile(activeCodeWorkspace.id));
-  }, [activeCodeWorkspace?.id]);
+    setActiveProjectProfile(getProjectWorkspaceProfile(activeWorkspace.id));
+  }, [activeWorkspace?.id]);
 
   // 描述：
   //
   //   - 监听结构化项目信息广播事件，保持同项目多话题会话上下文缓存实时一致。
   useEffect(() => {
-    if (!IS_BROWSER || !activeCodeWorkspace?.id) {
+    if (!IS_BROWSER || !activeWorkspace?.id) {
       return;
     }
-    const onCodeWorkspaceProfileUpdated = (event: Event) => {
+    const onProjectWorkspaceProfileUpdated = (event: Event) => {
       const customEvent = event as CustomEvent<{ workspaceId?: string; revision?: number }>;
       const workspaceId = String(customEvent.detail?.workspaceId || "").trim();
-      if (!workspaceId || workspaceId !== activeCodeWorkspace.id) {
+      if (!workspaceId || workspaceId !== activeWorkspace.id) {
         return;
       }
-      setActiveCodeProjectProfile(getCodeWorkspaceProjectProfile(activeCodeWorkspace.id));
+      setActiveProjectProfile(getProjectWorkspaceProfile(activeWorkspace.id));
     };
     window.addEventListener(
-      CODE_WORKSPACE_PROFILE_UPDATED_EVENT,
-      onCodeWorkspaceProfileUpdated as EventListener,
+      PROJECT_WORKSPACE_PROFILE_UPDATED_EVENT,
+      onProjectWorkspaceProfileUpdated as EventListener,
     );
     return () => {
       window.removeEventListener(
-        CODE_WORKSPACE_PROFILE_UPDATED_EVENT,
-        onCodeWorkspaceProfileUpdated as EventListener,
+        PROJECT_WORKSPACE_PROFILE_UPDATED_EVENT,
+        onProjectWorkspaceProfileUpdated as EventListener,
       );
     };
-  }, [activeCodeWorkspace?.id]);
+  }, [activeWorkspace?.id]);
 
   const isSessionPinned = useMemo(
     () => getAgentSessionMetaSnapshot().pinnedIds.includes(sessionId),
@@ -1711,57 +1556,39 @@ export function SessionPage({
     () => availableAiKeys.find((item) => item.provider === selectedProvider) || availableAiKeys[0] || null,
     [availableAiKeys, selectedProvider],
   );
-  const [selectedModelWorkflowId, setSelectedModelWorkflowId] = useState<string>(
-    () => readSelectedWorkflowId(MODEL_WORKFLOW_SELECTED_KEY),
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState<string>(
+    () => readSelectedWorkflowId(AGENT_WORKFLOW_SELECTED_KEY),
   );
-  const [selectedCodeWorkflowId, setSelectedCodeWorkflowId] = useState<string>(
-    () => readSelectedWorkflowId(CODE_WORKFLOW_SELECTED_KEY),
-  );
-  const [selectedModelSkillIds, setSelectedModelSkillIds] = useState<string[]>(
-    () => readSelectedSkillIds(MODEL_SKILL_SELECTED_KEY),
-  );
-  const [selectedCodeSkillIds, setSelectedCodeSkillIds] = useState<string[]>(
-    () => readSelectedSkillIds(CODE_SKILL_SELECTED_KEY),
+  const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>(
+    () => readSelectedSkillIds(AGENT_SKILL_SELECTED_KEY),
   );
   const [workflowSkillModalVisible, setWorkflowSkillModalVisible] = useState(false);
   const [draftWorkflowId, setDraftWorkflowId] = useState("");
   const [draftSkillIds, setDraftSkillIds] = useState<string[]>([]);
-  const [installedSkills, setInstalledSkills] = useState<SkillCatalogItem[]>([]);
-  const modelWorkflows = useMemo<WorkflowDefinition[]>(() => listModelWorkflows(), []);
-  const codeWorkflows = useMemo<CodeWorkflowDefinition[]>(
-    () => listCodeWorkflows(),
+  const [availableSkills, setAvailableSkills] = useState<AgentSkillItem[]>([]);
+  const workflows = useMemo<AgentWorkflowDefinition[]>(
+    () => listAgentWorkflows(),
     [],
   );
-  const selectedModelWorkflow = useMemo<WorkflowDefinition | null>(() => {
-    if (selectedModelSkillIds.length > 0) {
+  const selectedWorkflow = useMemo<AgentWorkflowDefinition | null>(() => {
+    if (selectedSkillIds.length > 0) {
       return null;
     }
-    return modelWorkflows.find((item) => item.id === selectedModelWorkflowId) || modelWorkflows[0] || null;
-  }, [modelWorkflows, selectedModelSkillIds.length, selectedModelWorkflowId]);
-  const selectedCodeWorkflow = useMemo<CodeWorkflowDefinition | null>(() => {
-    if (selectedCodeSkillIds.length > 0) {
-      return null;
-    }
-    return codeWorkflows.find((item) => item.id === selectedCodeWorkflowId) || codeWorkflows[0] || null;
-  }, [codeWorkflows, selectedCodeSkillIds.length, selectedCodeWorkflowId]);
-  const workflowMenuItems = useMemo(() => {
-    if (isWorkflowSession) {
-      return modelWorkflows.map((workflow) => ({
+    return workflows.find((item) => item.id === selectedWorkflowId) || workflows[0] || null;
+  }, [workflows, selectedSkillIds.length, selectedWorkflowId]);
+  const workflowMenuItems = useMemo(
+    () =>
+      workflows.map((workflow) => ({
         key: workflow.id,
         label: workflow.name,
         description: String(workflow.description || "").trim(),
-      }));
-    }
-    return codeWorkflows.map((workflow) => ({
-      key: workflow.id,
-      label: workflow.name,
-      description: String(workflow.description || "").trim(),
-    }));
-  }, [codeWorkflows, isWorkflowSession, modelWorkflows]);
-  const activeSelectedSkillIds = isWorkflowSession ? selectedModelSkillIds : selectedCodeSkillIds;
+      })),
+    [workflows],
+  );
+  const activeSelectedSkillIds = selectedSkillIds;
   const selectedSessionSkills = useMemo(
-    () => installedSkills.filter((item) => activeSelectedSkillIds.includes(item.id)),
-    [activeSelectedSkillIds, installedSkills],
+    () => availableSkills.filter((item) => activeSelectedSkillIds.includes(item.id)),
+    [activeSelectedSkillIds, availableSkills],
   );
   const aiSelectOptions = useMemo(
     () =>
@@ -1775,15 +1602,10 @@ export function SessionPage({
     if (selectedSessionSkills.length > 0) {
       return selectedSessionSkills[0]?.name || "技能";
     }
-    const workflowLabel = isWorkflowSession
-      ? selectedModelWorkflow?.name || resolvedSessionUiConfig.workflowFallbackLabel
-      : selectedCodeWorkflow?.name || resolvedSessionUiConfig.workflowFallbackLabel;
-    return workflowLabel;
+    return selectedWorkflow?.name || resolvedSessionUiConfig.workflowFallbackLabel;
   }, [
-    isWorkflowSession,
     resolvedSessionUiConfig.workflowFallbackLabel,
-    selectedCodeWorkflow?.name,
-    selectedModelWorkflow?.name,
+    selectedWorkflow?.name,
     selectedSessionSkills,
   ]);
   const workflowSkillSelectOptions = useMemo(
@@ -1795,14 +1617,12 @@ export function SessionPage({
     ],
     [workflowSkillSelectorLabel],
   );
-  const activeSelectedWorkflowId = isWorkflowSession
-    ? selectedModelWorkflow?.id || ""
-    : selectedCodeWorkflow?.id || "";
+  const activeSelectedWorkflowId = selectedWorkflow?.id || "";
 
   // 描述：以下 refs 用于维护流式渲染、去重、心跳与定时器状态，避免高频更新触发重复渲染。
   const streamMessageIdRef = useRef("");
-  const stepRecordsRef = useRef<ModelStepRecord[]>([]);
-  const eventRecordsRef = useRef<ModelEventRecord[]>([]);
+  const stepRecordsRef = useRef<AgentStepRecord[]>([]);
+  const eventRecordsRef = useRef<AgentEventRecord[]>([]);
   const streamDisplayedTextRef = useRef("");
   const streamLatestTextRef = useRef("");
   const streamRenderPendingRef = useRef(false);
@@ -1810,21 +1630,17 @@ export function SessionPage({
   const sessionMessagePersistTimerRef = useRef<number | null>(null);
   const sessionRunStatePersistTimerRef = useRef<number | null>(null);
   const debugSnapshotTimerRef = useRef<number | null>(null);
-  const modelStreamRecordFlushTimerRef = useRef<number | null>(null);
   const activeAgentStreamTraceRef = useRef("");
   const agentStreamTextBufferRef = useRef("");
   const agentStreamSeenKeysRef = useRef<Set<string>>(new Set());
-  const modelStreamSeenKeysRef = useRef<Set<string>>(new Set());
-  const modelStreamDebugSeenKeysRef = useRef<Set<string>>(new Set());
   const assistantRunHeartbeatTimerRef = useRef<number | null>(null);
   const assistantRunLastActivityAtRef = useRef(0);
   const assistantRunHeartbeatCountRef = useRef(0);
-  const assistantRunAgentKindRef = useRef<"model" | "code">("code");
   const assistantRunStageRef = useRef<AssistantRunStage>("planning");
   const assistantRunStatusRef = useRef<AssistantRunMeta["status"] | "idle">("idle");
-  const codeAgentPromptRawRef = useRef("");
-  const codeAgentLlmDeltaBufferRef = useRef("");
-  const codeAgentLlmResponseRawRef = useRef("");
+  const agentPromptRawRef = useRef("");
+  const agentLlmDeltaBufferRef = useRef("");
+  const agentLlmResponseRawRef = useRef("");
   const autoPromptDispatchedRef = useRef(false);
   const assistantRunMetaMapRef = useRef<Record<string, AssistantRunMeta>>({});
   const sessionApprovedToolNameSetRef = useRef<Set<string>>(new Set());
@@ -1862,15 +1678,7 @@ export function SessionPage({
     }
   };
 
-  // 描述：清理模型步骤/事件刷新的节流定时器，避免会话切换时写入旧会话状态。
-  const clearModelStreamRecordFlushTimer = () => {
-    if (modelStreamRecordFlushTimerRef.current !== null) {
-      window.clearTimeout(modelStreamRecordFlushTimerRef.current);
-      modelStreamRecordFlushTimerRef.current = null;
-    }
-  };
-
-  // 描述：清理模型会话心跳提示定时器，避免会话结束后继续追加“进行中”段落。
+  // 描述：清理会话心跳提示定时器，避免会话结束后继续追加“进行中”段落。
   const clearAssistantRunHeartbeatTimer = () => {
     if (assistantRunHeartbeatTimerRef.current !== null) {
       window.clearTimeout(assistantRunHeartbeatTimerRef.current);
@@ -1940,49 +1748,6 @@ export function SessionPage({
     }
     streamRenderPendingRef.current = true;
     streamRenderFrameRef.current = window.requestAnimationFrame(renderStreamingAssistantFrame);
-  };
-
-  // 描述：把模型会话流式事件映射进运行轨迹，并按唯一键去重防止重复刷屏。
-  const appendModelStreamEventToMessage = (payload: ModelSessionStreamEvent) => {
-    const messageId = streamMessageIdRef.current;
-    if (!messageId) {
-      return;
-    }
-    const eventKey = payload.event
-      ? `event:${payload.event.event}:${payload.event.step_index ?? -1}:${payload.event.timestamp_ms}`
-      : payload.step
-        ? `step:${payload.step.index}:${payload.step.status}:${payload.step.elapsed_ms}:${payload.step.summary}`
-        : `status:${payload.status}:${payload.message}`;
-    if (modelStreamSeenKeysRef.current.has(eventKey)) {
-      return;
-    }
-    modelStreamSeenKeysRef.current.add(eventKey);
-    // 描述：收到真实流式事件后重置心跳计数，代表执行链路仍在持续推进。
-    assistantRunHeartbeatCountRef.current = 0;
-    assistantRunLastActivityAtRef.current = Date.now();
-    assistantRunStageRef.current = resolveAssistantRunStage(payload);
-    const runSegment = mapModelStreamToRunSegment(payload, eventKey);
-    if (runSegment) {
-      appendAssistantRunSegment(messageId, runSegment);
-    }
-  };
-
-  // 描述：节流同步模型步骤与事件到状态，避免流式期间每个事件都触发整页重渲染。
-  const scheduleModelRecordFlush = (forceImmediate = false) => {
-    const flush = () => {
-      modelStreamRecordFlushTimerRef.current = null;
-      setStepRecords(stepRecordsRef.current);
-      setEventRecords(eventRecordsRef.current);
-    };
-    if (forceImmediate) {
-      clearModelStreamRecordFlushTimer();
-      flush();
-      return;
-    }
-    if (modelStreamRecordFlushTimerRef.current !== null) {
-      return;
-    }
-    modelStreamRecordFlushTimerRef.current = window.setTimeout(flush, 220);
   };
 
   // 描述：向指定助手消息追加一段执行轨迹，保持“说明 + 步骤”循环结构。
@@ -2138,7 +1903,6 @@ export function SessionPage({
           assistantRunStageRef.current,
           assistantRunHeartbeatCountRef.current,
           `heartbeat-${Date.now()}`,
-          assistantRunAgentKindRef.current,
         );
         // 描述：
         //
@@ -2283,7 +2047,6 @@ export function SessionPage({
     clearSessionMessagePersistTimer();
     clearSessionRunStatePersistTimer();
     clearDebugSnapshotTimer();
-    clearModelStreamRecordFlushTimer();
     clearAssistantRunHeartbeatTimer();
     streamMessageIdRef.current = "";
     stepRecordsRef.current = [];
@@ -2293,16 +2056,13 @@ export function SessionPage({
     activeAgentStreamTraceRef.current = "";
     agentStreamTextBufferRef.current = "";
     agentStreamSeenKeysRef.current.clear();
-    modelStreamSeenKeysRef.current.clear();
-    modelStreamDebugSeenKeysRef.current.clear();
     assistantRunHeartbeatCountRef.current = 0;
     assistantRunLastActivityAtRef.current = 0;
-    assistantRunAgentKindRef.current = "code";
     assistantRunStageRef.current = "planning";
     assistantRunStatusRef.current = "idle";
-    codeAgentPromptRawRef.current = "";
-    codeAgentLlmDeltaBufferRef.current = "";
-    codeAgentLlmResponseRawRef.current = "";
+    agentPromptRawRef.current = "";
+    agentLlmDeltaBufferRef.current = "";
+    agentLlmResponseRawRef.current = "";
     autoPromptDispatchedRef.current = false;
     setUiHint(null);
     setTraceRecords([]);
@@ -2370,8 +2130,8 @@ export function SessionPage({
           .filter((item): item is readonly [string, SessionAiRawByMessageItem] => Boolean(item)),
       );
       setSessionAiRawByMessage(artifactAiRawByMessage);
-      codeAgentPromptRawRef.current = artifactPromptRaw;
-      codeAgentLlmResponseRawRef.current = artifactResponseRaw;
+      agentPromptRawRef.current = artifactPromptRaw;
+      agentLlmResponseRawRef.current = artifactResponseRaw;
     }
     if (runSnapshot && runSnapshot.runMetaMap && Object.keys(runSnapshot.runMetaMap).length > 0) {
       const normalizedRunMetaMap = Object.fromEntries(
@@ -2395,7 +2155,6 @@ export function SessionPage({
         if (recoveredMeta?.status === "running") {
           assistantRunStatusRef.current = "running";
           assistantRunLastActivityAtRef.current = Date.now();
-          assistantRunAgentKindRef.current = normalizedAgentKey === "model" ? "model" : "code";
           setSending(true);
           startAssistantRunHeartbeat(recoveredMessageId);
         }
@@ -2406,14 +2165,13 @@ export function SessionPage({
     setMessages(nextMessages);
     setMessagesHydrated(true);
     setHydratedSessionKey(sessionStorageKey);
-  }, [isWorkflowSession, normalizedAgentKey, sessionId, sessionStorageKey]);
+  }, [normalizedAgentKey, sessionId, sessionStorageKey]);
 
   useEffect(() => () => {
     stopStreamTypingTimer();
     clearSessionMessagePersistTimer();
     clearSessionRunStatePersistTimer();
     clearDebugSnapshotTimer();
-    clearModelStreamRecordFlushTimer();
     clearAssistantRunHeartbeatTimer();
   }, []);
 
@@ -2496,11 +2254,11 @@ export function SessionPage({
     if (!sessionId || !messagesHydrated || hydratedSessionKey !== sessionStorageKey) {
       return;
     }
-    const promptRaw = String(sessionAiPromptRaw || codeAgentPromptRawRef.current || "").trim();
+    const promptRaw = String(sessionAiPromptRaw || agentPromptRawRef.current || "").trim();
     const responseRaw = String(
       sessionAiResponseRaw
-      || codeAgentLlmResponseRawRef.current
-      || codeAgentLlmDeltaBufferRef.current
+      || agentLlmResponseRawRef.current
+      || agentLlmDeltaBufferRef.current
       || "",
     ).trim();
     if (
@@ -2624,21 +2382,21 @@ export function SessionPage({
     }
   }, [availableAiKeys, selectedProvider]);
 
-  // 描述：加载“已安装技能”列表，供会话中的“工作流/技能”弹窗选择器使用。
+  // 描述：加载“已发现技能”列表，供会话中的“工作流/技能”弹窗选择器使用。
   useEffect(() => {
     let disposed = false;
     const loadSkills = async () => {
       try {
-        const skills = await listInstalledSkills();
+        const skills = await listAgentSkills();
         if (disposed) {
           return;
         }
-        setInstalledSkills(skills);
+        setAvailableSkills(skills);
       } catch (_err) {
         if (disposed) {
           return;
         }
-        setInstalledSkills([]);
+        setAvailableSkills([]);
       }
     };
     void loadSkills();
@@ -2648,190 +2406,28 @@ export function SessionPage({
   }, []);
 
   useEffect(() => {
-    if (!selectedModelWorkflow) {
+    if (!selectedWorkflow) {
       return;
     }
-    if (selectedModelWorkflow.id !== selectedModelWorkflowId) {
-      setSelectedModelWorkflowId(selectedModelWorkflow.id);
-      return;
-    }
-    if (IS_BROWSER) {
-      window.localStorage.setItem(MODEL_WORKFLOW_SELECTED_KEY, selectedModelWorkflow.id);
-    }
-  }, [selectedModelWorkflow, selectedModelWorkflowId]);
-
-  useEffect(() => {
-    if (!selectedCodeWorkflow) {
-      return;
-    }
-    if (selectedCodeWorkflow.id !== selectedCodeWorkflowId) {
-      setSelectedCodeWorkflowId(selectedCodeWorkflow.id);
+    if (selectedWorkflow.id !== selectedWorkflowId) {
+      setSelectedWorkflowId(selectedWorkflow.id);
       return;
     }
     if (IS_BROWSER) {
-      window.localStorage.setItem(CODE_WORKFLOW_SELECTED_KEY, selectedCodeWorkflow.id);
+      window.localStorage.setItem(AGENT_WORKFLOW_SELECTED_KEY, selectedWorkflow.id);
     }
-  }, [selectedCodeWorkflow, selectedCodeWorkflowId]);
+  }, [selectedWorkflow, selectedWorkflowId]);
 
-  // 描述：持久化模型会话选择的技能列表，保持跨会话复用。
+  // 描述：持久化当前会话选择的技能列表，保持跨会话复用。
   useEffect(() => {
     if (!IS_BROWSER) {
       return;
     }
-    window.localStorage.setItem(MODEL_SKILL_SELECTED_KEY, JSON.stringify(selectedModelSkillIds));
-  }, [selectedModelSkillIds]);
-
-  // 描述：持久化代码会话选择的技能列表，保持跨会话复用。
-  useEffect(() => {
-    if (!IS_BROWSER) {
-      return;
-    }
-    window.localStorage.setItem(CODE_SKILL_SELECTED_KEY, JSON.stringify(selectedCodeSkillIds));
-  }, [selectedCodeSkillIds]);
+    window.localStorage.setItem(AGENT_SKILL_SELECTED_KEY, JSON.stringify(selectedSkillIds));
+  }, [selectedSkillIds]);
 
   useEffect(() => {
-    if (!isWorkflowSession || !sessionId) {
-      return;
-    }
-    void invoke<ModelSessionRunResponse>(COMMANDS.GET_MODEL_SESSION_RECORDS, { sessionId })
-      .then((records) => {
-        setStepRecords(records.steps || []);
-        setEventRecords(records.events || []);
-      })
-      .catch(() => {
-        // 会话首次打开或后端无记录时忽略
-      });
-  }, [isWorkflowSession, sessionId]);
-
-  useEffect(() => {
-    if (!isWorkflowSession || !sessionId) {
-      return;
-    }
-    let disposed = false;
-    let unlisten: (() => void) | null = null;
-    void listen<ModelSessionStreamEvent>(EVENT_MODEL_SESSION_STREAM, (event) => {
-      if (disposed) {
-        return;
-      }
-      const payload = event.payload;
-      if (!payload || payload.session_id !== sessionId) {
-        return;
-      }
-      const nextSteps = mergeModelStepRecords(stepRecordsRef.current, payload.step);
-      const nextEvents = mergeModelEventRecords(eventRecordsRef.current, payload.event);
-      stepRecordsRef.current = nextSteps;
-      eventRecordsRef.current = nextEvents;
-      if (payload.status === "running") {
-        scheduleModelRecordFlush(false);
-      } else {
-        scheduleModelRecordFlush(true);
-        appendTraceRecord({
-          traceId: payload.trace_id || `trace-local-${Date.now()}`,
-          source: "model:stream",
-          message: payload.message || "模型会话流式更新",
-        });
-      }
-      if (payload.status === "failed") {
-        setStatus(`执行失败：${payload.message}`);
-      } else if (payload.status === "finished") {
-        setStatus("执行完成");
-      } else {
-        setStatus("智能体执行中...");
-      }
-      const debugKey = payload.event
-        ? `event:${payload.event.event}:${payload.event.timestamp_ms}`
-        : payload.step
-          ? `step:${payload.step.index}:${payload.step.status}:${payload.step.elapsed_ms}`
-          : `status:${payload.status}:${payload.message}`;
-      if (!modelStreamDebugSeenKeysRef.current.has(debugKey)) {
-        modelStreamDebugSeenKeysRef.current.add(debugKey);
-        appendDebugFlowRecord(
-          "ui",
-          "model_session_stream",
-          `流式事件(${payload.status})`,
-          JSON.stringify({
-            message: payload.message,
-            step: payload.step
-              ? {
-                index: payload.step.index,
-                code: payload.step.code,
-                status: payload.step.status,
-                elapsed_ms: payload.step.elapsed_ms,
-                summary: payload.step.summary,
-              }
-              : null,
-            event: payload.event
-              ? {
-                event: payload.event.event,
-                step_index: payload.event.step_index,
-                message: payload.event.message,
-              }
-              : null,
-          }, null, 2),
-        );
-      }
-      appendModelStreamEventToMessage(payload);
-    })
-      .then((fn) => {
-        if (disposed) {
-          fn();
-          return;
-        }
-        unlisten = fn;
-      })
-      .catch(() => {
-        // 流式监听初始化失败时不阻断主流程，保留最终响应展示。
-      });
-    return () => {
-      disposed = true;
-      clearModelStreamRecordFlushTimer();
-      if (unlisten) {
-        unlisten();
-      }
-    };
-  }, [isWorkflowSession, sessionId]);
-
-  useEffect(() => {
-    if (!isWorkflowSession || !sessionId) {
-      return;
-    }
-    let disposed = false;
-    let unlisten: (() => void) | null = null;
-    void listen<ModelDebugTraceEvent>(EVENT_MODEL_DEBUG_TRACE, (event) => {
-      if (disposed) {
-        return;
-      }
-      const payload = event.payload;
-      if (!payload || payload.session_id !== sessionId) {
-        return;
-      }
-      appendDebugFlowRecord(
-        "backend",
-        payload.stage || "backend",
-        payload.title || "后端调试",
-        payload.detail || "",
-      );
-    })
-      .then((fn) => {
-        if (disposed) {
-          fn();
-          return;
-        }
-        unlisten = fn;
-      })
-      .catch(() => {
-        // 后端调试流监听失败时不影响主流程。
-      });
-    return () => {
-      disposed = true;
-      if (unlisten) {
-        unlisten();
-      }
-    };
-  }, [isWorkflowSession, sessionId]);
-
-  useEffect(() => {
-    if (isWorkflowSession || !sessionId) {
+    if (!sessionId) {
       return;
     }
     let disposed = false;
@@ -2889,21 +2485,21 @@ export function SessionPage({
         }
       }
       if (payload.kind === STREAM_KINDS.STARTED) {
-        codeAgentLlmDeltaBufferRef.current = "";
+        agentLlmDeltaBufferRef.current = "";
         setSessionAiResponseRaw("");
         setStreamingAssistantTarget("正在准备执行...");
         return;
       }
       if (payload.kind === STREAM_KINDS.LLM_STARTED) {
-        codeAgentLlmDeltaBufferRef.current = "";
+        agentLlmDeltaBufferRef.current = "";
         setSessionAiResponseRaw("");
-        setStreamingAssistantTarget("模型会话已开始，正在执行策略…");
+        setStreamingAssistantTarget("正在生成执行结果…");
         return;
       }
       if (payload.kind === STREAM_KINDS.LLM_FINISHED) {
-        const normalizedRawResponse = String(codeAgentLlmDeltaBufferRef.current || "").trim();
+        const normalizedRawResponse = String(agentLlmDeltaBufferRef.current || "").trim();
         if (normalizedRawResponse) {
-          codeAgentLlmResponseRawRef.current = normalizedRawResponse;
+          agentLlmResponseRawRef.current = normalizedRawResponse;
           setSessionAiResponseRaw(normalizedRawResponse);
           const currentMessageId = String(streamMessageIdRef.current || "").trim();
           if (currentMessageId) {
@@ -2970,7 +2566,7 @@ export function SessionPage({
         if (!delta) {
           return;
         }
-        codeAgentLlmDeltaBufferRef.current = `${codeAgentLlmDeltaBufferRef.current}${delta}`;
+        agentLlmDeltaBufferRef.current = `${agentLlmDeltaBufferRef.current}${delta}`;
         agentStreamTextBufferRef.current = `${agentStreamTextBufferRef.current}${delta}`;
         setStreamingAssistantTarget(agentStreamTextBufferRef.current);
         return;
@@ -3011,46 +2607,7 @@ export function SessionPage({
         unlisten();
       }
     };
-  }, [isWorkflowSession, sessionId]);
-
-  // 描述：调用模型生成最终用户总结，输出更自然的结果说明；若失败则由上层回退规则总结。
-  //
-  // Params:
-  //
-  //   - provider: 当前选择的模型提供商。
-  //   - requestPrompt: 用户输入需求。
-  //   - workflowMessage: 工作流完成消息。
-  //   - modelSteps: 模型步骤记录。
-  //   - modelEvents: 模型事件记录。
-  //   - exportedFile: 导出文件路径。
-  //   - bridgeWarning: Bridge 恢复提示。
-  //
-  // Returns:
-  //
-  //   - AI 总结字符串。
-  const summarizeModelSessionWithAi = async (
-    provider: string,
-    requestPrompt: string,
-    workflowMessage: string,
-    modelSteps: ModelStepRecord[],
-    modelEvents: ModelEventRecord[],
-    exportedFile?: string,
-    bridgeWarning?: string,
-  ) => {
-    const response = await invoke<ModelSessionAiSummaryResponse>(COMMANDS.SUMMARIZE_MODEL_SESSION_RESULT, {
-      provider,
-      userPrompt: requestPrompt,
-      workflowMessage,
-      modelSteps,
-      modelEvents,
-      exportedFile,
-      bridgeWarning: bridgeWarning || null,
-    });
-    appendDebugFlowRecord("backend", "ai_summary_prompt", "总结模型 Prompt", response.prompt);
-    appendDebugFlowRecord("backend", "ai_summary_raw", "总结模型原始返回", response.raw_response);
-    appendDebugFlowRecord("backend", "ai_summary_final", "总结模型解析结果", response.summary);
-    return response.summary.trim();
-  };
+  }, [sessionId]);
 
   const executePrompt = async (content: string, options?: ExecutePromptOptions) => {
     const normalizedContent = content.trim();
@@ -3061,10 +2618,10 @@ export function SessionPage({
     const appendUserMessage = options?.appendUserMessage !== false;
     const contextMessages = options?.contextMessages || messages;
 
-    // 描述：代码智能体在正式执行前先检查项目依赖规则；发现版本不一致时先弹确认，不直接中断。
-    if (!isWorkflowSession && normalizedAgentKey === "code" && !options?.skipDependencyRuleCheck) {
-      const projectPath = String(activeCodeWorkspace?.path || "").trim();
-      const dependencyRules = activeCodeWorkspace?.dependencyRules || [];
+    // 描述：智能体在正式执行前先检查项目依赖规则；发现版本不一致时先弹确认，不直接中断。
+    if (!options?.skipDependencyRuleCheck) {
+      const projectPath = String(activeWorkspace?.path || "").trim();
+      const dependencyRules = activeWorkspace?.dependencyRules || [];
       if (projectPath && dependencyRules.length > 0) {
         try {
           const checkResponse = await invoke<DependencyRuleCheckResponse>(COMMANDS.CHECK_PROJECT_DEPENDENCY_RULES, {
@@ -3095,16 +2652,12 @@ export function SessionPage({
     }
 
     const provider = selectedAi?.provider || "codex";
-    const activeWorkflowName = isWorkflowSession
-      ? selectedModelWorkflow?.name || resolvedSessionUiConfig.workflowFallbackLabel
-      : selectedCodeWorkflow?.name || resolvedSessionUiConfig.workflowFallbackLabel;
-    const activeWorkflowId = isWorkflowSession
-      ? selectedModelWorkflow?.id || ""
-      : selectedCodeWorkflow?.id || "";
-    const outputDir = isWorkflowSession ? extractOutputDirFromPrompt(normalizedContent) : undefined;
+    const activeWorkflowName = selectedWorkflow?.name || resolvedSessionUiConfig.workflowFallbackLabel;
+    const activeWorkflowId = selectedWorkflow?.id || "";
+    const outputDir = undefined;
     const streamMessageId = String(options?.replaceAssistantMessageId || "").trim()
       || `assistant-stream-${Date.now()}`;
-    const codeTraceId = isWorkflowSession ? "" : `trace-${Date.now()}`;
+    const agentTraceId = `trace-${Date.now()}`;
     setInput("");
     setSending(true);
     setStatus("智能体执行中...");
@@ -3138,12 +2691,9 @@ export function SessionPage({
     streamMessageIdRef.current = streamMessageId;
     streamDisplayedTextRef.current = "";
     streamLatestTextRef.current = "";
-    modelStreamSeenKeysRef.current.clear();
-    if (!isWorkflowSession) {
-      activeAgentStreamTraceRef.current = codeTraceId;
-      agentStreamTextBufferRef.current = "";
-      agentStreamSeenKeysRef.current.clear();
-    }
+    activeAgentStreamTraceRef.current = agentTraceId;
+    agentStreamTextBufferRef.current = "";
+    agentStreamSeenKeysRef.current.clear();
     const initialStreamText = "";
     setMessages((prev) =>
       upsertAssistantMessageById(
@@ -3154,7 +2704,6 @@ export function SessionPage({
     streamDisplayedTextRef.current = initialStreamText;
     streamLatestTextRef.current = initialStreamText;
     assistantRunStatusRef.current = "running";
-    assistantRunAgentKindRef.current = normalizedAgentKey === "model" ? "model" : "code";
     assistantRunStageRef.current = "planning";
     assistantRunHeartbeatCountRef.current = 0;
     assistantRunLastActivityAtRef.current = Date.now();
@@ -3178,252 +2727,121 @@ export function SessionPage({
         ],
       },
     }));
-    setStreamingAssistantTarget(isWorkflowSession ? "正在规划本次模型操作…" : "正在准备执行...");
+    setStreamingAssistantTarget("正在准备执行...");
     startAssistantRunHeartbeat(streamMessageId);
 
     try {
-      if (isWorkflowSession) {
-        let bridgePrecheckWarning = "";
-        const bridgeEnsureResult = await ensureBlenderBridge();
-        appendDebugFlowRecord(
-          "ui",
-          "bridge_precheck",
-          "Bridge 预检结果",
-          JSON.stringify(bridgeEnsureResult, null, 2),
-        );
-        if (!bridgeEnsureResult.ok) {
-          // 描述：Bridge 预检失败不立即作为错误 trace 写入，避免后续自动恢复成功时形成误导。
-          bridgePrecheckWarning = bridgeEnsureResult.message;
-          setStatus("Bridge 未就绪，正在尝试自动拉起 Blender 并重试...");
-        }
-        const response = await runModelWorkflow({
-          sessionId: sessionId || "model-session",
-          projectName: title,
-          prompt: normalizedContent,
-          provider,
-          workflowId: selectedModelWorkflow?.id || "wf-model-full-v1",
-          referenceImages: [],
-          styleImages: [],
-          aiKeys,
-          modelMcpCapabilities,
-          outputDir,
-          allowDangerousAction,
-          confirmationToken,
+      const skillExecutionPlan = buildAgentWorkflowSkillExecutionPlan(selectedWorkflow, availableSkills);
+      if (skillExecutionPlan.blockingIssues.length > 0) {
+        throw new Error(`技能执行前检查未通过：${skillExecutionPlan.blockingIssues.join("；")}`);
+      }
+      const latestProjectProfile = activeWorkspace?.id
+        ? (activeProjectProfile || getProjectWorkspaceProfile(activeWorkspace.id))
+        : null;
+      const selectedSessionSkillPrompt = buildSessionSkillPrompt(selectedSessionSkills);
+      const currentRequestPrompt = buildSessionContextPrompt(
+        messages,
+        normalizedContent,
+        undefined,
+        latestProjectProfile,
+      );
+      const contextualRequestPrompt = buildSessionContextPrompt(
+        contextMessages,
+        normalizedContent,
+        String(activeWorkspace?.path || "").trim() || undefined,
+        latestProjectProfile,
+      );
+      const workflowPrompt = buildAgentWorkflowPrompt(
+        selectedWorkflow,
+        contextualRequestPrompt || currentRequestPrompt,
+      );
+      const agentPrompt = skillExecutionPlan.planPrompt
+        ? `${workflowPrompt}\n\n${skillExecutionPlan.planPrompt}${selectedSessionSkillPrompt ? `\n\n${selectedSessionSkillPrompt}` : ""}`
+        : `${workflowPrompt}${selectedSessionSkillPrompt ? `\n\n${selectedSessionSkillPrompt}` : ""}`;
+      agentPromptRawRef.current = agentPrompt;
+      agentLlmDeltaBufferRef.current = "";
+      agentLlmResponseRawRef.current = "";
+      setSessionAiPromptRaw(agentPrompt);
+      setSessionAiResponseRaw("");
+      setSessionAiRawByMessage((prev) => ({
+        ...prev,
+        [streamMessageId]: {
+          promptRaw: agentPrompt,
+          responseRaw: "",
+        },
+      }));
+      appendDebugFlowRecord(
+        "ui",
+        "skill_plan",
+        "技能执行计划",
+        JSON.stringify(
+          {
+            ready_count: skillExecutionPlan.readyItems.length,
+            ready_items: skillExecutionPlan.readyItems.map((item) => ({
+              node_id: item.nodeId,
+              node_title: item.nodeTitle,
+              skill_id: item.skillId,
+              skill_version: item.skillVersion,
+            })),
+          },
+          null,
+          2,
+        ),
+      );
+      if (skillExecutionPlan.readyItems.length > 0) {
+        appendTraceRecord({
+          traceId: agentTraceId,
+          source: "workflow:skill_plan",
+          message: `已加载 ${skillExecutionPlan.readyItems.length} 个技能节点`,
         });
-        appendDebugFlowRecord(
-          "ui",
-          "workflow_response",
-          "工作流执行返回",
-          JSON.stringify(
-            {
-              workflow_message: response.message,
-              workflow_steps: (response.steps || []).map((item) => ({
-                name: item.name,
-                kind: item.kind,
-                status: item.status,
-                summary: item.summary,
-              })),
-              model_trace_id: response.modelSession?.trace_id || null,
-              model_step_count: response.modelSession?.steps?.length || 0,
-              model_event_count: response.modelSession?.events?.length || 0,
-              exported_file: response.exportedFile || null,
-            },
-            null,
-            2,
-          ),
-        );
-        setStepRecords(response.modelSession?.steps || []);
-        setEventRecords(response.modelSession?.events || []);
-        if (response.modelSession?.trace_id) {
-          appendTraceRecord({
-            traceId: response.modelSession.trace_id,
-            source: "workflow:model_session",
-            message: response.message,
-          });
-        }
-        if (bridgePrecheckWarning) {
-          appendTraceRecord({
-            traceId: `trace-local-${Date.now()}`,
-            source: "bridge:ensure",
-            message: `Bridge 预检未通过，但执行阶段已自动恢复并完成。预检详情：${bridgePrecheckWarning}`,
-          });
-          appendAssistantRunSegment(streamMessageId, {
-            key: `bridge-warning-${Date.now()}`,
-            intro: "环境检查提示",
-            step: bridgePrecheckWarning,
-            status: "finished",
-          });
-        }
-        const nextUpdatedAt = new Date().toLocaleString("zh-CN", {
-          month: "2-digit",
-          day: "2-digit",
-          hour: "2-digit",
-          minute: "2-digit",
-        });
-        upsertModelProject({
-          id: sessionId,
-          title,
-          prompt: normalizedContent,
-          updatedAt: nextUpdatedAt,
-        });
-        let completionSummary = buildUserReadableModelSummary(
-          normalizedContent,
-          response.modelSession?.steps || [],
-          response.exportedFile,
-          Boolean(bridgePrecheckWarning),
-        );
-        try {
-          const aiSummary = await summarizeModelSessionWithAi(
-            provider,
-            normalizedContent,
-            response.message,
-            response.modelSession?.steps || [],
-            response.modelSession?.events || [],
-            response.exportedFile,
-            bridgePrecheckWarning,
-          );
-          if (aiSummary) {
-            completionSummary = aiSummary;
-          }
-        } catch (summaryErr) {
-          const summaryErrorMessage = normalizeInvokeError(summaryErr);
-          appendDebugFlowRecord(
-            "backend",
-            "ai_summary_failed",
-            "总结模型失败，回退规则总结",
-            summaryErrorMessage,
-          );
-        }
-        setStreamingAssistantTarget(completionSummary);
-        finishAssistantRunMessage(streamMessageId, "finished", completionSummary);
-        setUiHint(response.uiHint || null);
-        if (response.uiHint?.key === "dangerous-operation-confirm") {
-          const hintPrompt = response.uiHint.context?.prompt;
-          const hintToken = response.uiHint.context?.confirmation_token;
-          setPendingDangerousPrompt(typeof hintPrompt === "string" ? hintPrompt : normalizedContent);
-          setPendingDangerousToken(typeof hintToken === "string" ? hintToken : "");
-        } else {
-          setPendingDangerousPrompt("");
-          setPendingDangerousToken("");
-        }
-        setStatus(
-          response.exportedFile
-            ? `已完成 ${response.steps?.length || 0} 个步骤；导出文件：${response.exportedFile}`
-            : `已完成 ${response.steps?.length || 0} 个步骤`
-        );
-      } else {
-        const skillExecutionPlan = buildCodeWorkflowSkillExecutionPlan(selectedCodeWorkflow);
-        if (skillExecutionPlan.blockingIssues.length > 0) {
-          throw new Error(`技能执行前检查未通过：${skillExecutionPlan.blockingIssues.join("；")}`);
-        }
-        const latestCodeProjectProfile = activeCodeWorkspace?.id
-          ? (activeCodeProjectProfile || getCodeWorkspaceProjectProfile(activeCodeWorkspace.id))
-          : null;
-        const selectedSessionSkillPrompt = buildSessionSkillPrompt(selectedSessionSkills);
-        const codeRequestPrompt = buildCodeSessionContextPrompt(
-          messages,
-          normalizedContent,
-          undefined,
-          latestCodeProjectProfile,
-        );
-        const contextualCodeRequestPrompt = buildCodeSessionContextPrompt(
-          contextMessages,
-          normalizedContent,
-          String(activeCodeWorkspace?.path || "").trim() || undefined,
-          latestCodeProjectProfile,
-        );
-        const codeWorkflowPrompt = buildCodeWorkflowPrompt(
-          selectedCodeWorkflow,
-          contextualCodeRequestPrompt || codeRequestPrompt,
-        );
-        const codePrompt = skillExecutionPlan.planPrompt
-          ? `${codeWorkflowPrompt}\n\n${skillExecutionPlan.planPrompt}${selectedSessionSkillPrompt ? `\n\n${selectedSessionSkillPrompt}` : ""}`
-          : `${codeWorkflowPrompt}${selectedSessionSkillPrompt ? `\n\n${selectedSessionSkillPrompt}` : ""}`;
-        codeAgentPromptRawRef.current = codePrompt;
-        codeAgentLlmDeltaBufferRef.current = "";
-        codeAgentLlmResponseRawRef.current = "";
-        setSessionAiPromptRaw(codePrompt);
-        setSessionAiResponseRaw("");
+      }
+      const response = await invoke<AgentRunResponse>(COMMANDS.RUN_AGENT_COMMAND, {
+        agentKey: normalizedAgentKey,
+        sessionId,
+        provider,
+        prompt: agentPrompt,
+        traceId: agentTraceId,
+        projectName: title,
+        modelExportEnabled: dccMcpCapabilities.export,
+        blenderBridgeAddr: DEFAULT_BLENDER_BRIDGE_ADDR,
+        outputDir,
+        workdir: String(activeWorkspace?.path || "").trim() || undefined,
+      });
+      const responseSteps = response.steps || [];
+      setStepRecords(responseSteps);
+      setEventRecords(response.events || []);
+      const codegenRawStep = [...responseSteps]
+        .reverse()
+        .find((item) => item.code === "llm_python_codegen" && item.data && typeof item.data === "object");
+      const codegenRawData = codegenRawStep?.data || {};
+      const responsePromptRaw = String(codegenRawData.llm_prompt_raw || "").trim() || agentPrompt;
+      const responseRawText = String(codegenRawData.llm_response_raw || "").trim()
+        || String(agentLlmResponseRawRef.current || agentLlmDeltaBufferRef.current || "").trim();
+      if (responsePromptRaw || responseRawText) {
         setSessionAiRawByMessage((prev) => ({
           ...prev,
           [streamMessageId]: {
-            promptRaw: codePrompt,
-            responseRaw: "",
+            promptRaw: responsePromptRaw,
+            responseRaw: responseRawText,
           },
         }));
-        appendDebugFlowRecord(
-          "ui",
-          "skill_plan",
-          "技能执行计划",
-          JSON.stringify(
-            {
-              ready_count: skillExecutionPlan.readyItems.length,
-              ready_items: skillExecutionPlan.readyItems.map((item) => ({
-                node_id: item.nodeId,
-                node_title: item.nodeTitle,
-                skill_id: item.skillId,
-                skill_version: item.skillVersion,
-              })),
-            },
-            null,
-            2,
-          ),
-        );
-        if (skillExecutionPlan.readyItems.length > 0) {
-          appendTraceRecord({
-            traceId: codeTraceId,
-            source: "workflow:skill_plan",
-            message: `已加载 ${skillExecutionPlan.readyItems.length} 个技能节点`,
-          });
-        }
-        const response = await invoke<AgentRunResponse>(COMMANDS.RUN_AGENT_COMMAND, {
-          agentKey: agentKey || "code",
-          sessionId,
-          provider,
-          prompt: codePrompt,
-          traceId: codeTraceId,
-          projectName: title,
-          modelExportEnabled: modelMcpCapabilities.export,
-          blenderBridgeAddr: DEFAULT_BLENDER_BRIDGE_ADDR,
-          outputDir,
-          workdir: String(activeCodeWorkspace?.path || "").trim() || undefined,
-        });
-        const responseSteps = response.steps || [];
-        setStepRecords(responseSteps);
-        setEventRecords(response.events || []);
-        const codegenRawStep = [...responseSteps]
-          .reverse()
-          .find((item) => item.code === "llm_python_codegen" && item.data && typeof item.data === "object");
-        const codegenRawData = codegenRawStep?.data || {};
-        const responsePromptRaw = String(codegenRawData.llm_prompt_raw || "").trim() || codePrompt;
-        const responseRawText = String(codegenRawData.llm_response_raw || "").trim()
-          || String(codeAgentLlmResponseRawRef.current || codeAgentLlmDeltaBufferRef.current || "").trim();
-        if (responsePromptRaw || responseRawText) {
-          setSessionAiRawByMessage((prev) => ({
-            ...prev,
-            [streamMessageId]: {
-              promptRaw: responsePromptRaw,
-              responseRaw: responseRawText,
-            },
-          }));
-        }
-        appendTraceRecord({
-          traceId: response.trace_id,
-          source: "agent:run",
-          message: response.message,
-        });
-        setUiHint(response.ui_hint ? mapProtocolUiHint(response.ui_hint) : null);
-        setPendingDangerousToken("");
-        setStreamingAssistantTarget(response.message);
-        finishAssistantRunMessage(streamMessageId, "finished", response.message);
-        const actionText =
-          response.actions?.length > 0 ? `动作：${response.actions.join(", ")}` : "动作：无";
-        setStatus(
-          response.exported_file
-            ? `${actionText}；工作流：${activeWorkflowName}；导出文件：${response.exported_file}`
-            : `${actionText}；工作流：${activeWorkflowName}`
-        );
       }
+      appendTraceRecord({
+        traceId: response.trace_id,
+        source: "agent:run",
+        message: response.message,
+      });
+      setUiHint(response.ui_hint ? mapProtocolUiHint(response.ui_hint) : null);
+      setPendingDangerousToken("");
+      setStreamingAssistantTarget(response.message);
+      finishAssistantRunMessage(streamMessageId, "finished", response.message);
+      const actionText =
+        response.actions?.length > 0 ? `动作：${response.actions.join(", ")}` : "动作：无";
+      setStatus(
+        response.exported_file
+          ? `${actionText}；工作流：${activeWorkflowName}；导出文件：${response.exported_file}`
+          : `${actionText}；工作流：${activeWorkflowName}`
+      );
     } catch (err) {
       const detail = normalizeInvokeErrorDetail(err);
       const reason = detail.message;
@@ -3472,11 +2890,11 @@ export function SessionPage({
         code: detail.code,
         message: reason,
       });
-      if (!isWorkflowSession && streamMessageIdRef.current) {
+      if (streamMessageIdRef.current) {
         const failedMessageId = String(streamMessageIdRef.current || "").trim();
-        const failedPromptRaw = String(codeAgentPromptRawRef.current || "").trim();
+        const failedPromptRaw = String(agentPromptRawRef.current || "").trim();
         const rawCodeResponse = String(
-          codeAgentLlmResponseRawRef.current || codeAgentLlmDeltaBufferRef.current || "",
+          agentLlmResponseRawRef.current || agentLlmDeltaBufferRef.current || "",
         ).trim();
         if (failedMessageId && (failedPromptRaw || rawCodeResponse)) {
           setSessionAiRawByMessage((prev) => ({
@@ -3501,9 +2919,7 @@ export function SessionPage({
       setUiHint(buildUiHintFromProtocolError(detail));
     } finally {
       setSending(false);
-      if (!isWorkflowSession) {
-        activeAgentStreamTraceRef.current = "";
-      }
+      activeAgentStreamTraceRef.current = "";
     }
   };
 
@@ -3912,22 +3328,12 @@ const handleConfirmWorkflowSkillModal = () => {
     });
     return;
   }
-  if (isWorkflowSession) {
-    if (nextSkillIds.length > 0) {
-      setSelectedModelSkillIds(nextSkillIds);
-      setSelectedModelWorkflowId("");
-    } else {
-      setSelectedModelSkillIds([]);
-      setSelectedModelWorkflowId(nextWorkflowId || modelWorkflows[0]?.id || "");
-    }
+  if (nextSkillIds.length > 0) {
+    setSelectedSkillIds(nextSkillIds);
+    setSelectedWorkflowId("");
   } else {
-    if (nextSkillIds.length > 0) {
-      setSelectedCodeSkillIds(nextSkillIds);
-      setSelectedCodeWorkflowId("");
-    } else {
-      setSelectedCodeSkillIds([]);
-      setSelectedCodeWorkflowId(nextWorkflowId || codeWorkflows[0]?.id || "");
-    }
+    setSelectedSkillIds([]);
+    setSelectedWorkflowId(nextWorkflowId || workflows[0]?.id || "");
   }
   setWorkflowSkillModalVisible(false);
   setDraftWorkflowId("");
@@ -4051,9 +3457,11 @@ const handleConfirmWorkflowSkillModal = () => {
       return;
     }
 
-    if (action.kind === "open_model_settings") {
+    if (
+      action.kind === "open_agent_settings"
+    ) {
       setUiHint(null);
-      navigate("/agents/model/settings");
+      navigate(AGENT_SETTINGS_PATH);
       return;
     }
 
@@ -4099,53 +3507,22 @@ const handleConfirmWorkflowSkillModal = () => {
   };
 
   const retryLastStep = async () => {
-    if (!sessionId || sending || !isWorkflowSession) {
+    if (sending) {
       return;
     }
-    const traceId = `trace-${Date.now()}`;
-    setSending(true);
-    setStatus("重试中...");
-    try {
-      const response = await invoke<ModelSessionRunResponse>(COMMANDS.RETRY_MODEL_SESSION_LAST_STEP, {
-        sessionId,
-        traceId,
-        projectName: title,
-        capabilities: modelMcpCapabilities,
-        blenderBridgeAddr: DEFAULT_BLENDER_BRIDGE_ADDR,
-      });
-      setStepRecords(response.steps || []);
-      setEventRecords(response.events || []);
-      if (response.trace_id) {
-        appendTraceRecord({
-          traceId: response.trace_id,
-          source: "session:retry",
-          message: response.message,
-        });
-      }
-      setUiHint(response.ui_hint ? mapProtocolUiHint(response.ui_hint) : null);
-      setMessages((prev) => [
-        ...prev,
-        { id: `assistant-${Date.now()}`, role: "assistant", text: response.message },
-      ]);
-      setStatus("重试完成");
-    } catch (err) {
-      const detail = normalizeInvokeErrorDetail(err);
-      const reason = normalizeInvokeError(err);
-      appendTraceRecord({
-        traceId: `trace-local-${Date.now()}`,
-        source: "session:retry_error",
-        code: detail.code,
-        message: reason,
-      });
-      setStatus(`重试失败：${reason}`);
-      setMessages((prev) => [
-        ...prev,
-        { id: `assistant-${Date.now()}`, role: "assistant", text: `重试失败：${reason}` },
-      ]);
-      setUiHint(buildUiHintFromProtocolError(detail));
-    } finally {
-      setSending(false);
+    const latestUserPrompt = [...messages]
+      .reverse()
+      .find((item) => item.role === "user" && String(item.text || "").trim());
+    const normalizedPrompt = String(latestUserPrompt?.text || "").trim();
+    if (!normalizedPrompt) {
+      setStatus("无法重试：未找到最近一条用户请求");
+      return;
     }
+    setStatus("正在重试最近一轮...");
+    await executePrompt(normalizedPrompt, {
+      allowDangerousAction: false,
+      appendUserMessage: false,
+    });
   };
 
   // 描述：打开会话重命名弹窗，默认文案使用当前标题。
@@ -4171,16 +3548,10 @@ const handleConfirmWorkflowSkillModal = () => {
     if (!sessionId) {
       return;
     }
-    const deletingWorkspaceId = normalizedAgentKey === "code"
-      ? workspaceIdFromRouteState || workspaceIdFromQuery || workspaceIdFromBinding
-      : "";
+    const deletingWorkspaceId = workspaceIdFromRouteState || workspaceIdFromQuery || workspaceIdFromBinding;
     removeAgentSession(normalizedAgentKey, sessionId);
-    if (normalizedAgentKey === "code") {
-      const search = deletingWorkspaceId ? `?workspaceId=${encodeURIComponent(deletingWorkspaceId)}` : "";
-      navigate(`/agents/code${search}`);
-    } else {
-      navigate("/agents/model");
-    }
+    const search = deletingWorkspaceId ? `?workspaceId=${encodeURIComponent(deletingWorkspaceId)}` : "";
+    navigate(`${AGENT_HOME_PATH}${search}`);
     if (!currentUser?.id) {
       return;
     }
@@ -4324,18 +3695,17 @@ const handleConfirmWorkflowSkillModal = () => {
   //
   //   - 会话执行配置文本。
   const buildSessionExecutionConfigText = () => {
-    const activeWorkflow = isWorkflowSession ? selectedModelWorkflow : selectedCodeWorkflow;
     const configuredSkillItems = selectedSessionSkills.map((item) => {
       const name = String(item.name || "").trim() || item.id;
       return `${name} (${item.id})`;
     });
-    const workflowSummary = activeWorkflow
-      ? `${activeWorkflow.name} (${activeWorkflow.id})`
+    const workflowSummary = selectedWorkflow
+      ? `${selectedWorkflow.name} (${selectedWorkflow.id})`
       : "（当前未选择工作流，可能已切换为技能执行）";
     const providerName = String(selectedAi?.providerLabel || selectedAi?.provider || selectedProvider || "").trim() || "-";
     const providerId = String(selectedAi?.provider || selectedProvider || "").trim() || "-";
     return [
-      `- 会话类型：${isWorkflowSession ? "模型智能体" : "代码智能体"}`,
+      "- 会话类型：智能体",
       `- AI：${providerName} (${providerId})`,
       `- 工作流：${workflowSummary}`,
       "",
@@ -4350,13 +3720,13 @@ const handleConfirmWorkflowSkillModal = () => {
   //
   //   - 项目设置文本。
   const buildSessionProjectSettingsText = () => {
-    if (normalizedAgentKey !== "code") {
-      return "- 当前会话不关联代码项目设置。";
+    if (!activeWorkspace) {
+      return "- 当前会话不关联项目设置。";
     }
-    const workspaceName = String(activeCodeWorkspace?.name || "").trim() || "-";
-    const workspacePath = String(activeCodeWorkspace?.path || "").trim() || "-";
-    const dependencyRules = activeCodeWorkspace?.dependencyRules || [];
-    const profile = activeCodeProjectProfile;
+    const workspaceName = String(activeWorkspace?.name || "").trim() || "-";
+    const workspacePath = String(activeWorkspace?.path || "").trim() || "-";
+    const dependencyRules = activeWorkspace?.dependencyRules || [];
+    const profile = activeProjectProfile;
     const profileSummary = String(profile?.summary || "").trim() || "（无）";
     const sectionLines = (profile?.knowledgeSections || []).map((section) => {
       const title = String(section.title || section.key || "").trim() || "未命名分类";
@@ -4423,7 +3793,7 @@ const handleConfirmWorkflowSkillModal = () => {
       .reverse()
       .find((item) => item.code === "llm_python_codegen" && item.data && typeof item.data === "object");
     const latestCodegenData = latestCodegenStep?.data || {};
-    const codePromptRaw = String(latestCodegenData.llm_prompt_raw || "").trim();
+    const agentPromptRaw = String(latestCodegenData.llm_prompt_raw || "").trim();
     const codeResponseRaw = String(latestCodegenData.llm_response_raw || "").trim();
     const findDebugFlowDetail = (
       stageCandidates: string[],
@@ -4445,10 +3815,10 @@ const handleConfirmWorkflowSkillModal = () => {
       ["llm_plan_raw_response", "ai_summary_raw"],
       ["原始返回", "raw"],
     );
-    const promptRaw = codePromptRaw || fallbackPromptRaw;
-    const fallbackPrompt = String(sessionAiPromptRaw || codeAgentPromptRawRef.current || "").trim();
+    const promptRaw = agentPromptRaw || fallbackPromptRaw;
+    const fallbackPrompt = String(sessionAiPromptRaw || agentPromptRawRef.current || "").trim();
     const fallbackResponse = String(
-      sessionAiResponseRaw || codeAgentLlmResponseRawRef.current || codeAgentLlmDeltaBufferRef.current || "",
+      sessionAiResponseRaw || agentLlmResponseRawRef.current || agentLlmDeltaBufferRef.current || "",
     ).trim();
     const responseRaw = codeResponseRaw || fallbackResponseRaw || fallbackResponse;
     const rawPromptForCopy = promptRaw || fallbackPrompt;
@@ -4667,18 +4037,16 @@ const handleConfirmWorkflowSkillModal = () => {
       emitSessionCopyResult(false, failedMessage);
     }
   }, [
-    activeCodeProjectProfile,
-    activeCodeWorkspace,
+    activeProjectProfile,
+    activeWorkspace,
     activeSelectedSkillIds,
     assistantRunMetaMap,
     debugFlowRecords,
     emitSessionCopyResult,
-    isWorkflowSession,
     messages,
     normalizedAgentKey,
     selectedAi,
-    selectedCodeWorkflow,
-    selectedModelWorkflow,
+    selectedWorkflow,
     selectedProvider,
     selectedSessionSkills,
     sessionId,
@@ -4925,9 +4293,9 @@ const handleConfirmWorkflowSkillModal = () => {
           <AriList
             bordered
             className="desk-session-strategy-list"
-            emptyMessage="暂无已安装技能"
+            emptyMessage="暂无可用技能"
           >
-            {installedSkills.map((item) => (
+            {availableSkills.map((item) => (
               <AriListItem
                 key={`skill-${item.id}`}
                 split={false}
@@ -5389,7 +4757,7 @@ const handleConfirmWorkflowSkillModal = () => {
                   onTriggerClick={() => {
                     handleOpenWorkflowSkillModal();
                   }}
-                  disabled={workflowMenuItems.length === 0 && installedSkills.length === 0}
+                  disabled={workflowMenuItems.length === 0 && availableSkills.length === 0}
                 />
                 {sandboxMetrics && (
                   <AriFlex align="center" className="desk-sandbox-metrics">
@@ -5415,10 +4783,6 @@ const handleConfirmWorkflowSkillModal = () => {
                 icon={sending ? "pause" : "arrow_upward"}
                 className="desk-prompt-icon-btn"
                 onClick={handlePromptPrimaryAction}
-                disabled={
-                  !sending &&
-                  (isWorkflowSession && blenderBridgeRuntime.checking)
-                }
               />
             </AriFlex>
           </AriCard>

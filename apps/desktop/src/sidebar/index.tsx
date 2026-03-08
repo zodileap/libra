@@ -16,23 +16,23 @@ import {
 } from "aries_react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
-  bindCodeSessionWorkspace,
-  CODE_WORKSPACE_GROUPS_UPDATED_EVENT,
-  getCodeWorkspaceIdBySessionId,
-  getLastUsedCodeWorkspaceId,
+  bindProjectSessionWorkspace,
+  PROJECT_WORKSPACE_GROUPS_UPDATED_EVENT,
+  getProjectWorkspaceIdBySessionId,
+  getLastUsedProjectWorkspaceId,
   getAgentSessionMetaSnapshot,
   getSessionRunState,
   isSessionRunning,
-  listCodeWorkspaceGroups,
+  listProjectWorkspaceGroups,
   removeAgentSession,
-  removeCodeWorkspaceGroup,
+  removeProjectWorkspaceGroup,
   renameAgentSession,
   resolveAgentSessionTitle,
   SESSION_RUN_STATE_UPDATED_EVENT,
   upsertSessionRunState,
-  setLastUsedCodeWorkspaceId,
+  setLastUsedProjectWorkspaceId,
   togglePinnedAgentSession,
-  type CodeWorkspaceGroup,
+  type ProjectWorkspaceGroup,
   type SessionRunMeta,
 } from "@/shell/data";
 import {
@@ -44,18 +44,16 @@ import type {
   AgentKey,
   AgentSession,
   AuthAvailableAgentItem,
+  ConsoleIdentityItem,
   DesktopUpdateState,
   LoginUser,
 } from "@/shell/types";
 import type { AgentTextStreamEvent } from "../shared/types";
 import { EVENT_AGENT_TEXT_STREAM, IS_BROWSER, isCancelErrorCode, STREAM_KINDS } from "../shared/constants";
 import {
-  createCodeWorkflowFromTemplate,
-  createModelWorkflowFromTemplate,
-  deleteCodeWorkflow,
-  deleteModelWorkflow,
-  listCodeWorkflows,
-  listModelWorkflows,
+  createAgentWorkflowFromTemplate,
+  deleteAgentWorkflow,
+  listAgentWorkflows,
 } from "@/widgets/workflow";
 import {
   AI_KEY_SIDEBAR_CONTENT,
@@ -67,12 +65,11 @@ import {
   WORKFLOW_PAGE_PATH,
 } from "../modules/common/routes";
 import {
-  CODE_AGENT_ROOT_PATH,
-  CODE_PROJECT_SETTINGS_PATH,
-} from "../modules/code/routes";
-import {
-  MODEL_AGENT_ROOT_PATH,
-} from "../modules/model/routes";
+  AGENT_HOME_PATH,
+  AGENT_SETTINGS_PATH,
+  PROJECT_SETTINGS_PATH,
+  resolveAgentSessionPath,
+} from "../modules/agent/routes";
 import type { RouteAccess } from "../router/types";
 import { SidebarBackHeader } from "./widgets/sidebar-back-header";
 import { UserHoverMenu } from "./widgets/user-hover-menu";
@@ -82,6 +79,7 @@ import { UserHoverMenu } from "./widgets/user-hover-menu";
 //   - 定义客户端侧边栏根组件入参。
 interface ClientSidebarProps {
   user: LoginUser;
+  selectedIdentity: ConsoleIdentityItem | null;
   onLogout: () => Promise<void>;
   availableAgents: AuthAvailableAgentItem[];
   routeAccess: RouteAccess;
@@ -100,9 +98,9 @@ interface AgentSidebarSession extends AgentSession {
 
 // 描述:
 //
-//   - 定义代码目录与会话分组结构。
-interface CodeWorkspaceSessionGroup {
-  workspace: CodeWorkspaceGroup;
+//   - 定义项目目录与会话分组结构。
+interface WorkspaceSessionGroup {
+  workspace: ProjectWorkspaceGroup;
   sessions: AgentSidebarSession[];
 }
 
@@ -225,8 +223,9 @@ function resolveStreamErrorCode(payload: AgentTextStreamEvent): string {
 //
 //   - 智能体标识；未命中返回 null。
 function matchAgentKey(pathname: string): AgentKey | null {
-  if (pathname.startsWith("/agents/code")) return "code";
-  if (pathname.startsWith("/agents/model")) return "model";
+  if (pathname.startsWith(AGENT_HOME_PATH)) return "agent";
+  if (pathname.startsWith("/session/")) return "agent";
+  if (pathname.startsWith(PROJECT_SETTINGS_PATH)) return "agent";
   return null;
 }
 
@@ -242,10 +241,12 @@ function matchAgentKey(pathname: string): AgentKey | null {
 //
 //   - 侧边栏模式标识。
 function matchSidebarMode(pathname: string): "home" | "agent" | "settings" | "ai-key" | "workflow" {
+  if (pathname.startsWith("/session/")) return "agent";
+  if (pathname.startsWith(PROJECT_SETTINGS_PATH)) return "agent";
+  if (pathname.startsWith(AGENT_HOME_PATH)) return "agent";
   if (pathname.startsWith("/settings")) return "settings";
   if (pathname.startsWith("/ai-keys")) return "ai-key";
   if (pathname.includes("/workflows")) return "workflow";
-  if (pathname.startsWith("/agents/")) return "agent";
   return "home";
 }
 
@@ -279,6 +280,7 @@ function toSessionUpdatedAtText(lastAt?: string): string {
 //   - 渲染首页侧边栏，展示可访问智能体入口与用户菜单。
 function HomeSidebar({
   user,
+  selectedIdentity,
   onLogout,
   availableAgents,
   routeAccess,
@@ -287,6 +289,7 @@ function HomeSidebar({
   onInstallDesktopUpdate,
 }: {
   user: LoginUser;
+  selectedIdentity: ConsoleIdentityItem | null;
   onLogout: () => Promise<void>;
   availableAgents: AuthAvailableAgentItem[];
   routeAccess: RouteAccess;
@@ -296,9 +299,7 @@ function HomeSidebar({
 }) {
   const navigate = useNavigate();
   const location = useLocation();
-  const selectedKey = location.pathname.startsWith("/agents/")
-    ? location.pathname.split("/")[2] || ""
-    : "";
+  const selectedKey = location.pathname.startsWith(AGENT_HOME_PATH) ? "agent" : "";
   const homeSidebarItems = useMemo(
     () => resolveHomeSidebarAgentItems(availableAgents, routeAccess),
     [availableAgents, routeAccess],
@@ -402,6 +403,7 @@ function HomeSidebar({
       <AriContainer className="desk-sidebar-spacer" />
       <UserHoverMenu
         user={user}
+        selectedIdentityLabel={selectedIdentity?.scopeName || ""}
         onLogout={onLogout}
         routeAccess={routeAccess}
         desktopUpdateState={desktopUpdateState}
@@ -417,16 +419,20 @@ function HomeSidebar({
 //   - 渲染智能体侧边栏，统一承载会话列表、目录树与右键菜单操作。
 function AgentSidebar({
   user,
+  selectedIdentity,
   onLogout,
   agentKey,
+  showBackHeader = true,
   routeAccess,
   desktopUpdateState,
   onCheckDesktopUpdate,
   onInstallDesktopUpdate,
 }: {
   user: LoginUser;
+  selectedIdentity: ConsoleIdentityItem | null;
   onLogout: () => Promise<void>;
   agentKey: AgentKey;
+  showBackHeader?: boolean;
   routeAccess: RouteAccess;
   desktopUpdateState: DesktopUpdateState;
   onCheckDesktopUpdate: () => Promise<void>;
@@ -446,30 +452,77 @@ function AgentSidebar({
   const [hoveredPinSessionId, setHoveredPinSessionId] = useState("");
   const [hoveredDeleteSessionId, setHoveredDeleteSessionId] = useState("");
   const [hoveredContextMenuActionKey, setHoveredContextMenuActionKey] = useState("");
-  const [workspaceGroups, setWorkspaceGroups] = useState<CodeWorkspaceGroup[]>([]);
-  const [codeWorkspaceExpandedKeys, setCodeWorkspaceExpandedKeys] = useState<string[]>([]);
+  const [workspaceGroups, setWorkspaceGroups] = useState<ProjectWorkspaceGroup[]>([]);
+  const [projectWorkspaceExpandedKeys, setProjectWorkspaceExpandedKeys] = useState<string[]>([]);
   const [openWorkspaceActionMenuId, setOpenWorkspaceActionMenuId] = useState("");
   const [creatingWorkspaceSessionId, setCreatingWorkspaceSessionId] = useState("");
   const [sessionMenuRenderVersion, setSessionMenuRenderVersion] = useState(0);
   const missingSessionSyncAttemptsRef = useRef<Record<string, number>>({});
   const suppressNextSessionSelectIdRef = useRef("");
 
-  const isCodeAgent = agentKey === "code";
+  const isProjectAgent = agentKey === "agent";
   const selectedSessionKey = location.pathname.includes("/session/")
     ? location.pathname.split("/").pop() || ""
     : "";
   const selectedWorkspaceFromQuery = useMemo(() => {
-    if (!isCodeAgent) {
+    if (!isProjectAgent) {
       return "";
     }
     return new URLSearchParams(location.search).get("workspaceId")?.trim() || "";
-  }, [isCodeAgent, location.search]);
-  const isCodeProjectSettingsPath = isCodeAgent && location.pathname.startsWith(CODE_PROJECT_SETTINGS_PATH);
+  }, [isProjectAgent, location.search]);
+  const isProjectSettingsPath = isProjectAgent && location.pathname.startsWith(PROJECT_SETTINGS_PATH);
+  const projectToolbarEntries = useMemo(
+    () => [
+      {
+        key: "workflow",
+        label: "工作流",
+        icon: "account_tree",
+        enabled: routeAccess.isModuleEnabled("workflow"),
+        path: WORKFLOW_PAGE_PATH,
+        deniedMessage: "当前构建未启用工作流模块。",
+      },
+      {
+        key: "skills",
+        label: "技能",
+        icon: "new_releases",
+        enabled: routeAccess.isModuleEnabled("skill"),
+        path: SKILL_PAGE_PATH,
+        deniedMessage: "当前构建未启用技能模块。",
+      },
+      {
+        key: "mcp",
+        label: "MCP",
+        icon: "hub",
+        enabled: routeAccess.isModuleEnabled("mcp"),
+        path: MCP_PAGE_PATH,
+        deniedMessage: "当前构建未启用 MCP 模块。",
+      },
+      {
+        key: "create-project",
+        label: "新项目",
+        icon: "note_stack_add",
+        enabled: true,
+      },
+    ],
+    [routeAccess],
+  );
+  const selectedToolbarKey = useMemo(() => {
+    if (location.pathname.startsWith(SKILL_PAGE_PATH)) {
+      return "skills";
+    }
+    if (location.pathname.startsWith(MCP_PAGE_PATH)) {
+      return "mcp";
+    }
+    if (location.pathname.startsWith(WORKFLOW_PAGE_PATH)) {
+      return "workflow";
+    }
+    return "";
+  }, [location.pathname]);
 
-  // 描述：构建代码目录父菜单 key，避免与会话 key 冲突。
+  // 描述：构建项目目录父菜单 key，避免与会话 key 冲突。
   const buildWorkspaceMenuKey = (workspaceId: string) => `workspace:${workspaceId}`;
 
-  // 描述：从代码目录父菜单 key 中提取目录 ID。
+  // 描述：从项目目录父菜单 key 中提取目录 ID。
   const parseWorkspaceIdFromMenuKey = (key: string) => {
     if (!key.startsWith("workspace:")) {
       return "";
@@ -477,13 +530,13 @@ function AgentSidebar({
     return key.slice("workspace:".length).trim();
   };
 
-  // 描述：刷新代码目录分组缓存，并同步默认展开状态。
+  // 描述：刷新项目目录分组缓存，并同步默认展开状态。
   const refreshWorkspaceGroups = () => {
-    if (!isCodeAgent) {
+    if (!isProjectAgent) {
       setWorkspaceGroups([]);
       return;
     }
-    setWorkspaceGroups(listCodeWorkspaceGroups());
+    setWorkspaceGroups(listProjectWorkspaceGroups());
   };
 
   // 描述：拉取当前智能体的会话列表。
@@ -524,27 +577,27 @@ function AgentSidebar({
       const normalizedSessions = mapped.map(({ _originIndex, _pinnedIndex, ...session }) => session);
       setSessions(normalizedSessions);
 
-      if (isCodeAgent) {
-        let latestGroups = listCodeWorkspaceGroups();
-        const fallbackWorkspaceId = getLastUsedCodeWorkspaceId() || latestGroups[0]?.id || "";
+      if (isProjectAgent) {
+        let latestGroups = listProjectWorkspaceGroups();
+        const fallbackWorkspaceId = getLastUsedProjectWorkspaceId() || latestGroups[0]?.id || "";
         if (fallbackWorkspaceId) {
           let rebound = false;
           normalizedSessions.forEach((item) => {
-            const workspaceId = getCodeWorkspaceIdBySessionId(item.id);
+            const workspaceId = getProjectWorkspaceIdBySessionId(item.id);
             if (!workspaceId) {
-              bindCodeSessionWorkspace(item.id, fallbackWorkspaceId);
+              bindProjectSessionWorkspace(item.id, fallbackWorkspaceId);
               rebound = true;
             }
           });
           if (rebound) {
-            latestGroups = listCodeWorkspaceGroups();
+            latestGroups = listProjectWorkspaceGroups();
           }
         }
         setWorkspaceGroups(latestGroups);
       }
     } catch (_err) {
       setSessions([]);
-      if (isCodeAgent) {
+      if (isProjectAgent) {
         refreshWorkspaceGroups();
       }
     } finally {
@@ -552,14 +605,10 @@ function AgentSidebar({
     }
   };
 
-  // 描述：新增入口始终进入代码项目选择页，避免在侧边栏直接绑定旧目录上下文。
+  // 描述：新增入口始终进入项目选择页，避免在侧边栏直接绑定旧目录上下文。
   const handleCreateSession = () => {
     setPendingDeleteSessionId("");
-    if (isCodeAgent) {
-      navigate(CODE_AGENT_ROOT_PATH);
-      return;
-    }
-    navigate(MODEL_AGENT_ROOT_PATH);
+    navigate(AGENT_HOME_PATH);
   };
 
   // 描述：切换会话排序方式，支持“默认顺序”和“按名称排序”两种模式。
@@ -865,8 +914,8 @@ function AgentSidebar({
       return;
     }
 
-    const deletingWorkspaceId = isCodeAgent
-      ? getCodeWorkspaceIdBySessionId(sessionId) || selectedWorkspaceFromQuery || getLastUsedCodeWorkspaceId()
+    const deletingWorkspaceId = isProjectAgent
+      ? getProjectWorkspaceIdBySessionId(sessionId) || selectedWorkspaceFromQuery || getLastUsedProjectWorkspaceId()
       : "";
 
     // 描述：执行删除时先本地移除会话，避免后端状态更新延迟导致“已确认仍可见”。
@@ -875,10 +924,10 @@ function AgentSidebar({
     reloadSessionSidebarMenu();
     setPendingDeleteSessionId("");
     if (selectedSessionKey === sessionId) {
-      if (isCodeAgent && deletingWorkspaceId) {
-        navigate(`/agents/code?workspaceId=${encodeURIComponent(deletingWorkspaceId)}`);
+      if (isProjectAgent && deletingWorkspaceId) {
+        navigate(`${AGENT_HOME_PATH}?workspaceId=${encodeURIComponent(deletingWorkspaceId)}`);
       } else {
-        navigate(`/agents/${agentKey}`);
+        navigate(AGENT_HOME_PATH);
       }
     }
 
@@ -929,27 +978,18 @@ function AgentSidebar({
     if (!workspaceId) {
       return;
     }
-    removeCodeWorkspaceGroup(workspaceId);
+    removeProjectWorkspaceGroup(workspaceId);
     reloadSessionSidebarMenu();
-    const fallbackWorkspaceId = getLastUsedCodeWorkspaceId();
+    const fallbackWorkspaceId = getLastUsedProjectWorkspaceId();
     refreshWorkspaceGroups();
     if (!location.pathname.includes("/session/")) {
       if (fallbackWorkspaceId) {
-        navigate(`/agents/code?workspaceId=${encodeURIComponent(fallbackWorkspaceId)}`);
+        navigate(`${AGENT_HOME_PATH}?workspaceId=${encodeURIComponent(fallbackWorkspaceId)}`);
       } else {
-        navigate("/agents/code");
+        navigate(AGENT_HOME_PATH);
       }
     }
     void refreshSessions();
-  };
-
-  // 描述：选中目录分组后进入统一“新建会话”页面，并记住最近使用目录。
-  const openWorkspaceComposePage = (workspaceId: string) => {
-    if (!workspaceId) {
-      return;
-    }
-    setLastUsedCodeWorkspaceId(workspaceId);
-    navigate(`/agents/code?workspaceId=${encodeURIComponent(workspaceId)}`);
   };
 
   // 描述：打开项目设置页面，保持目录上下文并仅切换主内容区域。
@@ -958,12 +998,12 @@ function AgentSidebar({
       return;
     }
     const workspaceMenuKey = buildWorkspaceMenuKey(workspaceId);
-    setCodeWorkspaceExpandedKeys((current) => {
+    setProjectWorkspaceExpandedKeys((current) => {
       const next = new Set([...current, workspaceMenuKey]);
       return [...next];
     });
-    setLastUsedCodeWorkspaceId(workspaceId);
-    navigate(`${CODE_PROJECT_SETTINGS_PATH}?workspaceId=${encodeURIComponent(workspaceId)}`);
+    setLastUsedProjectWorkspaceId(workspaceId);
+    navigate(`${PROJECT_SETTINGS_PATH}?workspaceId=${encodeURIComponent(workspaceId)}`);
   };
 
   // 描述：在指定项目下创建新话题并跳转到会话页，保持项目上下文绑定。
@@ -972,12 +1012,12 @@ function AgentSidebar({
   //
   //   - workspaceId: 目标项目 ID。
   const handleCreateSessionInWorkspace = async (workspaceId: string) => {
-    if (!workspaceId || !isCodeAgent || creatingWorkspaceSessionId) {
+    if (!workspaceId || !isProjectAgent || creatingWorkspaceSessionId) {
       return;
     }
     setCreatingWorkspaceSessionId(workspaceId);
     try {
-      const created = await createRuntimeSession(user.id, "code");
+      const created = await createRuntimeSession(user.id, "agent");
       if (!created.id) {
         AriMessage.warning({
           content: "创建话题失败，请稍后重试。",
@@ -985,9 +1025,9 @@ function AgentSidebar({
         });
         return;
       }
-      bindCodeSessionWorkspace(created.id, workspaceId);
-      setLastUsedCodeWorkspaceId(workspaceId);
-      navigate(`/agents/code/session/${created.id}?workspaceId=${encodeURIComponent(workspaceId)}`);
+      bindProjectSessionWorkspace(created.id, workspaceId);
+      setLastUsedProjectWorkspaceId(workspaceId);
+      navigate(`${resolveAgentSessionPath(created.id)}?workspaceId=${encodeURIComponent(workspaceId)}`);
     } catch (_err) {
       AriMessage.warning({
         content: "创建话题失败，请稍后重试。",
@@ -1011,8 +1051,8 @@ function AgentSidebar({
     if (!sessionId || deletingSessionId) {
       return;
     }
-    const deletingWorkspaceId = isCodeAgent
-      ? getCodeWorkspaceIdBySessionId(sessionId) || selectedWorkspaceFromQuery || getLastUsedCodeWorkspaceId()
+    const deletingWorkspaceId = isProjectAgent
+      ? getProjectWorkspaceIdBySessionId(sessionId) || selectedWorkspaceFromQuery || getLastUsedProjectWorkspaceId()
       : "";
 
     // 描述：右键删除同样采用本地优先移除，确保交互结果即时可见。
@@ -1020,10 +1060,10 @@ function AgentSidebar({
     setSessions((prev) => prev.filter((item) => item.id !== sessionId));
     reloadSessionSidebarMenu();
     if (selectedSessionKey === sessionId) {
-      if (isCodeAgent && deletingWorkspaceId) {
-        navigate(`/agents/code?workspaceId=${encodeURIComponent(deletingWorkspaceId)}`);
+      if (isProjectAgent && deletingWorkspaceId) {
+        navigate(`${AGENT_HOME_PATH}?workspaceId=${encodeURIComponent(deletingWorkspaceId)}`);
       } else {
-        navigate(`/agents/${agentKey}`);
+        navigate(AGENT_HOME_PATH);
       }
     }
 
@@ -1039,7 +1079,7 @@ function AgentSidebar({
     }
   };
 
-  // 描述：点击会话项后导航到会话详情，代码智能体会携带目录分组上下文。
+  // 描述：点击会话项后导航到会话详情，智能体会携带目录分组上下文。
   const handleSelectSession = (sessionKey: string) => {
     if (!sessionKey) {
       return;
@@ -1049,20 +1089,16 @@ function AgentSidebar({
       suppressNextSessionSelectIdRef.current = "";
       return;
     }
-    if (!isCodeAgent) {
-      navigate(`${MODEL_AGENT_ROOT_PATH}/session/${sessionKey}`);
-      return;
-    }
-    const workspaceId = getCodeWorkspaceIdBySessionId(sessionKey)
+    const workspaceId = getProjectWorkspaceIdBySessionId(sessionKey)
       || selectedWorkspaceFromQuery
-      || getLastUsedCodeWorkspaceId()
+      || getLastUsedProjectWorkspaceId()
       || workspaceGroups[0]?.id
       || "";
     if (workspaceId) {
-      setLastUsedCodeWorkspaceId(workspaceId);
+      setLastUsedProjectWorkspaceId(workspaceId);
     }
     const search = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : "";
-    navigate(`${CODE_AGENT_ROOT_PATH}/session/${sessionKey}${search}`);
+    navigate(`${resolveAgentSessionPath(sessionKey)}${search}`);
   };
 
   // 描述：标记并短暂抑制下一次同会话 onSelect，用于规避 action 点击触发的误选中副作用。
@@ -1083,18 +1119,18 @@ function AgentSidebar({
   };
 
   // 描述：将当前会话列表按目录分组映射成二级结构。
-  const codeWorkspaceSessionGroups = useMemo<CodeWorkspaceSessionGroup[]>(() => {
-    if (!isCodeAgent) {
+  const workspaceSessionGroups = useMemo<WorkspaceSessionGroup[]>(() => {
+    if (!isProjectAgent) {
       return [];
     }
-    const fallbackWorkspaceId = getLastUsedCodeWorkspaceId() || workspaceGroups[0]?.id || "";
+    const fallbackWorkspaceId = getLastUsedProjectWorkspaceId() || workspaceGroups[0]?.id || "";
     const byWorkspaceId = new Map<string, AgentSidebarSession[]>();
     workspaceGroups.forEach((group) => {
       byWorkspaceId.set(group.id, []);
     });
 
     displayedSessions.forEach((sessionItem) => {
-      const workspaceId = getCodeWorkspaceIdBySessionId(sessionItem.id) || fallbackWorkspaceId;
+      const workspaceId = getProjectWorkspaceIdBySessionId(sessionItem.id) || fallbackWorkspaceId;
       if (!workspaceId || !byWorkspaceId.has(workspaceId)) {
         return;
       }
@@ -1105,7 +1141,7 @@ function AgentSidebar({
       workspace,
       sessions: byWorkspaceId.get(workspace.id) || [],
     }));
-  }, [displayedSessions, isCodeAgent, workspaceGroups]);
+  }, [displayedSessions, isProjectAgent, workspaceGroups]);
 
   // 描述：构建会话菜单项定义，复用会话 hover 动作与右键菜单触发。
   const buildSessionMenuItems = (items: AgentSidebarSession[]) => items.map((item) => ({
@@ -1167,12 +1203,12 @@ function AgentSidebar({
     },
   }));
 
-  // 描述：构建代码目录树菜单项，使用 AriMenu children 统一承载“目录 -> 会话”层级结构。
-  const codeWorkspaceMenuItems = useMemo(() => {
-    if (!isCodeAgent) {
+  // 描述：构建项目目录树菜单项，使用 AriMenu children 统一承载“目录 -> 会话”层级结构。
+  const projectWorkspaceMenuItems = useMemo(() => {
+    if (!isProjectAgent) {
       return [];
     }
-    return codeWorkspaceSessionGroups.map((group) => ({
+    return workspaceSessionGroups.map((group) => ({
       key: buildWorkspaceMenuKey(group.workspace.id),
       label: group.workspace.name,
       icon: "folder",
@@ -1243,51 +1279,51 @@ function AgentSidebar({
       children: buildSessionMenuItems(group.sessions),
     }));
   }, [
-    codeWorkspaceSessionGroups,
+    workspaceSessionGroups,
     creatingWorkspaceSessionId,
     deletingSessionId,
     hoveredDeleteSessionId,
     hoveredPinSessionId,
-    isCodeAgent,
+    isProjectAgent,
     openWorkspaceActionMenuId,
     pendingDeleteSessionId,
   ]);
 
-  // 描述：处理代码目录树菜单点击，父节点用于切换目录，子节点用于进入会话。
-  const handleSelectCodeWorkspaceMenuItem = (key: string) => {
+  // 描述：处理项目目录树菜单点击，父节点进入项目设置页，子节点进入会话详情。
+  const handleSelectProjectWorkspaceMenuItem = (key: string) => {
     const workspaceId = parseWorkspaceIdFromMenuKey(key);
     if (workspaceId) {
-      openWorkspaceComposePage(workspaceId);
+      openWorkspaceSettingsPage(workspaceId);
       return;
     }
     handleSelectSession(key);
   };
 
-  // 描述：根据当前路由计算代码目录树选中项，仅在具体会话页高亮会话，避免项目页出现整组激活态。
-  const selectedCodeWorkspaceMenuKey = useMemo(() => {
-    if (!isCodeAgent) {
+  // 描述：根据当前路由计算项目目录树选中项，仅在具体会话页高亮会话，避免项目页出现整组激活态。
+  const selectedWorkspaceMenuKey = useMemo(() => {
+    if (!isProjectAgent) {
       return "";
     }
-    if (isCodeProjectSettingsPath) {
+    if (isProjectSettingsPath) {
       return "";
     }
     if (selectedSessionKey) {
       return selectedSessionKey;
     }
     return "";
-  }, [isCodeAgent, isCodeProjectSettingsPath, selectedSessionKey]);
+  }, [isProjectAgent, isProjectSettingsPath, selectedSessionKey]);
 
-  // 描述：计算代码目录树默认展开项，确保当前目录对应父节点默认展开。
+  // 描述：计算项目目录树默认展开项，确保当前目录对应父节点默认展开。
   const defaultExpandedWorkspaceKeys = useMemo(() => {
-    if (!isCodeAgent) {
+    if (!isProjectAgent) {
       return [];
     }
-    const fallbackWorkspaceId = selectedWorkspaceFromQuery || getLastUsedCodeWorkspaceId() || workspaceGroups[0]?.id || "";
+    const fallbackWorkspaceId = selectedWorkspaceFromQuery || getLastUsedProjectWorkspaceId() || workspaceGroups[0]?.id || "";
     if (!fallbackWorkspaceId) {
       return [];
     }
     return [buildWorkspaceMenuKey(fallbackWorkspaceId)];
-  }, [isCodeAgent, selectedWorkspaceFromQuery, workspaceGroups]);
+  }, [isProjectAgent, selectedWorkspaceFromQuery, workspaceGroups]);
 
   // 描述：解析当前右键目标会话，供右键菜单文案与动作状态联动。
   const contextTargetSession = sessions.find((item) => item.id === contextSessionId) || null;
@@ -1364,29 +1400,29 @@ function AgentSidebar({
     setHoveredPinSessionId("");
     setHoveredDeleteSessionId("");
     setHoveredContextMenuActionKey("");
-    setCodeWorkspaceExpandedKeys([]);
+    setProjectWorkspaceExpandedKeys([]);
     setSessionSortMode("default");
     suppressNextSessionSelectIdRef.current = "";
   }, [location.pathname, agentKey]);
 
   useEffect(() => {
-    if (!isCodeAgent) {
+    if (!isProjectAgent) {
       return;
     }
     if (selectedWorkspaceFromQuery) {
-      setLastUsedCodeWorkspaceId(selectedWorkspaceFromQuery);
+      setLastUsedProjectWorkspaceId(selectedWorkspaceFromQuery);
     }
-  }, [isCodeAgent, selectedWorkspaceFromQuery]);
+  }, [isProjectAgent, selectedWorkspaceFromQuery]);
 
   useEffect(() => {
-    if (!isCodeAgent || !selectedSessionKey) {
+    if (!isProjectAgent || !selectedSessionKey) {
       return;
     }
-    const workspaceId = getCodeWorkspaceIdBySessionId(selectedSessionKey);
+    const workspaceId = getProjectWorkspaceIdBySessionId(selectedSessionKey);
     if (workspaceId) {
-      setLastUsedCodeWorkspaceId(workspaceId);
+      setLastUsedProjectWorkspaceId(workspaceId);
     }
-  }, [isCodeAgent, selectedSessionKey]);
+  }, [isProjectAgent, selectedSessionKey]);
 
   useEffect(() => {
     if (!selectedSessionKey) {
@@ -1407,31 +1443,31 @@ function AgentSidebar({
   }, [selectedSessionKey, sessions, agentKey, user.id]);
 
   useEffect(() => {
-    if (!isCodeAgent) {
+    if (!isProjectAgent) {
       return;
     }
     if (defaultExpandedWorkspaceKeys.length === 0) {
       return;
     }
-    setCodeWorkspaceExpandedKeys((prev) => {
+    setProjectWorkspaceExpandedKeys((prev) => {
       const next = new Set([...prev, ...defaultExpandedWorkspaceKeys]);
       return [...next];
     });
-  }, [defaultExpandedWorkspaceKeys, isCodeAgent]);
+  }, [defaultExpandedWorkspaceKeys, isProjectAgent]);
 
   useEffect(() => {
-    if (!isCodeAgent || !IS_BROWSER) {
+    if (!isProjectAgent || !IS_BROWSER) {
       return;
     }
-    // 描述：监听代码目录分组变更事件，保证新增目录后侧边栏目录树即时刷新。
-    const onCodeWorkspaceGroupsUpdated = () => {
-      setWorkspaceGroups(listCodeWorkspaceGroups());
+    // 描述：监听项目目录分组变更事件，保证新增目录后侧边栏目录树即时刷新。
+    const onProjectWorkspaceGroupsUpdated = () => {
+      setWorkspaceGroups(listProjectWorkspaceGroups());
     };
-    window.addEventListener(CODE_WORKSPACE_GROUPS_UPDATED_EVENT, onCodeWorkspaceGroupsUpdated as EventListener);
+    window.addEventListener(PROJECT_WORKSPACE_GROUPS_UPDATED_EVENT, onProjectWorkspaceGroupsUpdated as EventListener);
     return () => {
-      window.removeEventListener(CODE_WORKSPACE_GROUPS_UPDATED_EVENT, onCodeWorkspaceGroupsUpdated as EventListener);
+      window.removeEventListener(PROJECT_WORKSPACE_GROUPS_UPDATED_EVENT, onProjectWorkspaceGroupsUpdated as EventListener);
     };
-  }, [isCodeAgent, location.pathname, selectedSessionKey]);
+  }, [isProjectAgent, location.pathname, selectedSessionKey]);
 
   useEffect(() => {
     if (!IS_BROWSER) {
@@ -1451,7 +1487,7 @@ function AgentSidebar({
   }, [agentKey]);
 
   useEffect(() => {
-    if (!isCodeAgent) {
+    if (!isProjectAgent) {
       return;
     }
     let disposed = false;
@@ -1472,13 +1508,13 @@ function AgentSidebar({
       // 描述：
       //
       //   - 当前正处于该会话详情页时，由会话页负责写入运行态，侧边栏跳过以避免双写造成主线程抖动。
-      const isActiveSessionPage = location.pathname.includes("/agents/code/session/")
+      const isActiveSessionPage = location.pathname.includes("/session/")
         && selectedSessionKey === sessionId;
       if (isActiveSessionPage) {
         return;
       }
       const now = Date.now();
-      const snapshot = getSessionRunState("code", sessionId);
+      const snapshot = getSessionRunState("agent", sessionId);
       const activeMessageId = String(snapshot?.activeMessageId || "").trim() || `assistant-stream-${now}`;
       const runMetaMap = { ...(snapshot?.runMetaMap || {}) };
       const baseMeta = runMetaMap[activeMessageId] || {
@@ -1534,7 +1570,7 @@ function AgentSidebar({
       }
       runMetaMap[activeMessageId] = nextMeta;
       upsertSessionRunState({
-        agentKey: "code",
+        agentKey: "agent",
         sessionId,
         activeMessageId,
         sending: nextSending,
@@ -1558,7 +1594,7 @@ function AgentSidebar({
         unlisten();
       }
     };
-  }, [isCodeAgent]);
+  }, [isProjectAgent]);
 
   useEffect(() => {
     if (!openWorkspaceActionMenuId || !IS_BROWSER) {
@@ -1595,19 +1631,33 @@ function AgentSidebar({
 
   return (
     <AriContainer className="desk-sidebar">
-      <SidebarBackHeader onBack={() => navigate("/home")} label="Home" />
+      {showBackHeader ? <SidebarBackHeader onBack={() => navigate("/home")} label="Home" /> : null}
       <AriContainer className="desk-sidebar-toolbar" padding={0}>
         <AriMenu
           className="desk-sidebar-nav"
-          items={[
-            {
-              key: "create-project",
-              icon: "note_stack_add",
-              label: "新项目",
-            },
-          ]}
-          onSelect={() => {
-            handleCreateSession();
+          items={projectToolbarEntries.map((item) => ({
+            key: item.key,
+            icon: item.icon,
+            label: item.label,
+          }))}
+          selectedKey={selectedToolbarKey}
+          onSelect={(key: string) => {
+            const target = projectToolbarEntries.find((item) => item.key === key);
+            if (!target) {
+              return;
+            }
+            if (target.key === "create-project") {
+              handleCreateSession();
+              return;
+            }
+            if (!target.enabled || !target.path) {
+              AriMessage.warning({
+                content: target.deniedMessage || "当前入口不可用。",
+                duration: 2500,
+              });
+              return;
+            }
+            navigate(target.path);
           }}
         />
       </AriContainer>
@@ -1663,24 +1713,24 @@ function AgentSidebar({
         }}
       >
         <AriContainer className="desk-history-menu" padding={0}>
-          {isCodeAgent ? (
-            codeWorkspaceMenuItems.length > 0 ? (
+          {isProjectAgent ? (
+            projectWorkspaceMenuItems.length > 0 ? (
               <AriMenu
-                key={`code-workspace-menu-${sessionMenuRenderVersion}`}
-                className="desk-sidebar-nav desk-code-workspace-tree"
+                key={`project-workspace-menu-${sessionMenuRenderVersion}`}
+                className="desk-sidebar-nav desk-project-workspace-tree"
                 mode="vertical"
                 expandIconPosition="none"
-                items={codeWorkspaceMenuItems}
-                selectedKey={selectedCodeWorkspaceMenuKey}
+                items={projectWorkspaceMenuItems}
+                selectedKey={selectedWorkspaceMenuKey}
                 defaultExpandedKeys={defaultExpandedWorkspaceKeys}
-                expandedKeys={codeWorkspaceExpandedKeys}
-                onExpand={setCodeWorkspaceExpandedKeys}
+                expandedKeys={projectWorkspaceExpandedKeys}
+                onExpand={setProjectWorkspaceExpandedKeys}
                 onSelect={(key: string) => {
-                  handleSelectCodeWorkspaceMenuItem(key);
+                  handleSelectProjectWorkspaceMenuItem(key);
                 }}
               />
             ) : (
-              <AriContainer className="desk-code-workspace-empty">
+              <AriContainer className="desk-project-workspace-empty">
                 <AriTypography variant="caption" value="请先在“新增”页面选择至少一个工作目录。" />
               </AriContainer>
             )
@@ -1698,6 +1748,7 @@ function AgentSidebar({
       <AriContainer className="desk-sidebar-spacer" />
       <UserHoverMenu
         user={user}
+        selectedIdentityLabel={selectedIdentity?.scopeName || ""}
         onLogout={onLogout}
         routeAccess={routeAccess}
         desktopUpdateState={desktopUpdateState}
@@ -1747,6 +1798,7 @@ function AgentSidebar({
 //   - 渲染工作流侧边栏，统一提供工作流切换、新建与删除能力。
 function WorkflowsSidebar({
   user,
+  selectedIdentity,
   onLogout,
   routeAccess,
   desktopUpdateState,
@@ -1754,6 +1806,7 @@ function WorkflowsSidebar({
   onInstallDesktopUpdate,
 }: {
   user: LoginUser;
+  selectedIdentity: ConsoleIdentityItem | null;
   onLogout: () => Promise<void>;
   routeAccess: RouteAccess;
   desktopUpdateState: DesktopUpdateState;
@@ -1771,50 +1824,31 @@ function WorkflowsSidebar({
   const selectedWorkflowIdFromQuery = useMemo(() => {
     return new URLSearchParams(location.search).get("workflowId")?.trim() || "";
   }, [location.search]);
-  // 描述：解析当前路由中的 workflowType，未命中时回退 code。
-  const selectedWorkflowTypeFromQuery = useMemo<AgentKey>(() => {
-    return new URLSearchParams(location.search).get("workflowType")?.trim() === "model"
-      ? "model"
-      : "code";
-  }, [location.search]);
-
-  // 描述：读取全局可用工作流列表，供侧边栏菜单渲染。
+  // 描述：读取统一工作流列表，当前收敛为单智能体工作流集合。
   const workflows = useMemo(
-    () => {
-      const codeWorkflows = listCodeWorkflows().map((item) => ({
-        key: `code:${item.id}`,
+    () =>
+      listAgentWorkflows().map((item) => ({
+        key: item.id,
         id: item.id,
-        type: "code" as AgentKey,
         name: item.name,
         shared: item.shared,
-      }));
-      const modelWorkflows = listModelWorkflows().map((item) => ({
-        key: `model:${item.id}`,
-        id: item.id,
-        type: "model" as AgentKey,
-        name: item.name,
-        shared: item.shared,
-      }));
-      return [...codeWorkflows, ...modelWorkflows];
-    },
-    [workflowVersion, selectedWorkflowIdFromQuery, selectedWorkflowTypeFromQuery],
+      })),
+    [workflowVersion, selectedWorkflowIdFromQuery],
   );
 
   // 描述：归一化当前选中工作流，查询参数为空或非法时回退到首项。
   const selectedWorkflow = useMemo(() => {
-    const matched = workflows.find(
-      (item) => item.id === selectedWorkflowIdFromQuery && item.type === selectedWorkflowTypeFromQuery,
-    );
+    const matched = workflows.find((item) => item.id === selectedWorkflowIdFromQuery);
     if (matched) {
       return matched;
     }
     return workflows[0] || null;
-  }, [selectedWorkflowIdFromQuery, selectedWorkflowTypeFromQuery, workflows]);
+  }, [selectedWorkflowIdFromQuery, workflows]);
   const selectedWorkflowMenuKey = selectedWorkflow?.key || "";
 
-  // 描述：导航到工作流编辑页并携带 workflowType/workflowId 参数，保证画布页和侧边栏选中态一致。
-  const navigateToWorkflowPage = (workflowType: AgentKey, workflowId: string, replace = false) => {
-    const targetPath = resolveWorkflowEditorPath(workflowType, workflowId);
+  // 描述：导航到工作流编辑页并携带 workflowId 参数，保证画布页和侧边栏选中态一致。
+  const navigateToWorkflowPage = (workflowId: string, replace = false) => {
+    const targetPath = resolveWorkflowEditorPath(workflowId);
     navigate(targetPath, replace ? { replace: true } : undefined);
   };
 
@@ -1825,13 +1859,12 @@ function WorkflowsSidebar({
     }
     if (
       selectedWorkflow.id === selectedWorkflowIdFromQuery
-      && selectedWorkflow.type === selectedWorkflowTypeFromQuery
     ) {
       return;
     }
-    navigateToWorkflowPage(selectedWorkflow.type, selectedWorkflow.id, true);
+    navigateToWorkflowPage(selectedWorkflow.id, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedWorkflow, selectedWorkflowIdFromQuery, selectedWorkflowTypeFromQuery]);
+  }, [selectedWorkflow, selectedWorkflowIdFromQuery]);
 
   // 描述：路由变化时清空删除确认态，避免跨工作流残留“确定删除”状态。
   useEffect(() => {
@@ -1841,13 +1874,10 @@ function WorkflowsSidebar({
 
   // 描述：基于当前选中工作流创建新工作流，并自动切换到新建项继续编辑。
   const handleCreateWorkflow = () => {
-    const workflowType = selectedWorkflow?.type || "code";
-    const created = workflowType === "model"
-      ? createModelWorkflowFromTemplate(selectedWorkflow?.id || undefined)
-      : createCodeWorkflowFromTemplate(selectedWorkflow?.id || undefined);
+    const created = createAgentWorkflowFromTemplate(selectedWorkflow?.id || undefined);
     setWorkflowVersion((value) => value + 1);
     setPendingDeleteWorkflowId("");
-    navigateToWorkflowPage(workflowType, created.id);
+    navigateToWorkflowPage(created.id);
   };
 
   // 描述：删除按钮采用二次确认交互：首次点击进入确认态，二次点击执行删除。
@@ -1869,9 +1899,7 @@ function WorkflowsSidebar({
       setPendingDeleteWorkflowId("");
       return;
     }
-    const deleted = targetWorkflow.type === "model"
-      ? deleteModelWorkflow(targetWorkflow.id)
-      : deleteCodeWorkflow(targetWorkflow.id);
+    const deleted = deleteAgentWorkflow(targetWorkflow.id);
     if (!deleted) {
       const warningContent = targetWorkflow.shared
         ? "默认工作流不可删除，请先复制后再管理。"
@@ -1889,12 +1917,9 @@ function WorkflowsSidebar({
     setPendingDeleteWorkflowId("");
 
     if (selectedWorkflow?.key === workflowId) {
-      const nextWorkflows = [
-        ...listCodeWorkflows().map((item) => ({ type: "code" as AgentKey, id: item.id })),
-        ...listModelWorkflows().map((item) => ({ type: "model" as AgentKey, id: item.id })),
-      ];
+      const nextWorkflows = listAgentWorkflows().map((item) => ({ id: item.id }));
       const nextTarget = nextWorkflows[0];
-      navigateToWorkflowPage(nextTarget?.type || "code", nextTarget?.id || "", true);
+      navigateToWorkflowPage(nextTarget?.id || "", true);
     }
   };
 
@@ -1966,7 +1991,7 @@ function WorkflowsSidebar({
             if (!target) {
               return;
             }
-            navigateToWorkflowPage(target.type, target.id);
+            navigateToWorkflowPage(target.id);
           }}
         />
       </AriContainer>
@@ -1974,6 +1999,7 @@ function WorkflowsSidebar({
       <AriContainer className="desk-sidebar-spacer" />
       <UserHoverMenu
         user={user}
+        selectedIdentityLabel={selectedIdentity?.scopeName || ""}
         onLogout={onLogout}
         routeAccess={routeAccess}
         desktopUpdateState={desktopUpdateState}
@@ -1989,6 +2015,7 @@ function WorkflowsSidebar({
 //   - 渲染设置页侧边栏，承载通用与智能体设置入口。
 function SettingsSidebar({
   user,
+  selectedIdentity,
   onLogout,
   routeAccess,
   desktopUpdateState,
@@ -1996,6 +2023,7 @@ function SettingsSidebar({
   onInstallDesktopUpdate,
 }: {
   user: LoginUser;
+  selectedIdentity: ConsoleIdentityItem | null;
   onLogout: () => Promise<void>;
   routeAccess: RouteAccess;
   desktopUpdateState: DesktopUpdateState;
@@ -2008,11 +2036,17 @@ function SettingsSidebar({
   const settingItems = useMemo(() => resolveSettingsSidebarItems(routeAccess), [routeAccess]);
   // 描述：根据当前路径计算设置菜单选中态。
   const selectedSettingKey = useMemo(() => {
-    if (location.pathname.includes("/agents/model/settings") && routeAccess.isAgentEnabled("model")) {
-      return "model";
+    if (location.pathname.includes(AGENT_SETTINGS_PATH) && routeAccess.isAgentEnabled("agent")) {
+      return "agent";
     }
-    if (location.pathname.includes("/agents/code/settings") && routeAccess.isAgentEnabled("code")) {
-      return "code";
+    if (location.pathname.startsWith("/settings/overview")) {
+      return "overview";
+    }
+    if (location.pathname.startsWith("/settings/identities")) {
+      return "identities";
+    }
+    if (location.pathname.startsWith("/settings/permissions")) {
+      return "permissions";
     }
     return "general";
   }, [location.pathname, routeAccess]);
@@ -2036,6 +2070,7 @@ function SettingsSidebar({
       <AriContainer className="desk-sidebar-spacer" />
       <UserHoverMenu
         user={user}
+        selectedIdentityLabel={selectedIdentity?.scopeName || ""}
         onLogout={onLogout}
         routeAccess={routeAccess}
         desktopUpdateState={desktopUpdateState}
@@ -2051,6 +2086,7 @@ function SettingsSidebar({
 //   - 渲染 AI Key 页面侧边栏文案与返回入口。
 function AiKeySidebar({
   user,
+  selectedIdentity,
   onLogout,
   routeAccess,
   desktopUpdateState,
@@ -2058,6 +2094,7 @@ function AiKeySidebar({
   onInstallDesktopUpdate,
 }: {
   user: LoginUser;
+  selectedIdentity: ConsoleIdentityItem | null;
   onLogout: () => Promise<void>;
   routeAccess: RouteAccess;
   desktopUpdateState: DesktopUpdateState;
@@ -2075,6 +2112,7 @@ function AiKeySidebar({
       <AriContainer className="desk-sidebar-spacer" />
       <UserHoverMenu
         user={user}
+        selectedIdentityLabel={selectedIdentity?.scopeName || ""}
         onLogout={onLogout}
         routeAccess={routeAccess}
         desktopUpdateState={desktopUpdateState}
@@ -2090,6 +2128,7 @@ function AiKeySidebar({
 //   - 侧边栏总入口，根据路由模式切换 home/agent/settings/workflow/ai-key 视图。
 export function ClientSidebar({
   user,
+  selectedIdentity,
   onLogout,
   availableAgents,
   routeAccess,
@@ -2097,6 +2136,7 @@ export function ClientSidebar({
   onCheckDesktopUpdate,
   onInstallDesktopUpdate,
 }: ClientSidebarProps) {
+  void availableAgents;
   const location = useLocation();
   const mode = matchSidebarMode(location.pathname);
   const agentKey = matchAgentKey(location.pathname);
@@ -2105,6 +2145,7 @@ export function ClientSidebar({
     return (
       <SettingsSidebar
         user={user}
+        selectedIdentity={selectedIdentity}
         onLogout={onLogout}
         routeAccess={routeAccess}
         desktopUpdateState={desktopUpdateState}
@@ -2118,6 +2159,7 @@ export function ClientSidebar({
     return (
       <AiKeySidebar
         user={user}
+        selectedIdentity={selectedIdentity}
         onLogout={onLogout}
         routeAccess={routeAccess}
         desktopUpdateState={desktopUpdateState}
@@ -2131,6 +2173,7 @@ export function ClientSidebar({
     return (
       <WorkflowsSidebar
         user={user}
+        selectedIdentity={selectedIdentity}
         onLogout={onLogout}
         routeAccess={routeAccess}
         desktopUpdateState={desktopUpdateState}
@@ -2144,8 +2187,10 @@ export function ClientSidebar({
     return (
       <AgentSidebar
         user={user}
+        selectedIdentity={selectedIdentity}
         onLogout={onLogout}
         agentKey={agentKey}
+        showBackHeader={!location.pathname.startsWith(AGENT_HOME_PATH)}
         routeAccess={routeAccess}
         desktopUpdateState={desktopUpdateState}
         onCheckDesktopUpdate={onCheckDesktopUpdate}
@@ -2155,10 +2200,12 @@ export function ClientSidebar({
   }
 
   return (
-    <HomeSidebar
+    <AgentSidebar
       user={user}
+      selectedIdentity={selectedIdentity}
       onLogout={onLogout}
-      availableAgents={availableAgents}
+      agentKey="agent"
+      showBackHeader={false}
       routeAccess={routeAccess}
       desktopUpdateState={desktopUpdateState}
       onCheckDesktopUpdate={onCheckDesktopUpdate}

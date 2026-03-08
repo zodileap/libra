@@ -52,7 +52,7 @@ test("TestHomeAndAgentSidebarShouldUseProjectFirstLayout", () => {
   // 描述：
   //
   //   - 智能体侧边栏底部应移除原有“智能体设置/工作流设置”快捷区，工作流入口迁移到 Home。
-  assert.doesNotMatch(sidebarSource, /CODE_SIDEBAR_QUICK_ACTIONS/);
+  assert.doesNotMatch(sidebarSource, /AGENT_SIDEBAR_QUICK_ACTIONS/);
   assert.doesNotMatch(sidebarSource, /MODEL_SIDEBAR_QUICK_ACTIONS/);
   assert.doesNotMatch(sidebarSource, /className="desk-sidebar-quick-actions"/);
 

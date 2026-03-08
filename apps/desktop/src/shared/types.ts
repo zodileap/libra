@@ -1,7 +1,7 @@
 // 描述:
 //
 //   - 定义智能体标识枚举。
-export type AgentKey = "code" | "model";
+export type AgentKey = "agent";
 
 // 描述:
 //
@@ -11,7 +11,7 @@ export type ColorThemeMode = "light" | "dark" | "system";
 // 描述:
 //
 //   - 定义模型 MCP 能力键。
-export type ModelMcpCapabilityKey = "export";
+export type DccMcpCapabilityKey = "export";
 
 // 描述:
 //
@@ -70,7 +70,7 @@ export interface AuthAvailableAgentItem {
 // 描述:
 //
 //   - 定义模型 MCP 能力开关集合。
-export interface ModelMcpCapabilities {
+export interface DccMcpCapabilities {
   export: boolean;
   scene: boolean;
   transform: boolean;
@@ -144,6 +144,103 @@ export interface DesktopUpdateState {
   downloadPath?: string;
 }
 
+// 描述：
+//
+//   - 定义桌面端后端接入配置；未启用时 Desktop 以本地模式独立运行。
+export interface DesktopBackendConfig {
+  enabled: boolean;
+  baseUrl: string;
+}
+
+// 描述：
+//
+//   - 定义 setup 服务系统配置结构，供桌面端初始化检查消费。
+export interface SetupSystemConfig {
+  systemName: string;
+  baseUrl: string;
+  defaultLanguage: string;
+  timezone: string;
+  allowPublicSignup: boolean;
+}
+
+// 描述：
+//
+//   - 定义 setup 服务状态结构，供桌面端启动时判断是否已完成安装。
+export interface SetupStatus {
+  setupStatus: string;
+  currentStep: string;
+  installed: boolean;
+  installedAt?: string;
+  installedVersion?: string;
+  lastError?: string;
+  systemConfig?: SetupSystemConfig;
+  accountAvailable: boolean;
+  accountInitialized: boolean;
+  accountMessage?: string;
+}
+
+// 描述：
+//
+//   - 定义桌面端管理台身份项结构，支持在 Desktop 中查看账号所属身份与角色。
+export interface ConsoleIdentityItem {
+  id: string;
+  type: string;
+  scopeName: string;
+  roles: string[];
+  status: string;
+}
+
+// 描述：
+//
+//   - 定义桌面端管理台可授权用户结构，供权限页直接选择目标用户。
+export interface ConsoleManageableUserItem {
+  id: string;
+  name: string;
+  email?: string;
+  status: string;
+  identityScopes: string[];
+  self: boolean;
+}
+
+// 描述：
+//
+//   - 定义桌面端管理台权限模板结构，用于快速新增授权。
+export interface ConsolePermissionTemplate {
+  code: string;
+  name: string;
+  description: string;
+  resourceType: string;
+}
+
+// 描述：
+//
+//   - 定义桌面端管理台权限授权记录结构。
+export interface ConsolePermissionGrantItem {
+  id: string;
+  targetUserId: string;
+  targetUserName: string;
+  permissionCode: string;
+  resourceType: string;
+  resourceName: string;
+  grantedBy: string;
+  status: string;
+  createdAt?: string;
+  lastAt?: string;
+  expiresAt?: string;
+}
+
+// 描述：
+//
+//   - 定义桌面端管理台新增授权请求结构。
+export interface ConsoleGrantPermissionReq {
+  targetUserId: string;
+  targetUserName: string;
+  permissionCode: string;
+  resourceType: string;
+  resourceName: string;
+  expiresAt?: string;
+}
+
 // 描述:
 //
 //   - 定义智能体日志事件结构。
@@ -203,7 +300,7 @@ export interface ProtocolUiHint {
 // 描述:
 //
 //   - 定义模型步骤记录结构。
-export interface ModelStepRecord {
+export interface AgentStepRecord {
   index: number;
   code: string;
   status: ProtocolStepStatus;
@@ -216,7 +313,7 @@ export interface ModelStepRecord {
 // 描述:
 //
 //   - 定义模型事件记录结构。
-export interface ModelEventRecord {
+export interface AgentEventRecord {
   event: string;
   step_index?: number;
   timestamp_ms: number;
@@ -226,7 +323,7 @@ export interface ModelEventRecord {
 // 描述:
 //
 //   - 定义模型资产记录结构。
-export interface ModelAssetRecord {
+export interface AgentAssetRecord {
   kind: string;
   path: string;
   version: number;
@@ -248,7 +345,7 @@ export interface AgentTextStreamEvent {
 // 描述:
 //
 //   - 定义模型调试轨迹事件结构，供调试面板展示。
-export interface ModelDebugTraceEvent {
+export interface AgentDebugTraceEvent {
   session_id: string;
   trace_id: string;
   stage: string;

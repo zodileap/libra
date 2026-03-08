@@ -1,40 +1,5 @@
 go 1.24.2
 
 use (
-	./services/account
-	./services/agent_3d
-	./services/agent_code
-	./services/billing
-	./services/enterprise
-	./services/entity/v1/account
-	./services/entity/v1/agent_3d
-	./services/entity/v1/agent_code
-	./services/entity/v1/billing
-	./services/entity/v1/enterprise
-	./services/entity/v1/license
-	./services/entity/v1/runtime
-	./services/license
-	./services/runtime
+	./services
 )
-
-replace git.zodileap.com/entity/permission_v1 => /Users/yoho/code/go/dao/entity/v1/permission
-replace git.zodileap.com/entity/redis_user_v1 => /Users/yoho/code/go/dao/redis/v1/user
-replace git.zodileap.com/taurus/zodileap_go_grpc => /Users/yoho/code/go/zodileap_go/grpc
-replace git.zodileap.com/taurus/zodileap_go_zapi => /Users/yoho/code/go/zodileap_go/zapi
-replace git.zodileap.com/taurus/zodileap_go_zgit => /Users/yoho/code/go/zodileap_go/zgit
-replace git.zodileap.com/taurus/zodileap_go_zbootstrap => /Users/yoho/code/go/zodileap_go/zbootstrap
-replace git.zodileap.com/taurus/zodileap_go_zcache => /Users/yoho/code/go/zodileap_go/zcache
-replace git.zodileap.com/taurus/zodileap_go_zcmd => /Users/yoho/code/go/zodileap_go/zcmd
-replace git.zodileap.com/taurus/zodileap_go_zerr => /Users/yoho/code/go/zodileap_go/zerr
-replace git.zodileap.com/taurus/zodileap_go_zfile => /Users/yoho/code/go/zodileap_go/zfile
-replace git.zodileap.com/taurus/zodileap_go_zfileparser => /Users/yoho/code/go/zodileap_go/zfileparser
-replace git.zodileap.com/taurus/zodileap_go_zgencode => /Users/yoho/code/go/zodileap_go/zgencode
-replace git.zodileap.com/taurus/zodileap_go_zlog => /Users/yoho/code/go/zodileap_go/zlog
-replace git.zodileap.com/taurus/zodileap_go_zrpc => /Users/yoho/code/go/zodileap_go/zrpc
-replace git.zodileap.com/taurus/zodileap_go_zrpc_client => /Users/yoho/code/go/zodileap_go/zrpc_client
-replace git.zodileap.com/taurus/zodileap_go_zsecure => /Users/yoho/code/go/zodileap_go/zsecure
-replace git.zodileap.com/taurus/zodileap_go_zspecs => /Users/yoho/code/go/zodileap_go/zspecs
-replace git.zodileap.com/taurus/zodileap_go_zstatuscode => /Users/yoho/code/go/zodileap_go/zstatuscode
-replace git.zodileap.com/taurus/zodileap_go_ztest => /Users/yoho/code/go/zodileap_go/ztest
-replace git.zodileap.com/taurus/zodileap_go_zwebhook => /Users/yoho/code/go/zodileap_go/zwebhook
-replace git.zodileap.com/taurus/zodileap_go_zwebsocket => /Users/yoho/code/go/zodileap_go/zwebsocket

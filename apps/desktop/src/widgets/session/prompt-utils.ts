@@ -1,7 +1,7 @@
-import type { CodeWorkspaceProjectProfile } from "../../shared/data";
+import type { ProjectWorkspaceProfile } from "../../shared/data";
 import { IS_BROWSER, STORAGE_KEYS } from "../../shared/constants";
-import type { ModelEventRecord, ModelStepRecord } from "../../shared/types";
-import type { SkillCatalogItem } from "../../modules/common/services";
+import type { AgentEventRecord, AgentStepRecord } from "../../shared/types";
+import type { AgentSkillItem } from "../../modules/common/services";
 
 // 描述:
 //
@@ -21,19 +21,13 @@ export interface RetryTailPruneResult {
 }
 // 描述:
 //
-//   - 模型工作流当前选择项本地存储键。
-export const MODEL_WORKFLOW_SELECTED_KEY = "libra.desktop.model.selectedWorkflowId";
-
-// 描述:
-//
-//   - 代码工作流当前选择项本地存储键。
-export const CODE_WORKFLOW_SELECTED_KEY = "libra.desktop.code.selectedWorkflowId";
+//   - 统一智能体工作流当前选择项本地存储键。
+export const AGENT_WORKFLOW_SELECTED_KEY = "libra.desktop.agent.selectedWorkflowId";
 
 // 描述:
 //
 //   - 技能选中状态存储键，统一引用全局常量避免硬编码。
-export const MODEL_SKILL_SELECTED_KEY = STORAGE_KEYS.MODEL_SKILL_SELECTED_IDS;
-export const CODE_SKILL_SELECTED_KEY = STORAGE_KEYS.CODE_SKILL_SELECTED_IDS;
+export const AGENT_SKILL_SELECTED_KEY = STORAGE_KEYS.AGENT_SKILL_SELECTED_IDS;
 
 // 描述：
 //
@@ -91,7 +85,7 @@ export function readSelectedSkillIds(storageKey: string): string[] {
 
 // 描述：
 //
-//   - 构建“会话已选择技能”提示词片段，向代码智能体明确当前会话需优先遵循的技能上下文。
+//   - 构建“会话已选择技能”提示词片段，向智能体明确当前会话需优先遵循的技能上下文。
 //
 // Params:
 //
@@ -100,46 +94,47 @@ export function readSelectedSkillIds(storageKey: string): string[] {
 // Returns:
 //
 //   - 可拼接到主提示词的技能片段；未选择技能时返回空字符串。
-export function buildSessionSkillPrompt(selectedSkills: SkillCatalogItem[]): string {
+export function buildSessionSkillPrompt(selectedSkills: AgentSkillItem[]): string {
   if (selectedSkills.length === 0) {
     return "";
   }
-  const lines = selectedSkills.map((item) => {
-    const version = String(item.versions?.[0] || "").trim();
-    const versionLabel = version ? `@${version}` : "";
-    const description = String(item.description || "").trim();
-    if (description) {
-      return `- ${item.name}（${item.id}${versionLabel}）：${description}`;
+  const blocks = selectedSkills.map((item) => {
+    const lines = [`### ${item.name} (${item.id})`];
+    if (item.description) {
+      lines.push(item.description);
     }
-    return `- ${item.name}（${item.id}${versionLabel}）`;
+    if (item.markdownBody) {
+      lines.push(item.markdownBody);
+    }
+    return lines.join("\n\n");
   });
-  return ["【会话技能】", ...lines].join("\n");
+  return ["【会话技能】", ...blocks].join("\n\n");
 }
 
 // 描述：
 //
 //   - 会话上下文拼接时保留的历史消息条数上限，避免提示词无限膨胀。
-export const CODE_CONTEXT_HISTORY_LIMIT = 8;
+export const AGENT_CONTEXT_HISTORY_LIMIT = 8;
 
 // 描述：
 //
 //   - 会话上下文中单条消息的最大字符数，超长时进行截断。
-export const CODE_CONTEXT_MESSAGE_CHAR_LIMIT = 600;
+export const AGENT_CONTEXT_MESSAGE_CHAR_LIMIT = 600;
 
 // 描述：
 //
 //   - “重试/继续”类短指令关键词；命中后会改写为可执行请求，避免模型误判“缺少需求”。
-export const CODE_RETRY_HINT_KEYWORDS = ["重试", "再试", "retry", "继续", "继续执行", "继续处理"];
+export const AGENT_RETRY_HINT_KEYWORDS = ["重试", "再试", "retry", "继续", "继续执行", "继续处理"];
 
 // 描述：
 //
 //   - 结构化项目信息上下文每个分类最多注入条数，避免提示词过长。
-export const CODE_PROFILE_CONTEXT_ITEM_LIMIT = 4;
+export const AGENT_PROFILE_CONTEXT_ITEM_LIMIT = 4;
 
 // 描述：
 //
 //   - 结构化项目信息“按需注入”触发关键词；仅在模型明确需要项目语义基线时注入，避免首轮提示词冗长。
-export const CODE_PROFILE_ON_DEMAND_KEYWORDS = [
+export const AGENT_PROFILE_ON_DEMAND_KEYWORDS = [
   "结构化项目信息",
   "结构化信息",
   "项目结构",
@@ -204,7 +199,7 @@ export const CODE_FRAMEWORK_HINT_KEYWORDS = [
 //
 //   - 可拼接到提示词的行数组。
 export function buildCodeProjectProfileContextLines(
-  profile?: CodeWorkspaceProjectProfile | null,
+  profile?: ProjectWorkspaceProfile | null,
 ): string[] {
   if (!profile) {
     return [];
@@ -220,7 +215,7 @@ export function buildCodeProjectProfileContextLines(
     const normalized = items
       .map((item) => String(item || "").trim())
       .filter((item) => item.length > 0)
-      .slice(0, CODE_PROFILE_CONTEXT_ITEM_LIMIT);
+      .slice(0, AGENT_PROFILE_CONTEXT_ITEM_LIMIT);
     if (normalized.length === 0) {
       return;
     }
@@ -270,7 +265,7 @@ export function buildCodeProjectProfileContextLines(
 //
 //   - 条目数组。
 export function readProjectProfileFacetEntries(
-  profile: CodeWorkspaceProjectProfile,
+  profile: ProjectWorkspaceProfile,
   sectionKey: string,
   facetKey: string,
   fallback: string[],
@@ -326,7 +321,7 @@ export function isFrameworkReplacementPrompt(prompt: string): boolean {
 //   - 可拼接到提示词的附加约束行数组。
 export function buildFrameworkReplacementContextLines(
   prompt: string,
-  profile?: CodeWorkspaceProjectProfile | null,
+  profile?: ProjectWorkspaceProfile | null,
 ): string[] {
   if (!profile || !isFrameworkReplacementPrompt(prompt)) {
     return [];
@@ -341,7 +336,7 @@ export function buildFrameworkReplacementContextLines(
   )
     .map((item) => String(item || "").trim())
     .filter((item) => item.length > 0)
-    .slice(0, CODE_PROFILE_CONTEXT_ITEM_LIMIT);
+    .slice(0, AGENT_PROFILE_CONTEXT_ITEM_LIMIT);
   const moduleBaseline = [
     ...readProjectProfileFacetEntries(
       profile,
@@ -358,7 +353,7 @@ export function buildFrameworkReplacementContextLines(
   ]
     .map((item) => String(item || "").trim())
     .filter((item) => item.length > 0)
-    .slice(0, CODE_PROFILE_CONTEXT_ITEM_LIMIT);
+    .slice(0, AGENT_PROFILE_CONTEXT_ITEM_LIMIT);
   const hasUiBaseline = pageBaseline.length > 0
     || readProjectProfileFacetEntries(
       profile,
@@ -414,10 +409,10 @@ export function normalizeCodeContextMessageText(text: string): string {
   if (!normalized) {
     return "";
   }
-  if (normalized.length <= CODE_CONTEXT_MESSAGE_CHAR_LIMIT) {
+  if (normalized.length <= AGENT_CONTEXT_MESSAGE_CHAR_LIMIT) {
     return normalized;
   }
-  return `${normalized.slice(0, CODE_CONTEXT_MESSAGE_CHAR_LIMIT)}...(已截断)`;
+  return `${normalized.slice(0, AGENT_CONTEXT_MESSAGE_CHAR_LIMIT)}...(已截断)`;
 }
 
 // 描述：
@@ -433,12 +428,12 @@ export function normalizeCodeContextMessageText(text: string): string {
 //   - true 表示当前输入不含明确任务细节，仅表达“重试/继续”意图。
 export function isRetryOnlyPrompt(prompt: string): boolean {
   const normalized = String(prompt || "").trim().toLowerCase();
-  return CODE_RETRY_HINT_KEYWORDS.includes(normalized);
+  return AGENT_RETRY_HINT_KEYWORDS.includes(normalized);
 }
 
 // 描述：
 //
-//   - 为代码智能体构建“历史上下文 + 当前请求”的提示词，确保“重试”场景不会丢失前文语义。
+//   - 为智能体构建“历史上下文 + 当前请求”的提示词，确保“重试”场景不会丢失前文语义。
 //
 // Params:
 //
@@ -449,11 +444,11 @@ export function isRetryOnlyPrompt(prompt: string): boolean {
 // Returns:
 //
 //   - 拼接后的上下文提示词。
-export function buildCodeSessionContextPrompt(
+export function buildSessionContextPrompt(
   historyMessages: MessageItem[],
   currentPrompt: string,
   workspacePath?: string,
-  projectProfile?: CodeWorkspaceProjectProfile | null,
+  projectProfile?: ProjectWorkspaceProfile | null,
 ): string {
   const normalizedCurrentPrompt = String(currentPrompt || "").trim();
   if (!normalizedCurrentPrompt) {
@@ -464,7 +459,7 @@ export function buildCodeSessionContextPrompt(
   //
   //   - 仅在“重试继续”或当前请求明确依赖项目语义基线时注入结构化项目信息，避免首轮全量灌入。
   const shouldAttachProfileContext = isRetryOnlyPrompt(normalizedCurrentPrompt)
-    || CODE_PROFILE_ON_DEMAND_KEYWORDS.some((keyword) => normalizedCurrentPrompt.toLowerCase().includes(keyword.toLowerCase()));
+    || AGENT_PROFILE_ON_DEMAND_KEYWORDS.some((keyword) => normalizedCurrentPrompt.toLowerCase().includes(keyword.toLowerCase()));
   const profileContextLines = shouldAttachProfileContext
     ? buildCodeProjectProfileContextLines(projectProfile)
     : [];
@@ -479,7 +474,7 @@ export function buildCodeSessionContextPrompt(
       text: normalizeCodeContextMessageText(item.text),
     }))
     .filter((item) => item.text.length > 0)
-    .slice(-CODE_CONTEXT_HISTORY_LIMIT)
+    .slice(-AGENT_CONTEXT_HISTORY_LIMIT)
     .map((item, index) => `${index + 1}. ${item.role}：${item.text}`);
 
   if (historyLines.length === 0) {
@@ -584,102 +579,6 @@ export function extractOutputDirFromPrompt(prompt: string): string | undefined {
 // Returns:
 //
 //   - 贴图路径；未命中时返回 undefined。
-export function extractTexturePathFromPrompt(prompt: string): string | undefined {
-  const match = prompt.match(IMAGE_PATH_REGEX);
-  if (!match?.[1]) {
-    return undefined;
-  }
-  return trimOutputSuffix(match[1]) || undefined;
-}
-
-// 描述：把模型步骤记录转换为用户可读的动作文案，避免暴露内部术语。
-//
-// Params:
-//
-//   - step: 模型步骤记录。
-//   - texturePath: 用户输入中提取的贴图路径。
-//
-// Returns:
-//
-//   - 面向用户的单步总结文案。
-export function buildUserReadableStepLine(step: ModelStepRecord, texturePath?: string): string {
-  const code = step.code || "unknown";
-  const summary = (step.summary || "").trim();
-
-  if (code === "new_file") {
-    return "已新建 Blender 场景文件。";
-  }
-  if (code === "add_cube") {
-    const name = summary.match(/`([^`]+)`/)?.[1];
-    if (name) {
-      return `已创建正方体对象「${name}」。`;
-    }
-    return "已创建一个正方体对象。";
-  }
-  if (code === "apply_texture_image") {
-    if (texturePath) {
-      return `已将贴图「${texturePath}」应用到目标对象材质。`;
-    }
-    return "已为目标对象应用贴图材质。";
-  }
-
-  if (summary) {
-    return `已完成「${code}」：${summary}`;
-  }
-  return `已完成「${code}」步骤。`;
-}
-
-// 描述：构建模型执行的用户可读总结，突出“做了什么”和“最终结果”。
-//
-// Params:
-//
-//   - requestPrompt: 用户原始指令。
-//   - steps: 模型步骤记录。
-//   - exportedFile: 导出文件路径。
-//   - bridgeRecovered: 是否发生过 Bridge 预检失败但已恢复。
-//
-// Returns:
-//
-//   - 可直接展示给用户的总结文本。
-export function buildUserReadableModelSummary(
-  requestPrompt: string,
-  steps: ModelStepRecord[],
-  exportedFile?: string,
-  bridgeRecovered = false,
-): string {
-  const successSteps = steps.filter((item) => item.status === "success");
-  const failedSteps = steps.filter((item) => item.status === "failed");
-  const texturePath = extractTexturePathFromPrompt(requestPrompt);
-  const lines: string[] = ["已按你的需求完成本次模型操作。"];
-
-  if (successSteps.length > 0) {
-    lines.push("", "本次执行内容：");
-    successSteps.forEach((step, index) => {
-      lines.push(`${index + 1}. ${buildUserReadableStepLine(step, texturePath)}`);
-    });
-  } else {
-    lines.push("", "本次未获取到可确认的成功步骤记录。");
-  }
-
-  if (failedSteps.length > 0) {
-    lines.push("", `注意：仍有 ${failedSteps.length} 个步骤执行失败，请根据日志继续重试。`);
-  }
-
-  if (exportedFile) {
-    lines.push("", `导出结果：${exportedFile}`);
-  }
-
-  if (bridgeRecovered) {
-    lines.push("", "环境说明：执行前检测到 Bridge 短暂不可用，系统已自动恢复后继续执行。");
-  }
-
-  lines.push(
-    "",
-    `执行结果：成功 ${successSteps.length} 步${failedSteps.length > 0 ? `，失败 ${failedSteps.length} 步` : ""}。`,
-  );
-  return lines.join("\n").trim();
-}
-
 // 描述：
 //
 //   - 定义会话调试 Trace 记录结构，用于 UI 侧聚合展示调试链路。
@@ -691,7 +590,7 @@ export interface TraceRecord {
 }
 
 // 描述：将单条步骤记录合并到现有步骤列表，按 index 覆盖同编号项，避免流式重复追加。
-export function mergeModelStepRecords(records: ModelStepRecord[], incoming?: ModelStepRecord): ModelStepRecord[] {
+export function mergeAgentStepRecords(records: AgentStepRecord[], incoming?: AgentStepRecord): AgentStepRecord[] {
   if (!incoming) {
     return records;
   }
@@ -707,7 +606,7 @@ export function mergeModelStepRecords(records: ModelStepRecord[], incoming?: Mod
 }
 
 // 描述：将单条事件记录合并到现有事件列表，按 event+step_index+timestamp 去重，避免流式抖动。
-export function mergeModelEventRecords(records: ModelEventRecord[], incoming?: ModelEventRecord): ModelEventRecord[] {
+export function mergeAgentEventRecords(records: AgentEventRecord[], incoming?: AgentEventRecord): AgentEventRecord[] {
   if (!incoming) {
     return records;
   }

@@ -69,40 +69,86 @@ test("TestSkillsModuleShouldExposeRouteAndSidebarEntry", () => {
   assert.match(routerTypesSource, /\| "mcp"/);
 });
 
-test("TestSkillsPageShouldRenderInstalledAndMarketplaceSections", () => {
+test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   const skillsPageSource = readDesktopSource("src/modules/common/pages/skills-page.tsx");
   const skillServiceSource = readDesktopSource("src/modules/common/services/skills.ts");
+  const constantsSource = readDesktopSource("src/shared/constants.ts");
+  const tauriSkillRegistrySource = readDesktopSource("src-tauri/src/agent_skills.rs");
+  const tauriMainSource = readDesktopSource("src-tauri/src/main.rs");
+  const tauriConfigSource = readDesktopSource("src-tauri/tauri.conf.json");
+  const buildSource = readDesktopSource("src-tauri/build.rs");
+  const cargoSource = readDesktopSource("src-tauri/Cargo.toml");
   const styleSource = readDesktopSource("src/styles.css");
-  const envSource = readDesktopSource("src/vite-env.d.ts");
+  const builtinSkillPath = path.resolve(process.cwd(), "src-tauri/resources/skills/requirements-analyst/SKILL.md");
+  const builtinSkillSource = fs.readFileSync(builtinSkillPath, "utf8");
 
   // 描述：
   //
-  //   - 技能页应包含“已安装/推荐”分区，并通过服务层读写安装状态。
-  assert.match(skillsPageSource, /DeskSectionTitle title="已安装"/);
-  assert.match(skillsPageSource, /DeskSectionTitle title="推荐"/);
-  assert.match(skillsPageSource, /listSkillOverview/);
-  assert.match(skillsPageSource, /updateSkillInstalledState/);
+  //   - 技能页应展示“应用内置/外部技能”分区，并支持导入本地技能与移除外部技能。
+  assert.match(skillsPageSource, /DeskSectionTitle title="应用内置"/);
+  assert.match(skillsPageSource, /DeskSectionTitle title="外部技能"/);
+  assert.match(skillsPageSource, /label="导入本地技能"/);
+  assert.match(skillsPageSource, /title="移除外部技能"/);
+  assert.match(skillsPageSource, /pickLocalAgentSkillFolder/);
+  assert.match(skillsPageSource, /importAgentSkillFromPath/);
+  assert.match(skillsPageSource, /removeAgentSkill/);
   assert.match(skillsPageSource, /createPortal\(headerNode, headerSlotElement\)/);
 
   // 描述：
   //
-  //   - 技能服务层应提供目录与安装状态管理能力，并支持远端目录回退本地目录。
-  assert.match(skillServiceSource, /const SKILL_CATALOG: SkillCatalogItem\[]/);
-  assert.match(skillServiceSource, /versions: \["1\.0\.0"\]/);
-  assert.match(skillServiceSource, /id: "apifox_model_designer"/);
-  assert.match(skillServiceSource, /Apifox 官方 MCP Server/);
-  assert.match(skillServiceSource, /id: "frontend_architect"/);
-  assert.match(skillServiceSource, /id: "frontend_page_builder"/);
-  assert.match(skillServiceSource, /VITE_SKILL_CATALOG_URL/);
-  assert.match(skillServiceSource, /loadRemoteSkillCatalog/);
-  assert.match(skillServiceSource, /listSkillOverview\(\): Promise<SkillOverview>/);
-  assert.match(skillServiceSource, /listInstalledSkills\(catalog\?: SkillCatalogItem\[]\): Promise<SkillCatalogItem\[]>/);
-  assert.match(skillServiceSource, /updateSkillInstalledState/);
-  assert.match(envSource, /VITE_SKILL_CATALOG_URL/);
+  //   - 技能服务层应改为调用 Tauri 注册表，不再依赖前端静态 catalog 或 localStorage 安装态。
+  assert.match(skillServiceSource, /export interface AgentSkillItem/);
+  assert.match(skillServiceSource, /markdownBody: string;/);
+  assert.match(skillServiceSource, /removable: boolean;/);
+  assert.match(skillServiceSource, /invoke<unknown\[]>\(COMMANDS\.LIST_AGENT_SKILLS\)/);
+  assert.match(skillServiceSource, /invoke<string \| null>\(COMMANDS\.PICK_AGENT_SKILL_FOLDER\)/);
+  assert.match(skillServiceSource, /COMMANDS\.IMPORT_AGENT_SKILL_FROM_PATH/);
+  assert.match(skillServiceSource, /COMMANDS\.REMOVE_USER_AGENT_SKILL/);
+  assert.doesNotMatch(skillServiceSource, /SKILL_CATALOG/);
+  assert.doesNotMatch(skillServiceSource, /localStorage/);
 
   // 描述：
   //
-  //   - 样式层应定义技能页网格与卡片样式类。
+  //   - 常量层应暴露新的 Agent Skills 命令名。
+  assert.match(constantsSource, /LIST_AGENT_SKILLS: "list_agent_skills"/);
+  assert.match(constantsSource, /PICK_AGENT_SKILL_FOLDER: "pick_agent_skill_folder"/);
+  assert.match(constantsSource, /IMPORT_AGENT_SKILL_FROM_PATH: "import_agent_skill_from_path"/);
+  assert.match(constantsSource, /REMOVE_USER_AGENT_SKILL: "remove_user_agent_skill"/);
+
+  // 描述：
+  //
+  //   - Tauri 侧应具备标准技能扫描、YAML frontmatter 解析和本地导入/删除命令。
+  assert.match(tauriSkillRegistrySource, /pub async fn list_agent_skills/);
+  assert.match(tauriSkillRegistrySource, /pub async fn pick_agent_skill_folder/);
+  assert.match(tauriSkillRegistrySource, /pub async fn import_agent_skill_from_path/);
+  assert.match(tauriSkillRegistrySource, /pub async fn remove_user_agent_skill/);
+  assert.match(tauriSkillRegistrySource, /serde_yaml::from_str/);
+  assert.match(tauriSkillRegistrySource, /resolve_external_skill_root/);
+  assert.match(tauriSkillRegistrySource, /CODEX_HOME/);
+  assert.match(tauriSkillRegistrySource, /copy_directory_recursive/);
+  assert.match(tauriMainSource, /mod agent_skills;/);
+  assert.match(tauriMainSource, /list_agent_skills,/);
+  assert.match(tauriMainSource, /pick_agent_skill_folder,/);
+  assert.match(tauriMainSource, /import_agent_skill_from_path,/);
+  assert.match(tauriMainSource, /remove_user_agent_skill,/);
+
+  // 描述：
+  //
+  //   - Tauri 构建链应打包内置技能目录，并在资源变更时重新触发构建。
+  assert.match(tauriConfigSource, /"resources": \[/);
+  assert.match(tauriConfigSource, /resources\/skills/);
+  assert.match(buildSource, /cargo:rerun-if-changed=resources/);
+  assert.match(cargoSource, /serde_yaml = "0\.9"/);
+
+  // 描述：
+  //
+  //   - 至少应存在一个标准内置技能包，并包含合法 frontmatter 与正文。
+  assert.match(builtinSkillSource, /^---\nname: requirements-analyst\ndescription:/);
+  assert.match(builtinSkillSource, /# 需求分析/);
+
+  // 描述：
+  //
+  //   - 样式层仍应复用现有技能卡片布局类，不额外引入静态 catalog 特有结构。
   assert.match(styleSource, /\.desk-skills-shell/);
   assert.match(styleSource, /\.desk-skill-grid/);
   assert.match(styleSource, /\.desk-skill-card/);
@@ -111,47 +157,82 @@ test("TestSkillsPageShouldRenderInstalledAndMarketplaceSections", () => {
 test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
   const mcpPageSource = readDesktopSource("src/modules/common/pages/mcp-page.tsx");
   const mcpServiceSource = readDesktopSource("src/modules/common/services/mcps.ts");
+  const mcpRegistrySource = readDesktopSource("src-tauri/src/mcp_registry.rs");
   const envSource = readDesktopSource("src/vite-env.d.ts");
   const constantsSource = readDesktopSource("src/shared/constants.ts");
   const tauriMainSource = readDesktopSource("src-tauri/src/main.rs");
 
   // 描述：
   //
-  //   - MCP 页应包含“已安装/推荐”分区，并通过服务层读写安装状态。
-  assert.match(mcpPageSource, /DeskSectionTitle title="已安装"/);
-  assert.match(mcpPageSource, /DeskSectionTitle title="推荐"/);
+  //   - MCP 页应包含“已注册/推荐模板”分区，并提供新增、编辑、校验和 Runtime 管理入口。
+  assert.match(mcpPageSource, /DeskSectionTitle title="已注册"/);
+  assert.match(mcpPageSource, /DeskSectionTitle title="推荐模板"/);
   assert.match(mcpPageSource, /listMcpOverview/);
-  assert.match(mcpPageSource, /updateMcpInstalledState/);
+  assert.match(mcpPageSource, /saveMcpRegistration/);
+  assert.match(mcpPageSource, /validateMcpRegistration/);
+  assert.match(mcpPageSource, /removeMcpRegistration/);
+  assert.match(mcpPageSource, /installApifoxMcpRuntime/);
+  assert.match(mcpPageSource, /uninstallApifoxMcpRuntime/);
+  assert.match(mcpPageSource, /label=\"新增 MCP\"/);
   assert.match(mcpPageSource, /createPortal\(headerNode, headerSlotElement\)/);
-  assert.match(mcpPageSource, /安装命令：/);
+  assert.match(mcpPageSource, /安装 Runtime/);
   assert.match(mcpPageSource, /文档：/);
+  assert.match(mcpPageSource, /value=\{workspaceId\}/);
+  assert.match(mcpPageSource, /label: "全局（User）"/);
+  assert.match(mcpPageSource, /label="作用域"/);
+  assert.match(mcpPageSource, /workspace 级配置会覆盖同名 user 级 MCP/);
+  assert.match(mcpPageSource, /renderScopeLabel\(item\.scope\)/);
 
   // 描述：
   //
-  //   - MCP 服务层应提供目录与安装状态管理能力，并支持远端目录回退本地目录。
-  assert.match(mcpServiceSource, /const MCP_CATALOG: McpCatalogItem\[]/);
-  assert.match(mcpServiceSource, /id: "mcp_apifox"/);
-  assert.match(mcpServiceSource, /name: "Apifox MCP（官方）"/);
-  assert.match(mcpServiceSource, /apifox-mcp-server@latest/);
-  assert.match(mcpServiceSource, /enforceOfficialApifoxMcpPolicy/);
-  assert.match(mcpServiceSource, /VITE_MCP_CATALOG_URL/);
-  assert.match(mcpServiceSource, /listMcpOverview\(\): Promise<McpOverview>/);
-  assert.match(mcpServiceSource, /listInstalledMcps\(catalog\?: McpCatalogItem\[]\): Promise<McpCatalogItem\[]>/);
-  assert.match(mcpServiceSource, /updateMcpInstalledState/);
-  assert.match(mcpServiceSource, /invoke<ApifoxMcpRuntimeStatusResponse>\(COMMANDS\.CHECK_APIFOX_MCP_RUNTIME_STATUS\)/);
-  assert.match(mcpServiceSource, /invoke<ApifoxMcpRuntimeStatusResponse>\(COMMANDS\.INSTALL_APIFOX_MCP_RUNTIME\)/);
-  assert.match(mcpServiceSource, /invoke<ApifoxMcpRuntimeStatusResponse>\(COMMANDS\.UNINSTALL_APIFOX_MCP_RUNTIME\)/);
-  assert.match(mcpServiceSource, /reconcileInstalledIdsWithApifoxRuntime/);
-  assert.match(mcpServiceSource, /ensureApifoxMcpRuntimeAutoInstalled/);
-  assert.match(mcpServiceSource, /const desiredInstalledIds = new Set\(readInstalledMcpIdsFromStorage\(\)\)/);
-  assert.match(mcpServiceSource, /const installedIds = await ensureApifoxMcpRuntimeAutoInstalled\(reconciledInstalledIds, desiredInstalledIds\)/);
+  //   - MCP 服务层应改为调用 Tauri 注册表，不再依赖静态 catalog、远端目录或 localStorage 安装态。
+  assert.match(mcpServiceSource, /export interface McpRegistrationItem/);
+  assert.match(mcpServiceSource, /export type McpScope = "user" \| "workspace";/);
+  assert.match(mcpServiceSource, /export interface McpRegistryContext/);
+  assert.match(mcpServiceSource, /export interface McpTemplateItem/);
+  assert.match(mcpServiceSource, /listMcpOverview\(context\?: McpRegistryContext\): Promise<McpOverview>/);
+  assert.match(mcpServiceSource, /saveMcpRegistration\(\s*draft: McpRegistrationDraft,\s*context\?: McpRegistryContext,/s);
+  assert.match(mcpServiceSource, /removeMcpRegistration\(\s*id: string,\s*scope: McpScope,\s*context\?: McpRegistryContext,/s);
+  assert.match(mcpServiceSource, /validateMcpRegistration\(/);
+  assert.match(mcpServiceSource, /workspaceRoot: workspaceRoot \|\| undefined/);
+  assert.match(mcpServiceSource, /COMMANDS\.LIST_REGISTERED_MCPS/);
+  assert.match(mcpServiceSource, /COMMANDS\.SAVE_MCP_REGISTRATION/);
+  assert.match(mcpServiceSource, /COMMANDS\.REMOVE_MCP_REGISTRATION/);
+  assert.match(mcpServiceSource, /COMMANDS\.VALIDATE_MCP_REGISTRATION/);
+  assert.match(mcpServiceSource, /COMMANDS\.CHECK_APIFOX_MCP_RUNTIME_STATUS/);
+  assert.doesNotMatch(mcpServiceSource, /MCP_CATALOG/);
+  assert.doesNotMatch(mcpServiceSource, /localStorage/);
+  assert.doesNotMatch(mcpServiceSource, /VITE_MCP_CATALOG_URL/);
+
+  // 描述：
+  //   - Tauri 注册表模块应持久化 MCP 配置，并提供列出、保存、删除和校验命令。
+  assert.match(mcpRegistrySource, /pub async fn list_registered_mcps/);
+  assert.match(mcpRegistrySource, /pub async fn save_mcp_registration/);
+  assert.match(mcpRegistrySource, /pub async fn remove_mcp_registration/);
+  assert.match(mcpRegistrySource, /pub async fn validate_mcp_registration/);
+  assert.match(mcpRegistrySource, /resolve_user_mcp_registry_path/);
+  assert.match(mcpRegistrySource, /resolve_workspace_mcp_registry_path/);
+  assert.match(mcpRegistrySource, /merge_registry_records/);
+  assert.match(mcpRegistrySource, /builtin_mcp_templates/);
+  assert.match(mcpRegistrySource, /slugify_identifier/);
+  assert.match(mcpRegistrySource, /normalize_registration_payload/);
+  assert.match(mcpRegistrySource, /Apifox 官方 MCP/);
 
   // 描述：
   //
-  //   - 常量与 Tauri 后端必须暴露 Apifox MCP Runtime 安装能力，确保“安装”是本应用内真实安装。
+  //   - 常量与 Tauri 后端必须同时暴露 MCP 注册表命令和 Apifox Runtime 安装能力。
+  assert.match(constantsSource, /LIST_REGISTERED_MCPS: "list_registered_mcps"/);
+  assert.match(constantsSource, /SAVE_MCP_REGISTRATION: "save_mcp_registration"/);
+  assert.match(constantsSource, /REMOVE_MCP_REGISTRATION: "remove_mcp_registration"/);
+  assert.match(constantsSource, /VALIDATE_MCP_REGISTRATION: "validate_mcp_registration"/);
   assert.match(constantsSource, /CHECK_APIFOX_MCP_RUNTIME_STATUS: "check_apifox_mcp_runtime_status"/);
   assert.match(constantsSource, /INSTALL_APIFOX_MCP_RUNTIME: "install_apifox_mcp_runtime"/);
   assert.match(constantsSource, /UNINSTALL_APIFOX_MCP_RUNTIME: "uninstall_apifox_mcp_runtime"/);
+  assert.match(tauriMainSource, /mod mcp_registry;/);
+  assert.match(tauriMainSource, /list_registered_mcps,/);
+  assert.match(tauriMainSource, /save_mcp_registration,/);
+  assert.match(tauriMainSource, /remove_mcp_registration,/);
+  assert.match(tauriMainSource, /validate_mcp_registration,/);
   assert.match(tauriMainSource, /async fn check_apifox_mcp_runtime_status\(/);
   assert.match(tauriMainSource, /async fn install_apifox_mcp_runtime\(/);
   assert.match(tauriMainSource, /async fn uninstall_apifox_mcp_runtime\(/);
@@ -161,5 +242,39 @@ test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
   assert.match(tauriMainSource, /resolve_apifox_mcp_runtime_root/);
   assert.match(tauriMainSource, /app_data_dir\(\)/);
   assert.match(tauriMainSource, /npm install/);
-  assert.match(envSource, /VITE_MCP_CATALOG_URL/);
+  assert.doesNotMatch(constantsSource, /MCP_INSTALLED_IDS/);
+  assert.doesNotMatch(envSource, /VITE_MCP_CATALOG_URL/);
+});
+
+test("TestMcpRegistryShouldInjectRuntimeIntoUnifiedAgentAndPromptGuidance", () => {
+  const tauriMainSource = readDesktopSource("src-tauri/src/main.rs");
+  const coreLibSource = readDesktopSource("../../crates/core/agent/src/lib.rs");
+  const coreToolSource = readDesktopSource("../../crates/core/agent/src/tools/mcp.rs");
+  const corePromptSource = readDesktopSource("../../crates/core/agent/src/python_orchestrator.rs");
+  const promptGuidanceSource = readDesktopSource("src/shared/workflow/prompt-guidance.ts");
+
+  // 描述：
+  //
+  //   - Tauri 侧应在执行统一智能体前注入启用中的 MCP 注册项，而不是只停留在管理页。
+  assert.match(tauriMainSource, /build_runtime_registered_mcps/);
+  assert.match(tauriMainSource, /list_enabled_mcp_registrations/);
+  assert.match(tauriMainSource, /available_mcps,/);
+
+  // 描述：
+  //
+  //   - core agent 请求结构应显式携带 MCP 快照，工具层需使用通用 mcp_tool 命名。
+  assert.match(coreLibSource, /pub struct AgentRegisteredMcp/);
+  assert.match(coreLibSource, /pub available_mcps: Vec<AgentRegisteredMcp>/);
+  assert.match(coreToolSource, /pub struct McpTool/);
+  assert.match(coreToolSource, /fn name\(&self\) -> &'static str \{\n        "mcp_tool"/);
+  assert.match(coreToolSource, /tools\/call/);
+  assert.match(coreToolSource, /tools\/list/);
+
+  // 描述：
+  //
+  //   - 提示词指导层应切换到通用 mcp_tool，并提示先用 list_tools 探测能力。
+  assert.match(corePromptSource, /mcp_tool/);
+  assert.match(corePromptSource, /tool="list_tools"/);
+  assert.match(promptGuidanceSource, /mcp_tool/);
+  assert.doesNotMatch(promptGuidanceSource, /mcp_model_tool/);
 });

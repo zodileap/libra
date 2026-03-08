@@ -6,9 +6,11 @@ import type {
   BlenderBridgeEnsureResult,
   BlenderBridgeRuntime,
   ColorThemeMode,
+  ConsoleIdentityItem,
+  DesktopBackendConfig,
   DesktopUpdateState,
   LoginUser,
-  ModelMcpCapabilities,
+  DccMcpCapabilities,
 } from "../shared/types";
 
 // 描述：声明桌面端可按运行时与构建时控制的路由模块键。
@@ -25,14 +27,19 @@ export interface AuthState {
   user: LoginUser | null;
   restoringAuth: boolean;
   availableAgents: AuthAvailableAgentItem[];
+  selectedIdentity: ConsoleIdentityItem | null;
   login: (account: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  setSelectedIdentity: (value: ConsoleIdentityItem | null) => ConsoleIdentityItem | null;
   colorThemeMode: ColorThemeMode;
   setColorThemeMode: (value: ColorThemeMode) => void;
-  modelMcpCapabilities: ModelMcpCapabilities;
-  setModelMcpCapabilities: (value: ModelMcpCapabilities) => void;
+  dccMcpCapabilities: DccMcpCapabilities;
+  setDccMcpCapabilities: (value: DccMcpCapabilities) => void;
   aiKeys: AiKeyItem[];
   setAiKeys: (value: AiKeyItem[]) => void;
+  backendConfig: DesktopBackendConfig;
+  setBackendConfig: (value: DesktopBackendConfig) => DesktopBackendConfig;
+  resetBackendConfig: () => DesktopBackendConfig;
   desktopUpdateState: DesktopUpdateState;
   checkDesktopUpdate: () => Promise<void>;
   installDesktopUpdate: () => Promise<void>;

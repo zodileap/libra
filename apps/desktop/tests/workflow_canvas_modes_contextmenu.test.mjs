@@ -42,7 +42,7 @@ test("TestWorkflowCanvasShouldSupportModeSwitchAndContextDelete", () => {
   assert.match(source, /window\.setTimeout\(\(\) =>/);
   assert.match(source, /setWorkflowVersion\(\(value\) => value \+ 1\)/);
   assert.match(source, /const workflowLoadIdentityRef = useRef\(\"\"\);/);
-  assert.match(source, /const nextWorkflowIdentity = `\$\{agentKey\}:\$\{selectedWorkflow\.id\}`;/);
+  assert.match(source, /const nextWorkflowIdentity = selectedWorkflow\.id;/);
   assert.match(source, /if \(workflowLoadIdentityRef\.current === nextWorkflowIdentity\) \{\s*return;\s*\}/s);
   assert.match(source, /const openWorkflowEditModal = \(\) =>/);
   assert.match(source, /const confirmWorkflowEdit = \(\) =>/);
@@ -51,8 +51,7 @@ test("TestWorkflowCanvasShouldSupportModeSwitchAndContextDelete", () => {
   assert.match(source, /title="编辑工作流"/);
   assert.match(source, /label="工作流名称"/);
   assert.match(source, /label="工作流说明"/);
-  assert.match(source, /deleteModelWorkflow\(selectedWorkflow\.id\)/);
-  assert.match(source, /deleteCodeWorkflow\(selectedWorkflow\.id\)/);
+  assert.match(source, /deleteAgentWorkflow\(selectedWorkflow\.id\)/);
   assert.match(source, /instruction:\s*String\(source\.instruction \|\| ""\)\.trim\(\)/);
   assert.match(source, /instruction:\s*String\(node\.instruction \|\| ""\)\.trim\(\)/);
   assert.match(source, /instruction:\s*parsed\.instruction/);

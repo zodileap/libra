@@ -26,51 +26,52 @@ test("TestWorkflowSkillNodeShouldBeSupportedInTypesStorageAndEditor", () => {
 
   // 描述：
   //
-  //   - 工作流图节点类型应包含 skill，且节点结构应支持 skillId/skillVersion。
+  //   - 工作流图节点类型应包含 skill，且节点结构仍需兼容 skillId/skillVersion 历史字段。
   assert.match(typesSource, /\| "skill"/);
   assert.match(typesSource, /skillId\?: string;/);
   assert.match(typesSource, /skillVersion\?: string;/);
 
   // 描述：
   //
-  //   - 存储层应能识别并持久化 skill 节点类型，并在代码工作流提示词中附加技能链路信息。
+  //   - 存储层应能识别并持久化 skill 节点类型，并在统一工作流提示词中附加技能链路信息。
   assert.match(storageSource, /raw === "skill"/);
   assert.match(storageSource, /node\.type === "skill"/);
   assert.match(storageSource, /"【技能链路】"/);
+  assert.match(storageSource, /normalizeAgentSkillId/);
 
   // 描述：
   //
-  //   - 工作流画布应提供 SkillNode 创建入口，并通过“已安装技能”下拉维护技能编码与版本。
+  //   - 工作流画布应提供 SkillNode 创建入口，并通过 Agent Skills 下拉维护技能编码，不再暴露版本选择器。
   assert.match(editorSource, /nodeType: WorkflowGraphNodeType;/);
   assert.match(editorSource, /skillId: string;/);
   assert.match(editorSource, /skillVersion: string;/);
   assert.match(editorSource, /const addSkillNode = \(\) => \{/);
   assert.match(editorSource, /<AriButton ghost icon="new_releases" onClick=\{addSkillNode\} \/>/);
-  assert.match(editorSource, /listInstalledSkills/);
+  assert.match(editorSource, /listAgentSkills/);
   assert.match(editorSource, /label="节点类型"/);
   assert.match(editorSource, /label="技能编码"/);
-  assert.match(editorSource, /label="技能版本"/);
   assert.match(editorSource, /<AriSelect/);
   assert.match(editorSource, /buildSkillSelectOptions/);
-  assert.match(editorSource, /buildSkillVersionOptions/);
+  assert.doesNotMatch(editorSource, /label="技能版本"/);
+  assert.doesNotMatch(editorSource, /buildSkillVersionOptions/);
 });
 
-test("TestCodeFrontendWorkflowShouldUseSkillDrivenGraph", () => {
+test("TestFrontendWorkflowShouldUseAgentSkillNames", () => {
   const templateSource = readDesktopSource("src/shared/workflow/templates.ts");
 
   // 描述：
   //
-  //   - “前端项目-1”默认工作流应升级为 Skill 编排链路，包含需求分析/数据库设计/接口代码/报告等技能节点。
+  //   - “前端项目-1”默认工作流应升级为 Agent Skill 编排链路，包含需求分析/数据库设计/接口代码/报告等技能节点。
   assert.match(templateSource, /name: "前端项目-1（Skill 编排）"/);
   assert.match(templateSource, /title: "需求分析 Skill"/);
   assert.match(templateSource, /title: "数据库设计 Skill"/);
   assert.match(templateSource, /title: "接口代码 Skill"/);
   assert.match(templateSource, /title: "报告 Skill"/);
-  assert.match(templateSource, /skillId: "requirements_analyst"/);
-  assert.match(templateSource, /skillId: "db_designer"/);
-  assert.match(templateSource, /skillId: "api_codegen"/);
-  assert.match(templateSource, /skillId: "report_builder"/);
-  assert.match(templateSource, /id: "wf-code-full-delivery-v1"/);
+  assert.match(templateSource, /skillId: "requirements-analyst"/);
+  assert.match(templateSource, /skillId: "db-designer"/);
+  assert.match(templateSource, /skillId: "api-codegen"/);
+  assert.match(templateSource, /skillId: "report-builder"/);
+  assert.match(templateSource, /id: "wf-agent-full-delivery-v1"/);
   assert.match(templateSource, /name: "完整项目开发（结构化信息）"/);
   assert.match(templateSource, /title: "理解项目需求"/);
   assert.match(templateSource, /title: "构建交互契约"/);
@@ -79,7 +80,7 @@ test("TestCodeFrontendWorkflowShouldUseSkillDrivenGraph", () => {
   assert.match(templateSource, /title: "实现页面布局"/);
   assert.match(templateSource, /title: "项目测试"/);
   assert.match(templateSource, /apifox-mcp-server@latest/);
-  assert.match(templateSource, /skillId: "apifox_model_designer"/);
-  assert.match(templateSource, /skillId: "frontend_architect"/);
-  assert.match(templateSource, /skillId: "frontend_page_builder"/);
+  assert.match(templateSource, /skillId: "apifox-model-designer"/);
+  assert.match(templateSource, /skillId: "frontend-architect"/);
+  assert.match(templateSource, /skillId: "frontend-page-builder"/);
 });

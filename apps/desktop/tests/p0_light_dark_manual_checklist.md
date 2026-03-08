@@ -10,7 +10,7 @@
 
 - [ ] 登录页：`/login`
 - [ ] 首页：`/home`
-- [ ] 会话页：`/agents/model/session/:sessionId`（任意会话）
+- [ ] 会话页：`/session/:sessionId`（任意会话）
 - [ ] 设置页：`/settings/general`
 
 ## 3. 每页检查点（Light 与 Dark 都要过）

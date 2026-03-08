@@ -34,24 +34,19 @@ import {
   AriTypography,
 } from "aries_react";
 import { useSearchParams } from "react-router-dom";
-import { listInstalledSkills } from "../../modules/common/services";
-import type { SkillCatalogItem } from "../../modules/common/services";
+import { listAgentSkills } from "../../modules/common/services";
+import type { AgentSkillItem } from "../../modules/common/services";
 import {
-  deleteCodeWorkflow,
-  deleteModelWorkflow,
-  listCodeWorkflows,
-  listModelWorkflows,
-  saveCodeWorkflow,
-  saveModelWorkflow,
+  deleteAgentWorkflow,
+  listAgentWorkflows,
+  saveAgentWorkflow,
 } from "../../shared/workflow";
 import type {
-  CodeWorkflowDefinition,
-  WorkflowDefinition,
+  AgentWorkflowDefinition,
   WorkflowGraph,
   WorkflowGraphNode,
   WorkflowGraphNodeType,
 } from "../../shared/workflow";
-import type { AgentKey } from "../../shared/types";
 import { useDesktopHeaderSlot } from "../app-header/header-slot-context";
 
 // 描述:
@@ -79,11 +74,6 @@ interface ParsedCanvasNodeData {
 
 // 描述:
 //
-//   - 定义工作流画布页面入参，用于加载目标工作流集合。
-interface WorkflowCanvasPageProps {
-  agentKey: AgentKey;
-}
-
 // 描述：
 //
 //   - 定义画布交互模式，区分“选择元素”与“拖动画布”两种行为。
@@ -269,7 +259,7 @@ function WorkflowCanvasFlowNode({
   const roleLabel = resolveNodeRoleLabel(parsed.type, nodeKind);
   const roleIcon = resolveNodeRoleIcon(roleLabel);
   const skillDescriptor = parsed.skillId
-    ? `${parsed.skillId}${parsed.skillVersion ? `@${parsed.skillVersion}` : ""}`
+    ? parsed.skillId
     : "";
   const contentValue = parsed.type === "skill"
     ? (skillDescriptor || parsed.description)
@@ -468,14 +458,14 @@ function resolveNewNodePosition(count: number): { x: number; y: number } {
 //
 // Params:
 //
-//   - installedSkills: 已安装技能列表。
+//   - availableSkills: 当前已发现的技能列表。
 //   - selectedSkillId: 当前节点已绑定技能编码。
 //
 // Returns:
 //
 //   - 技能下拉选项数组。
-function buildSkillSelectOptions(installedSkills: SkillCatalogItem[], selectedSkillId: string) {
-  const options = installedSkills.map((item) => ({
+function buildSkillSelectOptions(availableSkills: AgentSkillItem[], selectedSkillId: string) {
+  const options = availableSkills.map((item) => ({
     value: item.id,
     label: `${item.name}（${item.id}）`,
   }));
@@ -483,7 +473,7 @@ function buildSkillSelectOptions(installedSkills: SkillCatalogItem[], selectedSk
   if (!normalizedSkillId) {
     return options;
   }
-  const exists = installedSkills.some((item) => item.id === normalizedSkillId);
+  const exists = availableSkills.some((item) => item.id === normalizedSkillId);
   if (exists) {
     return options;
   }
@@ -498,50 +488,11 @@ function buildSkillSelectOptions(installedSkills: SkillCatalogItem[], selectedSk
 
 // 描述：
 //
-//   - 将技能版本列表映射为 AriSelect 选项；当当前值不在候选中时补充为临时选项，避免编辑态值丢失。
-//
-// Params:
-//
-//   - versions: 技能可选版本。
-//   - selectedVersion: 当前节点已绑定版本。
-//
-// Returns:
-//
-//   - 版本下拉选项数组。
-function buildSkillVersionOptions(versions: string[], selectedVersion: string) {
-  const normalizedVersions = versions
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
-  const uniqueVersions = Array.from(new Set(normalizedVersions));
-  const options = uniqueVersions.map((item) => ({
-    value: item,
-    label: item,
-  }));
-  const normalizedSelectedVersion = String(selectedVersion || "").trim();
-  if (!normalizedSelectedVersion) {
-    return options;
-  }
-  const exists = uniqueVersions.includes(normalizedSelectedVersion);
-  if (exists) {
-    return options;
-  }
-  return [
-    {
-      value: normalizedSelectedVersion,
-      label: normalizedSelectedVersion,
-    },
-    ...options,
-  ];
-}
-
-// 描述：
-//
 //   - 渲染工作流编辑器页面，按工作流类型加载并保存对应工作流数据。
 //
 // Params:
 //
-//   - agentKey: 工作流类型标识（code/model）。
-export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
+export function WorkflowCanvasPage() {
   const [searchParams] = useSearchParams();
   const preferredWorkflowId = searchParams.get("workflowId") || "";
   const headerSlotElement = useDesktopHeaderSlot();
@@ -560,7 +511,7 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
   const [contextTarget, setContextTarget] =
     useState<WorkflowContextTarget | null>(null);
   const [contextMenuOpen, setContextMenuOpen] = useState(false);
-  const [installedSkills, setInstalledSkills] = useState<SkillCatalogItem[]>([]);
+  const [availableSkills, setAvailableSkills] = useState<AgentSkillItem[]>([]);
   const reconnectRadius = useMemo(() => resolveThemeInset() * 0.375, []);
   // 描述：
   //
@@ -568,7 +519,7 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
   const canvasRef = useRef<HTMLDivElement>(null);
   // 描述：
   //
-  //   - 记录已加载到画布的工作流身份（agentKey + workflowId），用于区分“自动保存回流”和“真实切换工作流”。
+  //   - 记录已加载到画布的工作流身份（workflowId），用于区分“自动保存回流”和“真实切换工作流”。
   const workflowLoadIdentityRef = useRef("");
 
   const [nodes, setNodes, onNodesChange] = useNodesState<WorkflowCanvasNode>(
@@ -576,15 +527,10 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
   );
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
 
-  const modelWorkflows = useMemo(
-    () => listModelWorkflows(),
+  const workflows = useMemo(
+    () => listAgentWorkflows(),
     [workflowVersion, preferredWorkflowId],
   );
-  const codeWorkflows = useMemo(
-    () => listCodeWorkflows(),
-    [workflowVersion, preferredWorkflowId],
-  );
-  const workflows = agentKey === "model" ? modelWorkflows : codeWorkflows;
 
   const selectedWorkflow = useMemo(
     () =>
@@ -640,14 +586,14 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
 
   // 描述：
   //
-  //   - 加载已安装技能目录，供 Skill 节点属性面板下拉选择使用；读取失败时提示用户稍后重试。
+  //   - 加载当前已发现的 Agent Skills，供 Skill 节点属性面板下拉选择使用；读取失败时提示用户稍后重试。
   useEffect(() => {
-    const loadInstalledSkills = async () => {
+    const loadAvailableSkills = async () => {
       try {
-        const skills = await listInstalledSkills();
-        setInstalledSkills(skills);
+        const skills = await listAgentSkills();
+        setAvailableSkills(skills);
       } catch (_err) {
-        setInstalledSkills([]);
+        setAvailableSkills([]);
         AriMessage.warning({
           content: "加载技能目录失败，稍后重试。",
           duration: 2200,
@@ -655,7 +601,7 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
         });
       }
     };
-    void loadInstalledSkills();
+    void loadAvailableSkills();
   }, []);
 
   const refreshWorkflows = () => setWorkflowVersion((value) => value + 1);
@@ -672,7 +618,7 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
       setSelectedEdgeId("");
       return;
     }
-    const nextWorkflowIdentity = `${agentKey}:${selectedWorkflow.id}`;
+    const nextWorkflowIdentity = selectedWorkflow.id;
     if (workflowLoadIdentityRef.current === nextWorkflowIdentity) {
       return;
     }
@@ -691,7 +637,7 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
     setEdges(toFlowEdges(graph));
     setSelectedNodeId("");
     setSelectedEdgeId("");
-  }, [agentKey, selectedWorkflow, setEdges, setNodes]);
+  }, [selectedWorkflow, setEdges, setNodes]);
 
   const onConnect = useCallback(
     (connection: Connection) => {
@@ -939,10 +885,7 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
     if (!selectedWorkflow?.id) {
       return;
     }
-    const deleted =
-      agentKey === "model"
-        ? deleteModelWorkflow(selectedWorkflow.id)
-        : deleteCodeWorkflow(selectedWorkflow.id);
+    const deleted = deleteAgentWorkflow(selectedWorkflow.id);
     if (!deleted) {
       AriMessage.warning({
         content: "当前工作流不支持删除。",
@@ -965,18 +908,9 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
     ? parseCanvasNodeData(selectedNode.data)
     : null;
   const selectedNodeType = selectedNodeData?.type === "skill" ? "skill" : "action";
-  const selectedSkillItem = useMemo(
-    () => installedSkills.find((item) => item.id === (selectedNodeData?.skillId || "")) || null,
-    [installedSkills, selectedNodeData?.skillId],
-  );
   const skillSelectOptions = useMemo(
-    () => buildSkillSelectOptions(installedSkills, selectedNodeData?.skillId || ""),
-    [installedSkills, selectedNodeData?.skillId],
-  );
-  const selectedSkillVersion = String(selectedNodeData?.skillVersion || "").trim();
-  const skillVersionSelectOptions = useMemo(
-    () => buildSkillVersionOptions(selectedSkillItem?.versions || [], selectedSkillVersion),
-    [selectedSkillItem?.versions, selectedSkillVersion],
+    () => buildSkillSelectOptions(availableSkills, selectedNodeData?.skillId || ""),
+    [availableSkills, selectedNodeData?.skillId],
   );
   const workflowInfoName =
     workflowName.trim() || selectedWorkflow?.name || "未命名工作流";
@@ -1006,21 +940,18 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
       return true;
     }
 
-    if (agentKey === "code") {
-      const nextPromptPrefix = workflowPromptPrefix.trim();
-      const currentPromptPrefix =
-        "promptPrefix" in selectedWorkflow
-          ? String(selectedWorkflow.promptPrefix || "").trim()
-          : "";
-      if (nextPromptPrefix !== currentPromptPrefix) {
-        return true;
-      }
+    const nextPromptPrefix = workflowPromptPrefix.trim();
+    const currentPromptPrefix =
+      "promptPrefix" in selectedWorkflow
+        ? String(selectedWorkflow.promptPrefix || "").trim()
+        : "";
+    if (nextPromptPrefix !== currentPromptPrefix) {
+      return true;
     }
 
     const currentGraph = selectedWorkflow.graph || { nodes: [], edges: [] };
     return JSON.stringify(workflowGraph) !== JSON.stringify(currentGraph);
   }, [
-    agentKey,
     selectedWorkflow,
     workflowDescription,
     workflowGraph,
@@ -1042,24 +973,14 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
         return;
       }
 
-      if (agentKey === "model") {
-        saveModelWorkflow({
-          ...(selectedWorkflow as WorkflowDefinition),
-          name: trimmedName,
-          description: workflowDescription.trim(),
-          graph: workflowGraph,
-          version: selectedWorkflow.version + 1,
-        });
-      } else {
-        saveCodeWorkflow({
-          ...(selectedWorkflow as CodeWorkflowDefinition),
-          name: trimmedName,
-          description: workflowDescription.trim(),
-          promptPrefix: workflowPromptPrefix.trim(),
-          graph: workflowGraph,
-          version: selectedWorkflow.version + 1,
-        });
-      }
+      saveAgentWorkflow({
+        ...(selectedWorkflow as AgentWorkflowDefinition),
+        name: trimmedName,
+        description: workflowDescription.trim(),
+        promptPrefix: workflowPromptPrefix.trim(),
+        graph: workflowGraph,
+        version: selectedWorkflow.version + 1,
+      });
 
       setWorkflowVersion((value) => value + 1);
     }, 450);
@@ -1068,7 +989,6 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
       window.clearTimeout(timer);
     };
   }, [
-    agentKey,
     hasPendingWorkflowChanges,
     selectedWorkflow,
     workflowDescription,
@@ -1466,28 +1386,10 @@ export function WorkflowCanvasPage({ agentKey }: WorkflowCanvasPageProps) {
                             patchSelectedNode({ skillId: "", skillVersion: "" });
                             return;
                           }
-                          const selectedSkill = installedSkills.find((item) => item.id === selectedSkillId);
-                          const defaultVersion = selectedSkill?.versions?.[0] || "";
                           patchSelectedNode({
                             skillId: selectedSkillId,
-                            skillVersion: defaultVersion,
+                            skillVersion: "",
                           });
-                        }}
-                      />
-                    </AriFormItem>
-                    <AriFormItem label="技能版本" name="selectedNode.skillVersion">
-                      <AriSelect
-                        value={selectedNodeData.skillVersion || undefined}
-                        options={skillVersionSelectOptions}
-                        searchable
-                        allowClear
-                        placeholder="请选择版本"
-                        disabled={!selectedNodeData.skillId || skillVersionSelectOptions.length === 0}
-                        onChange={(value: unknown) => {
-                          const nextVersion = typeof value === "string"
-                            ? value
-                            : String(value || "").trim();
-                          patchSelectedNode({ skillVersion: nextVersion });
                         }}
                       />
                     </AriFormItem>

@@ -39,35 +39,35 @@ test("TestSidebarShouldSyncWorkspaceTreeWhenWorkspaceGroupsUpdated", () => {
 
   // 描述：
   //
-  //   - 数据层写入代码目录分组后，需要广播统一事件给侧边栏监听。
-  assert.match(dataSource, /export const CODE_WORKSPACE_GROUPS_UPDATED_EVENT = "libra:code-workspace-groups-updated";/);
-  assert.match(dataSource, /new CustomEvent\(CODE_WORKSPACE_GROUPS_UPDATED_EVENT,/);
-  assert.match(dataSource, /emitCodeWorkspaceGroupsUpdated\("upsert"\);/);
-  assert.match(dataSource, /emitCodeWorkspaceGroupsUpdated\("settings"\);/);
-  assert.match(dataSource, /emitCodeWorkspaceGroupsUpdated\("remove"\);/);
+  //   - 数据层写入项目目录分组后，需要广播统一事件给侧边栏监听。
+  assert.match(dataSource, /export const PROJECT_WORKSPACE_GROUPS_UPDATED_EVENT = "libra:project-workspace-groups-updated";/);
+  assert.match(dataSource, /new CustomEvent\(PROJECT_WORKSPACE_GROUPS_UPDATED_EVENT,/);
+  assert.match(dataSource, /emitProjectWorkspaceGroupsUpdated\("upsert"\);/);
+  assert.match(dataSource, /emitProjectWorkspaceGroupsUpdated\("settings"\);/);
+  assert.match(dataSource, /emitProjectWorkspaceGroupsUpdated\("remove"\);/);
 
   // 描述：
   //
   //   - 侧边栏应监听该事件并即时刷新目录分组，避免新增项目后需重进才可见。
-  assert.match(sidebarSource, /CODE_WORKSPACE_GROUPS_UPDATED_EVENT/);
-  assert.match(sidebarSource, /window\.addEventListener\(CODE_WORKSPACE_GROUPS_UPDATED_EVENT, onCodeWorkspaceGroupsUpdated as EventListener\);/);
-  assert.match(sidebarSource, /setWorkspaceGroups\(listCodeWorkspaceGroups\(\)\);/);
-  assert.match(sidebarSource, /window\.removeEventListener\(CODE_WORKSPACE_GROUPS_UPDATED_EVENT, onCodeWorkspaceGroupsUpdated as EventListener\);/);
+  assert.match(sidebarSource, /PROJECT_WORKSPACE_GROUPS_UPDATED_EVENT/);
+  assert.match(sidebarSource, /window\.addEventListener\(PROJECT_WORKSPACE_GROUPS_UPDATED_EVENT, onProjectWorkspaceGroupsUpdated as EventListener\);/);
+  assert.match(sidebarSource, /setWorkspaceGroups\(listProjectWorkspaceGroups\(\)\);/);
+  assert.match(sidebarSource, /window\.removeEventListener\(PROJECT_WORKSPACE_GROUPS_UPDATED_EVENT, onProjectWorkspaceGroupsUpdated as EventListener\);/);
 
   // 描述：
   //
   //   - 数据层应提供项目结构化信息更新广播能力，用于同项目多话题共享同步。
-  assert.match(dataSource, /export const CODE_WORKSPACE_PROFILE_UPDATED_EVENT = "libra:code-workspace-profile-updated";/);
-  assert.match(dataSource, /new CustomEvent\(CODE_WORKSPACE_PROFILE_UPDATED_EVENT,/);
-  assert.match(dataSource, /emitCodeWorkspaceProfileUpdated\(/);
+  assert.match(dataSource, /export const PROJECT_WORKSPACE_PROFILE_UPDATED_EVENT = "libra:project-workspace-profile-updated";/);
+  assert.match(dataSource, /new CustomEvent\(PROJECT_WORKSPACE_PROFILE_UPDATED_EVENT,/);
+  assert.match(dataSource, /emitProjectWorkspaceProfileUpdated\(/);
 
   // 描述：
   //
   //   - 会话页应监听 profile 更新事件并刷新当前项目上下文缓存，保证同项目跨话题实时一致。
-  assert.match(sessionSource, /CODE_WORKSPACE_PROFILE_UPDATED_EVENT/);
-  assert.match(sessionSource, /window\.addEventListener\(\s*CODE_WORKSPACE_PROFILE_UPDATED_EVENT,\s*onCodeWorkspaceProfileUpdated as EventListener,\s*\);/s);
-  assert.match(sessionSource, /setActiveCodeProjectProfile\(getCodeWorkspaceProjectProfile\(activeCodeWorkspace\.id\)\);/);
-  assert.match(sessionSource, /window\.removeEventListener\(\s*CODE_WORKSPACE_PROFILE_UPDATED_EVENT,\s*onCodeWorkspaceProfileUpdated as EventListener,\s*\);/s);
+  assert.match(sessionSource, /PROJECT_WORKSPACE_PROFILE_UPDATED_EVENT/);
+  assert.match(sessionSource, /window\.addEventListener\(\s*PROJECT_WORKSPACE_PROFILE_UPDATED_EVENT,\s*onProjectWorkspaceProfileUpdated as EventListener,\s*\);/s);
+  assert.match(sessionSource, /setActiveProjectProfile\(getProjectWorkspaceProfile\(activeWorkspace\.id\)\);/);
+  assert.match(sessionSource, /window\.removeEventListener\(\s*PROJECT_WORKSPACE_PROFILE_UPDATED_EVENT,\s*onProjectWorkspaceProfileUpdated as EventListener,\s*\);/s);
 });
 
 test("TestRemoveWorkspaceShouldAlsoRemoveBoundSessions", () => {
@@ -77,5 +77,5 @@ test("TestRemoveWorkspaceShouldAlsoRemoveBoundSessions", () => {
   //
   //   - 删除项目时应一并移除该项目下会话，防止无归属会话在刷新后自动绑定到新项目。
   assert.match(dataSource, /const sessionIds = mapItems[\s\S]*\.filter\(\(item\) => item\.workspaceId === workspaceId\)[\s\S]*\.map\(\(item\) => item\.sessionId\);/);
-  assert.match(dataSource, /sessionIds\.forEach\(\(sessionId\) => \{\s*removeAgentSession\("code", sessionId\);\s*\}\);/s);
+  assert.match(dataSource, /sessionIds\.forEach\(\(sessionId\) => \{\s*removeAgentSession\("agent", sessionId\);\s*\}\);/s);
 });

@@ -14,7 +14,7 @@ export const IS_BROWSER = typeof window !== "undefined";
 
 // 描述:
 //
-//   - 代码智能体文本流事件名，Tauri emit → 前端 listen 全局唯一绑定。
+//   - 智能体文本流事件名，Tauri emit → 前端 listen 全局唯一绑定。
 export const EVENT_AGENT_TEXT_STREAM = "agent:text_stream";
 
 // 描述:
@@ -22,36 +22,31 @@ export const EVENT_AGENT_TEXT_STREAM = "agent:text_stream";
 //   - 智能体后台日志事件名，供调试面板消费。
 export const EVENT_AGENT_LOG = "agent:log";
 
-// 描述:
-//
-//   - 模型会话流式事件名，用于模型工作流进度推送。
-export const EVENT_MODEL_SESSION_STREAM = "model:session_stream";
-
-// 描述:
-//
-//   - 模型调试轨迹事件名，供调试面板展示详细执行链路。
-export const EVENT_MODEL_DEBUG_TRACE = "model:debug_trace";
-
 // ── Tauri invoke 命令名 ──────────────────────────────────────────────
 
 // 描述:
 //
 //   - invoke 命令名集合，与 src-tauri 侧 `#[tauri::command]` 函数名一一对应。
 export const COMMANDS = {
+  LIST_AGENT_SKILLS: "list_agent_skills",
+  PICK_AGENT_SKILL_FOLDER: "pick_agent_skill_folder",
+  IMPORT_AGENT_SKILL_FROM_PATH: "import_agent_skill_from_path",
+  REMOVE_USER_AGENT_SKILL: "remove_user_agent_skill",
+  LIST_REGISTERED_MCPS: "list_registered_mcps",
+  SAVE_MCP_REGISTRATION: "save_mcp_registration",
+  REMOVE_MCP_REGISTRATION: "remove_mcp_registration",
+  VALIDATE_MCP_REGISTRATION: "validate_mcp_registration",
   RUN_AGENT_COMMAND: "run_agent_command",
   CANCEL_AGENT_SESSION: "cancel_agent_session",
   RESET_AGENT_SANDBOX: "reset_agent_sandbox",
   APPROVE_AGENT_ACTION: "approve_agent_action",
   GET_AGENT_SANDBOX_METRICS: "get_agent_sandbox_metrics",
-  GET_MODEL_SESSION_RECORDS: "get_model_session_records",
-  SUMMARIZE_MODEL_SESSION_RESULT: "summarize_model_session_result",
   CHECK_PROJECT_DEPENDENCY_RULES: "check_project_dependency_rules",
   APPLY_PROJECT_DEPENDENCY_RULE_UPGRADES: "apply_project_dependency_rule_upgrades",
-  INSPECT_CODE_WORKSPACE_PROFILE_SEED: "inspect_code_workspace_profile_seed",
+  INSPECT_PROJECT_WORKSPACE_PROFILE_SEED: "inspect_project_workspace_profile_seed",
   CHECK_APIFOX_MCP_RUNTIME_STATUS: "check_apifox_mcp_runtime_status",
   INSTALL_APIFOX_MCP_RUNTIME: "install_apifox_mcp_runtime",
   UNINSTALL_APIFOX_MCP_RUNTIME: "uninstall_apifox_mcp_runtime",
-  RETRY_MODEL_SESSION_LAST_STEP: "retry_model_session_last_step",
   GET_DESKTOP_RUNTIME_INFO: "get_desktop_runtime_info",
   START_DESKTOP_UPDATE_DOWNLOAD: "start_desktop_update_download",
   GET_DESKTOP_UPDATE_STATE: "get_desktop_update_state",
@@ -88,7 +83,7 @@ export function isCancelErrorCode(code: string): boolean {
 
 // 描述:
 //
-//   - 代码智能体文本流事件 kind 常量，与 Tauri 侧 `AgentStreamEvent` 映射一致。
+//   - 智能体文本流事件 kind 常量，与 Tauri 侧 `AgentStreamEvent` 映射一致。
 export const STREAM_KINDS = {
   STARTED: "started",
   LLM_STARTED: "llm_started",
@@ -105,20 +100,6 @@ export const STREAM_KINDS = {
   ERROR: "error",
 } as const;
 
-// ── 模型流式事件名 ────────────────────────────────────────────────────
-
-// 描述:
-//
-//   - 模型工作流步骤事件名常量。
-export const MODEL_EVENT_NAMES = {
-  STEP_STARTED: "step_started",
-  STEP_FINISHED: "step_finished",
-  STEP_FAILED: "step_failed",
-  BRANCH_SELECTED: "branch_selected",
-  OPERATION_TRANSACTION_STARTED: "operation_transaction_started",
-  OPERATION_TRANSACTION_COMMITTED: "operation_transaction_committed",
-} as const;
-
 // ── 默认服务端口 ──────────────────────────────────────────────────────
 
 // 描述:
@@ -126,24 +107,20 @@ export const MODEL_EVENT_NAMES = {
 //   - 应用级 localStorage 存储键集合，统一管理避免散布硬编码。
 export const STORAGE_KEYS = {
   COLOR_THEME_MODE: "libra.desktop.colorThemeMode",
-  MODEL_MCP_CAPABILITIES: "libra.desktop.modelMcpCapabilities",
+  DCC_MCP_CAPABILITIES: "libra.desktop.agent.dccMcpCapabilities",
   AI_KEYS: "libra.desktop.aiKeys",
-  SKILL_INSTALLED_IDS: "libra.desktop.skills.installed",
-  MCP_INSTALLED_IDS: "libra.desktop.mcps.installed",
-  MODEL_SKILL_SELECTED_IDS: "libra.desktop.model.selectedSkillIds",
-  CODE_SKILL_SELECTED_IDS: "libra.desktop.code.selectedSkillIds",
-  MODEL_WORKFLOWS: "libra.desktop.model.workflows",
-  CODE_WORKFLOWS: "libra.desktop.code.workflows",
+  AGENT_SKILL_SELECTED_IDS: "libra.desktop.agent.selectedSkillIds",
+  AGENT_WORKFLOWS: "libra.desktop.agent.workflows",
+  DESKTOP_ADMIN_PERMISSION_GRANTS: "libra.desktop.admin.permissionGrants",
+  DESKTOP_BACKEND_CONFIG: "libra.desktop.backendConfig",
+  DESKTOP_SELECTED_IDENTITY_ID: "libra.desktop.selectedIdentityId",
 } as const;
 
 // 描述:
 //
-//   - 各后端服务的默认本地端口映射，统一管理避免分散硬编码。
+//   - Desktop 依赖的本地默认服务端口映射。
 export const DEFAULT_SERVICE_PORTS = {
-  account: 10001,
-  runtime: 10002,
-  agentCode: 10003,
-  agent3d: 10004,
+  backend: 10001,
   app: 11001,
 } as const;
 

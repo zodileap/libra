@@ -24,7 +24,7 @@ test("TestSessionPageShouldCheckAndUpgradeProjectDependencyRules", () => {
 
   // 描述：
   //
-  //   - 代码智能体发送前应先检查项目依赖规则，并提供“升级并继续 / 跳过继续”的确认路径。
+  //   - 统一智能体发送前应先检查项目依赖规则，并提供“升级并继续 / 跳过继续”的确认路径。
   assert.match(sessionSource, /invoke<DependencyRuleCheckResponse>\(COMMANDS\.CHECK_PROJECT_DEPENDENCY_RULES/);
   assert.match(sessionSource, /invoke<DependencyRuleUpgradeResponse>\(COMMANDS\.APPLY_PROJECT_DEPENDENCY_RULE_UPGRADES/);
   assert.match(sessionSource, /skipDependencyRuleCheck/);
@@ -41,10 +41,10 @@ test("TestTauriMainShouldExposeDependencyRuleCommands", () => {
   //   - Tauri 后端应暴露依赖规则检查/升级与项目结构化初始化分析命令，并注册到 invoke handler。
   assert.match(tauriMainSource, /async fn check_project_dependency_rules\(/);
   assert.match(tauriMainSource, /async fn apply_project_dependency_rule_upgrades\(/);
-  assert.match(tauriMainSource, /async fn inspect_code_workspace_profile_seed\(/);
+  assert.match(tauriMainSource, /async fn inspect_project_workspace_profile_seed\(/);
   assert.match(tauriMainSource, /check_project_dependency_rules,/);
   assert.match(tauriMainSource, /apply_project_dependency_rule_upgrades,/);
-  assert.match(tauriMainSource, /inspect_code_workspace_profile_seed,/);
+  assert.match(tauriMainSource, /inspect_project_workspace_profile_seed,/);
   assert.match(tauriMainSource, /DependencyEcosystem::Node/);
   assert.match(tauriMainSource, /DependencyEcosystem::Go/);
   assert.match(tauriMainSource, /DependencyEcosystem::Java/);

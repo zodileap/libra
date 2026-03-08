@@ -20,9 +20,16 @@ test("TestDesktopBackendApiBaseUrlShouldFallbackToDirectLocalhost", () => {
 
   // 描述：
   //
-  //   - Desktop 默认应通过 defaultServiceUrl 统一获取本地服务端口，禁止硬编码地址字符串。
-  assert.match(source, /const accountBaseUrl = resolveServiceBaseUrl\(import\.meta\.env\.VITE_ACCOUNT_BASE_URL, defaultServiceUrl\("account"\)\);/);
-  assert.match(source, /const runtimeBaseUrl = resolveServiceBaseUrl\(import\.meta\.env\.VITE_RUNTIME_BASE_URL, defaultServiceUrl\("runtime"\)\);/);
-  assert.match(source, /const agentCodeBaseUrl = resolveServiceBaseUrl\(import\.meta\.env\.VITE_AGENT_CODE_BASE_URL, defaultServiceUrl\("agentCode"\)\);/);
-  assert.match(source, /const agent3dBaseUrl = resolveServiceBaseUrl\(import\.meta\.env\.VITE_AGENT_3D_BASE_URL, defaultServiceUrl\("agent3d"\)\);/);
+  //   - Desktop 远端模式应统一通过单一后端入口解析 account、runtime 与 setup 请求；未接入后端时走本地模式兜底。
+  assert.match(source, /function resolveConfiguredServiceBaseUrl\(/);
+  assert.match(source, /service: "account" \| "runtime" \| "setup",/);
+  assert.match(source, /return buildDesktopBackendBaseUrl\(\);/);
+  assert.match(source, /function isDesktopBackendEnabled\(\): boolean \{/);
+  assert.match(source, /if \(!isDesktopBackendEnabled\(\)\) \{/);
+  assert.match(source, /return getLocalDesktopUser\(\);/);
+  assert.match(source, /return getLocalAvailableAgents\(\);/);
+  assert.match(source, /upsertSessionMessages\(\{/);
+  assert.match(source, /return getAgentSessions\("agent"\)\.map/);
+  assert.doesNotMatch(source, /agentCodeBaseUrl/);
+  assert.doesNotMatch(source, /agent3dBaseUrl/);
 });

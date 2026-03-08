@@ -70,9 +70,9 @@ test("TestSessionCopyShouldBeMovedToDevDebugPanel", () => {
   assert.match(sessionSource, /setSessionAiRawByMessage\(\(prev\) => \(\{/);
   assert.match(sessionSource, /upsertSessionDebugArtifact\(\{/);
   assert.match(sessionSource, /getSessionDebugArtifact\(normalizedAgentKey, sessionId\)/);
-  assert.match(sessionSource, /codeAgentPromptRawRef/);
-  assert.match(sessionSource, /codeAgentLlmDeltaBufferRef/);
-  assert.match(sessionSource, /codeAgentLlmResponseRawRef/);
+  assert.match(sessionSource, /agentPromptRawRef/);
+  assert.match(sessionSource, /agentLlmDeltaBufferRef/);
+  assert.match(sessionSource, /agentLlmResponseRawRef/);
   assert.doesNotMatch(sessionSource, /【全链路调试】/);
   assert.doesNotMatch(sessionSource, /【Trace 记录】/);
   assert.doesNotMatch(sessionSource, /【Workflow 步骤】/);

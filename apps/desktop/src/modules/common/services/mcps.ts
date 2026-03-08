@@ -1,32 +1,100 @@
 import { invoke } from "@tauri-apps/api/core";
-import { COMMANDS, IS_BROWSER, STORAGE_KEYS } from "../../../shared/constants";
+import { COMMANDS, IS_BROWSER } from "../../../shared/constants";
 
 // 描述：
 //
-//   - 定义 MCP 目录项结构，供 MCP 页面渲染“已安装/推荐”列表。
-export interface McpCatalogItem {
+//   - MCP 传输类型；当前桌面端管理页支持 stdio 与 http 两种接入模式。
+export type McpTransport = "stdio" | "http";
+
+// 描述：
+//
+//   - MCP 注册作用域；workspace 级配置会覆盖同名 user 级配置。
+export type McpScope = "user" | "workspace";
+
+// 描述：
+//
+//   - 前端统一消费的 MCP 注册项结构，覆盖注册、编辑、启用和校验所需字段。
+export interface McpRegistrationItem {
+  id: string;
+  templateId: string;
+  name: string;
+  description: string;
+  transport: McpTransport;
+  scope: McpScope;
+  enabled: boolean;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  cwd: string;
+  url: string;
+  headers: Record<string, string>;
+  docsUrl: string;
+  officialProvider: string;
+  runtimeKind: string;
+  removable: boolean;
+}
+
+// 描述：
+//
+//   - 前端统一消费的 MCP 模板结构，用于“推荐模板”列表展示和新增预填。
+export interface McpTemplateItem {
   id: string;
   name: string;
   description: string;
-  icon: string;
-  versions: string[];
-  installedByDefault?: boolean;
-  officialProvider?: string;
-  installCommand?: string;
-  docsUrl?: string;
+  transport: McpTransport;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  cwd: string;
+  url: string;
+  headers: Record<string, string>;
+  docsUrl: string;
+  officialProvider: string;
+  runtimeKind: string;
 }
 
 // 描述：
 //
-//   - 定义 MCP 总览结构。
+//   - MCP 总览结构，按“已注册 / 推荐模板”两类输出。
 export interface McpOverview {
-  installed: McpCatalogItem[];
-  marketplace: McpCatalogItem[];
+  registered: McpRegistrationItem[];
+  templates: McpTemplateItem[];
 }
 
 // 描述：
 //
-//   - 定义 Apifox 官方 MCP Runtime 状态结构，用于校验“是否真实安装在本应用数据目录”。
+//   - MCP 保存草稿结构；页面新增、编辑和启用切换统一复用该入参。
+export interface McpRegistrationDraft {
+  id?: string;
+  templateId?: string;
+  name: string;
+  description?: string;
+  transport: McpTransport;
+  scope?: McpScope;
+  enabled?: boolean;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+  url?: string;
+  headers?: Record<string, string>;
+  docsUrl?: string;
+  officialProvider?: string;
+  runtimeKind?: string;
+}
+
+// 描述：
+//
+//   - MCP 预校验结果；ok 表示满足最小环境要求，resolvedPath 用于反馈命中的本地命令或 URL。
+export interface McpValidationResult {
+  ok: boolean;
+  message: string;
+  resolvedPath: string;
+}
+
+// 描述：
+//
+//   - Apifox 官方 MCP Runtime 状态结构，用于页面展示“是否已安装到应用私有目录”。
 interface ApifoxMcpRuntimeStatusResponse {
   installed: boolean;
   version: string;
@@ -38,86 +106,145 @@ interface ApifoxMcpRuntimeStatusResponse {
 
 // 描述：
 //
-//   - 记录 Apifox 官方 MCP 自动安装任务，避免同一时刻重复触发多个安装进程。
-let apifoxAutoInstallTask: Promise<void> | null = null;
-
-// 描述：
-//
-//   - MCP 目录清单；MVP 阶段先由前端内置，后续替换为服务端目录接口。
-const MCP_CATALOG: McpCatalogItem[] = [
-  {
-    id: "mcp_fs",
-    name: "Filesystem MCP",
-    description: "提供目录读取、文件检索与文本分析能力。",
-    icon: "folder",
-    versions: ["1.0.0"],
-    installedByDefault: true,
-  },
-  {
-    id: "mcp_git",
-    name: "Git MCP",
-    description: "提供分支、提交、差异分析等仓库操作能力。",
-    icon: "source",
-    versions: ["1.0.0"],
-    installedByDefault: true,
-  },
-  {
-    id: "mcp_apifox",
-    name: "Apifox MCP（官方）",
-    description: "使用 Apifox 官方 MCP Server 提供 API 模型、接口定义与 Mock 同步能力。",
-    icon: "api",
-    versions: ["1.0.0"],
-    officialProvider: "Apifox",
-    installCommand: "npx -y apifox-mcp-server@latest",
-    docsUrl: "https://docs.apifox.com/apifox-mcp-server",
-  },
-  {
-    id: "mcp_browser",
-    name: "Browser MCP",
-    description: "提供网页抓取、导航与页面信息提取能力。",
-    icon: "language",
-    versions: ["1.0.0"],
-  },
-];
-
-// 描述：
-//
-//   - 解析并归一化 MCP 版本列表，确保版本值为非空字符串集合。
-//
-// Params:
-//
-//   - rawVersions: 原始版本数据。
-//
-// Returns:
-//
-//   - 归一化后的版本数组；无可用版本时返回默认版本。
-function normalizeMcpVersions(rawVersions: unknown): string[] {
-  if (!Array.isArray(rawVersions)) {
-    return ["1.0.0"];
-  }
-  const normalized = rawVersions
-    .filter((item): item is string => typeof item === "string")
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
-  return normalized.length > 0 ? Array.from(new Set(normalized)) : ["1.0.0"];
+//   - MCP 注册表上下文；workspaceRoot 存在时，后端将自动读取 workspace 级覆盖配置。
+export interface McpRegistryContext {
+  workspaceRoot?: string;
 }
 
 // 描述：
 //
-//   - 将单条目录项转换为统一结构，忽略缺失关键字段的数据。
+//   - 将未知值规整为字符串数组，移除空项与重复值。
 //
 // Params:
 //
-//   - rawItem: 原始目录项对象。
+//   - value: 原始列表值。
 //
 // Returns:
 //
-//   - 归一化后的目录项；若不合法则返回 null。
-function normalizeMcpCatalogItem(rawItem: unknown): McpCatalogItem | null {
-  if (!rawItem || typeof rawItem !== "object") {
+//   - 归一化后的字符串数组。
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return Array.from(
+    new Set(
+      value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0),
+    ),
+  );
+}
+
+// 描述：
+//
+//   - 将未知对象规整为字符串映射，移除空键和空值，避免表单脏数据进入业务层。
+//
+// Params:
+//
+//   - value: 原始映射值。
+//
+// Returns:
+//
+//   - 归一化后的字符串映射。
+function normalizeStringRecord(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+    .map(([key, rawValue]) => [key.trim(), String(rawValue || "").trim()] as const)
+    .filter(([key, rawValue]) => key.length > 0 && rawValue.length > 0);
+  return Object.fromEntries(entries);
+}
+
+// 描述：
+//
+//   - 将未知值规整为合法的 MCP 传输类型；非法值统一回退为 stdio。
+//
+// Params:
+//
+//   - value: 原始传输类型。
+//
+// Returns:
+//
+//   - 归一化后的传输类型。
+function normalizeTransport(value: unknown): McpTransport {
+  return String(value || "").trim().toLowerCase() === "http" ? "http" : "stdio";
+}
+
+// 描述：
+//
+//   - 将未知值规整为合法的 MCP 作用域；非法值统一回退为 user，避免页面层出现脏状态。
+//
+// Params:
+//
+//   - value: 原始作用域。
+//
+// Returns:
+//
+//   - 归一化后的 MCP 作用域。
+function normalizeScope(value: unknown): McpScope {
+  return String(value || "").trim().toLowerCase() === "workspace" ? "workspace" : "user";
+}
+
+// 描述：
+//
+//   - 将后端返回的注册项对象转换为前端统一结构。
+//
+// Params:
+//
+//   - rawValue: 原始注册项对象。
+//
+// Returns:
+//
+//   - 归一化后的注册项。
+function normalizeMcpRegistrationItem(rawValue: unknown): McpRegistrationItem | null {
+  if (!rawValue || typeof rawValue !== "object") {
     return null;
   }
-  const source = rawItem as Partial<McpCatalogItem>;
+  const source = rawValue as Partial<McpRegistrationItem>;
+  const id = String(source.id || "").trim();
+  const name = String(source.name || "").trim();
+  if (!id || !name) {
+    return null;
+  }
+  return {
+    id,
+    templateId: String(source.templateId || "").trim(),
+    name,
+    description: String(source.description || "").trim(),
+    transport: normalizeTransport(source.transport),
+    scope: normalizeScope(source.scope),
+    enabled: Boolean(source.enabled),
+    command: String(source.command || "").trim(),
+    args: normalizeStringList(source.args),
+    env: normalizeStringRecord(source.env),
+    cwd: String(source.cwd || "").trim(),
+    url: String(source.url || "").trim(),
+    headers: normalizeStringRecord(source.headers),
+    docsUrl: String(source.docsUrl || "").trim(),
+    officialProvider: String(source.officialProvider || "").trim(),
+    runtimeKind: String(source.runtimeKind || "").trim(),
+    removable: Boolean(source.removable),
+  };
+}
+
+// 描述：
+//
+//   - 将后端返回的模板对象转换为前端统一结构。
+//
+// Params:
+//
+//   - rawValue: 原始模板对象。
+//
+// Returns:
+//
+//   - 归一化后的模板项。
+function normalizeMcpTemplateItem(rawValue: unknown): McpTemplateItem | null {
+  if (!rawValue || typeof rawValue !== "object") {
+    return null;
+  }
+  const source = rawValue as Partial<McpTemplateItem>;
   const id = String(source.id || "").trim();
   const name = String(source.name || "").trim();
   if (!id || !name) {
@@ -127,152 +254,107 @@ function normalizeMcpCatalogItem(rawItem: unknown): McpCatalogItem | null {
     id,
     name,
     description: String(source.description || "").trim(),
-    icon: String(source.icon || "hub").trim() || "hub",
-    versions: normalizeMcpVersions(source.versions),
-    installedByDefault: Boolean(source.installedByDefault),
-    officialProvider: String(source.officialProvider || "").trim(),
-    installCommand: String(source.installCommand || "").trim(),
+    transport: normalizeTransport(source.transport),
+    command: String(source.command || "").trim(),
+    args: normalizeStringList(source.args),
+    env: normalizeStringRecord(source.env),
+    cwd: String(source.cwd || "").trim(),
+    url: String(source.url || "").trim(),
+    headers: normalizeStringRecord(source.headers),
     docsUrl: String(source.docsUrl || "").trim(),
+    officialProvider: String(source.officialProvider || "").trim(),
+    runtimeKind: String(source.runtimeKind || "").trim(),
   };
 }
 
 // 描述：
 //
-//   - 对目录执行“Apifox 官方 MCP”策略修正：无论来源为本地或远端，mcp_apifox 均强制对齐官方实现信息。
+//   - 将后端总览结构规整为前端统一数据，避免页面层直接依赖后端字段细节。
 //
 // Params:
 //
-//   - catalog: 原始目录列表。
+//   - rawValue: 原始总览结构。
 //
 // Returns:
 //
-//   - 修正后的目录列表。
-function enforceOfficialApifoxMcpPolicy(catalog: McpCatalogItem[]): McpCatalogItem[] {
-  return catalog.map((item) => {
-    if (item.id !== "mcp_apifox") {
-      return item;
-    }
-    return {
-      ...item,
-      name: "Apifox MCP（官方）",
-      description: "使用 Apifox 官方 MCP Server 提供 API 模型、接口定义与 Mock 同步能力。",
-      officialProvider: "Apifox",
-      installCommand: "npx -y apifox-mcp-server@latest",
-      docsUrl: "https://docs.apifox.com/apifox-mcp-server",
-    };
-  });
+//   - 归一化后的 MCP 总览。
+function normalizeMcpOverview(rawValue: unknown): McpOverview {
+  if (!rawValue || typeof rawValue !== "object") {
+    return { registered: [], templates: [] };
+  }
+  const source = rawValue as { registered?: unknown[]; templates?: unknown[] };
+  return {
+    registered: Array.isArray(source.registered)
+      ? source.registered
+        .map((item) => normalizeMcpRegistrationItem(item))
+        .filter((item): item is McpRegistrationItem => Boolean(item))
+      : [],
+    templates: Array.isArray(source.templates)
+      ? source.templates
+        .map((item) => normalizeMcpTemplateItem(item))
+        .filter((item): item is McpTemplateItem => Boolean(item))
+      : [],
+  };
 }
 
 // 描述：
 //
-//   - 根据环境变量读取 MCP 目录远端地址，未配置时返回空字符串。
-//
-// Returns:
-//
-//   - 远端 MCP 目录地址。
-function resolveRemoteMcpCatalogUrl(): string {
-  return String(import.meta.env.VITE_MCP_CATALOG_URL || "").trim();
-}
-
-// 描述：
-//
-//   - 从远端目录服务加载 MCP 清单；网络异常或返回结构不合法时返回 null 以触发本地回退。
-//
-// Returns:
-//
-//   - 远端目录列表；若加载失败则返回 null。
-async function loadRemoteMcpCatalog(): Promise<McpCatalogItem[] | null> {
-  const remoteUrl = resolveRemoteMcpCatalogUrl();
-  if (!remoteUrl) {
-    return null;
-  }
-  try {
-    const response = await fetch(remoteUrl, { cache: "no-store" });
-    if (!response.ok) {
-      return null;
-    }
-    const payload = await response.json() as unknown;
-    const rawList = Array.isArray(payload)
-      ? payload
-      : payload && typeof payload === "object" && Array.isArray((payload as { items?: unknown[] }).items)
-        ? (payload as { items: unknown[] }).items
-        : null;
-    if (!rawList) {
-      return null;
-    }
-    const normalized = rawList
-      .map((item) => normalizeMcpCatalogItem(item))
-      .filter((item): item is McpCatalogItem => Boolean(item));
-    return normalized;
-  } catch (_err) {
-    return null;
-  }
-}
-
-// 描述：
-//
-//   - 读取内置默认安装 MCP ID 集合。
-//
-// Returns:
-//
-//   - 默认安装 MCP ID 列表。
-function resolveDefaultInstalledMcpIds(): string[] {
-  return MCP_CATALOG.filter((item) => item.installedByDefault).map((item) => item.id);
-}
-
-// 描述：
-//
-//   - 从本地存储读取已安装 MCP ID；读取失败时回退到默认安装集合。
-//
-// Returns:
-//
-//   - 已安装 MCP ID 列表。
-export function readInstalledMcpIdsFromStorage(): string[] {
-  const defaults = resolveDefaultInstalledMcpIds();
-  if (!IS_BROWSER) {
-    return defaults;
-  }
-  const rawValue = window.localStorage.getItem(STORAGE_KEYS.MCP_INSTALLED_IDS);
-  if (!rawValue) {
-    return defaults;
-  }
-  try {
-    const parsed = JSON.parse(rawValue) as unknown;
-    if (!Array.isArray(parsed)) {
-      return defaults;
-    }
-    const normalized = parsed
-      .filter((item): item is string => typeof item === "string")
-      .map((item) => item.trim())
-      .filter((item) => item.length > 0);
-    return normalized.length > 0 ? Array.from(new Set(normalized)) : defaults;
-  } catch (_err) {
-    return defaults;
-  }
-}
-
-// 描述：
-//
-//   - 将已安装 MCP ID 写入本地存储。
+//   - 将草稿映射为 Tauri 命令入参，统一补齐默认值，避免页面层反复写样板逻辑。
 //
 // Params:
 //
-//   - installedIds: 已安装 MCP ID 列表。
-function writeInstalledMcpIdsToStorage(installedIds: string[]) {
-  if (!IS_BROWSER) {
-    return;
-  }
-  window.localStorage.setItem(STORAGE_KEYS.MCP_INSTALLED_IDS, JSON.stringify(installedIds));
+//   - draft: 前端 MCP 草稿。
+//
+// Returns:
+//
+//   - 命令入参对象。
+function buildMcpRegistrationPayload(draft: McpRegistrationDraft) {
+  return {
+    id: String(draft.id || "").trim(),
+    templateId: String(draft.templateId || "").trim(),
+    name: String(draft.name || "").trim(),
+    description: String(draft.description || "").trim(),
+    transport: normalizeTransport(draft.transport),
+    scope: normalizeScope(draft.scope),
+    enabled: draft.enabled !== false,
+    command: String(draft.command || "").trim(),
+    args: normalizeStringList(draft.args),
+    env: normalizeStringRecord(draft.env),
+    cwd: String(draft.cwd || "").trim(),
+    url: String(draft.url || "").trim(),
+    headers: normalizeStringRecord(draft.headers),
+    docsUrl: String(draft.docsUrl || "").trim(),
+    officialProvider: String(draft.officialProvider || "").trim(),
+    runtimeKind: String(draft.runtimeKind || "").trim(),
+  };
 }
 
 // 描述：
 //
-//   - 读取 Apifox 官方 MCP Runtime 状态，返回值由 Tauri 后端基于应用数据目录检测。
+//   - 将页面上下文映射为 Tauri 命令入参，统一清理空字符串，避免向后端传递无意义目录。
+//
+// Params:
+//
+//   - context: MCP 上下文。
 //
 // Returns:
 //
-//   - Runtime 状态；调用失败时返回 null。
-async function readApifoxMcpRuntimeStatus(): Promise<ApifoxMcpRuntimeStatusResponse | null> {
+//   - Tauri 命令参数片段。
+function buildMcpContextPayload(context?: McpRegistryContext) {
+  const workspaceRoot = String(context?.workspaceRoot || "").trim();
+  return {
+    workspaceRoot: workspaceRoot || undefined,
+  };
+}
+
+// 描述：
+//
+//   - 读取 Apifox Runtime 状态；调用失败时返回 null，避免阻塞 MCP 页面主流程。
+//
+// Returns:
+//
+//   - Runtime 状态；失败时返回 null。
+export async function readApifoxMcpRuntimeStatus(): Promise<ApifoxMcpRuntimeStatusResponse | null> {
   if (!IS_BROWSER) {
     return null;
   }
@@ -285,183 +367,123 @@ async function readApifoxMcpRuntimeStatus(): Promise<ApifoxMcpRuntimeStatusRespo
 
 // 描述：
 //
-//   - 确保已安装 Apifox 官方 MCP Runtime；安装失败时抛出业务友好错误。
-async function installApifoxMcpRuntimeForDesktop() {
+//   - 安装 Apifox 官方 MCP Runtime；失败时抛出用户友好错误。
+export async function installApifoxMcpRuntime() {
   try {
     await invoke<ApifoxMcpRuntimeStatusResponse>(COMMANDS.INSTALL_APIFOX_MCP_RUNTIME);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err || "").trim();
-    throw new Error(reason || "安装 Apifox 官方 MCP 失败，请检查 Node.js/npm 环境后重试。");
+    throw new Error(reason || "安装 Apifox Runtime 失败，请检查 Node.js/npm 环境后重试。");
   }
 }
 
 // 描述：
 //
-//   - 卸载 Apifox 官方 MCP Runtime，确保“卸载”不仅是 UI 状态切换。
-async function uninstallApifoxMcpRuntimeForDesktop() {
+//   - 卸载 Apifox 官方 MCP Runtime；失败时抛出用户友好错误。
+export async function uninstallApifoxMcpRuntime() {
   try {
     await invoke<ApifoxMcpRuntimeStatusResponse>(COMMANDS.UNINSTALL_APIFOX_MCP_RUNTIME);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err || "").trim();
-    throw new Error(reason || "卸载 Apifox 官方 MCP 失败，请稍后重试。");
+    throw new Error(reason || "卸载 Apifox Runtime 失败，请稍后重试。");
   }
 }
 
 // 描述：
 //
-//   - 在桌面端自动安装 Apifox 官方 MCP Runtime。
-//
-//   - 自动安装失败时不抛错，避免阻塞页面加载；失败后仍可通过手动安装重试。
-//
-// Params:
-//
-//   - actualInstalledIds: 当前运行时实际安装 ID 集合。
-//   - desiredInstalledIds: 用户期望安装 ID 集合（来源于本地配置）。
-//
-// Returns:
-//
-//   - 自动安装后的安装 ID 集合。
-async function ensureApifoxMcpRuntimeAutoInstalled(
-  actualInstalledIds: Set<string>,
-  desiredInstalledIds: Set<string>,
-): Promise<Set<string>> {
-  const next = new Set(actualInstalledIds);
-  const apifoxMcpId = "mcp_apifox";
-  if (!desiredInstalledIds.has(apifoxMcpId)) {
-    next.delete(apifoxMcpId);
-    return next;
-  }
-
-  if (next.has(apifoxMcpId) || !IS_BROWSER) {
-    return next;
-  }
-
-  if (!apifoxAutoInstallTask) {
-    apifoxAutoInstallTask = installApifoxMcpRuntimeForDesktop().finally(() => {
-      apifoxAutoInstallTask = null;
-    });
-  }
-
-  try {
-    await apifoxAutoInstallTask;
-    next.add(apifoxMcpId);
-  } catch (_err) {
-    next.delete(apifoxMcpId);
-  }
-  return next;
-}
-
-// 描述：
-//
-//   - 将 Apifox 安装状态与本应用 Runtime 实际状态对齐，避免仅本地标记导致“假安装”。
-//
-// Params:
-//
-//   - installedIds: 当前安装 ID 集合。
-//
-// Returns:
-//
-//   - 对齐后的安装 ID 集合。
-async function reconcileInstalledIdsWithApifoxRuntime(installedIds: Set<string>): Promise<Set<string>> {
-  const next = new Set(installedIds);
-  const status = await readApifoxMcpRuntimeStatus();
-  if (!status) {
-    return next;
-  }
-  if (status.installed) {
-    next.add("mcp_apifox");
-  } else {
-    next.delete("mcp_apifox");
-  }
-  return next;
-}
-
-// 描述：
-//
-//   - 获取 MCP 目录清单；当前先返回内置目录，后续可替换为服务端获取。
-//
-// Returns:
-//
-//   - MCP 目录列表。
-export async function listMcpCatalog(): Promise<McpCatalogItem[]> {
-  const remoteCatalog = await loadRemoteMcpCatalog();
-  if (remoteCatalog) {
-    return enforceOfficialApifoxMcpPolicy(remoteCatalog);
-  }
-  return enforceOfficialApifoxMcpPolicy(MCP_CATALOG);
-}
-
-// 描述：
-//
-//   - 获取当前已安装 MCP 目录项。
-//
-// Params:
-//
-//   - catalog: 可选 MCP 目录缓存；传入时可避免重复读取目录。
-//
-// Returns:
-//
-//   - 已安装 MCP 列表。
-export async function listInstalledMcps(catalog?: McpCatalogItem[]): Promise<McpCatalogItem[]> {
-  const nextCatalog = catalog || await listMcpCatalog();
-  const desiredInstalledIds = new Set(readInstalledMcpIdsFromStorage());
-  const reconciledInstalledIds = await reconcileInstalledIdsWithApifoxRuntime(
-    new Set(desiredInstalledIds),
-  );
-  const installedIds = await ensureApifoxMcpRuntimeAutoInstalled(reconciledInstalledIds, desiredInstalledIds);
-  writeInstalledMcpIdsToStorage(Array.from(installedIds));
-  return nextCatalog.filter((item) => installedIds.has(item.id));
-}
-
-// 描述：
-//
-//   - 获取 MCP 总览（已安装/推荐）。
+//   - 获取 MCP 注册表总览。
 //
 // Returns:
 //
 //   - MCP 总览数据。
-export async function listMcpOverview(): Promise<McpOverview> {
-  const catalog = await listMcpCatalog();
-  const installed = await listInstalledMcps(catalog);
-  const installedIds = new Set(installed.map((item) => item.id));
-  const marketplace = catalog.filter((item) => !installedIds.has(item.id));
-  return {
-    installed,
-    marketplace,
-  };
+export async function listMcpOverview(context?: McpRegistryContext): Promise<McpOverview> {
+  const rawOverview = await invoke<unknown>(COMMANDS.LIST_REGISTERED_MCPS, buildMcpContextPayload(context));
+  return normalizeMcpOverview(rawOverview);
 }
 
 // 描述：
 //
-//   - 更新 MCP 安装状态，并返回更新后的 MCP 总览。
+//   - 保存 MCP 注册项；既支持新增，也支持编辑和启用状态切换。
 //
 // Params:
 //
-//   - mcpId: 目标 MCP ID。
-//   - installed: true 表示安装，false 表示卸载。
+//   - draft: 待保存的 MCP 草稿。
 //
 // Returns:
 //
-//   - 更新后的 MCP 总览数据。
-export async function updateMcpInstalledState(mcpId: string, installed: boolean): Promise<McpOverview> {
-  const catalog = await listMcpCatalog();
-  const allowedIds = new Set(catalog.map((item) => item.id));
-  if (!allowedIds.has(mcpId)) {
-    return listMcpOverview();
+//   - 已持久化的注册项。
+export async function saveMcpRegistration(
+  draft: McpRegistrationDraft,
+  context?: McpRegistryContext,
+): Promise<McpRegistrationItem> {
+  const payload = buildMcpRegistrationPayload(draft);
+  const rawRecord = await invoke<unknown>(COMMANDS.SAVE_MCP_REGISTRATION, {
+    payload,
+    ...buildMcpContextPayload(context),
+  });
+  const normalizedRecord = normalizeMcpRegistrationItem(rawRecord);
+  if (!normalizedRecord) {
+    throw new Error("保存 MCP 后返回数据不完整，请重试。");
   }
-  const current = new Set(readInstalledMcpIdsFromStorage());
-  if (mcpId === "mcp_apifox") {
-    if (installed) {
-      await installApifoxMcpRuntimeForDesktop();
-    } else {
-      await uninstallApifoxMcpRuntimeForDesktop();
+  return normalizedRecord;
+}
+
+// 描述：
+//
+//   - 删除指定 MCP 注册项。
+//
+// Params:
+//
+//   - id: 待删除的 MCP 注册 ID。
+//
+// Returns:
+//
+//   - true 表示删除成功。
+export async function removeMcpRegistration(
+  id: string,
+  scope: McpScope,
+  context?: McpRegistryContext,
+): Promise<boolean> {
+  return invoke<boolean>(COMMANDS.REMOVE_MCP_REGISTRATION, {
+    id: String(id || "").trim(),
+    scope,
+    ...buildMcpContextPayload(context),
+  });
+}
+
+// 描述：
+//
+//   - 执行 MCP 基础校验；Apifox Runtime 走独立状态检测，其余 MCP 走通用校验命令。
+//
+// Params:
+//
+//   - draft: 待校验的 MCP 草稿。
+//
+// Returns:
+//
+//   - 校验结果。
+export async function validateMcpRegistration(
+  draft: McpRegistrationDraft,
+  context?: McpRegistryContext,
+): Promise<McpValidationResult> {
+  const payload = buildMcpRegistrationPayload(draft);
+  if (payload.runtimeKind === "apifox_runtime") {
+    const runtimeStatus = await readApifoxMcpRuntimeStatus();
+    if (runtimeStatus?.installed) {
+      return {
+        ok: true,
+        message: runtimeStatus.message,
+        resolvedPath: runtimeStatus.entry_path,
+      };
     }
+    return {
+      ok: false,
+      message: runtimeStatus?.message || "Apifox Runtime 未安装，请先安装 Runtime。",
+      resolvedPath: runtimeStatus?.entry_path || "",
+    };
   }
-  if (installed) {
-    current.add(mcpId);
-  } else {
-    current.delete(mcpId);
-  }
-  writeInstalledMcpIdsToStorage(Array.from(current));
-  return listMcpOverview();
+  return invoke<McpValidationResult>(COMMANDS.VALIDATE_MCP_REGISTRATION, {
+    payload,
+    ...buildMcpContextPayload(context),
+  });
 }

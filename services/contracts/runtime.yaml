@@ -1,0 +1,858 @@
+version: 2
+domain: runtime
+route_prefix: /workflow/v1
+source:
+  handler: services/internal/runtime/api/workflow.go
+  specs: services/internal/runtime/specs/workflow.go
+  service: services/internal/runtime/service/workflow_service.go
+  errors: services/internal/runtime/service/errors.go
+  api_errors: services/internal/runtime/service/api_errors.go
+  storage: services/internal/runtime/service/store.go
+conventions:
+  envelope_ref: services/contracts/backend.yaml#/schemas/SuccessEnvelope
+  error_envelope_ref: services/contracts/backend.yaml#/schemas/ErrorEnvelope
+  auth: none
+  content_type: application/json
+storage:
+  type: local_json_file
+  path: services/data/runtime/runtime-state.json
+  file_permissions: "0644"
+  root_object: runtimeState
+  fields:
+    messageSeq:
+      type: integer
+      required: true
+      description: monotonically increasing message id counter
+    sessions:
+      type: map
+      key: session id
+      value_schema: RuntimeSessionEntity
+    messages:
+      type: map
+      key: session id
+      value:
+        type: array
+        items_schema: WorkflowSessionMessageItem
+    sandboxes:
+      type: map
+      key: sandbox id
+      value_schema: RuntimeSandboxEntity
+    previews:
+      type: map
+      key: preview id
+      value_schema: RuntimePreviewEntity
+runtime_rules:
+  default_status:
+    type: integer
+    default: 1
+    description: service uses 1 as the default active status for sessions, sandboxes, and previews
+  pagination:
+    page_default: 1
+    page_size_default: 20
+    page_size_max: 200
+  desktop_update:
+    channel_default: stable
+    env_priority:
+      - LIBRA_DESKTOP_DOWNLOAD_URL_<PLATFORM>_<ARCH>_<CHANNEL>
+      - LIBRA_DESKTOP_DOWNLOAD_URL_<PLATFORM>_<CHANNEL>
+      - LIBRA_DESKTOP_DOWNLOAD_URL_<CHANNEL>
+      - LIBRA_DESKTOP_DOWNLOAD_URL_<PLATFORM>_<ARCH>
+      - LIBRA_DESKTOP_DOWNLOAD_URL_<PLATFORM>
+      - LIBRA_DESKTOP_DOWNLOAD_URL
+error_catalog:
+  bad_request:
+    code: 400001
+    http_status: 400
+    default_message_examples:
+      - userId 不能为空
+      - sessionId 和 userId 不能为空
+      - sandboxId 或 sessionId 至少一个必填
+      - 查询参数 page 无效
+  forbidden:
+    code: 403001
+    http_status: 403
+    default_message_examples:
+      - 该资源不属于当前用户
+  not_found:
+    code: 404001
+    http_status: 404
+    default_message_examples:
+      - session 不存在
+      - sandbox 不存在
+      - 未找到可回收的 sandbox
+      - 未找到可失效的预览地址
+  internal_error:
+    code: 500001
+    http_status: 500
+    default_message: 服务暂时不可用，请稍后重试。
+schemas:
+  RuntimeSessionEntity:
+    type: object
+    required: [id, user_id, agent_code, status]
+    properties:
+      id: { type: string, required: true, generated: random_hex }
+      user_id: { type: string, required: true }
+      agent_code: { type: string, required: true }
+      status: { type: integer, required: true, default: 1 }
+      created_at: { type: string, required: false, format: date-time }
+      last_at: { type: string, required: false, format: date-time }
+      deleted_at: { type: string, required: false, format: date-time }
+  RuntimeSandboxEntity:
+    type: object
+    required: [id, session_id, status]
+    properties:
+      id: { type: string, required: true, generated: random_hex }
+      session_id: { type: string, required: true }
+      container_id: { type: string, required: false }
+      preview_url: { type: string, required: false }
+      status: { type: integer, required: true, default: 1 }
+      created_at: { type: string, required: false, format: date-time }
+      last_at: { type: string, required: false, format: date-time }
+      deleted_at: { type: string, required: false, format: date-time }
+  RuntimePreviewEntity:
+    type: object
+    required: [id, sandbox_id, url, status]
+    properties:
+      id: { type: string, required: true, generated: random_hex }
+      sandbox_id: { type: string, required: true }
+      url: { type: string, required: true }
+      status: { type: integer, required: true, default: 1 }
+      expires_at: { type: string, required: false, format: date-time }
+      created_at: { type: string, required: false, format: date-time }
+      last_at: { type: string, required: false, format: date-time }
+      deleted_at: { type: string, required: false, format: date-time }
+  WorkflowSessionCreateReq:
+    type: object
+    required: [userId, agentCode]
+    properties:
+      userId: { type: string, required: true }
+      agentCode: { type: string, required: true }
+      status: { type: integer, required: false, default: 1 }
+  WorkflowSessionCreateResp:
+    type: object
+    required: [session]
+    properties:
+      session: { schema: RuntimeSessionEntity, required: true }
+  WorkflowSessionGetReq:
+    type: object
+    required: [sessionId, userId]
+    properties:
+      sessionId: { type: string, required: true }
+      userId: { type: string, required: true }
+  WorkflowSessionGetResp:
+    type: object
+    required: [session]
+    properties:
+      session: { schema: RuntimeSessionEntity, required: true }
+  WorkflowSessionListReq:
+    type: object
+    required: [userId]
+    properties:
+      userId: { type: string, required: true }
+      agentCode: { type: string, required: false }
+      status: { type: integer, required: false }
+      byLastAt: { type: integer, required: false, description: negative values reverse default sort order }
+  WorkflowSessionListResp:
+    type: object
+    required: [list]
+    properties:
+      list:
+        type: array
+        required: true
+        items_schema: RuntimeSessionEntity
+  WorkflowSessionStatusUpdateReq:
+    type: object
+    required: [sessionId, userId, status]
+    properties:
+      sessionId: { type: string, required: true }
+      userId: { type: string, required: true }
+      status: { type: integer, required: true }
+  WorkflowSessionStatusUpdateResp:
+    type: object
+    required: [session]
+    properties:
+      session: { schema: RuntimeSessionEntity, required: true }
+  WorkflowSessionMessageItem:
+    type: object
+    required: [messageId, sessionId, userId, role, content]
+    properties:
+      messageId: { type: string, required: true, generated: decimal_sequence_string }
+      sessionId: { type: string, required: true }
+      userId: { type: string, required: true }
+      role: { type: string, required: true, description: service only validates non-empty string }
+      content: { type: string, required: true }
+      createdAt: { type: string, required: false, format: date-time }
+  WorkflowSessionMessageCreateReq:
+    type: object
+    required: [sessionId, userId, role, content]
+    properties:
+      sessionId: { type: string, required: true }
+      userId: { type: string, required: true }
+      role: { type: string, required: true }
+      content: { type: string, required: true }
+  WorkflowSessionMessageCreateResp:
+    type: object
+    required: [message]
+    properties:
+      message: { schema: WorkflowSessionMessageItem, required: true }
+  WorkflowSessionMessageListReq:
+    type: object
+    required: [sessionId, userId]
+    properties:
+      sessionId: { type: string, required: true }
+      userId: { type: string, required: true }
+      page: { type: integer, required: false, default: 1 }
+      pageSize: { type: integer, required: false, default: 20, maximum: 200 }
+  WorkflowSessionMessageListResp:
+    type: object
+    required: [list, total, page, pageSize]
+    properties:
+      list:
+        type: array
+        required: true
+        items_schema: WorkflowSessionMessageItem
+      total: { type: integer, required: true }
+      page: { type: integer, required: true }
+      pageSize: { type: integer, required: true }
+  WorkflowSandboxCreateReq:
+    type: object
+    required: [sessionId, userId]
+    properties:
+      sessionId: { type: string, required: true }
+      userId: { type: string, required: true }
+      containerId: { type: string, required: false }
+      previewUrl: { type: string, required: false }
+      status: { type: integer, required: false, default: 1 }
+  WorkflowSandboxCreateResp:
+    type: object
+    required: [sandbox]
+    properties:
+      sandbox: { schema: RuntimeSandboxEntity, required: true }
+  WorkflowSandboxGetReq:
+    type: object
+    required: [userId]
+    one_of_required:
+      - sandboxId
+      - sessionId
+    properties:
+      sandboxId: { type: string, required: false }
+      sessionId: { type: string, required: false }
+      userId: { type: string, required: true }
+  WorkflowSandboxGetResp:
+    type: object
+    required: [list]
+    properties:
+      list:
+        type: array
+        required: true
+        items_schema: RuntimeSandboxEntity
+  WorkflowSandboxRecycleReq:
+    type: object
+    required: [userId]
+    one_of_required:
+      - sandboxId
+      - sessionId
+    properties:
+      sandboxId: { type: string, required: false }
+      sessionId: { type: string, required: false }
+      userId: { type: string, required: true }
+  WorkflowSandboxRecycleResp:
+    type: object
+    required: [success]
+    properties:
+      success: { type: boolean, required: true }
+  WorkflowPreviewCreateReq:
+    type: object
+    required: [sandboxId, userId, url]
+    properties:
+      sandboxId: { type: string, required: true }
+      userId: { type: string, required: true }
+      url: { type: string, required: true }
+      status: { type: integer, required: false, default: 1 }
+      expiration: { type: integer, required: false, format: int64, description: seconds from now }
+  WorkflowPreviewCreateResp:
+    type: object
+    required: [preview]
+    properties:
+      preview: { schema: RuntimePreviewEntity, required: true }
+  WorkflowPreviewGetReq:
+    type: object
+    required: [userId]
+    one_of_required:
+      - previewId
+      - sandboxId
+    properties:
+      previewId: { type: string, required: false }
+      sandboxId: { type: string, required: false }
+      userId: { type: string, required: true }
+  WorkflowPreviewGetResp:
+    type: object
+    required: [list]
+    properties:
+      list:
+        type: array
+        required: true
+        items_schema: RuntimePreviewEntity
+  WorkflowPreviewExpireReq:
+    type: object
+    required: [userId]
+    one_of_required:
+      - previewId
+      - sandboxId
+    properties:
+      previewId: { type: string, required: false }
+      sandboxId: { type: string, required: false }
+      userId: { type: string, required: true }
+  WorkflowPreviewExpireResp:
+    type: object
+    required: [success]
+    properties:
+      success: { type: boolean, required: true }
+  WorkflowDesktopUpdateCheckReq:
+    type: object
+    required: [platform, arch, currentVersion, channel]
+    properties:
+      platform: { type: string, required: true }
+      arch: { type: string, required: true }
+      currentVersion: { type: string, required: true, description: semver-like string }
+      channel: { type: string, required: true, default: stable }
+  WorkflowDesktopUpdateCheckResp:
+    type: object
+    required: [hasUpdate, latestVersion, downloadUrl, releaseNotes, publishedAt, channel]
+    properties:
+      hasUpdate: { type: boolean, required: true }
+      latestVersion: { type: string, required: true }
+      downloadUrl: { type: string, required: true }
+      checksumSha256: { type: string, required: false }
+      releaseNotes: { type: string, required: true }
+      publishedAt: { type: string, required: true, format: date-time }
+      channel: { type: string, required: true }
+endpoints:
+  - operation_id: createSession
+    method: POST
+    path: /workflow/v1/session
+    auth: none
+    request:
+      query: []
+      body_schema: WorkflowSessionCreateReq
+    response:
+      success_schema: WorkflowSessionCreateResp
+    errors:
+      - bad_request
+      - internal_error
+    examples:
+      request:
+        headers: {}
+        query: {}
+        body:
+          userId: usr_example_admin
+          agentCode: code
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            session:
+              id: sess_example_01
+              user_id: usr_example_admin
+              agent_code: code
+              status: 1
+              created_at: "2026-03-07T12:00:00Z"
+              last_at: "2026-03-07T12:00:00Z"
+      error:
+        case: bad_request
+        status_code: 400
+        body:
+          code: 400001
+          message: userId 不能为空
+          data: {}
+  - operation_id: getSession
+    method: GET
+    path: /workflow/v1/session
+    auth: none
+    request:
+      query_schema: WorkflowSessionGetReq
+      body_schema: null
+    response:
+      success_schema: WorkflowSessionGetResp
+    errors:
+      - bad_request
+      - forbidden
+      - not_found
+      - internal_error
+    examples:
+      request:
+        headers: {}
+        query:
+          sessionId: sess_example_01
+          userId: usr_example_admin
+        body: null
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            session:
+              id: sess_example_01
+              user_id: usr_example_admin
+              agent_code: code
+              status: 1
+              created_at: "2026-03-07T12:00:00Z"
+              last_at: "2026-03-07T12:05:00Z"
+      error:
+        case: not_found
+        status_code: 404
+        body:
+          code: 404001
+          message: session 不存在
+          data: {}
+  - operation_id: listSessions
+    method: GET
+    path: /workflow/v1/sessions
+    auth: none
+    request:
+      query_schema: WorkflowSessionListReq
+      body_schema: null
+    response:
+      success_schema: WorkflowSessionListResp
+    errors:
+      - bad_request
+      - internal_error
+    examples:
+      request:
+        headers: {}
+        query:
+          userId: usr_example_admin
+          agentCode: code
+          status: 1
+          byLastAt: 1
+        body: null
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            list:
+              - id: sess_example_01
+                user_id: usr_example_admin
+                agent_code: code
+                status: 1
+                created_at: "2026-03-07T12:00:00Z"
+                last_at: "2026-03-07T12:05:00Z"
+      error:
+        case: bad_request
+        status_code: 400
+        body:
+          code: 400001
+          message: userId 不能为空
+          data: {}
+  - operation_id: updateSessionStatus
+    method: PUT
+    path: /workflow/v1/session/status
+    auth: none
+    request:
+      query: []
+      body_schema: WorkflowSessionStatusUpdateReq
+    response:
+      success_schema: WorkflowSessionStatusUpdateResp
+    errors:
+      - bad_request
+      - forbidden
+      - not_found
+      - internal_error
+    examples:
+      request:
+        headers: {}
+        query: {}
+        body:
+          sessionId: sess_example_01
+          userId: usr_example_admin
+          status: 2
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            session:
+              id: sess_example_01
+              user_id: usr_example_admin
+              agent_code: code
+              status: 2
+              created_at: "2026-03-07T12:00:00Z"
+              last_at: "2026-03-07T12:10:00Z"
+      error:
+        case: forbidden
+        status_code: 403
+        body:
+          code: 403001
+          message: 该资源不属于当前用户
+          data: {}
+  - operation_id: createSessionMessage
+    method: POST
+    path: /workflow/v1/session/message
+    auth: none
+    request:
+      query: []
+      body_schema: WorkflowSessionMessageCreateReq
+    response:
+      success_schema: WorkflowSessionMessageCreateResp
+    errors:
+      - bad_request
+      - forbidden
+      - not_found
+      - internal_error
+    examples:
+      request:
+        headers: {}
+        query: {}
+        body:
+          sessionId: sess_example_01
+          userId: usr_example_admin
+          role: user
+          content: 帮我整理这个工作流
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            message:
+              messageId: "1"
+              sessionId: sess_example_01
+              userId: usr_example_admin
+              role: user
+              content: 帮我整理这个工作流
+              createdAt: "2026-03-07T12:15:00Z"
+      error:
+        case: bad_request
+        status_code: 400
+        body:
+          code: 400001
+          message: role 不能为空
+          data: {}
+  - operation_id: listSessionMessages
+    method: GET
+    path: /workflow/v1/session/messages
+    auth: none
+    request:
+      query_schema: WorkflowSessionMessageListReq
+      body_schema: null
+    response:
+      success_schema: WorkflowSessionMessageListResp
+    errors:
+      - bad_request
+      - forbidden
+      - not_found
+      - internal_error
+    examples:
+      request:
+        headers: {}
+        query:
+          sessionId: sess_example_01
+          userId: usr_example_admin
+          page: 1
+          pageSize: 20
+        body: null
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            list:
+              - messageId: "1"
+                sessionId: sess_example_01
+                userId: usr_example_admin
+                role: user
+                content: 帮我整理这个工作流
+                createdAt: "2026-03-07T12:15:00Z"
+            total: 1
+            page: 1
+            pageSize: 20
+      error:
+        case: bad_request
+        status_code: 400
+        body:
+          code: 400001
+          message: sessionId 和 userId 不能为空
+          data: {}
+  - operation_id: createSandbox
+    method: POST
+    path: /workflow/v1/sandbox
+    auth: none
+    request:
+      query: []
+      body_schema: WorkflowSandboxCreateReq
+    response:
+      success_schema: WorkflowSandboxCreateResp
+    errors:
+      - bad_request
+      - forbidden
+      - not_found
+      - internal_error
+    examples:
+      request:
+        headers: {}
+        query: {}
+        body:
+          sessionId: sess_example_01
+          userId: usr_example_admin
+          containerId: ctr_example_01
+          previewUrl: http://127.0.0.1:3900
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            sandbox:
+              id: sbx_example_01
+              session_id: sess_example_01
+              container_id: ctr_example_01
+              preview_url: http://127.0.0.1:3900
+              status: 1
+              created_at: "2026-03-07T12:20:00Z"
+              last_at: "2026-03-07T12:20:00Z"
+      error:
+        case: not_found
+        status_code: 404
+        body:
+          code: 404001
+          message: session 不存在
+          data: {}
+  - operation_id: getSandbox
+    method: GET
+    path: /workflow/v1/sandbox
+    auth: none
+    request:
+      query_schema: WorkflowSandboxGetReq
+      body_schema: null
+    response:
+      success_schema: WorkflowSandboxGetResp
+    errors:
+      - bad_request
+      - internal_error
+    examples:
+      request:
+        headers: {}
+        query:
+          sandboxId: sbx_example_01
+          userId: usr_example_admin
+        body: null
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            list:
+              - id: sbx_example_01
+                session_id: sess_example_01
+                container_id: ctr_example_01
+                preview_url: http://127.0.0.1:3900
+                status: 1
+                created_at: "2026-03-07T12:20:00Z"
+                last_at: "2026-03-07T12:20:00Z"
+      error:
+        case: bad_request
+        status_code: 400
+        body:
+          code: 400001
+          message: sandboxId 或 sessionId 至少一个必填
+          data: {}
+  - operation_id: recycleSandbox
+    method: DELETE
+    path: /workflow/v1/sandbox
+    auth: none
+    request:
+      query: []
+      body_schema: WorkflowSandboxRecycleReq
+    response:
+      success_schema: WorkflowSandboxRecycleResp
+    errors:
+      - bad_request
+      - not_found
+      - internal_error
+    examples:
+      request:
+        headers: {}
+        query: {}
+        body:
+          sandboxId: sbx_example_01
+          userId: usr_example_admin
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            success: true
+      error:
+        case: not_found
+        status_code: 404
+        body:
+          code: 404001
+          message: 未找到可回收的 sandbox
+          data: {}
+  - operation_id: createPreview
+    method: POST
+    path: /workflow/v1/preview
+    auth: none
+    request:
+      query: []
+      body_schema: WorkflowPreviewCreateReq
+    response:
+      success_schema: WorkflowPreviewCreateResp
+    errors:
+      - bad_request
+      - forbidden
+      - not_found
+      - internal_error
+    examples:
+      request:
+        headers: {}
+        query: {}
+        body:
+          sandboxId: sbx_example_01
+          userId: usr_example_admin
+          url: http://127.0.0.1:3900/preview
+          expiration: 3600
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            preview:
+              id: prv_example_01
+              sandbox_id: sbx_example_01
+              url: http://127.0.0.1:3900/preview
+              status: 1
+              expires_at: "2026-03-07T13:20:00Z"
+              created_at: "2026-03-07T12:20:00Z"
+              last_at: "2026-03-07T12:20:00Z"
+      error:
+        case: bad_request
+        status_code: 400
+        body:
+          code: 400001
+          message: url 不能为空
+          data: {}
+  - operation_id: getPreview
+    method: GET
+    path: /workflow/v1/preview
+    auth: none
+    request:
+      query_schema: WorkflowPreviewGetReq
+      body_schema: null
+    response:
+      success_schema: WorkflowPreviewGetResp
+    errors:
+      - bad_request
+      - internal_error
+    examples:
+      request:
+        headers: {}
+        query:
+          sandboxId: sbx_example_01
+          userId: usr_example_admin
+        body: null
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            list:
+              - id: prv_example_01
+                sandbox_id: sbx_example_01
+                url: http://127.0.0.1:3900/preview
+                status: 1
+                expires_at: "2026-03-07T13:20:00Z"
+                created_at: "2026-03-07T12:20:00Z"
+                last_at: "2026-03-07T12:20:00Z"
+      error:
+        case: bad_request
+        status_code: 400
+        body:
+          code: 400001
+          message: previewId 或 sandboxId 至少一个必填
+          data: {}
+  - operation_id: expirePreview
+    method: DELETE
+    path: /workflow/v1/preview
+    auth: none
+    request:
+      query: []
+      body_schema: WorkflowPreviewExpireReq
+    response:
+      success_schema: WorkflowPreviewExpireResp
+    errors:
+      - bad_request
+      - not_found
+      - internal_error
+    examples:
+      request:
+        headers: {}
+        query: {}
+        body:
+          previewId: prv_example_01
+          userId: usr_example_admin
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            success: true
+      error:
+        case: not_found
+        status_code: 404
+        body:
+          code: 404001
+          message: 未找到可失效的预览地址
+          data: {}
+  - operation_id: checkDesktopUpdate
+    method: GET
+    path: /workflow/v1/desktop-update/check
+    auth: none
+    request:
+      query_schema: WorkflowDesktopUpdateCheckReq
+      body_schema: null
+    response:
+      success_schema: WorkflowDesktopUpdateCheckResp
+    errors:
+      - internal_error
+    examples:
+      request:
+        headers: {}
+        query:
+          platform: darwin
+          arch: aarch64
+          currentVersion: 0.1.0
+          channel: stable
+        body: null
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            hasUpdate: true
+            latestVersion: 0.1.1
+            downloadUrl: https://github.com/zodileap/libra/releases/download/v0.1.1/libra-desktop.dmg
+            checksumSha256: abcdef1234567890
+            releaseNotes: 修复若干稳定性问题
+            publishedAt: "2026-03-07T12:00:00Z"
+            channel: stable
+      error:
+        case: internal_error
+        status_code: 500
+        body:
+          code: 500001
+          message: 服务暂时不可用，请稍后重试。
+          data: {}

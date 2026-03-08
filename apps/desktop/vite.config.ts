@@ -53,19 +53,9 @@ export default defineConfig(({ mode }) => {
         rewrite: (path) => path.replace(/^\/__api\/account/, "")
       },
       "/__api/runtime": {
-        target: "http://127.0.0.1:10002",
+        target: "http://127.0.0.1:10001",
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/__api\/runtime/, "")
-      },
-      "/__api/agent_code": {
-        target: "http://127.0.0.1:10003",
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/__api\/agent_code/, "")
-      },
-      "/__api/agent_3d": {
-        target: "http://127.0.0.1:10004",
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/__api\/agent_3d/, "")
       }
     }
   },

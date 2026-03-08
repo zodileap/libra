@@ -20,22 +20,14 @@ function readDesktopSource(relativePath) {
 }
 
 test("TestWorkflowEngineShouldInjectNodeInstructionIntoPrompt", () => {
-  const source = readDesktopSource("src/shared/workflow/engine.ts");
+  const source = readDesktopSource("src/shared/workflow/storage.ts");
 
   // 描述：
   //
-  //   - 执行引擎应从画布 graph 节点提取 instruction，并在命中节点时拼接到 prompt。
-  assert.match(source, /function parseWorkflowNodeKindFromGraphDescription\(/);
-  assert.match(source, /function buildWorkflowNodeInstructionMap\(/);
-  assert.match(source, /instructionMap\[kind\] = instruction;/);
-  assert.match(source, /String\(graphNode\.instruction \|\| ""\)\.trim\(\)/);
-  assert.match(source, /function mergePromptWithNodeInstruction\(/);
-  assert.match(source, /【节点指令】/);
-  assert.match(source, /async function runNode\([\s\S]*nodeInstruction = ""/);
-  assert.match(source, /const promptWithNodeInstruction = mergePromptWithNodeInstruction\(/);
-  assert.match(source, /prompt:\s*promptWithNodeInstruction,/);
-  assert.match(source, /const structured = summarizePrompt\(promptWithNodeInstruction\);/);
-  assert.match(source, /const nodeInstructionMap = buildWorkflowNodeInstructionMap\(workflow\);/);
-  assert.match(source, /const nodeInstruction = String\(nodeInstructionMap\[node\.kind\] \|\| ""\)\.trim\(\);/);
-  assert.match(source, /await runNode\(node, ctx, request, nodeInstruction\)/);
+  //   - 统一智能体工作流应直接从 graph 节点提取 instruction，并拼接到最终 Prompt。
+  assert.match(source, /const normalizedInstruction = String\(node\.instruction \|\| ""\)\.trim\(\);/);
+  assert.match(source, /本节点要求：\$\{normalizedInstruction\}/);
+  assert.match(source, /const skillChainLines = \(workflow\?\.graph\?\.nodes \|\| \[\]\)/);
+  assert.match(source, /filter\(\(node\) => node\.type === "skill"\)/);
+  assert.match(source, /return \[/);
 });

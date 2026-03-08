@@ -19,30 +19,30 @@ function readDesktopSource(relativePath) {
   return fs.readFileSync(absolutePath, "utf8");
 }
 
-test("TestCodeWorkspaceProfileSeedShouldBeInvokedAfterWorkspaceCreate", () => {
-  const codeAgentSource = readDesktopSource("src/modules/code/pages/code-agent-page.tsx");
+test("TestWorkspaceProfileSeedShouldBeInvokedAfterWorkspaceCreate", () => {
+  const agentHomeSource = readDesktopSource("src/modules/agent/pages/agent-home-page.tsx");
   const constantsSource = readDesktopSource("src/shared/constants.ts");
 
   // 描述：
   //
   //   - 前端应在项目创建后触发结构化初始化分析命令，并写回 ProjectProfile。
-  assert.match(constantsSource, /INSPECT_CODE_WORKSPACE_PROFILE_SEED: "inspect_code_workspace_profile_seed"/);
-  assert.match(codeAgentSource, /const bootstrapWorkspaceProfileSeed = async \(workspace: CodeWorkspaceGroup\) =>/);
-  assert.match(codeAgentSource, /invoke<CodeWorkspaceProfileSeedResponse>\(\s*COMMANDS\.INSPECT_CODE_WORKSPACE_PROFILE_SEED,/s);
-  assert.match(codeAgentSource, /saveCodeWorkspaceProjectProfile\(/);
-  assert.match(codeAgentSource, /apiDataModel:/);
-  assert.match(codeAgentSource, /frontendPageLayout:/);
-  assert.match(codeAgentSource, /frontendCodeStructure:/);
-  assert.doesNotMatch(codeAgentSource, /frontend_stacks/);
-  assert.doesNotMatch(codeAgentSource, /backend_stacks/);
-  assert.doesNotMatch(codeAgentSource, /database_stacks/);
-  assert.match(codeAgentSource, /!item\.startsWith\("语言："\)/);
-  assert.match(codeAgentSource, /!item\.startsWith\("包管理器："\)/);
-  assert.match(codeAgentSource, /!item\.startsWith\("构建工具："\)/);
-  assert.match(codeAgentSource, /expectedRevision: profileCurrent\.revision/);
-  assert.match(codeAgentSource, /updatedBy: "workspace_seed_bootstrap"/);
-  assert.match(codeAgentSource, /reason: "workspace_seed_bootstrap"/);
-  assert.match(codeAgentSource, /void bootstrapWorkspaceProfileSeed\(created\);/);
+  assert.match(constantsSource, /INSPECT_PROJECT_WORKSPACE_PROFILE_SEED: "inspect_project_workspace_profile_seed"/);
+  assert.match(agentHomeSource, /const bootstrapWorkspaceProfileSeed = async \(workspace: ProjectWorkspaceGroup\) =>/);
+  assert.match(agentHomeSource, /invoke<ProjectWorkspaceProfileSeedResponse>\(\s*COMMANDS\.INSPECT_PROJECT_WORKSPACE_PROFILE_SEED,/s);
+  assert.match(agentHomeSource, /saveProjectWorkspaceProfile\(/);
+  assert.match(agentHomeSource, /apiDataModel:/);
+  assert.match(agentHomeSource, /frontendPageLayout:/);
+  assert.match(agentHomeSource, /frontendCodeStructure:/);
+  assert.doesNotMatch(agentHomeSource, /frontend_stacks/);
+  assert.doesNotMatch(agentHomeSource, /backend_stacks/);
+  assert.doesNotMatch(agentHomeSource, /database_stacks/);
+  assert.match(agentHomeSource, /!item\.startsWith\("语言："\)/);
+  assert.match(agentHomeSource, /!item\.startsWith\("包管理器："\)/);
+  assert.match(agentHomeSource, /!item\.startsWith\("构建工具："\)/);
+  assert.match(agentHomeSource, /expectedRevision: profileCurrent\.revision/);
+  assert.match(agentHomeSource, /updatedBy: "workspace_seed_bootstrap"/);
+  assert.match(agentHomeSource, /reason: "workspace_seed_bootstrap"/);
+  assert.match(agentHomeSource, /void bootstrapWorkspaceProfileSeed\(created\);/);
 });
 
 test("TestTauriShouldExposeProjectProfileSeedInspectCommand", () => {
@@ -51,9 +51,9 @@ test("TestTauriShouldExposeProjectProfileSeedInspectCommand", () => {
   // 描述：
   //
   //   - Tauri 层应提供项目结构化初始化分析命令，并覆盖语言/技术栈/目录摘要识别。
-  assert.match(tauriMainSource, /struct CodeWorkspaceProfileSeedResponse \{/);
-  assert.match(tauriMainSource, /async fn inspect_code_workspace_profile_seed\(/);
-  assert.match(tauriMainSource, /fn inspect_code_workspace_profile_seed_inner\(/);
+  assert.match(tauriMainSource, /struct ProjectWorkspaceProfileSeedResponse \{/);
+  assert.match(tauriMainSource, /async fn inspect_project_workspace_profile_seed\(/);
+  assert.match(tauriMainSource, /fn inspect_project_workspace_profile_seed_inner\(/);
   assert.match(tauriMainSource, /detect_node_build_tools\(/);
   assert.match(tauriMainSource, /collect_workspace_module_candidates\(/);
   assert.match(tauriMainSource, /api_data_models: Vec<String>/);
@@ -62,5 +62,5 @@ test("TestTauriShouldExposeProjectProfileSeedInspectCommand", () => {
   assert.doesNotMatch(tauriMainSource, /infrastructure_stacks: Vec<String>/);
   assert.doesNotMatch(tauriMainSource, /database_stacks\.iter\(\)\.chain\(backend_stacks\.iter\(\)/);
   assert.doesNotMatch(tauriMainSource, /for item in frontend_stacks\.iter\(\)\.take\(4\)/);
-  assert.match(tauriMainSource, /inspect_code_workspace_profile_seed,/);
+  assert.match(tauriMainSource, /inspect_project_workspace_profile_seed,/);
 });

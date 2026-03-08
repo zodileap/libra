@@ -1,0 +1,1115 @@
+version: 2
+domain: account
+route_prefix: /auth/v1
+source:
+  handler: services/internal/account/api/auth.go
+  specs: services/internal/account/specs/auth.go
+  service: services/internal/account/service/auth_service.go
+  errors: services/internal/account/service/errors.go
+  storage: services/internal/account/service/store.go
+conventions:
+  envelope_ref: services/contracts/backend.yaml#/schemas/SuccessEnvelope
+  error_envelope_ref: services/contracts/backend.yaml#/schemas/ErrorEnvelope
+  auth_header: Authorization
+  bootstrap_header: X-Libra-Bootstrap-Token
+  token_formats:
+    - raw token
+    - Bearer <token>
+storage:
+  type: local_json_file
+  path: services/data/account/account-state.json
+  file_permissions: "0644"
+  root_object: accountState
+  top_level_maps:
+    users:
+      key: user id
+      value_schema: AccountUserRecord
+    agents:
+      key: agent id
+      value_schema: AccountAgentRecord
+    agentAccesses:
+      key: access id
+      value_schema: AccountAgentAccessRecord
+    permissionGrants:
+      key: grant id
+      value_schema: AccountPermissionGrantRecord
+enums:
+  user_status:
+    type: integer
+    values:
+      - value: 1
+        name: active
+        source: resolveUserStatusText
+      - value: other
+        name: inactive
+        source: resolveUserStatusText
+  identity_type:
+    type: string
+    values:
+      - organization_member
+      - department_member
+      - personal_workspace
+  identity_status:
+    type: string
+    values:
+      - active
+  role_code:
+    type: string
+    values:
+      - org_member
+      - dept_member
+      - workspace_owner
+      - workspace_member
+      - permission_admin
+      - model_operator
+  permission_code:
+    type: string
+    values:
+      - model.access.grant
+      - model.access.delegate
+      - console.permission.manage
+  permission_status:
+    type: string
+    values:
+      - active
+  agent_code:
+    type: string
+    values:
+      - code
+      - model
+  agent_status:
+    type: integer
+    values:
+      - value: 1
+        name: active
+  agent_access_status:
+    type: integer
+    values:
+      - value: 1
+        name: active
+      - value: 0
+        name: disabled
+  agent_access_type:
+    type: integer
+    values:
+      - value: 1
+        name: direct_access
+error_catalog:
+  unauthorized:
+    code: 100001001
+    http_status: 401
+    default_message: 身份令牌无效或已过期，请重新登录。
+  invalid_email:
+    code: 100002001
+    http_status: 400
+    default_message: 邮箱格式不正确，请检查后重试。
+  invalid_param:
+    code: 100002002
+    http_status: 400
+    default_message_examples:
+      - 密码长度至少为 6 位。
+      - 管理员名称不能为空
+      - 智能体 ID 不能为空
+  invalid_credential:
+    code: 1008001004
+    http_status: 401
+    default_message: 账号或密码错误，请检查后重试。
+  forbidden:
+    code: 100003001
+    http_status: 403
+    default_message_examples:
+      - 当前无权限执行授权操作。
+      - 初始化令牌无效，请检查后重试。
+  conflict:
+    code: 100004001
+    http_status: 409
+    default_message_examples:
+      - 系统已完成初始化，不能重复创建管理员。
+  not_found:
+    code: 100005001
+    http_status: 404
+    default_message_examples:
+      - 用户不存在
+      - 授权记录不存在
+      - 智能体不存在
+  method_not_allowed:
+    code: 100006001
+    http_status: 405
+    default_message_template: "不支持的请求方法: <method>"
+  decode_error:
+    code: 100007001
+    http_status: 400
+    default_message: 请求数据不合法，请检查输入后重试。
+  internal_error:
+    code: 500001
+    http_status: 500
+    default_message: 服务暂时不可用，请稍后重试。
+schemas:
+  AccountUserRecord:
+    type: object
+    required: [id, name, email, status, passwordHash, identities, createdAt, lastAt]
+    properties:
+      id: { type: string, required: true, generated_prefix: usr_ }
+      name: { type: string, required: true }
+      email: { type: string, required: true, format: email, normalized: lowercase_trimmed }
+      phone: { type: string, required: false }
+      status: { type: integer, required: true, enum_ref: user_status }
+      passwordHash: { type: string, required: true, encoding: bcrypt_or_bootstrap_placeholder }
+      identities:
+        type: array
+        required: true
+        items_schema: AuthIdentityItem
+      createdAt: { type: string, required: true, format: date-time }
+      lastAt: { type: string, required: true, format: date-time }
+  AccountAgentRecord:
+    type: object
+    required: [id, code, name]
+    properties:
+      id: { type: string, required: true }
+      code: { type: string, required: true, enum_ref: agent_code }
+      name: { type: string, required: true }
+      version: { type: string, required: false }
+      agentStatus: { type: integer, required: false, enum_ref: agent_status }
+      remark: { type: string, required: false }
+  AccountAgentAccessRecord:
+    type: object
+    required: [id, userId, agentId, createdAt, lastAt]
+    properties:
+      id: { type: string, required: true, generated_prefix: access_ }
+      userId: { type: string, required: true }
+      agentId: { type: string, required: true }
+      accessType: { type: integer, required: false, enum_ref: agent_access_type, default: 1 }
+      duration: { type: integer, required: false, format: int64, default: 0 }
+      status: { type: integer, required: false, enum_ref: agent_access_status, default: 1 }
+      createdAt: { type: string, required: true, format: date-time }
+      lastAt: { type: string, required: true, format: date-time }
+  AccountPermissionGrantRecord:
+    type: object
+    required: [grantId, actorUserId, targetUserId, targetUserName, permissionCode, resourceType, resourceName, grantedBy, status, createdAt, lastAt]
+    properties:
+      grantId: { type: string, required: true, generated_prefix: grant_ }
+      actorUserId: { type: string, required: true }
+      targetUserId: { type: string, required: true }
+      targetUserName: { type: string, required: true }
+      permissionCode: { type: string, required: true, enum_ref: permission_code }
+      resourceType: { type: string, required: true }
+      resourceName: { type: string, required: true }
+      grantedBy: { type: string, required: true }
+      status: { type: string, required: true, enum_ref: permission_status }
+      expiresAt: { type: string, required: false, format: date-time }
+      createdAt: { type: string, required: true, format: date-time }
+      lastAt: { type: string, required: true, format: date-time }
+  AuthUserInfo:
+    type: object
+    required: [id, name]
+    properties:
+      id: { type: string, required: true }
+      name: { type: string, required: true }
+      email: { type: string, required: false, format: email }
+      phone: { type: string, required: false }
+      status: { type: integer, required: false, enum_ref: user_status }
+  AuthLoginReq:
+    type: object
+    required: [email, password]
+    properties:
+      email: { type: string, required: true, format: email }
+      password: { type: string, required: true, min_length: 6 }
+  AuthLoginResp:
+    type: object
+    required: [token, expiresAt, user]
+    properties:
+      token: { type: string, required: true, generated_prefix: atk_ }
+      expiresAt: { type: string, required: true, format: date-time }
+      user: { schema: AuthUserInfo, required: true }
+  AuthMeResp:
+    type: object
+    required: [user]
+    properties:
+      user: { schema: AuthUserInfo, required: true }
+  AuthLogoutReq:
+    type: object
+    required: []
+    properties: {}
+  AuthLogoutResp:
+    type: object
+    required: [success]
+    properties:
+      success: { type: boolean, required: true }
+  AuthIdentityItem:
+    type: object
+    required: [identityId, identityType, scopeName, roleCodes, status]
+    properties:
+      identityId: { type: string, required: true }
+      identityType: { type: string, required: true, enum_ref: identity_type }
+      scopeName: { type: string, required: true }
+      roleCodes:
+        type: array
+        required: true
+        items:
+          type: string
+          enum_ref: role_code
+      status: { type: string, required: true, enum_ref: identity_status }
+  AuthIdentityListResp:
+    type: object
+    required: [list]
+    properties:
+      list:
+        type: array
+        required: true
+        items_schema: AuthIdentityItem
+  AuthManageableUserItem:
+    type: object
+    required: [userId, name, status, identityScopes, self]
+    properties:
+      userId: { type: string, required: true }
+      name: { type: string, required: true }
+      email: { type: string, required: false, format: email }
+      status: { type: string, required: true, enum: [active, inactive] }
+      identityScopes:
+        type: array
+        required: true
+        items: { type: string }
+      self: { type: boolean, required: true }
+  AuthManageableUserListResp:
+    type: object
+    required: [list]
+    properties:
+      list:
+        type: array
+        required: true
+        items_schema: AuthManageableUserItem
+  AuthPermissionTemplateItem:
+    type: object
+    required: [code, name, description, resourceType]
+    properties:
+      code: { type: string, required: true, enum_ref: permission_code }
+      name: { type: string, required: true }
+      description: { type: string, required: true }
+      resourceType: { type: string, required: true, enum: [model, console] }
+  AuthPermissionTemplateListResp:
+    type: object
+    required: [list]
+    properties:
+      list:
+        type: array
+        required: true
+        items_schema: AuthPermissionTemplateItem
+  AuthPermissionGrantItem:
+    type: object
+    required: [grantId, actorUserId, targetUserId, targetUserName, permissionCode, resourceType, resourceName, grantedBy, status, createdAt, lastAt]
+    properties:
+      grantId: { type: string, required: true }
+      actorUserId: { type: string, required: true }
+      targetUserId: { type: string, required: true }
+      targetUserName: { type: string, required: true }
+      permissionCode: { type: string, required: true, enum_ref: permission_code }
+      resourceType: { type: string, required: true }
+      resourceName: { type: string, required: true }
+      grantedBy: { type: string, required: true }
+      status: { type: string, required: true, enum_ref: permission_status }
+      expiresAt: { type: string, required: false, format: date-time }
+      createdAt: { type: string, required: true, format: date-time }
+      lastAt: { type: string, required: true, format: date-time }
+  AuthPermissionGrantListReq:
+    type: object
+    required: []
+    properties:
+      targetUserId: { type: string, required: false }
+      permissionCode: { type: string, required: false, enum_ref: permission_code }
+      resourceType: { type: string, required: false }
+  AuthPermissionGrantListResp:
+    type: object
+    required: [list]
+    properties:
+      list:
+        type: array
+        required: true
+        items_schema: AuthPermissionGrantItem
+  AuthGrantPermissionReq:
+    type: object
+    required: [targetUserId, targetUserName, permissionCode, resourceType, resourceName]
+    properties:
+      targetUserId: { type: string, required: true }
+      targetUserName: { type: string, required: true }
+      permissionCode: { type: string, required: true, enum_ref: permission_code }
+      resourceType: { type: string, required: true }
+      resourceName: { type: string, required: true }
+      expiresAt: { type: string, required: false, format: date-time }
+  AuthGrantPermissionResp:
+    type: object
+    required: [item]
+    properties:
+      item: { schema: AuthPermissionGrantItem, required: true }
+  AuthRevokePermissionReq:
+    type: object
+    required: [grantId]
+    properties:
+      grantId: { type: string, required: true }
+  AuthRevokePermissionResp:
+    type: object
+    required: [success]
+    properties:
+      success: { type: boolean, required: true }
+  AuthUserAgentAccessItem:
+    type: object
+    required: [id, userId, agentId]
+    properties:
+      id: { type: string, required: true }
+      userId: { type: string, required: true }
+      agentId: { type: string, required: true }
+      accessType: { type: integer, required: false, enum_ref: agent_access_type }
+      duration: { type: integer, required: false, format: int64 }
+      status: { type: integer, required: false, enum_ref: agent_access_status }
+      createdAt: { type: string, required: false, format: date-time }
+      lastAt: { type: string, required: false, format: date-time }
+  AuthUserAgentAccessListReq:
+    type: object
+    required: []
+    properties:
+      agentId: { type: string, required: false }
+      status: { type: integer, required: false, enum_ref: agent_access_status }
+  AuthUserAgentAccessListResp:
+    type: object
+    required: [list]
+    properties:
+      list:
+        type: array
+        required: true
+        items_schema: AuthUserAgentAccessItem
+  AuthGrantUserAgentAccessReq:
+    type: object
+    required: [agentId]
+    properties:
+      agentId: { type: string, required: true }
+      accessType: { type: integer, required: false, enum_ref: agent_access_type, default: 1 }
+      duration: { type: integer, required: false, format: int64, default: 0 }
+      status: { type: integer, required: false, enum_ref: agent_access_status, default: 1 }
+  AuthUserAgentAccessResp:
+    type: object
+    required: [item]
+    properties:
+      item: { schema: AuthUserAgentAccessItem, required: true }
+  AuthRevokeUserAgentAccessReq:
+    type: object
+    required: [agentId]
+    properties:
+      agentId: { type: string, required: true }
+  AuthRevokeUserAgentAccessResp:
+    type: object
+    required: [success]
+    properties:
+      success: { type: boolean, required: true }
+  AuthAvailableAgentItem:
+    type: object
+    required: [agentId, code, name, accessId]
+    properties:
+      agentId: { type: string, required: true }
+      code: { type: string, required: true, enum_ref: agent_code }
+      name: { type: string, required: true }
+      version: { type: string, required: false }
+      agentStatus: { type: integer, required: false, enum_ref: agent_status }
+      remark: { type: string, required: false }
+      accessId: { type: string, required: true }
+      accessType: { type: integer, required: false, enum_ref: agent_access_type }
+      duration: { type: integer, required: false, format: int64 }
+      accessStatus: { type: integer, required: false, enum_ref: agent_access_status }
+  AuthAvailableAgentListResp:
+    type: object
+    required: [list]
+    properties:
+      list:
+        type: array
+        required: true
+        items_schema: AuthAvailableAgentItem
+  AuthBootstrapStatusResp:
+    type: object
+    required: [initialized, hasUsers]
+    properties:
+      initialized: { type: boolean, required: true }
+      hasUsers: { type: boolean, required: true }
+      adminUserId: { type: string, required: false }
+  AuthBootstrapAdminReq:
+    type: object
+    required: [name, email, password]
+    properties:
+      name: { type: string, required: true }
+      email: { type: string, required: true, format: email }
+      password: { type: string, required: true, min_length: 6 }
+      organizationName: { type: string, required: false, default: Libra }
+  AuthBootstrapAdminResp:
+    type: object
+    required: [created, user]
+    properties:
+      created: { type: boolean, required: true }
+      user: { schema: AuthUserInfo, required: true }
+default_seed:
+  agents:
+    - id: agent-code-default
+      code: code
+      name: 代码智能体
+      version: 0.1.0
+      agentStatus: 1
+      remark: 开源版默认代码智能体
+    - id: agent-model-default
+      code: model
+      name: 模型智能体
+      version: 0.1.0
+      agentStatus: 1
+      remark: 开源版默认模型智能体
+  permission_templates:
+    - code: model.access.grant
+      resourceType: model
+    - code: model.access.delegate
+      resourceType: model
+    - code: console.permission.manage
+      resourceType: console
+  bootstrap_side_effects:
+    - create one admin user
+    - seed default agent accesses for the admin user
+    - create one demo user with id 123e4567-e89b-12d3-a456-426614174001
+endpoints:
+  - operation_id: bootstrapStatus
+    method: GET
+    path: /auth/v1/bootstrap-status
+    auth: none
+    request:
+      query: []
+      headers: []
+      body_schema: null
+    response:
+      success_schema: AuthBootstrapStatusResp
+    errors:
+      - internal_error
+    examples:
+      request:
+        headers: {}
+        query: {}
+        body: null
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            initialized: false
+            hasUsers: false
+      error:
+        case: internal_error
+        status_code: 500
+        body:
+          code: 500001
+          message: 服务暂时不可用，请稍后重试。
+          data: {}
+  - operation_id: bootstrapAdmin
+    method: POST
+    path: /auth/v1/bootstrap-admin
+    auth: bootstrap_header_when_configured
+    request:
+      query: []
+      headers:
+        - name: X-Libra-Bootstrap-Token
+          required: false
+          required_when: bootstrap token is configured in backend env
+      body_schema: AuthBootstrapAdminReq
+    response:
+      success_schema: AuthBootstrapAdminResp
+    errors:
+      - forbidden
+      - invalid_email
+      - invalid_param
+      - conflict
+      - internal_error
+    examples:
+      request:
+        headers:
+          X-Libra-Bootstrap-Token: bootstrap-secret
+        query: {}
+        body:
+          name: Libra Admin
+          email: admin@example.com
+          password: secret123
+          organizationName: Libra
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            created: true
+            user:
+              id: usr_example_admin
+              name: Libra Admin
+              email: admin@example.com
+              status: 1
+      error:
+        case: forbidden
+        status_code: 403
+        body:
+          code: 100003001
+          message: 初始化令牌无效，请检查后重试。
+          data: {}
+  - operation_id: login
+    method: POST
+    path: /auth/v1/login
+    auth: none
+    request:
+      query: []
+      headers: []
+      body_schema: AuthLoginReq
+    response:
+      success_schema: AuthLoginResp
+    errors:
+      - invalid_email
+      - invalid_param
+      - invalid_credential
+      - internal_error
+    examples:
+      request:
+        headers: {}
+        query: {}
+        body:
+          email: admin@example.com
+          password: secret123
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            token: atk_example_token
+            expiresAt: "2026-03-08T00:00:00Z"
+            user:
+              id: usr_example_admin
+              name: Libra Admin
+              email: admin@example.com
+              status: 1
+      error:
+        case: invalid_credential
+        status_code: 401
+        body:
+          code: 1008001004
+          message: 账号或密码错误，请检查后重试。
+          data: {}
+  - operation_id: me
+    method: GET
+    path: /auth/v1/me
+    auth: bearer
+    request:
+      query: []
+      headers:
+        - name: Authorization
+          required: true
+      body_schema: null
+    response:
+      success_schema: AuthMeResp
+    errors:
+      - unauthorized
+      - not_found
+      - internal_error
+    examples:
+      request:
+        headers:
+          Authorization: Bearer atk_example_token
+        query: {}
+        body: null
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            user:
+              id: usr_example_admin
+              name: Libra Admin
+              email: admin@example.com
+              status: 1
+      error:
+        case: unauthorized
+        status_code: 401
+        body:
+          code: 100001001
+          message: 身份令牌无效或已过期，请重新登录。
+          data: {}
+  - operation_id: logout
+    method: POST
+    path: /auth/v1/logout
+    auth: bearer
+    request:
+      query: []
+      headers:
+        - name: Authorization
+          required: true
+      body_schema: AuthLogoutReq
+    response:
+      success_schema: AuthLogoutResp
+    errors:
+      - unauthorized
+    examples:
+      request:
+        headers:
+          Authorization: Bearer atk_example_token
+        query: {}
+        body: {}
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            success: true
+      error:
+        case: unauthorized
+        status_code: 401
+        body:
+          code: 100001001
+          message: 身份令牌无效或已过期，请重新登录。
+          data: {}
+  - operation_id: identities
+    method: GET
+    path: /auth/v1/identities
+    auth: bearer
+    request:
+      query: []
+      headers:
+        - name: Authorization
+          required: true
+      body_schema: null
+    response:
+      success_schema: AuthIdentityListResp
+    errors:
+      - unauthorized
+      - not_found
+      - internal_error
+    examples:
+      request:
+        headers:
+          Authorization: Bearer atk_example_token
+        query: {}
+        body: null
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            list:
+              - identityId: workspace-admin
+                identityType: personal_workspace
+                scopeName: My Workspace
+                roleCodes:
+                  - workspace_owner
+                  - permission_admin
+                status: active
+      error:
+        case: not_found
+        status_code: 404
+        body:
+          code: 100005001
+          message: 用户不存在
+          data: {}
+  - operation_id: manageableUsers
+    method: GET
+    path: /auth/v1/manageable-users
+    auth: bearer
+    request:
+      query: []
+      headers:
+        - name: Authorization
+          required: true
+      body_schema: null
+    response:
+      success_schema: AuthManageableUserListResp
+    errors:
+      - unauthorized
+      - forbidden
+      - not_found
+      - internal_error
+    examples:
+      request:
+        headers:
+          Authorization: Bearer atk_example_token
+        query: {}
+        body: null
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            list:
+              - userId: "123e4567-e89b-12d3-a456-426614174001"
+                name: Demo User
+                email: demo@libra.local
+                status: active
+                identityScopes:
+                  - Libra
+                  - Demo Workspace
+                self: false
+      error:
+        case: forbidden
+        status_code: 403
+        body:
+          code: 100003001
+          message: 当前无权限查看可管理用户列表。
+          data: {}
+  - operation_id: permissionTemplates
+    method: GET
+    path: /auth/v1/permission-templates
+    auth: none
+    request:
+      query: []
+      headers: []
+      body_schema: null
+    response:
+      success_schema: AuthPermissionTemplateListResp
+    errors:
+      - internal_error
+    examples:
+      request:
+        headers: {}
+        query: {}
+        body: null
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            list:
+              - code: model.access.grant
+                name: 模型访问授权
+                description: 允许目标用户访问指定模型资源
+                resourceType: model
+      error:
+        case: internal_error
+        status_code: 500
+        body:
+          code: 500001
+          message: 服务暂时不可用，请稍后重试。
+          data: {}
+  - operation_id: permissionGrants
+    method: GET
+    path: /auth/v1/permission-grants
+    auth: bearer
+    request:
+      query_schema: AuthPermissionGrantListReq
+      headers:
+        - name: Authorization
+          required: true
+      body_schema: null
+    response:
+      success_schema: AuthPermissionGrantListResp
+    errors:
+      - unauthorized
+      - forbidden
+      - not_found
+      - internal_error
+    examples:
+      request:
+        headers:
+          Authorization: Bearer atk_example_token
+        query:
+          targetUserId: "123e4567-e89b-12d3-a456-426614174001"
+          permissionCode: model.access.grant
+          resourceType: model
+        body: null
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            list:
+              - grantId: grant_example_01
+                actorUserId: usr_example_admin
+                targetUserId: "123e4567-e89b-12d3-a456-426614174001"
+                targetUserName: Demo User
+                permissionCode: model.access.grant
+                resourceType: model
+                resourceName: 基础模型池
+                grantedBy: usr_example_admin
+                status: active
+                createdAt: "2026-03-07T12:00:00Z"
+                lastAt: "2026-03-07T12:00:00Z"
+      error:
+        case: forbidden
+        status_code: 403
+        body:
+          code: 100003001
+          message: 当前无权限查看授权记录。
+          data: {}
+  - operation_id: grantPermission
+    method: POST
+    path: /auth/v1/permission-grant
+    auth: bearer
+    request:
+      query: []
+      headers:
+        - name: Authorization
+          required: true
+      body_schema: AuthGrantPermissionReq
+    response:
+      success_schema: AuthGrantPermissionResp
+    errors:
+      - unauthorized
+      - forbidden
+      - invalid_param
+      - not_found
+      - internal_error
+    examples:
+      request:
+        headers:
+          Authorization: Bearer atk_example_token
+        query: {}
+        body:
+          targetUserId: "123e4567-e89b-12d3-a456-426614174001"
+          targetUserName: Demo User
+          permissionCode: model.access.grant
+          resourceType: model
+          resourceName: 基础模型池
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            item:
+              grantId: grant_example_01
+              actorUserId: usr_example_admin
+              targetUserId: "123e4567-e89b-12d3-a456-426614174001"
+              targetUserName: Demo User
+              permissionCode: model.access.grant
+              resourceType: model
+              resourceName: 基础模型池
+              grantedBy: usr_example_admin
+              status: active
+              createdAt: "2026-03-07T12:00:00Z"
+              lastAt: "2026-03-07T12:00:00Z"
+      error:
+        case: invalid_param
+        status_code: 400
+        body:
+          code: 100002002
+          message: 授权信息不完整，请检查后重试。
+          data: {}
+  - operation_id: revokePermission
+    method: DELETE
+    path: /auth/v1/permission-grant
+    auth: bearer
+    request:
+      query: []
+      headers:
+        - name: Authorization
+          required: true
+      body_schema: AuthRevokePermissionReq
+    response:
+      success_schema: AuthRevokePermissionResp
+    errors:
+      - unauthorized
+      - forbidden
+      - invalid_param
+      - not_found
+      - internal_error
+    examples:
+      request:
+        headers:
+          Authorization: Bearer atk_example_token
+        query: {}
+        body:
+          grantId: grant_example_01
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            success: true
+      error:
+        case: not_found
+        status_code: 404
+        body:
+          code: 100005001
+          message: 授权记录不存在
+          data: {}
+  - operation_id: userAgentAccesses
+    method: GET
+    path: /auth/v1/user-agent-accesses
+    auth: bearer
+    request:
+      query_schema: AuthUserAgentAccessListReq
+      headers:
+        - name: Authorization
+          required: true
+      body_schema: null
+    response:
+      success_schema: AuthUserAgentAccessListResp
+    errors:
+      - unauthorized
+      - invalid_param
+      - not_found
+      - internal_error
+    examples:
+      request:
+        headers:
+          Authorization: Bearer atk_example_token
+        query:
+          agentId: agent-code-default
+          status: 1
+        body: null
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            list:
+              - id: access_example_01
+                userId: usr_example_admin
+                agentId: agent-code-default
+                accessType: 1
+                duration: 0
+                status: 1
+                createdAt: "2026-03-07T12:00:00Z"
+                lastAt: "2026-03-07T12:00:00Z"
+      error:
+        case: invalid_param
+        status_code: 400
+        body:
+          code: 100002002
+          message: 查询参数格式不正确，请检查后重试。
+          data: {}
+  - operation_id: grantUserAgentAccess
+    method: POST
+    path: /auth/v1/user-agent-access
+    auth: bearer
+    request:
+      query: []
+      headers:
+        - name: Authorization
+          required: true
+      body_schema: AuthGrantUserAgentAccessReq
+    response:
+      success_schema: AuthUserAgentAccessResp
+    errors:
+      - unauthorized
+      - forbidden
+      - invalid_param
+      - not_found
+      - internal_error
+    examples:
+      request:
+        headers:
+          Authorization: Bearer atk_example_token
+        query: {}
+        body:
+          agentId: agent-code-default
+          accessType: 1
+          duration: 0
+          status: 1
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            item:
+              id: access_example_01
+              userId: usr_example_admin
+              agentId: agent-code-default
+              accessType: 1
+              duration: 0
+              status: 1
+              createdAt: "2026-03-07T12:00:00Z"
+              lastAt: "2026-03-07T12:00:00Z"
+      error:
+        case: not_found
+        status_code: 404
+        body:
+          code: 100005001
+          message: 智能体不存在
+          data: {}
+  - operation_id: revokeUserAgentAccess
+    method: DELETE
+    path: /auth/v1/user-agent-access
+    auth: bearer
+    request:
+      query: []
+      headers:
+        - name: Authorization
+          required: true
+      body_schema: AuthRevokeUserAgentAccessReq
+    response:
+      success_schema: AuthRevokeUserAgentAccessResp
+    errors:
+      - unauthorized
+      - forbidden
+      - invalid_param
+      - not_found
+      - internal_error
+    examples:
+      request:
+        headers:
+          Authorization: Bearer atk_example_token
+        query: {}
+        body:
+          agentId: agent-code-default
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            success: true
+      error:
+        case: not_found
+        status_code: 404
+        body:
+          code: 100005001
+          message: 智能体授权不存在
+          data: {}
+  - operation_id: availableAgents
+    method: GET
+    path: /auth/v1/available-agents
+    auth: bearer
+    request:
+      query: []
+      headers:
+        - name: Authorization
+          required: true
+      body_schema: null
+    response:
+      success_schema: AuthAvailableAgentListResp
+    errors:
+      - unauthorized
+      - not_found
+      - internal_error
+    examples:
+      request:
+        headers:
+          Authorization: Bearer atk_example_token
+        query: {}
+        body: null
+      success:
+        status_code: 200
+        body:
+          code: 200
+          message: ok
+          data:
+            list:
+              - agentId: agent-code-default
+                code: code
+                name: 代码智能体
+                version: 0.1.0
+                agentStatus: 1
+                remark: 开源版默认代码智能体
+                accessId: access_example_code
+                accessType: 1
+                duration: 0
+                accessStatus: 1
+      error:
+        case: unauthorized
+        status_code: 401
+        body:
+          code: 100001001
+          message: 身份令牌无效或已过期，请重新登录。
+          data: {}

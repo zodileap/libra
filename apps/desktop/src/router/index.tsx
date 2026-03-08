@@ -3,14 +3,18 @@ import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AriContainer, AriTypography } from "aries_react";
 import {
   CommonAiKeyPageLazy,
-  CommonHomePageLazy,
   CommonLoginPageLazy,
   CommonMcpPageLazy,
   CommonSkillsPageLazy,
   CommonWorkflowsPageLazy,
   MCP_MODULE_KEY,
   MCP_PAGE_PATH,
-  resolveWorkflowEditorPath,
+  SETTINGS_IDENTITIES_PATH,
+  SETTINGS_OVERVIEW_PATH,
+  SETTINGS_PERMISSIONS_PATH,
+  SettingsAdminIdentitiesPageLazy,
+  SettingsAdminOverviewPageLazy,
+  SettingsAdminPermissionsPageLazy,
   SKILL_MODULE_KEY,
   SKILL_PAGE_PATH,
   SETTINGS_MODULE_KEY,
@@ -19,18 +23,17 @@ import {
 } from "../modules/common/routes";
 import {
   AGENT_MODULE_KEY,
-  CodeAgentPageLazy,
-  CodeProjectSettingsPageLazy,
-  CodeAgentSettingsPageLazy,
+  AgentHomePageLazy,
+  ProjectSettingsPageLazy,
+  AgentSettingsPageLazy,
+  AGENT_HOME_PATH,
+  AGENT_SETTINGS_PATH,
+  PROJECT_SETTINGS_PATH,
+  AGENT_SESSION_PATH_PREFIX,
   SESSION_MODULE_KEY,
-  CodeSessionPageLazy,
+  AgentSessionPageLazy,
   WORKFLOW_MODULE_KEY,
-} from "../modules/code/routes";
-import {
-  ModelAgentPageLazy,
-  ModelAgentSettingsPageLazy,
-  ModelSessionPageLazy,
-} from "../modules/model/routes";
+} from "../modules/agent/routes";
 import { DesktopLayout } from "../shell/layout";
 import type { AgentKey } from "../shared/types";
 import { isAgentAuthorized, isModuleEnabled, resolveBuildEnabledModules } from "./module-access";
@@ -51,13 +54,35 @@ const buildEnabledModuleSet = resolveBuildEnabledModules(__DESKTOP_ENABLED_MODUL
 //
 //   - 匹配到的智能体 key；若路径不含智能体则返回 null。
 function resolveAgentKeyFromPathname(pathname: string): AgentKey | null {
-  if (pathname.startsWith("/agents/model")) {
-    return "model";
+  if (pathname.startsWith(AGENT_HOME_PATH)) {
+    return "agent";
   }
-  if (pathname.startsWith("/agents/code")) {
-    return "code";
+  if (pathname.startsWith(AGENT_SETTINGS_PATH)) {
+    return "agent";
+  }
+  if (pathname.startsWith(PROJECT_SETTINGS_PATH)) {
+    return "agent";
+  }
+  if (pathname.startsWith(AGENT_SESSION_PATH_PREFIX)) {
+    return "agent";
   }
   return null;
+}
+
+// 描述：判断当前身份是否具备管理台默认落点资格；当前仅对权限管理员身份启用 Overview 优先级。
+//
+// Params:
+//
+//   - auth: 当前认证状态。
+//
+// Returns:
+//
+//   - true: 登录后应优先进入管理概览。
+function shouldPreferAdminOverview(auth: AuthState): boolean {
+  if (!auth.selectedIdentity) {
+    return false;
+  }
+  return auth.selectedIdentity.roles.some((role) => role === "permission_admin");
 }
 
 // 描述：计算已登录后的默认落地页，保证模块被禁用时仍可回退到可访问路径。
@@ -71,8 +96,25 @@ function resolveAgentKeyFromPathname(pathname: string): AgentKey | null {
 //
 //   - 已登录场景的可访问路径。
 function resolveAuthedFallbackPath(auth: AuthState, routeAccess: RouteAccess): string {
-  void routeAccess;
-  return auth.user ? "/home" : "/login";
+  if (!auth.user) {
+    return "/login";
+  }
+  if (routeAccess.isModuleEnabled(SETTINGS_MODULE_KEY) && shouldPreferAdminOverview(auth)) {
+    return SETTINGS_OVERVIEW_PATH;
+  }
+  if (routeAccess.isModuleEnabled(AGENT_MODULE_KEY) && routeAccess.isAgentEnabled("agent")) {
+    return AGENT_HOME_PATH;
+  }
+  if (routeAccess.isModuleEnabled(WORKFLOW_MODULE_KEY)) {
+    return WORKFLOW_PAGE_PATH;
+  }
+  if (routeAccess.isModuleEnabled(SKILL_MODULE_KEY)) {
+    return SKILL_PAGE_PATH;
+  }
+  if (routeAccess.isModuleEnabled(MCP_MODULE_KEY)) {
+    return MCP_PAGE_PATH;
+  }
+  return "/ai-keys";
 }
 
 // 描述：判断当前路径是否允许访问，统一处理模块开关与智能体授权。
@@ -92,7 +134,7 @@ function canAccessPath(pathname: string, auth: AuthState, routeAccess: RouteAcce
   }
 
   if (pathname.startsWith("/home")) {
-    return true;
+    return routeAccess.isModuleEnabled(AGENT_MODULE_KEY) && routeAccess.isAgentEnabled("agent");
   }
 
   if (pathname.startsWith("/settings")) {
@@ -115,21 +157,15 @@ function canAccessPath(pathname: string, auth: AuthState, routeAccess: RouteAcce
     return true;
   }
 
-  if (pathname.startsWith("/agents/") && pathname.includes("/session/")) {
+  if (pathname.startsWith(AGENT_SESSION_PATH_PREFIX)) {
     return (
       routeAccess.isModuleEnabled(SESSION_MODULE_KEY) &&
-      !!resolveAgentKeyFromPathname(pathname) &&
-      routeAccess.isAgentEnabled(resolveAgentKeyFromPathname(pathname) as AgentKey)
+      routeAccess.isAgentEnabled("agent")
     );
   }
 
-  if (pathname.startsWith("/agents/") && pathname.includes("/workflows")) {
-    return routeAccess.isModuleEnabled(WORKFLOW_MODULE_KEY);
-  }
-
-  if (pathname.startsWith("/agents/")) {
-    const agentKey = resolveAgentKeyFromPathname(pathname);
-    return !!agentKey && routeAccess.isModuleEnabled(AGENT_MODULE_KEY) && routeAccess.isAgentEnabled(agentKey);
+  if (pathname.startsWith(PROJECT_SETTINGS_PATH)) {
+    return routeAccess.isModuleEnabled(AGENT_MODULE_KEY) && routeAccess.isAgentEnabled("agent");
   }
 
   return true;
@@ -182,17 +218,6 @@ function RouteGuard({ auth, routeAccess, children }: { auth: AuthState; routeAcc
   return children;
 }
 
-// 描述：兼容旧版按智能体区分的工作流路由，自动跳转到全局工作流页并保留 workflowId。
-//
-// Params:
-//
-//   - workflowType: 工作流类型（code/model）。
-function LegacyWorkflowRedirect({ workflowType }: { workflowType: AgentKey }) {
-  const location = useLocation();
-  const workflowId = new URLSearchParams(location.search).get("workflowId")?.trim() || "";
-  return <Navigate to={resolveWorkflowEditorPath(workflowType, workflowId)} replace />;
-}
-
 // 描述：桌面端总路由入口，统一编排登录态、侧边栏布局与 modules 路由模块。
 export function DesktopRouter({ auth }: { auth: AuthState }) {
   const routeAccess = useRouteAccess(auth);
@@ -221,6 +246,7 @@ export function DesktopRouter({ auth }: { auth: AuthState }) {
                 desktopUpdateState={auth.desktopUpdateState}
                 onCheckDesktopUpdate={auth.checkDesktopUpdate}
                 onInstallDesktopUpdate={auth.installDesktopUpdate}
+                selectedIdentity={auth.selectedIdentity}
               />
           ) : (
             <Navigate to="/login" replace />
@@ -229,7 +255,14 @@ export function DesktopRouter({ auth }: { auth: AuthState }) {
       >
         <Route index element={<Navigate to={fallbackPath} replace />} />
 
-        <Route path="home" element={withRouteLoading(<CommonHomePageLazy availableAgents={auth.availableAgents} />)} />
+        <Route
+          path="home"
+          element={withRouteLoading(
+            <RouteGuard auth={auth} routeAccess={routeAccess}>
+              <AgentHomePageLazy dccMcpCapabilities={auth.dccMcpCapabilities} currentUser={auth.user} />
+            </RouteGuard>,
+          )}
+        />
 
           {routeAccess.isModuleEnabled(SKILL_MODULE_KEY) ? (
             <Route
@@ -261,7 +294,36 @@ export function DesktopRouter({ auth }: { auth: AuthState }) {
                   <SettingsGeneralPageLazy
                     colorThemeMode={auth.colorThemeMode}
                     onColorThemeModeChange={auth.setColorThemeMode}
+                    backendConfig={auth.backendConfig}
+                    selectedIdentity={auth.selectedIdentity}
+                    onBackendConfigChange={auth.setBackendConfig}
+                    onBackendConfigReset={auth.resetBackendConfig}
                   />,
+                )}
+              />
+              <Route
+                path={SETTINGS_OVERVIEW_PATH.slice(1)}
+                element={withRouteLoading(<SettingsAdminOverviewPageLazy />)}
+              />
+              <Route
+                path={SETTINGS_IDENTITIES_PATH.slice(1)}
+                element={withRouteLoading(
+                  <SettingsAdminIdentitiesPageLazy
+                    selectedIdentity={auth.selectedIdentity}
+                    onSelectIdentity={auth.setSelectedIdentity}
+                  />,
+                )}
+              />
+              <Route
+                path={SETTINGS_PERMISSIONS_PATH.slice(1)}
+                element={withRouteLoading(<SettingsAdminPermissionsPageLazy />)}
+              />
+              <Route
+                path="settings/agent"
+                element={withRouteLoading(
+                  <RouteGuard auth={auth} routeAccess={routeAccess}>
+                    <AgentSettingsPageLazy />
+                  </RouteGuard>,
                 )}
               />
             </>
@@ -270,26 +332,11 @@ export function DesktopRouter({ auth }: { auth: AuthState }) {
           {routeAccess.isModuleEnabled(AGENT_MODULE_KEY) ? (
             <>
               <Route
-                path="agents/model/settings"
+                path="project-settings"
                 element={
                   withRouteLoading(
                     <RouteGuard auth={auth} routeAccess={routeAccess}>
-                      <ModelAgentSettingsPageLazy
-                        modelMcpCapabilities={auth.modelMcpCapabilities}
-                        onModelMcpCapabilitiesChange={auth.setModelMcpCapabilities}
-                        blenderBridgeRuntime={auth.blenderBridgeRuntime}
-                        ensureBlenderBridge={auth.ensureBlenderBridge}
-                      />
-                    </RouteGuard>,
-                  )
-                }
-              />
-              <Route
-                path="agents/code/settings"
-                element={
-                  withRouteLoading(
-                    <RouteGuard auth={auth} routeAccess={routeAccess}>
-                      <CodeAgentSettingsPageLazy />
+                      <ProjectSettingsPageLazy />
                     </RouteGuard>,
                   )
                 }
@@ -302,97 +349,21 @@ export function DesktopRouter({ auth }: { auth: AuthState }) {
           element={withRouteLoading(<CommonAiKeyPageLazy aiKeys={auth.aiKeys} onAiKeysChange={auth.setAiKeys} />)}
         />
 
-          {routeAccess.isModuleEnabled(AGENT_MODULE_KEY) ? (
-            <Route
-              path="agents/code"
-              element={
-                withRouteLoading(
-                  <RouteGuard auth={auth} routeAccess={routeAccess}>
-                    <CodeAgentPageLazy modelMcpCapabilities={auth.modelMcpCapabilities} currentUser={auth.user} />
-                  </RouteGuard>,
-                )
-              }
-            />
-          ) : null}
-
-          {routeAccess.isModuleEnabled(AGENT_MODULE_KEY) ? (
-            <Route
-              path="agents/code/project-settings"
-              element={
-                withRouteLoading(
-                  <RouteGuard auth={auth} routeAccess={routeAccess}>
-                    <CodeProjectSettingsPageLazy />
-                  </RouteGuard>,
-                )
-              }
-            />
-          ) : null}
-
-          {routeAccess.isModuleEnabled(AGENT_MODULE_KEY) ? (
-            <Route
-              path="agents/model"
-              element={
-                withRouteLoading(
-                  <RouteGuard auth={auth} routeAccess={routeAccess}>
-                    <ModelAgentPageLazy modelMcpCapabilities={auth.modelMcpCapabilities} currentUser={auth.user} />
-                  </RouteGuard>,
-                )
-              }
-            />
-          ) : null}
-
           {routeAccess.isModuleEnabled(SESSION_MODULE_KEY) ? (
             <Route
-              path="agents/code/session/:sessionId"
+              path="session/:sessionId"
               element={
                 withRouteLoading(
                   <RouteGuard auth={auth} routeAccess={routeAccess}>
-                    <CodeSessionPageLazy
+                    <AgentSessionPageLazy
                       currentUser={auth.user}
-                      modelMcpCapabilities={auth.modelMcpCapabilities}
+                      dccMcpCapabilities={auth.dccMcpCapabilities}
                       blenderBridgeRuntime={auth.blenderBridgeRuntime}
                       ensureBlenderBridge={auth.ensureBlenderBridge}
                       aiKeys={auth.aiKeys}
                     />
                   </RouteGuard>,
                 )
-              }
-            />
-          ) : null}
-
-          {routeAccess.isModuleEnabled(SESSION_MODULE_KEY) ? (
-            <Route
-              path="agents/model/session/:sessionId"
-              element={
-                withRouteLoading(
-                  <RouteGuard auth={auth} routeAccess={routeAccess}>
-                    <ModelSessionPageLazy
-                      currentUser={auth.user}
-                      modelMcpCapabilities={auth.modelMcpCapabilities}
-                      blenderBridgeRuntime={auth.blenderBridgeRuntime}
-                      ensureBlenderBridge={auth.ensureBlenderBridge}
-                      aiKeys={auth.aiKeys}
-                    />
-                  </RouteGuard>,
-                )
-              }
-            />
-          ) : null}
-
-          {routeAccess.isModuleEnabled(WORKFLOW_MODULE_KEY) ? (
-            <Route
-              path="agents/code/workflows"
-              element={
-                <LegacyWorkflowRedirect workflowType="code" />
-              }
-            />
-          ) : null}
-
-          {routeAccess.isModuleEnabled(WORKFLOW_MODULE_KEY) ? (
-            <Route
-              path="agents/model/workflows"
-              element={
-                <LegacyWorkflowRedirect workflowType="model" />
               }
             />
           ) : null}

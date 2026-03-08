@@ -42,7 +42,10 @@ export function resolveBuildEnabledModules(raw: string | undefined): Set<Desktop
 //   - false: 未授权。
 export function isAgentAuthorized(availableAgents: AuthAvailableAgentItem[], agentKey: AgentKey): boolean {
   const target = agentKey.toLowerCase();
-  return availableAgents.some((item) => (item.code || "").toLowerCase() === target);
+  return availableAgents.some((item) => {
+    const code = (item.code || "").toLowerCase();
+    return code === target;
+  });
 }
 
 // 描述：为路由层提供统一的模块启用判断。

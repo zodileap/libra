@@ -42,9 +42,8 @@ test("TestDeskContentContainersShouldUseUnifiedProps", () => {
   const homeSource = readDesktopSource("src/modules/common/pages/home-page.tsx");
   const settingsSource = readDesktopSource("src/modules/common/pages/settings-general-page.tsx");
   const aiKeySource = readDesktopSource("src/modules/common/pages/ai-key-page.tsx");
-  const modelSettingsSource = readDesktopSource("src/modules/model/pages/model-agent-settings-page.tsx");
-  const codeSettingsSource = readDesktopSource("src/modules/code/pages/code-agent-settings-page.tsx");
-  const codeAgentSource = readDesktopSource("src/modules/code/pages/code-agent-page.tsx");
+  const codeSettingsSource = readDesktopSource("src/modules/agent/pages/agent-settings-page.tsx");
+  const agentHomeSource = readDesktopSource("src/modules/agent/pages/agent-home-page.tsx");
 
   const filesToCheck = [
     agentSource,
@@ -53,9 +52,8 @@ test("TestDeskContentContainersShouldUseUnifiedProps", () => {
     homeSource,
     settingsSource,
     aiKeySource,
-    modelSettingsSource,
     codeSettingsSource,
-    codeAgentSource,
+    agentHomeSource,
   ];
 
   // 描述：

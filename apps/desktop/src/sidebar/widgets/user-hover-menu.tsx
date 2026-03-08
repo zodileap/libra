@@ -10,6 +10,7 @@ import { SidebarEntryContent } from "./sidebar-entry-content";
 //   - 定义用户悬浮菜单组件入参。
 interface UserHoverMenuProps {
   user: LoginUser;
+  selectedIdentityLabel?: string;
   onLogout: () => Promise<void>;
   routeAccess: RouteAccess;
   desktopUpdateState?: DesktopUpdateState;
@@ -20,6 +21,7 @@ interface UserHoverMenuProps {
 // 描述：渲染用户悬浮菜单入口，统一承载设置、AI Key 与登出操作。
 export function UserHoverMenu({
   user,
+  selectedIdentityLabel,
   onLogout,
   routeAccess,
 }: UserHoverMenuProps) {
@@ -30,6 +32,8 @@ export function UserHoverMenu({
     const next = [] as Array<{ key: string; label: string; icon: string }>;
 
     if (routeAccess.isModuleEnabled("settings")) {
+      next.push({ key: "overview", label: "概览", icon: "dashboard" });
+      next.push({ key: "identities", label: "身份", icon: "badge" });
       next.push({ key: "settings", label: "设置", icon: "settings" });
     }
 
@@ -43,6 +47,8 @@ export function UserHoverMenu({
     <AriMenu
       items={menuItems}
       onSelect={(key: string) => {
+        if (key === "overview") navigate("/settings/overview");
+        if (key === "identities") navigate("/settings/identities");
         if (key === "settings") navigate("/settings/general");
         if (key === "ai-key") navigate("/ai-keys");
         if (key === "logout") {
@@ -66,7 +72,11 @@ export function UserHoverMenu({
           onFocus={() => setEntryHovered(true)}
           onBlur={() => setEntryHovered(false)}
         >
-          <SidebarEntryContent icon="person" label={user.name} highlighted={entryHovered} />
+          <SidebarEntryContent
+            icon="person"
+            label={selectedIdentityLabel ? `${user.name} · ${selectedIdentityLabel}` : user.name}
+            highlighted={entryHovered}
+          />
         </button>
       </AriContainer>
     </AriTooltip>

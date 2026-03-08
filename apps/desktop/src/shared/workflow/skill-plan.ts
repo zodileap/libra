@@ -1,60 +1,100 @@
-import type { CodeWorkflowDefinition } from "./types";
-import { readInstalledSkillIdsFromStorage } from "../../modules/common/services/skills";
-import { resolveCodeSkillPromptGuide } from "./prompt-guidance";
+import type { AgentSkillItem } from "../../modules/common/services/skills";
+import { normalizeAgentSkillId } from "./prompt-guidance";
+import type { AgentWorkflowDefinition } from "./types";
 
 // 描述：
 //
 //   - 定义技能节点执行状态枚举。
-type CodeWorkflowSkillPlanStatus = "ready" | "missing_skill_id" | "not_installed";
+type AgentWorkflowSkillPlanStatus = "ready" | "missing_skill_id" | "not_found";
 
 // 描述：
 //
 //   - 定义单个技能节点执行计划项。
-export interface CodeWorkflowSkillPlanItem {
+export interface AgentWorkflowSkillPlanItem {
   nodeId: string;
   nodeTitle: string;
   skillId: string;
   skillVersion: string;
+  skillName: string;
+  skillDescription: string;
+  skillMarkdownBody: string;
   instruction: string;
-  status: CodeWorkflowSkillPlanStatus;
+  status: AgentWorkflowSkillPlanStatus;
 }
 
 // 描述：
 //
-//   - 定义代码工作流技能执行计划结构。
-export interface CodeWorkflowSkillExecutionPlan {
-  items: CodeWorkflowSkillPlanItem[];
-  readyItems: CodeWorkflowSkillPlanItem[];
+//   - 定义统一智能体工作流技能执行计划结构。
+export interface AgentWorkflowSkillExecutionPlan {
+  items: AgentWorkflowSkillPlanItem[];
+  readyItems: AgentWorkflowSkillPlanItem[];
   blockingIssues: string[];
   planPrompt: string;
 }
 
 // 描述：
 //
-//   - 读取当前已安装技能集合，复用 skills 服务的统一读取逻辑。
+//   - 将可用技能列表转换为按标准技能编码索引的映射，供工作流执行前校验复用。
+//
+// Params:
+//
+//   - skills: 当前已发现的技能列表。
 //
 // Returns:
 //
-//   - 已安装技能 ID 集合。
-function readInstalledSkillIdSet(): Set<string> {
-  return new Set(readInstalledSkillIdsFromStorage());
+//   - 按技能编码索引的映射。
+function buildAgentSkillMap(skills: AgentSkillItem[]): Map<string, AgentSkillItem> {
+  const skillMap = new Map<string, AgentSkillItem>();
+  skills.forEach((item) => {
+    const normalizedSkillId = normalizeAgentSkillId(item.id);
+    if (!normalizedSkillId) {
+      return;
+    }
+    skillMap.set(normalizedSkillId, item);
+  });
+  return skillMap;
 }
 
 // 描述：
 //
-//   - 从代码工作流中构建技能执行计划，并返回可注入提示词的计划文本。
+//   - 为单个技能节点构造标准技能说明块，在执行计划里直接注入 `SKILL.md` 正文。
 //
 // Params:
 //
-//   - workflow: 当前代码工作流定义。
+//   - item: 已就绪的技能计划项。
+//
+// Returns:
+//
+//   - 技能说明文本块。
+function buildSkillInstructionBlock(item: AgentWorkflowSkillPlanItem): string {
+  const lines = [`### ${item.skillName} (${item.skillId})`];
+  if (item.skillDescription) {
+    lines.push(item.skillDescription);
+  }
+  if (item.instruction) {
+    lines.push(`节点要求：${item.instruction}`);
+  }
+  lines.push(item.skillMarkdownBody);
+  return lines.filter((line) => String(line || "").trim().length > 0).join("\n\n");
+}
+
+// 描述：
+//
+//   - 从统一智能体工作流中构建技能执行计划，并返回可注入提示词的计划文本。
+//
+// Params:
+//
+//   - workflow: 当前智能体工作流定义。
+//   - skills: 当前已发现的技能列表。
 //
 // Returns:
 //
 //   - 技能执行计划。
-export function buildCodeWorkflowSkillExecutionPlan(
-  workflow: CodeWorkflowDefinition | null | undefined,
-): CodeWorkflowSkillExecutionPlan {
-  const installedSkillIdSet = readInstalledSkillIdSet();
+export function buildAgentWorkflowSkillExecutionPlan(
+  workflow: AgentWorkflowDefinition | null | undefined,
+  skills: AgentSkillItem[],
+): AgentWorkflowSkillExecutionPlan {
+  const skillMap = buildAgentSkillMap(skills);
   const skillNodes = (workflow?.graph?.nodes || []).filter((node) => node.type === "skill");
 
   if (skillNodes.length === 0) {
@@ -66,9 +106,9 @@ export function buildCodeWorkflowSkillExecutionPlan(
     };
   }
 
-  const items: CodeWorkflowSkillPlanItem[] = skillNodes.map((node) => {
+  const items: AgentWorkflowSkillPlanItem[] = skillNodes.map((node) => {
     const nodeTitle = String(node.title || "技能节点").trim() || "技能节点";
-    const skillId = String(node.skillId || "").trim();
+    const skillId = normalizeAgentSkillId(String(node.skillId || "").trim());
     const skillVersion = String(node.skillVersion || "").trim();
     const instruction = String(node.instruction || "").trim();
 
@@ -78,19 +118,26 @@ export function buildCodeWorkflowSkillExecutionPlan(
         nodeTitle,
         skillId: "",
         skillVersion,
+        skillName: "",
+        skillDescription: "",
+        skillMarkdownBody: "",
         instruction,
         status: "missing_skill_id",
       };
     }
 
-    if (!installedSkillIdSet.has(skillId)) {
+    const resolvedSkill = skillMap.get(skillId);
+    if (!resolvedSkill) {
       return {
         nodeId: node.id,
         nodeTitle,
         skillId,
         skillVersion,
+        skillName: "",
+        skillDescription: "",
+        skillMarkdownBody: "",
         instruction,
-        status: "not_installed",
+        status: "not_found",
       };
     }
 
@@ -99,6 +146,9 @@ export function buildCodeWorkflowSkillExecutionPlan(
       nodeTitle,
       skillId,
       skillVersion,
+      skillName: resolvedSkill.name,
+      skillDescription: resolvedSkill.description,
+      skillMarkdownBody: resolvedSkill.markdownBody,
       instruction,
       status: "ready",
     };
@@ -111,24 +161,22 @@ export function buildCodeWorkflowSkillExecutionPlan(
       if (item.status === "missing_skill_id") {
         return `节点「${item.nodeTitle}」未配置技能编码`;
       }
-      return `技能「${item.skillId}」未安装（节点：${item.nodeTitle}）`;
+      return `技能「${item.skillId}」未在 Agent Skills 注册表中找到（节点：${item.nodeTitle}）`;
     });
 
   const planPrompt = readyItems.length > 0
     ? [
         "【Skill 执行计划】",
         ...readyItems.map((item, index) => {
-          const skillGuide = resolveCodeSkillPromptGuide(item.skillId);
-          const instructionText = item.instruction
-            ? `；节点指令：${item.instruction}`
-            : "";
-          if (skillGuide) {
-            return `${index + 1}. ${item.nodeTitle}：${skillGuide.name}；能力：${skillGuide.objective}；产出：${skillGuide.deliverable}${instructionText}`;
-          }
-          return `${index + 1}. ${item.nodeTitle}：技能编码 ${item.skillId}${instructionText}`;
+          const instructionText = item.instruction ? `；节点要求：${item.instruction}` : "";
+          const descriptionText = item.skillDescription ? `；技能说明：${item.skillDescription}` : "";
+          return `${index + 1}. ${item.nodeTitle}：${item.skillName} (${item.skillId})${descriptionText}${instructionText}`;
         }),
         "执行约束：按顺序执行技能；若任一步骤失败，先输出阻塞原因与修复建议，再决定是否继续。",
-      ].join("\n")
+        "",
+        "【Skill 定义】",
+        ...readyItems.map((item) => buildSkillInstructionBlock(item)),
+      ].join("\n\n")
     : "";
 
   return {

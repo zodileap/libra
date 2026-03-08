@@ -3,7 +3,7 @@ import { Outlet } from "react-router-dom";
 import { AriContainer } from "aries_react";
 import { ClientSidebar } from "../sidebar";
 import type { RouteAccess } from "../router/types";
-import type { AuthAvailableAgentItem, DesktopUpdateState, LoginUser } from "./types";
+import type { AuthAvailableAgentItem, ConsoleIdentityItem, DesktopUpdateState, LoginUser } from "./types";
 import { DevDebugFloat } from "../widgets/dev-debug-float";
 import { DesktopAppHeader } from "../widgets/app-header";
 import { DesktopHeaderSlotProvider } from "../widgets/app-header/header-slot-context";
@@ -13,6 +13,7 @@ import { DesktopHeaderSlotProvider } from "../widgets/app-header/header-slot-con
 //   - 定义桌面端布局组件入参。
 interface DesktopLayoutProps {
   user: LoginUser;
+  selectedIdentity: ConsoleIdentityItem | null;
   onLogout: () => Promise<void>;
   availableAgents: AuthAvailableAgentItem[];
   routeAccess: RouteAccess;
@@ -26,6 +27,7 @@ interface DesktopLayoutProps {
 //   - 渲染桌面端主布局，组合侧边栏与主路由内容区。
 export function DesktopLayout({
   user,
+  selectedIdentity,
   onLogout,
   availableAgents,
   routeAccess,
@@ -59,6 +61,7 @@ export function DesktopLayout({
         <AriContainer className="desk-app-sidebar-wrap">
           <ClientSidebar
             user={user}
+            selectedIdentity={selectedIdentity}
             onLogout={onLogout}
             availableAgents={availableAgents}
             routeAccess={routeAccess}

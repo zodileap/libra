@@ -1,41 +1,100 @@
-import { useState } from "react";
-import { AriButton, AriContainer, AriFlex, AriSwitch } from "aries_react";
-import type { ColorThemeMode } from "../types";
-import { DeskPageHeader, DeskSectionTitle, DeskSettingsRow } from "../../../widgets/settings-primitives";
+import { useEffect, useState } from "react";
+import { AriButton, AriContainer, AriFlex, AriInput, AriSwitch, AriTypography } from "aries_react";
+import type { ColorThemeMode, ConsoleIdentityItem, DesktopBackendConfig } from "../types";
+import { DeskPageHeader, DeskSectionTitle, DeskSettingsRow, DeskStatusText } from "../../../widgets/settings-primitives";
 
-// 描述:
-//
-//   - 定义通用设置页组件入参。
+// 描述：定义通用设置页组件入参。
 interface SettingsGeneralPageProps {
   colorThemeMode: ColorThemeMode;
   onColorThemeModeChange: (value: ColorThemeMode) => void;
+  backendConfig: DesktopBackendConfig;
+  selectedIdentity: ConsoleIdentityItem | null;
+  onBackendConfigChange: (value: DesktopBackendConfig) => DesktopBackendConfig;
+  onBackendConfigReset: () => DesktopBackendConfig;
 }
 
-// 描述:
+// 描述：判断后端地址是否为合法的 `http(s)://host:port` 形式；允许用户只输入 `ip:port`。
 //
-//   - 渲染通用设置页，统一主题切换与基础交互开关。
+// Params:
+//
+//   - value: 后端地址输入值。
+//
+// Returns:
+//
+//   - true: 地址合法。
+function isValidBackendAddress(value: string): boolean {
+  const text = value.trim();
+  if (!text) {
+    return false;
+  }
+  const normalized = /^[a-zA-Z][a-zA-Z\d+.-]*:\/\//.test(text) ? text : `http://${text}`;
+  try {
+    const url = new URL(normalized);
+    return (url.protocol === "http:" || url.protocol === "https:") && Boolean(url.host);
+  } catch (_err) {
+    return false;
+  }
+}
+
+// 描述：渲染通用设置页，统一管理主题模式与桌面端后端接入配置。
 export function SettingsGeneralPage({
   colorThemeMode,
   onColorThemeModeChange,
+  backendConfig,
+  selectedIdentity,
+  onBackendConfigChange,
+  onBackendConfigReset,
 }: SettingsGeneralPageProps) {
   const [opaqueWindow, setOpaqueWindow] = useState(false);
   const [pointerCursor, setPointerCursor] = useState(false);
+  const [backendDraft, setBackendDraft] = useState<DesktopBackendConfig>(backendConfig);
+  const [backendStatus, setBackendStatus] = useState("");
+
+  useEffect(() => {
+    setBackendDraft(backendConfig);
+  }, [backendConfig]);
+
+  // 描述：更新后端接入草稿字段，保证用户可以先编辑再统一保存。
+  const patchBackendDraft = (patch: Partial<DesktopBackendConfig>) => {
+    setBackendDraft((prev) => ({
+      ...prev,
+      ...patch,
+    }));
+    if (backendStatus) {
+      setBackendStatus("");
+    }
+  };
+
+  // 描述：保存后端接入配置；启用后端时会校验地址格式，避免把错误地址写入运行态。
+  const handleSaveBackendConfig = () => {
+    if (backendDraft.enabled && !isValidBackendAddress(backendDraft.baseUrl)) {
+      setBackendStatus("请输入有效的后端地址，例如 http://127.0.0.1:10001。");
+      return;
+    }
+    const saved = onBackendConfigChange({
+      enabled: backendDraft.enabled,
+      baseUrl: backendDraft.baseUrl.trim(),
+    });
+    setBackendDraft(saved);
+    setBackendStatus(saved.enabled ? "后端接入配置已保存。" : "已切换为本地模式。");
+  };
+
+  // 描述：恢复默认后端配置；恢复后 Desktop 会重新回到纯本地模式。
+  const handleResetBackendConfig = () => {
+    const restored = onBackendConfigReset();
+    setBackendDraft(restored);
+    setBackendStatus("后端接入配置已恢复为默认值。");
+  };
 
   return (
     <AriContainer className="desk-content" showBorderRadius={false}>
       <AriContainer className="desk-settings-shell">
-        <DeskPageHeader
-          title="General"
-          description="统一管理主题与基础交互偏好。"
-        />
+        <DeskPageHeader title="General" description="统一管理主题、基础交互和后端接入。" />
 
         <DeskSectionTitle title="Appearance" />
 
         <AriContainer className="desk-settings-panel">
-          <DeskSettingsRow
-            title="Theme"
-            description="Use light, dark, or match your system"
-          >
+          <DeskSettingsRow title="Theme" description="Use light, dark, or match your system">
             <AriFlex className="desk-theme-group" align="center" space={8}>
               <AriButton
                 size="sm"
@@ -75,6 +134,40 @@ export function SettingsGeneralPage({
             <AriSwitch checked={pointerCursor} onChange={setPointerCursor} />
           </DeskSettingsRow>
         </AriContainer>
+
+        <DeskSectionTitle title="Backend" />
+
+        <AriContainer className="desk-settings-panel">
+          <DeskSettingsRow title="Current Identity" description="登录后会自动选择身份，也可以在 Identities 页面手动切换。">
+            <AriContainer padding={0}>
+              <AriTypography variant="caption" value={selectedIdentity?.scopeName || "未选定身份"} />
+            </AriContainer>
+          </DeskSettingsRow>
+
+          <DeskSettingsRow title="Use Backend" description="启用后可共享账号、工作流与会话存储。">
+            <AriSwitch
+              checked={backendDraft.enabled}
+              onChange={(value) => patchBackendDraft({ enabled: value })}
+            />
+          </DeskSettingsRow>
+
+          <DeskSettingsRow title="Backend URL" description="输入统一后端入口地址，例如 http://127.0.0.1:10001。">
+            <AriInput
+              value={backendDraft.baseUrl}
+              placeholder="http://127.0.0.1:10001"
+              onChange={(value) => patchBackendDraft({ baseUrl: value })}
+            />
+          </DeskSettingsRow>
+
+          <DeskSettingsRow title="Actions" description="未接入后端时，Desktop 将只使用本地存储。">
+            <AriFlex align="center" space={8}>
+              <AriButton icon="save" label="保存设置" color="primary" onClick={handleSaveBackendConfig} />
+              <AriButton icon="settings_backup_restore" label="恢复默认" onClick={handleResetBackendConfig} />
+            </AriFlex>
+          </DeskSettingsRow>
+        </AriContainer>
+
+        {backendStatus ? <DeskStatusText value={backendStatus} /> : null}
       </AriContainer>
     </AriContainer>
   );

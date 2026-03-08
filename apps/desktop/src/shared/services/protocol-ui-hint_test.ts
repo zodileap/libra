@@ -46,7 +46,7 @@ function TestBuildUiHintShouldMapBridgeError(): void {
   assert(uiHint?.key === "restart-blender-bridge", "Bridge 错误未映射到重启提示");
 }
 
-// 描述：验证能力关闭错误会映射为“打开模型设置”提示。
+// 描述：验证能力关闭错误会映射为“打开智能体设置”提示。
 function TestBuildUiHintShouldMapCapabilityDisabledError(): void {
   const uiHint = buildUiHintFromProtocolError({
     code: "mcp.model.export.capability_disabled",
@@ -55,8 +55,25 @@ function TestBuildUiHintShouldMapCapabilityDisabledError(): void {
   });
   assert(uiHint?.key === "export-capability-disabled", "能力关闭错误未映射到设置提示");
   assert(
-    Boolean(uiHint?.actions.some((action) => action.kind === "open_model_settings")),
-    "能力关闭提示缺少打开设置动作",
+    Boolean(uiHint?.actions.some((action) => action.kind === "open_agent_settings")),
+    "能力关闭提示缺少打开智能体设置动作",
+  );
+}
+
+// 描述：验证协议中的智能体设置动作会原样保留。
+function TestMapProtocolUiHintShouldKeepAgentSettingsAction(): void {
+  const protocolUiHint: ProtocolUiHint = {
+    key: "open-agent-settings",
+    level: "info",
+    title: "打开设置",
+    message: "使用当前动作键",
+    actions: [{ key: "open_agent_settings", label: "打开智能体设置", intent: "primary" }],
+  };
+
+  const workflowUiHint = mapProtocolUiHint(protocolUiHint);
+  assert(
+    workflowUiHint.actions[0]?.kind === "open_agent_settings",
+    "智能体设置动作未保持为 open_agent_settings",
   );
 }
 
@@ -73,7 +90,7 @@ function TestBuildUiHintShouldReturnNullForUnknownError(): void {
 // 描述：验证复杂操作失败可映射到恢复交互提示。
 function TestBuildUiHintShouldMapComplexRecoveryError(): void {
   const uiHint = buildUiHintFromProtocolError({
-    code: "core.desktop.model.step_failed",
+    code: "core.desktop.scene.step_failed",
     message: "复杂操作执行失败，已自动回滚",
     retryable: true,
   });
@@ -90,6 +107,7 @@ function runAllProtocolUiHintTests(): void {
     TestMapProtocolUiHintShouldKeepFields,
     TestBuildUiHintShouldMapBridgeError,
     TestBuildUiHintShouldMapCapabilityDisabledError,
+    TestMapProtocolUiHintShouldKeepAgentSettingsAction,
     TestBuildUiHintShouldReturnNullForUnknownError,
     TestBuildUiHintShouldMapComplexRecoveryError,
   ];
