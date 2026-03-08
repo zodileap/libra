@@ -63,3 +63,15 @@ test("TestHomeAndAgentSidebarShouldUseProjectFirstLayout", () => {
   assert.match(styleSource, /\.desk-agent-session-header/);
   assert.match(styleSource, /\.desk-agent-session-header-actions/);
 });
+
+test("TestAgentSidebarBackHeaderShouldOnlyAppearOnProjectSettings", () => {
+  const sidebarSource = readDesktopSource("src/sidebar/index.tsx");
+
+  // 描述：
+  //
+  //   - 话题页不应再显示返回 Home，只有项目设置页这类真正子页才显示返回头部。
+  assert.match(sidebarSource, /function shouldShowAgentSidebarBackHeader\(pathname: string\): boolean \{/);
+  assert.match(sidebarSource, /return pathname\.startsWith\(PROJECT_SETTINGS_PATH\);/);
+  assert.match(sidebarSource, /showBackHeader=\{shouldShowAgentSidebarBackHeader\(location\.pathname\)\}/);
+  assert.doesNotMatch(sidebarSource, /showBackHeader=\{!location\.pathname\.startsWith\(AGENT_HOME_PATH\)\}/);
+});

@@ -70,10 +70,14 @@ test("TestSidebarDeleteButtonsShouldUseGhostAndColor", () => {
 
   // 描述:
   //
-  //   - 工作流删除按钮在鼠标移出后应退出确认态，避免再次 hover 仍停留“确定”状态。
-  assert.match(
+  //   - 工作流删除按钮进入确认态后不应在鼠标移出时清空确认状态，避免二次确认被意外打断。
+  assert.doesNotMatch(
     source,
     /onMouseLeave=\{\(\) => \{[\s\S]*setPendingDeleteWorkflowId\(\(current\) => \(current === item\.key \? "" : current\)\);[\s\S]*\}\}/,
+  );
+  assert.match(
+    source,
+    /showActionsOnHover: pendingDeleteWorkflowId !== item\.key/,
   );
 
   // 描述:

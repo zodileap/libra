@@ -141,6 +141,17 @@ test("TestAgentSidebarShouldUseWorkspaceTreeAndWorkspaceActions", () => {
   assert.doesNotMatch(source, /\{ key: "edit", label: "编辑", icon: "edit" \}/);
 });
 
+test("TestAgentSidebarShouldKeepWorkspaceExpandedWhenSelectingTopic", () => {
+  const source = readDesktopSource("src/sidebar/index.tsx");
+
+  // 描述:
+  //
+  //   - 点击项目内话题时，路由切换只应清理临时交互态，不应把目录树展开状态清空。
+  assert.match(source, /setPendingDeleteSessionId\(""\);[\s\S]*setHoveredContextMenuActionKey\(""\);[\s\S]*\}, \[location\.pathname\]\);/);
+  assert.match(source, /setProjectWorkspaceExpandedKeys\(\[\]\);[\s\S]*setSessionSortMode\("default"\);[\s\S]*\}, \[agentKey\]\);/);
+  assert.doesNotMatch(source, /setProjectWorkspaceExpandedKeys\(\[\]\);[\s\S]*\}, \[location\.pathname(?:,\s*agentKey)?\]\);/);
+});
+
 test("TestAgentSidebarTitleUsesUnifiedResolver", () => {
   const sidebarSource = readDesktopSource("src/sidebar/index.tsx");
   const dataSource = readDesktopSource("src/shared/data.ts");

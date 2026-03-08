@@ -278,7 +278,8 @@ test("TestWorkflowCanvasSidebarAndFloatingActionsShouldMatchUxRules", () => {
   assert.match(sidebarSource, /onBack=\{\(\) => navigate\("\/home"\)\}/);
   assert.match(sidebarSource, /if \(pendingDeleteWorkflowId !== workflowId\) \{\s*setPendingDeleteWorkflowId\(workflowId\);\s*return;\s*\}/s);
   assert.match(sidebarSource, /label=\{pendingDeleteWorkflowId === item\.key \? "确定" : undefined\}/);
-  assert.match(sidebarSource, /showActionsOnHover: true/);
+  assert.match(sidebarSource, /showActionsOnHover: pendingDeleteWorkflowId !== item\.key/);
+  assert.doesNotMatch(sidebarSource, /setPendingDeleteWorkflowId\(\(current\) => \(current === item\.key \? "" : current\)\);/);
   assert.match(canvasSource, /className="desk-workflow-editor-floating-panel"/);
   assert.doesNotMatch(canvasSource, /label="新增工作流"/);
   assert.doesNotMatch(canvasSource, /desk-workflow-editor-sidebar/);

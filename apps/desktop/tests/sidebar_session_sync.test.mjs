@@ -79,3 +79,15 @@ test("TestRemoveWorkspaceShouldAlsoRemoveBoundSessions", () => {
   assert.match(dataSource, /const sessionIds = mapItems[\s\S]*\.filter\(\(item\) => item\.workspaceId === workspaceId\)[\s\S]*\.map\(\(item\) => item\.sessionId\);/);
   assert.match(dataSource, /sessionIds\.forEach\(\(sessionId\) => \{\s*removeAgentSession\("agent", sessionId\);\s*\}\);/s);
 });
+
+test("TestLocalSidebarSessionsShouldNotSeedDemoTopicsForNewProject", () => {
+  const dataSource = readDesktopSource("src/shared/data.ts");
+
+  // 描述：
+  //
+  //   - 本地模式新项目不应自动带出示例话题，列表只应来自真实创建过的话题和本地消息记录。
+  assert.match(dataSource, /export const AGENT_SESSIONS: AgentSession\[] = \[\];/);
+  assert.doesNotMatch(dataSource, /MCP 接入验证/);
+  assert.match(dataSource, /const dynamicProjects = readAgentProjects\(\)\.map<AgentSession>/);
+  assert.doesNotMatch(dataSource, /const defaults = AGENT_SESSIONS/);
+});

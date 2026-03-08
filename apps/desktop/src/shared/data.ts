@@ -36,13 +36,8 @@ export const SHORTCUTS: ShortcutItem[] = [
 
 // 描述:
 //
-//   - 定义本地会话初始数据快照，供未登录或离线场景兜底展示。
-export const AGENT_SESSIONS: AgentSession[] = [
-  { id: "agent-001", agentKey: "agent", title: "React + aries_react 脚手架", updatedAt: "今天 09:40" },
-  { id: "agent-002", agentKey: "agent", title: "权限后台页面重构", updatedAt: "昨天 21:15" },
-  { id: "agent-003", agentKey: "agent", title: "工作流节点编排", updatedAt: "今天 10:12" },
-  { id: "agent-004", agentKey: "agent", title: "MCP 接入验证", updatedAt: "昨天 18:22" }
-];
+//   - 定义本地会话初始数据快照；当前不再预置示例话题，避免新项目自动混入历史演示会话。
+export const AGENT_SESSIONS: AgentSession[] = [];
 
 // 描述:
 //
@@ -126,6 +121,7 @@ interface SessionMeta {
   renamedTitles: Record<string, string>;
   pinnedIds: string[];
   removedIds: string[];
+  selectedDccSoftwareBySessionId: Record<string, string>;
 }
 
 // 描述:
@@ -135,6 +131,7 @@ export interface AgentSessionMetaSnapshot {
   renamedTitles: Record<string, string>;
   pinnedIds: string[];
   removedIds: string[];
+  selectedDccSoftwareBySessionId: Record<string, string>;
 }
 
 // 描述:
@@ -417,6 +414,7 @@ function readSessionMeta(): SessionMeta {
       renamedTitles: {},
       pinnedIds: [],
       removedIds: [],
+      selectedDccSoftwareBySessionId: {},
     };
   }
 
@@ -426,6 +424,7 @@ function readSessionMeta(): SessionMeta {
       renamedTitles: {},
       pinnedIds: [],
       removedIds: [],
+      selectedDccSoftwareBySessionId: {},
     };
   }
 
@@ -435,12 +434,19 @@ function readSessionMeta(): SessionMeta {
       renamedTitles: parsed?.renamedTitles || {},
       pinnedIds: Array.isArray(parsed?.pinnedIds) ? parsed.pinnedIds : [],
       removedIds: Array.isArray(parsed?.removedIds) ? parsed.removedIds : [],
+      selectedDccSoftwareBySessionId:
+        parsed?.selectedDccSoftwareBySessionId
+        && typeof parsed.selectedDccSoftwareBySessionId === "object"
+        && !Array.isArray(parsed.selectedDccSoftwareBySessionId)
+          ? parsed.selectedDccSoftwareBySessionId
+          : {},
     };
   } catch (_err) {
     return {
       renamedTitles: {},
       pinnedIds: [],
       removedIds: [],
+      selectedDccSoftwareBySessionId: {},
     };
   }
 }
@@ -1696,6 +1702,45 @@ export function isAgentSessionPinned(sessionId: string): boolean {
   return readSessionMeta().pinnedIds.includes(sessionId);
 }
 
+// 描述：读取指定会话当前绑定的 DCC 软件标识，供建模 Skill 在多软件场景下保持线程级一致性。
+//
+// Params:
+//
+//   - sessionId: 会话 ID。
+//
+// Returns:
+//
+//   - 已绑定的软件标识；未绑定时返回空字符串。
+export function resolveAgentSessionSelectedDccSoftware(sessionId: string): string {
+  return String(readSessionMeta().selectedDccSoftwareBySessionId[sessionId] || "").trim();
+}
+
+// 描述：记录指定会话当前绑定的 DCC 软件标识；空值会清理旧绑定，避免线程状态残留。
+//
+// Params:
+//
+//   - sessionId: 会话 ID。
+//   - software: DCC 软件标识。
+export function rememberAgentSessionSelectedDccSoftware(sessionId: string, software: string) {
+  const meta = readSessionMeta();
+  const normalizedSoftware = String(software || "").trim().toLowerCase();
+  if (!normalizedSoftware) {
+    delete meta.selectedDccSoftwareBySessionId[sessionId];
+  } else {
+    meta.selectedDccSoftwareBySessionId[sessionId] = normalizedSoftware;
+  }
+  writeSessionMeta(meta);
+}
+
+// 描述：清理指定会话绑定的 DCC 软件标识，供移除会话或用户主动重置绑定时复用。
+//
+// Params:
+//
+//   - sessionId: 会话 ID。
+export function clearAgentSessionSelectedDccSoftware(sessionId: string) {
+  rememberAgentSessionSelectedDccSoftware(sessionId, "");
+}
+
 // 描述：移除会话及其关联本地数据（标题、固定态、消息、目录绑定）。
 export function removeAgentSession(agentKey: AgentKey, sessionId: string) {
   const projects = readAgentProjects();
@@ -1710,6 +1755,7 @@ export function removeAgentSession(agentKey: AgentKey, sessionId: string) {
   }
   meta.pinnedIds = meta.pinnedIds.filter((id) => id !== sessionId);
   delete meta.renamedTitles[sessionId];
+  delete meta.selectedDccSoftwareBySessionId[sessionId];
   writeSessionMeta(meta);
 
   const groups = readSessionMessages();
@@ -2085,11 +2131,10 @@ function listDynamicAgentSessions(): AgentSession[] {
   }));
 }
 
-// 描述：返回指定智能体可见会话列表，融合默认会话、动态会话与本地元数据。
+// 描述：返回指定智能体可见会话列表，仅融合真实动态会话与本地元数据，避免新项目被演示会话污染。
 export function getAgentSessions(agentKey: AgentKey): AgentSession[] {
   void agentKey;
   const meta = readSessionMeta();
-  const defaults = AGENT_SESSIONS.filter((item) => item.agentKey === "agent");
   const dynamicProjects = readAgentProjects().map<AgentSession>((item) => ({
     id: item.id,
     agentKey: "agent",
@@ -2103,12 +2148,7 @@ export function getAgentSessions(agentKey: AgentKey): AgentSession[] {
     ),
   ];
 
-  const merged = [
-    ...dynamic,
-    ...defaults.filter((item) => !dynamic.some((dynamicItem) => dynamicItem.id === item.id)),
-  ];
-
-  const visible = merged.filter((item) => !meta.removedIds.includes(item.id));
+  const visible = dynamic.filter((item) => !meta.removedIds.includes(item.id));
   const renamed = visible.map((item) => ({
     ...item,
     title: meta.renamedTitles[item.id] || item.title,

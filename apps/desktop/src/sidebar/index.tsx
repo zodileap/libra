@@ -250,6 +250,22 @@ function matchSidebarMode(pathname: string): "home" | "agent" | "settings" | "ai
   return "home";
 }
 
+// 描述:
+//
+//   - 判断统一智能体侧边栏是否需要显示返回 Home 头部；当前仅项目设置页属于真正的子页，会话页和 Home 不显示返回。
+//
+// Params:
+//
+//   - pathname: 当前路由路径。
+//
+// Returns:
+//
+//   - true: 显示返回头部。
+//   - false: 隐藏返回头部。
+function shouldShowAgentSidebarBackHeader(pathname: string): boolean {
+  return pathname.startsWith(PROJECT_SETTINGS_PATH);
+}
+
 // 描述：将 runtime 会话实体转换为前端侧边栏会话项。
 function toAgentSession(agentKey: AgentKey, entity: { id: string; last_at?: string }): AgentSession {
   const updatedAtText = toSessionUpdatedAtText(entity.last_at);
@@ -1394,16 +1410,25 @@ function AgentSidebar({
   }, [agentKey, user.id]);
 
   useEffect(() => {
+    // 描述：
+    //
+    //   - 路由切换时只清理临时交互态，不重置项目树展开状态，避免点击话题后整组项目被自动收起。
     setPendingDeleteSessionId("");
     setContextSessionId("");
     setOpenWorkspaceActionMenuId("");
     setHoveredPinSessionId("");
     setHoveredDeleteSessionId("");
     setHoveredContextMenuActionKey("");
+    suppressNextSessionSelectIdRef.current = "";
+  }, [location.pathname]);
+
+  useEffect(() => {
+    // 描述：
+    //
+    //   - 仅在智能体上下文切换时重置目录树展开态和排序方式，避免不同侧边栏模式沿用旧状态。
     setProjectWorkspaceExpandedKeys([]);
     setSessionSortMode("default");
-    suppressNextSessionSelectIdRef.current = "";
-  }, [location.pathname, agentKey]);
+  }, [agentKey]);
 
   useEffect(() => {
     if (!isProjectAgent) {
@@ -1948,14 +1973,16 @@ function WorkflowsSidebar({
             }}
             onMouseLeave={() => {
               setHoveredDeleteWorkflowId((current) => (current === item.key ? "" : current));
-              setPendingDeleteWorkflowId((current) => (current === item.key ? "" : current));
             }}
             onClick={(event: MouseEvent<HTMLElement>) => {
               handleDeleteWorkflow(event, item.key);
             }}
           />
         ),
-        showActionsOnHover: true,
+        // 描述：
+        //
+        //   - 进入“确定删除”态后固定显示动作区，避免鼠标轻微移出或菜单重绘导致确认态被意外打断。
+        showActionsOnHover: pendingDeleteWorkflowId !== item.key,
       })),
     [workflows, pendingDeleteWorkflowId, hoveredDeleteWorkflowId],
   );
@@ -2190,7 +2217,7 @@ export function ClientSidebar({
         selectedIdentity={selectedIdentity}
         onLogout={onLogout}
         agentKey={agentKey}
-        showBackHeader={!location.pathname.startsWith(AGENT_HOME_PATH)}
+        showBackHeader={shouldShowAgentSidebarBackHeader(location.pathname)}
         routeAccess={routeAccess}
         desktopUpdateState={desktopUpdateState}
         onCheckDesktopUpdate={onCheckDesktopUpdate}
