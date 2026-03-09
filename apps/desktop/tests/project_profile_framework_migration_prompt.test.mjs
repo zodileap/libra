@@ -28,7 +28,11 @@ test("TestSessionPromptShouldInjectFrameworkReplacementGuards", () => {
   // 描述：
   //
   //   - 会话提示词层应识别框架替换需求，并注入“结构保持优先”的执行约束。
-  assert.match(source, /const CODE_FRAMEWORK_REPLACEMENT_KEYWORDS = \[/);
+  assert.match(source, /resolveDesktopTextVariants/);
+  assert.match(source, /DESKTOP_TEXT_VARIANT_GROUPS/);
+  assert.match(source, /const CODE_FRAMEWORK_REPLACEMENT_KEYWORDS = resolveDesktopTextVariants\(DESKTOP_TEXT_VARIANT_GROUPS\.codeFrameworkReplacement\);/);
+  assert.match(source, /const CODE_FRAMEWORK_GENERIC_NOUN_KEYWORDS = resolveDesktopTextVariants\(DESKTOP_TEXT_VARIANT_GROUPS\.codeFrameworkGenericNouns\);/);
+  assert.match(source, /const CODE_FRAMEWORK_GENERIC_VERB_KEYWORDS = resolveDesktopTextVariants\(DESKTOP_TEXT_VARIANT_GROUPS\.codeFrameworkGenericVerbs\);/);
   assert.match(source, /function isFrameworkReplacementPrompt\(prompt: string\): boolean \{/);
   assert.match(source, /function buildFrameworkReplacementContextLines\(/);
   assert.match(source, /【框架替换执行约束】/);
@@ -36,4 +40,6 @@ test("TestSessionPromptShouldInjectFrameworkReplacementGuards", () => {
   assert.match(source, /const frameworkReplacementContextLines = buildFrameworkReplacementContextLines\(/);
   assert.match(source, /\.\.\.frameworkReplacementContextLines,/);
   assert.match(source, /if \(!hasUiBaseline && !hasArchitectureBaseline\) \{\s*return \[\];\s*\}/s);
+  assert.match(source, /const hasFrameworkWord = CODE_FRAMEWORK_GENERIC_NOUN_KEYWORDS\.some\(\(keyword\) => normalized\.includes\(keyword\)\);/);
+  assert.match(source, /const hasReplacementVerb = CODE_FRAMEWORK_GENERIC_VERB_KEYWORDS\.some\(\(keyword\) => normalized\.includes\(keyword\)\);/);
 });

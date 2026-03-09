@@ -25,6 +25,7 @@ import {
   buildDesktopBackendBaseUrl,
   hasEnabledDesktopBackend,
 } from "./service-endpoints";
+import { translateDesktopText } from "../i18n";
 
 // 描述:
 //
@@ -118,7 +119,7 @@ export class BackendApiError extends Error {
 //   - 本地模式下的伪用户信息，保证 Desktop 在不接入后端时也能直接进入主界面。
 const localDesktopUser: LoginUser = {
   id: "local-user",
-  name: "本地模式",
+  name: translateDesktopText("本地模式"),
   email: "",
 };
 
@@ -144,7 +145,7 @@ const localConsoleIdentities: ConsoleIdentityItem[] = [
   {
     id: "local-identity-owner",
     type: "individual",
-    scopeName: "本地工作站",
+    scopeName: translateDesktopText("本地工作站"),
     roles: ["owner"],
     status: "active",
   },
@@ -156,18 +157,18 @@ const localConsoleIdentities: ConsoleIdentityItem[] = [
 const localManageableUsers: ConsoleManageableUserItem[] = [
   {
     id: "local-user-2",
-    name: "协作者",
+    name: translateDesktopText("协作者"),
     email: "collaborator@libra.local",
     status: "active",
-    identityScopes: ["共享工作站"],
+    identityScopes: [translateDesktopText("共享工作站")],
     self: false,
   },
   {
     id: "local-user",
-    name: "本地模式",
+    name: translateDesktopText("本地模式"),
     email: "",
     status: "active",
-    identityScopes: ["本地工作站"],
+    identityScopes: [translateDesktopText("本地工作站")],
     self: true,
   },
 ];
@@ -178,20 +179,20 @@ const localManageableUsers: ConsoleManageableUserItem[] = [
 const localPermissionTemplates: ConsolePermissionTemplate[] = [
   {
     code: "workflow.manage",
-    name: "工作流管理",
-    description: "允许查看、编辑和共享工作流。",
+    name: translateDesktopText("工作流管理"),
+    description: translateDesktopText("允许查看、编辑和共享工作流。"),
     resourceType: "workflow",
   },
   {
     code: "session.manage",
-    name: "会话管理",
-    description: "允许访问并同步智能体会话。",
+    name: translateDesktopText("会话管理"),
+    description: translateDesktopText("允许访问并同步智能体会话。"),
     resourceType: "session",
   },
   {
     code: "agent.access.grant",
-    name: "智能体能力授权",
-    description: "允许向其他账号分配智能体访问权限。",
+    name: translateDesktopText("智能体能力授权"),
+    description: translateDesktopText("允许向其他账号分配智能体访问权限。"),
     resourceType: "agent",
   },
 ];
@@ -466,8 +467,8 @@ async function request<T>(url: string, options?: RequestOptions): Promise<T> {
 
   if (!response.ok || code !== 200) {
     const fallbackMessage = response.status >= 500
-      ? "服务暂时不可用，请稍后重试。"
-      : "请求失败，请检查输入后重试。";
+      ? translateDesktopText("服务暂时不可用，请稍后重试。")
+      : translateDesktopText("请求失败，请检查输入后重试。");
     throw new BackendApiError(
       buildBackendErrorMessage(code, message, fallbackMessage),
       code,
@@ -476,7 +477,7 @@ async function request<T>(url: string, options?: RequestOptions): Promise<T> {
   }
 
   if (!envelope) {
-    throw new BackendApiError("响应体解析失败", code, response.status);
+    throw new BackendApiError(translateDesktopText("响应体解析失败"), code, response.status);
   }
 
   return envelope.data;
@@ -697,7 +698,7 @@ export async function getSetupStatus(): Promise<SetupStatus> {
       installed: false,
       accountAvailable: false,
       accountInitialized: false,
-      accountMessage: "当前未接入后端。",
+      accountMessage: translateDesktopText("当前未接入后端。"),
     };
   }
   const setupBaseUrl = resolveConfiguredServiceBaseUrl("setup");
@@ -715,7 +716,7 @@ export async function checkDesktopUpdate(params: {
   channel?: string;
 }): Promise<DesktopUpdateCheckResult> {
   if (!isDesktopBackendEnabled()) {
-    throw new BackendApiError("当前为本地模式，未接入后端更新服务。", -1, 0);
+    throw new BackendApiError(translateDesktopText("当前为本地模式，未接入后端更新服务。"), -1, 0);
   }
   const runtimeBaseUrl = resolveConfiguredServiceBaseUrl("runtime");
   const query = toQueryString({

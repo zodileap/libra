@@ -94,12 +94,21 @@ pub(crate) fn run_agent_with_python_workflow(
             &turn_records,
         );
         let round_description_started_at = now_millis();
+        let mut round_progress_observer = |progress: &str| {
+            on_stream_event(AgentStreamEvent::Heartbeat {
+                message: build_llm_waiting_heartbeat_message(
+                    "正在确认本次操作所需的工具链与任务顺序…",
+                    progress,
+                ),
+            });
+        };
         let round_description_result = crate::llm::call_model_with_policy_and_stream(
             provider,
             &round_description_prompt,
             request.workdir.as_deref(),
             llm_policy.clone(),
             None,
+            Some(&mut round_progress_observer),
         )
         .map_err(|err| err.to_protocol_error())?;
         let round_description_finished_at = now_millis();
@@ -134,18 +143,32 @@ pub(crate) fn run_agent_with_python_workflow(
             request.available_mcps.as_slice(),
         );
         let llm_started_at = now_millis();
-        let mut stream_observer = |chunk: &str| {
-            on_stream_event(AgentStreamEvent::LlmDelta {
-                content: chunk.to_string(),
-            });
-        };
-        let run_result = crate::llm::call_model_with_policy_and_stream(
-            provider,
-            &prompt,
-            request.workdir.as_deref(),
-            llm_policy.clone(),
-            Some(&mut stream_observer),
-        )
+        let run_result = {
+            let stream_event_cell = std::cell::RefCell::new(&mut *on_stream_event);
+            let mut stream_observer = |chunk: &str| {
+                let mut emitter = stream_event_cell.borrow_mut();
+                (*emitter)(AgentStreamEvent::LlmDelta {
+                    content: chunk.to_string(),
+                });
+            };
+            let mut codegen_progress_observer = |progress: &str| {
+                let mut emitter = stream_event_cell.borrow_mut();
+                (*emitter)(AgentStreamEvent::Heartbeat {
+                    message: build_llm_waiting_heartbeat_message(
+                        "正在等待模型返回可执行脚本的首个片段…",
+                        progress,
+                    ),
+                });
+            };
+            crate::llm::call_model_with_policy_and_stream(
+                provider,
+                &prompt,
+                request.workdir.as_deref(),
+                llm_policy.clone(),
+                Some(&mut stream_observer),
+                Some(&mut codegen_progress_observer),
+            )
+        }
         .map_err(|err| err.to_protocol_error())?;
         let llm_finished_at = now_millis();
         usage_total.prompt_tokens = usage_total
@@ -403,6 +426,28 @@ fn build_python_workflow_prompt(
 /// 描述：将结构化 planning 事件编码为前端可识别的统一文本协议。
 fn build_planning_meta_message(payload: Value) -> String {
     format!("{}{}", PLANNING_META_PREFIX, payload)
+}
+
+/// 描述：为等待中的 LLM 调用拼装更可读的心跳文案，避免前端只能看到无信息量的“正在思考”。
+///
+/// Params:
+///
+///   - fallback: 当前阶段的高层语义描述。
+///   - progress_detail: 底层 provider 给出的等待进度细节。
+///
+/// Returns:
+///
+///   - String: 适合直接透传给前端的心跳文案。
+fn build_llm_waiting_heartbeat_message(fallback: &str, progress_detail: &str) -> String {
+    let detail = progress_detail.trim();
+    if detail.is_empty() {
+        return fallback.trim().to_string();
+    }
+    let fallback_text = fallback.trim();
+    if fallback_text.contains(detail) {
+        return fallback_text.to_string();
+    }
+    format!("{}（{}）", fallback_text, detail)
 }
 
 /// 描述：规范化“本轮任务描述”文本，兼容模型偶发返回 JSON/前后缀噪声。
@@ -3816,6 +3861,25 @@ diff --git a/src/a.txt b/src/a.txt
         let prompt = build_round_description_prompt("实现登录页面", Some("demo"), 1, 6, &[]);
         assert!(prompt.contains("本次仅输出“本轮任务描述”"));
         assert!(prompt.contains("禁止输出代码"));
+    }
+
+    /// 描述：验证等待模型返回时会拼装阶段语义与底层 provider 细节，避免前端只能看到笼统占位文案。
+    #[test]
+    fn should_build_llm_waiting_heartbeat_message_with_progress_detail() {
+        let message = build_llm_waiting_heartbeat_message(
+            "正在确认本次操作所需的工具链与任务顺序…",
+            "Gemini CLI 已启动，正在等待首个响应分片…",
+        );
+        assert!(message.contains("正在确认本次操作所需的工具链与任务顺序"));
+        assert!(message.contains("Gemini CLI 已启动"));
+    }
+
+    /// 描述：验证等待模型返回时在 provider 没有补充细节的情况下，会回退到阶段默认文案。
+    #[test]
+    fn should_fallback_to_default_waiting_message_when_progress_detail_is_empty() {
+        let message =
+            build_llm_waiting_heartbeat_message("正在等待模型返回可执行脚本的首个片段…", "   ");
+        assert_eq!(message, "正在等待模型返回可执行脚本的首个片段…");
     }
 
     /// 描述：验证 Python 编排提示词会注入已启用 MCP 摘要，避免模型看不到外部能力入口。

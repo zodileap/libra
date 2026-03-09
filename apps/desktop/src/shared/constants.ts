@@ -109,6 +109,7 @@ export const STREAM_KINDS = {
 //   - 应用级 localStorage 存储键集合，统一管理避免散布硬编码。
 export const STORAGE_KEYS = {
   COLOR_THEME_MODE: "libra.desktop.colorThemeMode",
+  DESKTOP_LANGUAGE: "libra.desktop.language",
   DCC_MCP_CAPABILITIES: "libra.desktop.agent.dccMcpCapabilities",
   AI_KEYS: "libra.desktop.aiKeys",
   AGENT_SKILL_SELECTED_IDS: "libra.desktop.agent.selectedSkillIds",

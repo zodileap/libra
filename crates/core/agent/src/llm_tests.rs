@@ -93,3 +93,26 @@ fn should_reject_unknown_provider_for_stream_call() {
     assert_eq!(err.code, "core.agent.llm.provider_unknown");
     assert!(chunks.is_empty());
 }
+
+/// 描述：验证等待阶段心跳会在首次调用时立即放行。
+#[test]
+fn should_emit_waiting_progress_without_previous_timestamp() {
+    let now = std::time::Instant::now();
+    assert!(should_emit_waiting_progress(None, now));
+}
+
+/// 描述：验证等待阶段心跳会在节流窗口内抑制重复发送。
+#[test]
+fn should_throttle_waiting_progress_within_interval() {
+    let now = std::time::Instant::now();
+    let last = now - std::time::Duration::from_millis(400);
+    assert!(!should_emit_waiting_progress(Some(last), now));
+}
+
+/// 描述：验证等待阶段心跳在超过节流窗口后会重新发送。
+#[test]
+fn should_emit_waiting_progress_after_interval_elapsed() {
+    let now = std::time::Instant::now();
+    let last = now - std::time::Duration::from_millis(1500);
+    assert!(should_emit_waiting_progress(Some(last), now));
+}

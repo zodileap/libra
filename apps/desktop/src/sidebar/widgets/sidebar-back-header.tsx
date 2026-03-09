@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { AriButton, AriContainer, AriFlex } from "aries_react";
+import { useDesktopI18n } from "../../shared/i18n";
 
 // 描述:
 //
@@ -12,9 +13,10 @@ interface SidebarBackHeaderProps {
 
 // 描述：渲染侧边栏头部返回区域，统一左侧返回与右侧扩展动作布局。
 export function SidebarBackHeader({ onBack, label = "Back", rightAction }: SidebarBackHeaderProps) {
+  const { t } = useDesktopI18n();
   return (
     <AriFlex justify="space-between" align="center">
-      <AriButton icon="arrow_left_alt" label={label} onClick={onBack} />
+      <AriButton icon="arrow_left_alt" label={t(label)} onClick={onBack} />
       {rightAction || <AriContainer />}
     </AriFlex>
   );

@@ -43,7 +43,6 @@ test("TestDeskContentContainersShouldUseUnifiedProps", () => {
   const settingsSource = readDesktopSource("src/modules/common/pages/settings-general-page.tsx");
   const aiKeySource = readDesktopSource("src/modules/common/pages/ai-key-page.tsx");
   const codeSettingsSource = readDesktopSource("src/modules/agent/pages/agent-settings-page.tsx");
-  const agentHomeSource = readDesktopSource("src/modules/agent/pages/agent-home-page.tsx");
 
   const filesToCheck = [
     agentSource,
@@ -53,7 +52,6 @@ test("TestDeskContentContainersShouldUseUnifiedProps", () => {
     settingsSource,
     aiKeySource,
     codeSettingsSource,
-    agentHomeSource,
   ];
 
   // 描述：

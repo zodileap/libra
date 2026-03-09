@@ -53,7 +53,11 @@ test("TestWorkflowSkillExecutionPlanShouldValidateRegistryStateAndBuildPrompt", 
   assert.match(promptGuidanceSource, /normalizeAgentSkillId/);
   assert.match(workflowStorageSource, /AGENT_TOOLSET_LINES/);
   assert.match(workflowStorageSource, /normalizeAgentSkillId/);
-  assert.match(workflowStorageSource, /技能编码 \$\{skillId\}/);
+  assert.match(workflowStorageSource, /translateDesktopText\("- \{\{label\}\}：技能编码 \{\{skillId\}\}"/);
+  assert.match(workflowStorageSource, /translateDesktopText\("【项目能力声明】"\)/);
+  assert.match(workflowStorageSource, /requiredCapabilities/);
+  assert.match(workflowStorageSource, /optionalCapabilities/);
+  assert.match(workflowStorageSource, /getProjectWorkspaceCapabilityManifest/);
 
   // 描述：
   //
@@ -65,10 +69,11 @@ test("TestWorkflowSkillExecutionPlanShouldValidateRegistryStateAndBuildPrompt", 
   //   - 统一智能体发送前应执行 Skill 计划校验，失败时阻断；成功时将计划拼接到 prompt。
   assert.match(sessionPageSource, /buildAgentWorkflowSkillExecutionPlan\(selectedWorkflow, availableSkills\)/);
   assert.match(sessionPageSource, /if \(skillExecutionPlan\.blockingIssues\.length > 0\)/);
-  assert.match(sessionPageSource, /throw new Error\(`技能执行前检查未通过：\$\{skillExecutionPlan\.blockingIssues\.join\("；"\)\}`\)/);
+  assert.match(sessionPageSource, /throw new Error\(t\("技能执行前检查未通过：\{\{issues\}\}", \{\s*issues: skillExecutionPlan\.blockingIssues\.join\("；"\),\s*\}\)\)/s);
+  assert.match(sessionPageSource, /if \(selectedWorkflowMissingRequiredCapabilities\.length > 0\)/);
   assert.match(sessionPageSource, /const latestProjectProfile = activeWorkspace\?\.id\s*\?\s*\(activeProjectProfile \|\| getProjectWorkspaceProfile\(activeWorkspace\.id\)\)\s*:\s*null;/s);
-  assert.match(sessionPageSource, /const currentRequestPrompt = buildSessionContextPrompt\(\s*messages,\s*normalizedContent,\s*undefined,\s*latestProjectProfile,\s*\);/s);
-  assert.match(sessionPageSource, /const contextualRequestPrompt = buildSessionContextPrompt\(\s*contextMessages,\s*normalizedContent,\s*String\(activeWorkspace\?\.path \|\| ""\)\.trim\(\) \|\| undefined,\s*latestProjectProfile,\s*\);/s);
+  assert.match(sessionPageSource, /const currentRequestPrompt = buildSessionContextPrompt\(\s*messages,\s*normalizedContent,\s*undefined,\s*latestProjectProfile,\s*activeWorkspaceEnabledCapabilities,\s*\);/s);
+  assert.match(sessionPageSource, /const contextualRequestPrompt = buildSessionContextPrompt\(\s*contextMessages,\s*normalizedContent,\s*String\(activeWorkspace\?\.path \|\| ""\)\.trim\(\) \|\| undefined,\s*latestProjectProfile,\s*activeWorkspaceEnabledCapabilities,\s*\);/s);
   assert.match(sessionPageSource, /const agentPrompt = skillExecutionPlan\.planPrompt/);
   assert.match(sessionPageSource, /source: "workflow:skill_plan"/);
   assert.match(sessionPageSource, /prompt: agentPrompt/);
@@ -76,8 +81,9 @@ test("TestWorkflowSkillExecutionPlanShouldValidateRegistryStateAndBuildPrompt", 
 
   // 描述：
   //
-  //   - 结构化项目信息应按需注入，避免首轮请求默认拼接全量项目语义基线。
-  assert.match(sessionPageSource, /const AGENT_PROFILE_ON_DEMAND_KEYWORDS = \[/);
+  //   - 项目知识能力启用后才允许按需注入结构化项目信息，避免首轮请求默认拼接全量项目语义基线。
+  assert.match(sessionPageSource, /const AGENT_PROFILE_ON_DEMAND_KEYWORDS = resolveDesktopTextVariants\(DESKTOP_TEXT_VARIANT_GROUPS\.agentProfileOnDemand\);/);
+  assert.match(sessionPageSource, /const projectKnowledgeEnabled = enabledCapabilities\.includes\("project-knowledge"\);/);
   assert.match(sessionPageSource, /const shouldAttachProfileContext = isRetryOnlyPrompt\(normalizedCurrentPrompt\)/);
-  assert.match(sessionPageSource, /AGENT_PROFILE_ON_DEMAND_KEYWORDS\.some\(\(keyword\) => normalizedCurrentPrompt\.toLowerCase\(\)\.includes\(keyword\.toLowerCase\(\)\)\)/);
+  assert.match(sessionPageSource, /AGENT_PROFILE_ON_DEMAND_KEYWORDS\.some\(\(keyword\) => normalizedCurrentPrompt\.toLowerCase\(\)\.includes\(keyword\)\)/);
 });

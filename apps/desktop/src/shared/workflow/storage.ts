@@ -1,4 +1,5 @@
-import { DEFAULT_AGENT_WORKFLOWS } from "./templates";
+import { translateDesktopText } from "../i18n";
+import { resolveDefaultAgentWorkflows } from "./templates";
 import { AGENT_TOOLSET_LINES, normalizeAgentSkillId } from "./prompt-guidance";
 import { IS_BROWSER, STORAGE_KEYS } from "../constants";
 import {
@@ -19,7 +20,7 @@ import type {
 //
 //   - 记录默认智能体工作流 ID，用于限制内置模板被误删。
 const DEFAULT_AGENT_WORKFLOW_ID_SET = new Set(
-  DEFAULT_AGENT_WORKFLOWS.map((item) => item.id),
+  resolveDefaultAgentWorkflows().map((item) => item.id),
 );
 
 // 描述：
@@ -124,7 +125,7 @@ function normalizeGraphNode(node: WorkflowGraphNode): WorkflowGraphNode | null {
   const normalizedSkillVersion = String(node.skillVersion || "").trim();
   return {
     id: String(node.id),
-    title: String(node.title || "").trim() || "未命名节点",
+    title: String(node.title || "").trim() || translateDesktopText("未命名节点"),
     description: String(node.description || "").trim(),
     instruction: String(node.instruction || "").trim(),
     type: normalizedType,
@@ -195,32 +196,32 @@ function buildAgentFallbackGraph(workflow: AgentWorkflowDefinition): WorkflowGra
   const nodes: WorkflowGraphNode[] = [
     {
       id: `${workflow.id}-start`,
-      title: "开始",
-      description: "接收用户任务",
+      title: translateDesktopText("开始"),
+      description: translateDesktopText("接收用户任务"),
       type: "node",
       x: GRAPH_CANVAS_BASE_X,
       y: GRAPH_CANVAS_BASE_Y,
     },
     {
       id: `${workflow.id}-analysis`,
-      title: "需求分析",
-      description: "拆解目标、限制与边界",
+      title: translateDesktopText("需求分析"),
+      description: translateDesktopText("拆解目标、限制与边界"),
       type: "node",
       x: GRAPH_CANVAS_BASE_X + GRAPH_NODE_HORIZONTAL_GAP,
       y: GRAPH_CANVAS_BASE_Y,
     },
     {
       id: `${workflow.id}-execute`,
-      title: "实现与验证",
-      description: "生成代码并执行测试",
+      title: translateDesktopText("实现与验证"),
+      description: translateDesktopText("生成代码并执行测试"),
       type: "node",
       x: GRAPH_CANVAS_BASE_X + GRAPH_NODE_HORIZONTAL_GAP * 2,
       y: GRAPH_CANVAS_BASE_Y,
     },
     {
       id: `${workflow.id}-finish`,
-      title: "完成",
-      description: "输出结果与后续建议",
+      title: translateDesktopText("完成"),
+      description: translateDesktopText("输出结果与后续建议"),
       type: "node",
       x: GRAPH_CANVAS_BASE_X + GRAPH_NODE_HORIZONTAL_GAP * 3,
       y: GRAPH_CANVAS_BASE_Y,
@@ -336,11 +337,16 @@ function writeSavedAgentWorkflows(workflows: AgentWorkflowDefinition[]) {
 //
 //   - 0: 工作流总览结构。
 export function listAgentWorkflowOverview(): AgentWorkflowOverview {
-  const templates = DEFAULT_AGENT_WORKFLOWS.map((item) =>
-    normalizeAgentWorkflow({ ...item, source: "builtin" }),
-  );
   const registered = readSavedAgentWorkflows()
     .filter((item) => item.source === "user");
+  const registeredTemplateIdSet = new Set(
+    registered
+      .map((item) => String(item.templateId || "").trim())
+      .filter((item) => item.length > 0),
+  );
+  const templates = resolveDefaultAgentWorkflows()
+    .map((item) => normalizeAgentWorkflow({ ...item, source: "builtin" }))
+    .filter((item) => !registeredTemplateIdSet.has(item.id));
   return {
     registered,
     templates,
@@ -444,7 +450,7 @@ export function createAgentWorkflowFromTemplate(
   const nextWorkflow: AgentWorkflowDefinition = {
     ...source,
     id: `wf-agent-custom-${Date.now()}`,
-    name: `${source.name}-副本`,
+    name: translateDesktopText("{{name}} - 副本", { name: source.name }),
     version: source.version + 1,
     shared: false,
     agentKey: "agent",
@@ -467,8 +473,8 @@ export function createAgentWorkflowFromTemplate(
 export function createAgentWorkflow(): AgentWorkflowDefinition {
   const nextWorkflow = saveAgentWorkflow({
     id: `wf-agent-custom-${Date.now()}`,
-    name: "未命名工作流",
-    description: "请输入工作流说明",
+    name: translateDesktopText("未命名工作流"),
+    description: translateDesktopText("请输入工作流说明"),
     version: 1,
     shared: false,
     agentKey: "agent",
@@ -528,14 +534,24 @@ export function buildAgentWorkflowPrompt(
     .map((node) => {
       const skillId = normalizeAgentSkillId(String(node.skillId || "").trim());
       const normalizedInstruction = String(node.instruction || "").trim();
-      const label = String(node.title || "技能节点").trim() || "技能节点";
+      const label = String(node.title || translateDesktopText("技能节点")).trim() || translateDesktopText("技能节点");
       if (normalizedInstruction) {
         return skillId
-          ? `- ${label}：技能编码 ${skillId}；本节点要求：${normalizedInstruction}`
-          : `- ${label}：${normalizedInstruction}`;
+          ? translateDesktopText("- {{label}}：技能编码 {{skillId}}；本节点要求：{{instruction}}", {
+            label,
+            skillId,
+            instruction: normalizedInstruction,
+          })
+          : translateDesktopText("- {{label}}：{{instruction}}", {
+            label,
+            instruction: normalizedInstruction,
+          });
       }
       if (skillId) {
-        return `- ${label}：技能编码 ${skillId}`;
+        return translateDesktopText("- {{label}}：技能编码 {{skillId}}", {
+          label,
+          skillId,
+        });
       }
       return "";
     })
@@ -543,11 +559,17 @@ export function buildAgentWorkflowPrompt(
   const capabilityLines = [
     ...((workflow?.requiredCapabilities || []).map((item) => {
       const manifest = getProjectWorkspaceCapabilityManifest(item);
-      return manifest ? `- 必需能力：${manifest.title}（${manifest.id}）` : "";
+      return manifest ? translateDesktopText("- 必需能力：{{title}}（{{id}}）", {
+        title: manifest.title,
+        id: manifest.id,
+      }) : "";
     })),
     ...((workflow?.optionalCapabilities || []).map((item) => {
       const manifest = getProjectWorkspaceCapabilityManifest(item);
-      return manifest ? `- 可选能力：${manifest.title}（${manifest.id}）` : "";
+      return manifest ? translateDesktopText("- 可选能力：{{title}}（{{id}}）", {
+        title: manifest.title,
+        id: manifest.id,
+      }) : "";
     })),
   ].filter((line) => line.length > 0);
   const toolsetBlock = ["", ...AGENT_TOOLSET_LINES];
@@ -556,34 +578,36 @@ export function buildAgentWorkflowPrompt(
       return [
         ...AGENT_TOOLSET_LINES,
         "",
-        "【用户需求】",
+        translateDesktopText("【用户需求】"),
         normalizedPrompt,
       ].join("\n");
     }
     return [
-      "【技能链路】",
+      translateDesktopText("【技能链路】"),
       ...skillChainLines,
-      ...(capabilityLines.length > 0 ? ["", "【项目能力声明】", ...capabilityLines] : []),
+      ...(capabilityLines.length > 0 ? ["", translateDesktopText("【项目能力声明】"), ...capabilityLines] : []),
       ...toolsetBlock,
       "",
-      "【用户需求】",
+      translateDesktopText("【用户需求】"),
       normalizedPrompt,
     ].join("\n");
   }
   const skillChainBlock = skillChainLines.length > 0
-    ? ["", "【技能链路】", ...skillChainLines]
+    ? ["", translateDesktopText("【技能链路】"), ...skillChainLines]
     : [];
   const capabilityBlock = capabilityLines.length > 0
-    ? ["", "【项目能力声明】", ...capabilityLines]
+    ? ["", translateDesktopText("【项目能力声明】"), ...capabilityLines]
     : [];
   return [
-    `【工作流：${workflow?.name || "智能体工作流"}】`,
+    translateDesktopText("【工作流：{{name}}】", {
+      name: workflow?.name || translateDesktopText("智能体工作流"),
+    }),
     prefix,
     ...skillChainBlock,
     ...capabilityBlock,
     ...toolsetBlock,
     "",
-    "【用户需求】",
+    translateDesktopText("【用户需求】"),
     normalizedPrompt,
   ].join("\n");
 }

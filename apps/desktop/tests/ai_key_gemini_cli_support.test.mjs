@@ -22,6 +22,8 @@ function readDesktopSource(relativePath) {
 test("TestAiKeyShouldSupportGeminiCliProvider", () => {
   const sharedTypesSource = readDesktopSource("src/shared/types.ts");
   const aiKeyPageSource = readDesktopSource("src/modules/common/pages/ai-key-page.tsx");
+  const styleSource = readDesktopSource("src/styles.css");
+  const messagesSource = readDesktopSource("src/shared/i18n/messages.ts");
   const appSource = readDesktopSource("src/app.tsx");
   const sessionSource = readDesktopSource("src/widgets/session/page.tsx");
   const dataSource = readDesktopSource("src/shared/data.ts");
@@ -34,10 +36,31 @@ test("TestAiKeyShouldSupportGeminiCliProvider", () => {
 
   // 描述：
   //
-  //   - AI Key 页面应将 gemini-cli 视为本地 CLI Provider，不展示 API Key 输入框。
+  //   - AI Key 页面应将 gemini-cli 视为本地 CLI Provider，不展示 API Key 输入框，并将标题挂到全局标题栏 slot。
   assert.match(aiKeyPageSource, /function isLocalCliProvider\(provider: AiKeyItem\["provider"\]\): boolean \{/);
   assert.match(aiKeyPageSource, /provider === "codex" \|\| provider === "gemini-cli"/);
   assert.match(aiKeyPageSource, /local-cli（无需 API Key）/);
+  assert.match(aiKeyPageSource, /useDesktopHeaderSlot/);
+  assert.match(aiKeyPageSource, /createPortal\(headerNode, headerSlotElement\)/);
+  assert.match(aiKeyPageSource, /const headerNode = useMemo\(\(\) => \(/);
+  assert.match(aiKeyPageSource, /<DeskPageHeader[\s\S]*mode="slot"/);
+  assert.match(aiKeyPageSource, /function buildAiKeyCardSummary\(/);
+  assert.match(aiKeyPageSource, /function AiKeyProviderCard\(/);
+  assert.match(aiKeyPageSource, /className="desk-ai-key-list"/);
+  assert.match(aiKeyPageSource, /className="desk-ai-key-card"/);
+  assert.match(aiKeyPageSource, /AriTag/);
+  assert.match(aiKeyPageSource, /label=\{t\("默认"\)\}/);
+  assert.match(aiKeyPageSource, /label=\{t\("本地 CLI"\)\}/);
+  assert.match(aiKeyPageSource, /icon="star"/);
+  assert.doesNotMatch(aiKeyPageSource, /DeskSettingsRow/);
+  assert.match(styleSource, /\.desk-ai-key-list/);
+  assert.match(styleSource, /\.desk-ai-key-card/);
+  assert.match(styleSource, /\.desk-ai-key-card-body/);
+  assert.match(styleSource, /\.desk-ai-key-card-actions/);
+  assert.match(messagesSource, /"默认": "默认"/);
+  assert.match(messagesSource, /"默认": "Default"/);
+  assert.match(messagesSource, /"本地 CLI": "本地 CLI"/);
+  assert.match(messagesSource, /"本地 CLI": "Local CLI"/);
 
   // 描述：
   //

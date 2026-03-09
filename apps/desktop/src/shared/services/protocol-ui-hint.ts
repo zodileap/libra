@@ -1,5 +1,6 @@
 import type { ProtocolUiHint } from "../types";
 import type { WorkflowUiHint } from "../workflow/types";
+import { translateDesktopText } from "../i18n";
 
 export interface ProtocolUiHintError {
   code?: string;
@@ -39,55 +40,55 @@ export function buildUiHintFromProtocolError(
   if (
     lowerCode.includes("invalid_bridge_addr")
     || lowerCode.includes("bridge_connect_failed")
-    || lowerMessage.includes("当前 blender 会话仍是旧版本")
+    || lowerMessage.includes(translateDesktopText("当前 blender 会话仍是旧版本").toLowerCase())
     || lowerMessage.includes("unsupported action")
     || lowerMessage.includes("unsupported_action")
   ) {
     return {
       key: "check-dcc-runtime",
       level: "warning",
-      title: "需要检查 DCC Runtime",
+      title: translateDesktopText("需要检查 DCC Runtime"),
       message:
         error.suggestion
-        || "DCC Runtime 已自动更新，但当前软件会话仍是旧版本。请重启对应建模软件后点击“我已处理并重试”。",
+        || translateDesktopText("DCC Runtime 已自动更新，但当前软件会话仍是旧版本。请重启对应建模软件后点击“我已处理并重试”。"),
       actions: [
-        { kind: "retry_last_step", label: "我已处理并重试", intent: "primary" },
-        { kind: "dismiss", label: "暂不处理", intent: "default" },
+        { kind: "retry_last_step", label: translateDesktopText("我已处理并重试"), intent: "primary" },
+        { kind: "dismiss", label: translateDesktopText("暂不处理"), intent: "default" },
       ],
     };
   }
 
-  if (lowerMessage.includes("导出能力已关闭") || lowerCode.includes("capability_disabled")) {
+  if (lowerMessage.includes(translateDesktopText("导出能力已关闭").toLowerCase()) || lowerCode.includes("capability_disabled")) {
     return {
       key: "export-capability-disabled",
       level: "info",
-      title: "导出能力已关闭",
+      title: translateDesktopText("导出能力已关闭"),
       message:
         error.suggestion
-        || "当前会话仍可执行编辑操作；如需导出，请在智能体设置里开启导出能力。",
+        || translateDesktopText("当前会话仍可执行编辑操作；如需导出，请在智能体设置里开启导出能力。"),
       actions: [
-        { kind: "open_agent_settings", label: "打开智能体设置", intent: "primary" },
-        { kind: "dismiss", label: "知道了", intent: "default" },
+        { kind: "open_agent_settings", label: translateDesktopText("打开智能体设置"), intent: "primary" },
+        { kind: "dismiss", label: translateDesktopText("知道了"), intent: "default" },
       ],
     };
   }
 
   if (
     lowerCode.includes("step_failed")
-    || lowerMessage.includes("复杂操作执行失败")
-    || lowerMessage.includes("自动回滚")
+    || lowerMessage.includes(translateDesktopText("复杂操作执行失败").toLowerCase())
+    || lowerMessage.includes(translateDesktopText("自动回滚").toLowerCase())
   ) {
     return {
       key: "complex-operation-recovery",
       level: "warning",
-      title: "复杂操作执行失败",
+      title: translateDesktopText("复杂操作执行失败"),
       message:
         error.suggestion
-        || "可先重试最近一步；若仍失败，建议应用恢复策略并检查对象状态与参数边界。",
+        || translateDesktopText("可先重试最近一步；若仍失败，建议应用恢复策略并检查对象状态与参数边界。"),
       actions: [
-        { kind: "retry_last_step", label: "重试最近一步", intent: "primary" },
-        { kind: "apply_recovery_plan", label: "应用恢复策略", intent: "default" },
-        { kind: "dismiss", label: "暂不处理", intent: "default" },
+        { kind: "retry_last_step", label: translateDesktopText("重试最近一步"), intent: "primary" },
+        { kind: "apply_recovery_plan", label: translateDesktopText("应用恢复策略"), intent: "default" },
+        { kind: "dismiss", label: translateDesktopText("暂不处理"), intent: "default" },
       ],
     };
   }

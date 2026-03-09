@@ -1,5 +1,7 @@
 import type { ProjectWorkspaceCapabilityId, ProjectWorkspaceProfile } from "../../shared/data";
 import { IS_BROWSER, STORAGE_KEYS } from "../../shared/constants";
+import { resolveDesktopTextVariants, translateDesktopText } from "../../shared/i18n";
+import { DESKTOP_TEXT_VARIANT_GROUPS } from "../../shared/i18n/messages";
 import type { AgentEventRecord, AgentStepRecord } from "../../shared/types";
 import type { AgentSkillItem } from "../../modules/common/services";
 
@@ -108,7 +110,7 @@ export function buildSessionSkillPrompt(selectedSkills: AgentSkillItem[]): strin
     }
     return lines.join("\n\n");
   });
-  return ["【会话技能】", ...blocks].join("\n\n");
+  return [translateDesktopText("【会话技能】"), ...blocks].join("\n\n");
 }
 
 // 描述：
@@ -124,7 +126,7 @@ export const AGENT_CONTEXT_MESSAGE_CHAR_LIMIT = 600;
 // 描述：
 //
 //   - “重试/继续”类短指令关键词；命中后会改写为可执行请求，避免模型误判“缺少需求”。
-export const AGENT_RETRY_HINT_KEYWORDS = ["重试", "再试", "retry", "继续", "继续执行", "继续处理"];
+export const AGENT_RETRY_HINT_KEYWORDS = resolveDesktopTextVariants(DESKTOP_TEXT_VARIANT_GROUPS.agentRetryHints);
 
 // 描述：
 //
@@ -134,37 +136,22 @@ export const AGENT_PROFILE_CONTEXT_ITEM_LIMIT = 4;
 // 描述：
 //
 //   - 结构化项目信息“按需注入”触发关键词；仅在模型明确需要项目语义基线时注入，避免首轮提示词冗长。
-export const AGENT_PROFILE_ON_DEMAND_KEYWORDS = [
-  "结构化项目信息",
-  "结构化信息",
-  "项目结构",
-  "代码结构",
-  "页面布局",
-  "信息架构",
-  "交互契约",
-  "数据模型",
-  "api 模型",
-  "框架替换",
-  "框架迁移",
-  "重构",
-  "迁移",
-  "按项目规范",
-];
+export const AGENT_PROFILE_ON_DEMAND_KEYWORDS = resolveDesktopTextVariants(DESKTOP_TEXT_VARIANT_GROUPS.agentProfileOnDemand);
 
 // 描述：
 //
 //   - 识别“框架替换/迁移”需求的关键词，命中后会注入结构不变约束。
-export const CODE_FRAMEWORK_REPLACEMENT_KEYWORDS = [
-  "框架替换",
-  "替换框架",
-  "切换框架",
-  "框架迁移",
-  "迁移框架",
-  "ui框架替换",
-  "switch framework",
-  "replace framework",
-  "migrate framework",
-];
+export const CODE_FRAMEWORK_REPLACEMENT_KEYWORDS = resolveDesktopTextVariants(DESKTOP_TEXT_VARIANT_GROUPS.codeFrameworkReplacement);
+
+// 描述：
+//
+//   - 识别“框架”这一主题词，配合动作词表兜底命中更多框架替换表达。
+const CODE_FRAMEWORK_GENERIC_NOUN_KEYWORDS = resolveDesktopTextVariants(DESKTOP_TEXT_VARIANT_GROUPS.codeFrameworkGenericNouns);
+
+// 描述：
+//
+//   - 识别“替换/迁移/重写”等动作词，避免用户不用完整短语时漏掉框架替换意图。
+const CODE_FRAMEWORK_GENERIC_VERB_KEYWORDS = resolveDesktopTextVariants(DESKTOP_TEXT_VARIANT_GROUPS.codeFrameworkGenericVerbs);
 
 // 描述：
 //
@@ -205,10 +192,10 @@ export function buildCodeProjectProfileContextLines(
     return [];
   }
 
-  const lines: string[] = ["【项目结构化信息】"];
+  const lines: string[] = [translateDesktopText("【项目结构化信息】")];
   const summary = String(profile.summary || "").trim();
   if (summary) {
-    lines.push(`摘要：${summary}`);
+    lines.push(translateDesktopText("摘要：{{summary}}", { summary }));
   }
 
   const pushList = (label: string, items: string[]) => {
@@ -227,24 +214,31 @@ export function buildCodeProjectProfileContextLines(
     : [];
   if (knowledgeSections.length > 0) {
     knowledgeSections.forEach((section) => {
-      const sectionTitle = String(section.title || "").trim() || String(section.key || "").trim() || "未命名分类";
+      const sectionTitle = String(section.title || "").trim()
+        || String(section.key || "").trim()
+        || translateDesktopText("未命名分类");
       (section.facets || []).forEach((facet) => {
-        const facetLabel = String(facet.label || "").trim() || String(facet.key || "").trim() || "未命名字段";
-        pushList(`${sectionTitle} · ${facetLabel}`, facet.entries || []);
+        const facetLabel = String(facet.label || "").trim()
+          || String(facet.key || "").trim()
+          || translateDesktopText("未命名字段");
+        pushList(translateDesktopText("{{section}} · {{facet}}", {
+          section: sectionTitle,
+          facet: facetLabel,
+        }), facet.entries || []);
       });
     });
   } else {
-    pushList("API 数据实体", profile.apiDataModel.entities || []);
-    pushList("API 请求模型", profile.apiDataModel.requestModels || []);
-    pushList("API 响应模型", profile.apiDataModel.responseModels || []);
-    pushList("API Mock 场景", profile.apiDataModel.mockCases || []);
-    pushList("前端页面清单", profile.frontendPageLayout.pages || []);
-    pushList("导航与菜单项", profile.frontendPageLayout.navigation || []);
-    pushList("页面元素结构", profile.frontendPageLayout.pageElements || []);
-    pushList("前端目录结构", profile.frontendCodeStructure.directories || []);
-    pushList("前端模块边界", profile.frontendCodeStructure.moduleBoundaries || []);
-    pushList("前端实现约束", profile.frontendCodeStructure.implementationConstraints || []);
-    pushList("编码约定", profile.codingConventions || []);
+    pushList(translateDesktopText("API 数据实体"), profile.apiDataModel.entities || []);
+    pushList(translateDesktopText("API 请求模型"), profile.apiDataModel.requestModels || []);
+    pushList(translateDesktopText("API 响应模型"), profile.apiDataModel.responseModels || []);
+    pushList(translateDesktopText("API Mock 场景"), profile.apiDataModel.mockCases || []);
+    pushList(translateDesktopText("前端页面清单"), profile.frontendPageLayout.pages || []);
+    pushList(translateDesktopText("导航与菜单项"), profile.frontendPageLayout.navigation || []);
+    pushList(translateDesktopText("页面元素结构"), profile.frontendPageLayout.pageElements || []);
+    pushList(translateDesktopText("前端目录结构"), profile.frontendCodeStructure.directories || []);
+    pushList(translateDesktopText("前端模块边界"), profile.frontendCodeStructure.moduleBoundaries || []);
+    pushList(translateDesktopText("前端实现约束"), profile.frontendCodeStructure.implementationConstraints || []);
+    pushList(translateDesktopText("编码约定"), profile.codingConventions || []);
   }
   lines.push("");
   return lines;
@@ -297,8 +291,8 @@ export function isFrameworkReplacementPrompt(prompt: string): boolean {
   if (CODE_FRAMEWORK_REPLACEMENT_KEYWORDS.some((keyword) => normalized.includes(keyword))) {
     return true;
   }
-  const hasFrameworkWord = normalized.includes("框架");
-  const hasReplacementVerb = /(替换|切换|迁移|改用|重写|升级)/.test(normalized);
+  const hasFrameworkWord = CODE_FRAMEWORK_GENERIC_NOUN_KEYWORDS.some((keyword) => normalized.includes(keyword));
+  const hasReplacementVerb = CODE_FRAMEWORK_GENERIC_VERB_KEYWORDS.some((keyword) => normalized.includes(keyword));
   if (hasFrameworkWord && hasReplacementVerb) {
     return true;
   }
@@ -378,17 +372,21 @@ export function buildFrameworkReplacementContextLines(
     return [];
   }
   const lines: string[] = [
-    "【框架替换执行约束】",
-    "保持页面结构语义、信息架构和交互目标不变，仅替换框架相关实现。",
+    translateDesktopText("【框架替换执行约束】"),
+    translateDesktopText("保持页面结构语义、信息架构和交互目标不变，仅替换框架相关实现。"),
   ];
   if (pageBaseline.length > 0) {
-    lines.push(`页面结构基线：${pageBaseline.join("；")}`);
+    lines.push(translateDesktopText("页面结构基线：{{baseline}}", {
+      baseline: pageBaseline.join("；"),
+    }));
   }
   if (moduleBaseline.length > 0) {
-    lines.push(`模块边界基线：${moduleBaseline.join("；")}`);
+    lines.push(translateDesktopText("模块边界基线：{{baseline}}", {
+      baseline: moduleBaseline.join("；"),
+    }));
   }
-  lines.push("优先复用既有 API 数据模型与页面布局定义，避免引入无关重构。");
-  lines.push("若新框架能力存在差异，先说明差异，再给出兼容实现。");
+  lines.push(translateDesktopText("优先复用既有 API 数据模型与页面布局定义，避免引入无关重构。"));
+  lines.push(translateDesktopText("若新框架能力存在差异，先说明差异，再给出兼容实现。"));
   lines.push("");
   return lines;
 }
@@ -412,7 +410,7 @@ export function normalizeCodeContextMessageText(text: string): string {
   if (normalized.length <= AGENT_CONTEXT_MESSAGE_CHAR_LIMIT) {
     return normalized;
   }
-  return `${normalized.slice(0, AGENT_CONTEXT_MESSAGE_CHAR_LIMIT)}...(已截断)`;
+  return `${normalized.slice(0, AGENT_CONTEXT_MESSAGE_CHAR_LIMIT)}${translateDesktopText("...(已截断)")}`;
 }
 
 // 描述：
@@ -461,7 +459,7 @@ export function buildSessionContextPrompt(
   //   - 仅在“重试继续”或当前请求明确依赖项目语义基线时注入结构化项目信息，避免首轮全量灌入。
   const projectKnowledgeEnabled = enabledCapabilities.includes("project-knowledge");
   const shouldAttachProfileContext = isRetryOnlyPrompt(normalizedCurrentPrompt)
-    || AGENT_PROFILE_ON_DEMAND_KEYWORDS.some((keyword) => normalizedCurrentPrompt.toLowerCase().includes(keyword.toLowerCase()));
+    || AGENT_PROFILE_ON_DEMAND_KEYWORDS.some((keyword) => normalizedCurrentPrompt.toLowerCase().includes(keyword));
   const profileContextLines = projectKnowledgeEnabled && shouldAttachProfileContext
     ? buildCodeProjectProfileContextLines(projectProfile)
     : [];
@@ -472,7 +470,7 @@ export function buildSessionContextPrompt(
   const historyLines = historyMessages
     .filter((item) => item.role === "user" || item.role === "assistant")
     .map((item) => ({
-      role: item.role === "user" ? "用户" : "助手",
+      role: item.role === "user" ? translateDesktopText("用户") : translateDesktopText("助手"),
       text: normalizeCodeContextMessageText(item.text),
     }))
     .filter((item) => item.text.length > 0)
@@ -482,13 +480,13 @@ export function buildSessionContextPrompt(
   if (historyLines.length === 0) {
     if (normalizedWorkspacePath) {
       return [
-        "【当前项目】",
-        `路径：${normalizedWorkspacePath}`,
-        "约束：仅基于该目录进行分析与修改，不要切换到其它工程。",
+        translateDesktopText("【当前项目】"),
+        translateDesktopText("路径：{{path}}", { path: normalizedWorkspacePath }),
+        translateDesktopText("约束：仅基于该目录进行分析与修改，不要切换到其它工程。"),
         "",
         ...profileContextLines,
         ...frameworkReplacementContextLines,
-        "【当前请求】",
+        translateDesktopText("【当前请求】"),
         normalizedCurrentPrompt,
       ].join("\n");
     }
@@ -496,20 +494,20 @@ export function buildSessionContextPrompt(
       return [
         ...profileContextLines,
         ...frameworkReplacementContextLines,
-        "【当前请求】",
+        translateDesktopText("【当前请求】"),
         normalizedCurrentPrompt,
       ].join("\n");
     }
     return normalizedCurrentPrompt;
   }
   const normalizedRequest = isRetryOnlyPrompt(normalizedCurrentPrompt)
-    ? "请基于以上会话上下文继续上一轮任务并直接给出可执行结果，不要要求我重复需求。"
+    ? translateDesktopText("请基于以上会话上下文继续上一轮任务并直接给出可执行结果，不要要求我重复需求。")
     : normalizedCurrentPrompt;
   const workspaceLines = normalizedWorkspacePath
     ? [
-      "【当前项目】",
-      `路径：${normalizedWorkspacePath}`,
-      "约束：仅基于该目录进行分析与修改，不要切换到其它工程。",
+      translateDesktopText("【当前项目】"),
+      translateDesktopText("路径：{{path}}", { path: normalizedWorkspacePath }),
+      translateDesktopText("约束：仅基于该目录进行分析与修改，不要切换到其它工程。"),
       "",
     ]
     : [];
@@ -517,10 +515,10 @@ export function buildSessionContextPrompt(
     ...workspaceLines,
     ...profileContextLines,
     ...frameworkReplacementContextLines,
-    "【会话上下文】",
+    translateDesktopText("【会话上下文】"),
     ...historyLines,
     "",
-    "【当前请求】",
+    translateDesktopText("【当前请求】"),
     normalizedRequest,
   ].join("\n");
 }

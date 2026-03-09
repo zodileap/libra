@@ -89,13 +89,13 @@ test("TestDesktopShouldRenderSetupRequiredPageWithBackendEntry", () => {
   //   - 未初始化阻断页应仅暴露统一后端地址输入，并允许切回本地模式。
   assert.match(pageSource, /export function SetupRequiredPage/);
   assert.match(pageSource, /const \[backendBaseUrl, setBackendBaseUrl\] = useState\(backendConfig\.baseUrl\);/);
-  assert.match(pageSource, /label="后端地址"/);
-  assert.match(pageSource, /label=\{saving \? "检查中\.\.\." : "保存并检查"\}/);
-  assert.match(pageSource, /value=\{checking \? "检查后端状态" : "后端尚未完成初始化"\}/);
-  assert.match(pageSource, /label="打开初始化"/);
-  assert.match(pageSource, /label="本地进入"/);
-  assert.match(pageSource, /value=\{`初始化入口：\$\{setupUrl\}`\}/);
-  assert.match(pageSource, /value=\{`当前步骤：\$\{currentStep\}`\}/);
+  assert.match(pageSource, /label=\{t\("后端地址"\)\}/);
+  assert.match(pageSource, /label=\{saving \? t\("检查中\.\.\."\) : t\("保存并检查"\)\}/);
+  assert.match(pageSource, /value=\{checking \? t\("检查后端状态"\) : t\("后端尚未完成初始化"\)\}/);
+  assert.match(pageSource, /label=\{t\("打开初始化"\)\}/);
+  assert.match(pageSource, /label=\{t\("本地进入"\)\}/);
+  assert.match(pageSource, /value=\{t\("初始化入口：\{\{url\}\}", \{ url: setupUrl \}\)\}/);
+  assert.match(pageSource, /value=\{t\("当前步骤：\{\{step\}\}", \{ step: currentStep \}\)\}/);
   assert.match(styleSource, /--desk-setup-card-width:/);
   assert.match(styleSource, /\.desk-setup-required-card/);
   assert.match(styleSource, /\.desk-setup-required-status/);

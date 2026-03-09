@@ -1,5 +1,6 @@
 import { AriCode, AriContainer, AriTypography } from "aries_react";
 import type { KeyboardEvent as ReactKeyboardEvent, JSX } from "react";
+import { translateDesktopText } from "../../shared/i18n";
 
 // 描述：
 //
@@ -52,6 +53,180 @@ interface SessionRunSegmentItemProps {
 
 // 描述：
 //
+//   - 运行段模板捕获占位符；用于把国际化模板转换为可提取工具名的正则。
+const RUN_SEGMENT_TEMPLATE_CAPTURE_TOKEN = "__RUN_SEGMENT_CAPTURE__";
+
+// 描述：
+//
+//   - 将运行段匹配文本统一转为小写并裁剪首尾空白，保证中英文前缀比较稳定。
+function normalizeRunSegmentMatchText(value: string): string {
+  return String(value || "").trim().toLowerCase();
+}
+
+// 描述：
+//
+//   - 基于已翻译文本构建去重后的匹配词表，避免运行段解析继续散落硬编码字面量。
+function buildRunSegmentLocalizedVariants(values: string[]): string[] {
+  return Array.from(
+    new Set(
+      values
+        .map((item) => normalizeRunSegmentMatchText(item))
+        .filter((item) => item.length > 0),
+    ),
+  );
+}
+
+// 描述：
+//
+//   - 转义正则元字符，供国际化模板生成捕获表达式时复用。
+function escapeRunSegmentRegExp(value: string): string {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// 描述：
+//
+//   - 将中英文模板文本转换为统一的捕获正则，专门用于提取“{{tool}}”这类动态片段。
+function buildRunSegmentTemplatePatterns(templates: string[]): RegExp[] {
+  const escapedCaptureToken = escapeRunSegmentRegExp(RUN_SEGMENT_TEMPLATE_CAPTURE_TOKEN);
+  return Array.from(
+    new Set(
+      templates
+        .map((item) => String(item || "").trim())
+        .filter((item) => item.length > 0),
+    ),
+  ).map((template) => new RegExp(
+    `^${escapeRunSegmentRegExp(template).replace(escapedCaptureToken, "(.+?)")}$`,
+    "u",
+  ));
+}
+
+// 描述：
+//
+//   - 基于本地化前缀匹配步骤文本，并保留去前缀后的原始剩余内容。
+function matchRunSegmentLocalizedPrefix(
+  text: string,
+  prefixes: readonly string[],
+): { prefix: string; suffix: string } | null {
+  const normalizedText = String(text || "").trim();
+  const loweredText = normalizedText.toLowerCase();
+  for (const prefix of prefixes) {
+    const normalizedPrefix = String(prefix || "").trim();
+    if (!normalizedPrefix) {
+      continue;
+    }
+    const loweredPrefix = normalizedPrefix.toLowerCase();
+    if (loweredText === loweredPrefix) {
+      return {
+        prefix: normalizedText,
+        suffix: "",
+      };
+    }
+    if (loweredText.startsWith(`${loweredPrefix} `)) {
+      return {
+        prefix: normalizedText.slice(0, normalizedPrefix.length).trim(),
+        suffix: normalizedText.slice(normalizedPrefix.length).trim(),
+      };
+    }
+  }
+  return null;
+}
+
+// 描述：
+//
+//   - 用中英文模板正则提取动态值；未命中时返回空串，供老数据回放场景兜底。
+function matchRunSegmentTemplateCapture(text: string, patterns: readonly RegExp[]): string {
+  const normalizedText = String(text || "").trim();
+  for (const pattern of patterns) {
+    const matched = normalizedText.match(pattern);
+    if (matched?.[1]) {
+      return String(matched[1] || "").trim();
+    }
+  }
+  return "";
+}
+
+// 描述：
+//
+//   - 运行段“脚本”语义关键词；中英文都命中时统一按代码块展示。
+const RUN_SEGMENT_SCRIPT_HINT_KEYWORDS = buildRunSegmentLocalizedVariants([
+  translateDesktopText("脚本", undefined, "zh-CN"),
+  translateDesktopText("脚本", undefined, "en-US"),
+]);
+
+// 描述：
+//
+//   - “已编辑”步骤前缀集合，供编辑结果卡片在中英文回放时都能结构化解析。
+const RUN_SEGMENT_EDIT_PREFIXES = buildRunSegmentLocalizedVariants([
+  translateDesktopText("已编辑", undefined, "zh-CN"),
+  translateDesktopText("已编辑", undefined, "en-US"),
+]);
+
+// 描述：
+//
+//   - “已浏览/正在浏览”步骤前缀集合，统一覆盖浏览态与完成态。
+const RUN_SEGMENT_BROWSE_PREFIXES = buildRunSegmentLocalizedVariants([
+  translateDesktopText("已浏览", undefined, "zh-CN"),
+  translateDesktopText("已浏览", undefined, "en-US"),
+  translateDesktopText("正在浏览", undefined, "zh-CN"),
+  translateDesktopText("正在浏览", undefined, "en-US"),
+]);
+
+// 描述：
+//
+//   - 授权结果关键词集合，用于快速识别运行段是否属于批准/拒绝类状态。
+const RUN_SEGMENT_APPROVAL_KEYWORDS = buildRunSegmentLocalizedVariants([
+  translateDesktopText("已批准", undefined, "zh-CN"),
+  translateDesktopText("已批准", undefined, "en-US"),
+  translateDesktopText("已拒绝", undefined, "zh-CN"),
+  translateDesktopText("已拒绝", undefined, "en-US"),
+]);
+
+// 描述：
+//
+//   - “已批准”标签前缀集合，供简单结果文案直接抽取工具名。
+const RUN_SEGMENT_APPROVED_PREFIXES = buildRunSegmentLocalizedVariants([
+  translateDesktopText("已批准", undefined, "zh-CN"),
+  translateDesktopText("已批准", undefined, "en-US"),
+]);
+
+// 描述：
+//
+//   - “会话内已批准”模板集合；优先用于解析老数据中的自动放行授权文案。
+const RUN_SEGMENT_SESSION_APPROVED_PATTERNS = buildRunSegmentTemplatePatterns([
+  translateDesktopText("会话内已批准 {{tool}}，后续将自动放行。", {
+    tool: RUN_SEGMENT_TEMPLATE_CAPTURE_TOKEN,
+  }, "zh-CN"),
+  translateDesktopText("会话内已批准 {{tool}}，后续将自动放行。", {
+    tool: RUN_SEGMENT_TEMPLATE_CAPTURE_TOKEN,
+  }, "en-US"),
+]);
+
+// 描述：
+//
+//   - “已批准本次执行”模板集合；用于兼容一次性批准的历史步骤文本。
+const RUN_SEGMENT_APPROVED_ONCE_PATTERNS = buildRunSegmentTemplatePatterns([
+  translateDesktopText("已批准本次执行 {{tool}}。", {
+    tool: RUN_SEGMENT_TEMPLATE_CAPTURE_TOKEN,
+  }, "zh-CN"),
+  translateDesktopText("已批准本次执行 {{tool}}。", {
+    tool: RUN_SEGMENT_TEMPLATE_CAPTURE_TOKEN,
+  }, "en-US"),
+]);
+
+// 描述：
+//
+//   - “已拒绝执行请求”模板集合；供无结构化 data 的旧消息仍能正确高亮。
+const RUN_SEGMENT_REJECTED_PATTERNS = buildRunSegmentTemplatePatterns([
+  translateDesktopText("已拒绝 {{tool}} 的执行请求。", {
+    tool: RUN_SEGMENT_TEMPLATE_CAPTURE_TOKEN,
+  }, "zh-CN"),
+  translateDesktopText("已拒绝 {{tool}} 的执行请求。", {
+    tool: RUN_SEGMENT_TEMPLATE_CAPTURE_TOKEN,
+  }, "en-US"),
+]);
+
+// 描述：
+//
 //   - 根据详情文本推断代码块语言，优先覆盖 Python/JSON/Diff，其他回退 text。
 //
 // Params:
@@ -79,7 +254,7 @@ export function resolveRunSegmentDetailLanguage(detailText: string, introText = 
   }
   const intro = String(introText || "").toLowerCase();
   if (
-    intro.includes("脚本")
+    RUN_SEGMENT_SCRIPT_HINT_KEYWORDS.some((keyword) => intro.includes(keyword))
     || normalizedDetail.includes("def ")
     || normalizedDetail.includes("import ")
     || normalizedDetail.includes("if __name__ ==")
@@ -421,15 +596,18 @@ export function resolveRunSegmentRichMeta(segment: SessionRunSegmentStep): Sessi
   if (!stepText) {
     return null;
   }
+  const normalizedStepText = stepText.toLowerCase();
   const stepData = segment.data && typeof segment.data === "object"
     ? segment.data
     : {};
   const stepType = typeof stepData.__step_type === "string"
     ? String(stepData.__step_type || "").trim()
     : "";
+  const editPrefixMatch = matchRunSegmentLocalizedPrefix(stepText, RUN_SEGMENT_EDIT_PREFIXES);
+  const browsePrefixMatch = matchRunSegmentLocalizedPrefix(stepText, RUN_SEGMENT_BROWSE_PREFIXES);
 
-  if (stepType === "edit" || stepText.startsWith("已编辑 ")) {
-    const parsedByText = stepText.match(/^已编辑\s+(.+?)\s+\+(\d+)\s+-(\d+)$/);
+  if (stepType === "edit" || editPrefixMatch) {
+    const parsedByText = String(editPrefixMatch?.suffix || stepText).match(/^(.+?)\s+\+(\d+)\s+-(\d+)$/);
     const filePath = String(
       (typeof stepData.edit_file_path === "string"
         ? stepData.edit_file_path
@@ -456,21 +634,20 @@ export function resolveRunSegmentRichMeta(segment: SessionRunSegmentStep): Sessi
     }
     return {
       type: "edit",
-      prefix: "已编辑",
+      prefix: translateDesktopText("已编辑"),
       filePath,
       added,
       removed,
     };
   }
 
-  if (stepType === "browse" || stepText.startsWith("已浏览 ") || stepText.startsWith("正在浏览 ")) {
-    const parsedByText = stepText.match(/^(已浏览|正在浏览)\s+(.+)$/);
+  if (stepType === "browse" || browsePrefixMatch) {
     const prefix = String(
       (typeof stepData.browse_prefix === "string"
         ? stepData.browse_prefix
-        : "") || (parsedByText?.[1] || ""),
+        : "") || (browsePrefixMatch?.prefix || ""),
     ).trim();
-    const suffix = String(parsedByText?.[2] || "").trim();
+    const suffix = String(browsePrefixMatch?.suffix || "").trim();
     if (!prefix || !suffix) {
       return null;
     }
@@ -481,21 +658,21 @@ export function resolveRunSegmentRichMeta(segment: SessionRunSegmentStep): Sessi
     };
   }
 
-  if (stepType === "approval_decision" || stepText.includes("已批准") || stepText.startsWith("已拒绝 ")) {
+  if (stepType === "approval_decision" || RUN_SEGMENT_APPROVAL_KEYWORDS.some((keyword) => normalizedStepText.includes(keyword))) {
     const approvalDecision = typeof stepData.approval_decision === "string"
       ? String(stepData.approval_decision || "").trim()
       : "";
     const approvalToolName = String(
       (typeof stepData.approval_tool_name === "string"
         ? stepData.approval_tool_name
-        : "") || "该工具",
+        : "") || translateDesktopText("该工具"),
     ).trim();
     if (approvalDecision === "approved") {
       return {
         type: "approval",
         leading: "",
-        label: "已批准",
-        suffix: ` ${approvalToolName}`,
+        label: translateDesktopText("已批准"),
+        suffix: translateDesktopText(" {{tool}}", { tool: approvalToolName }),
         tone: "approved",
       };
     }
@@ -503,8 +680,8 @@ export function resolveRunSegmentRichMeta(segment: SessionRunSegmentStep): Sessi
       return {
         type: "approval",
         leading: "",
-        label: "已拒绝",
-        suffix: ` ${approvalToolName} 的执行请求。`,
+        label: translateDesktopText("已拒绝"),
+        suffix: translateDesktopText(" {{tool}} 的执行请求。", { tool: approvalToolName }),
         tone: "rejected",
       };
     }
@@ -512,8 +689,8 @@ export function resolveRunSegmentRichMeta(segment: SessionRunSegmentStep): Sessi
       return {
         type: "approval",
         leading: "",
-        label: "已取消",
-        suffix: `授权流程，未执行 ${approvalToolName}。`,
+        label: translateDesktopText("已取消"),
+        suffix: translateDesktopText("授权流程，未执行 {{tool}}。", { tool: approvalToolName }),
         tone: "neutral",
       };
     }
@@ -521,48 +698,48 @@ export function resolveRunSegmentRichMeta(segment: SessionRunSegmentStep): Sessi
       return {
         type: "approval",
         leading: "",
-        label: "已处理",
-        suffix: ` ${approvalToolName} 的授权请求。`,
+        label: translateDesktopText("已处理"),
+        suffix: translateDesktopText(" {{tool}} 的授权请求。", { tool: approvalToolName }),
         tone: "neutral",
       };
     }
-    const sessionApprovedMatch = stepText.match(/^会话内已批准\s+(.+?)，后续将自动放行。$/);
-    if (sessionApprovedMatch) {
+    const sessionApprovedToolName = matchRunSegmentTemplateCapture(stepText, RUN_SEGMENT_SESSION_APPROVED_PATTERNS);
+    if (sessionApprovedToolName) {
       return {
         type: "approval",
         leading: "",
-        label: "已批准",
-        suffix: ` ${String(sessionApprovedMatch[1] || "").trim()}`,
+        label: translateDesktopText("已批准"),
+        suffix: translateDesktopText(" {{tool}}", { tool: sessionApprovedToolName }),
         tone: "approved",
       };
     }
-    const approvedMatch = stepText.match(/^已批准本次执行\s+(.+?)。$/);
-    if (approvedMatch) {
+    const approvedOnceToolName = matchRunSegmentTemplateCapture(stepText, RUN_SEGMENT_APPROVED_ONCE_PATTERNS);
+    if (approvedOnceToolName) {
       return {
         type: "approval",
         leading: "",
-        label: "已批准",
-        suffix: ` ${String(approvedMatch[1] || "").trim()}`,
+        label: translateDesktopText("已批准"),
+        suffix: translateDesktopText(" {{tool}}", { tool: approvedOnceToolName }),
         tone: "approved",
       };
     }
-    const simpleApprovedMatch = stepText.match(/^已批准\s+(.+)$/);
-    if (simpleApprovedMatch) {
+    const simpleApprovedMatch = matchRunSegmentLocalizedPrefix(stepText, RUN_SEGMENT_APPROVED_PREFIXES);
+    if (simpleApprovedMatch?.suffix) {
       return {
         type: "approval",
         leading: "",
-        label: "已批准",
-        suffix: ` ${String(simpleApprovedMatch[1] || "").trim().replace(/[，。]+$/g, "")}`,
+        label: translateDesktopText("已批准"),
+        suffix: translateDesktopText(" {{tool}}", { tool: String(simpleApprovedMatch.suffix || "").trim().replace(/[，。]+$/g, "") }),
         tone: "approved",
       };
     }
-    const rejectedMatch = stepText.match(/^已拒绝\s+(.+?)\s+的执行请求。$/);
-    if (rejectedMatch) {
+    const rejectedToolName = matchRunSegmentTemplateCapture(stepText, RUN_SEGMENT_REJECTED_PATTERNS);
+    if (rejectedToolName) {
       return {
         type: "approval",
         leading: "",
-        label: "已拒绝",
-        suffix: ` ${String(rejectedMatch[1] || "").trim()} 的执行请求。`,
+        label: translateDesktopText("已拒绝"),
+        suffix: translateDesktopText(" {{tool}} 的执行请求。", { tool: rejectedToolName }),
         tone: "rejected",
       };
     }
@@ -625,7 +802,7 @@ function renderRunSegmentStepContent(
     if (detailExpanded) {
       return (
         <AriContainer className={`desk-run-step desk-run-step-rich ${runningClass}`} padding={0}>
-          <span className="desk-run-step-prefix">已编辑的文件</span>
+          <span className="desk-run-step-prefix">{translateDesktopText("已编辑的文件")}</span>
           <span className="desk-run-step-count-add">+{richMeta.added}</span>
           <span className="desk-run-step-count-remove">-{richMeta.removed}</span>
         </AriContainer>

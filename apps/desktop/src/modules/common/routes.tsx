@@ -1,7 +1,8 @@
 import { lazy } from "react";
-import { AGENTS } from "../../shared/data";
+import { resolveAgentSummaries } from "../../shared/data";
 import type { AuthAvailableAgentItem } from "../../shared/types";
 import type { RouteAccess } from "../../router/types";
+import { translateDesktopText } from "../../shared/i18n";
 
 // 描述:
 //
@@ -145,19 +146,21 @@ export function resolveHomeSidebarAgentItems(
   routeAccess: RouteAccess,
 ): HomeSidebarAgentItem[] {
   const authorizedCodes = new Set(availableAgents.map((item) => (item.code || "").toLowerCase()));
-  const agent = AGENTS[0];
+  const agent = resolveAgentSummaries()[0];
   const authed = authorizedCodes.size > 0 && routeAccess.isAgentEnabled(agent.key);
   const moduleEnabled = routeAccess.isModuleEnabled("agent");
   const enabled = moduleEnabled && authed;
   return [
     {
       key: agent.key,
-      label: `项目${authed ? "（已授权）" : "（未授权）"}`,
+      label: authed
+        ? translateDesktopText("项目（已授权）")
+        : translateDesktopText("项目（未授权）"),
       path: "/home",
       enabled,
       deniedMessage: moduleEnabled
-        ? "当前账号尚未开通智能体，请先完成授权。"
-        : "当前构建未启用智能体模块。",
+        ? translateDesktopText("当前账号尚未开通智能体，请先完成授权。")
+        : translateDesktopText("当前构建未启用智能体模块。"),
     },
   ];
 }
@@ -174,14 +177,14 @@ interface SettingsSidebarItem {
 // 描述：生成设置页侧边栏菜单，由 common 路由模块集中定义。
 export function resolveSettingsSidebarItems(routeAccess: RouteAccess): SettingsSidebarItem[] {
   const items: SettingsSidebarItem[] = [
-    { key: "general", label: "General", path: "/settings/general" },
-    { key: "overview", label: "Overview", path: SETTINGS_OVERVIEW_PATH },
-    { key: "identities", label: "Identities", path: SETTINGS_IDENTITIES_PATH },
-    { key: "permissions", label: "Permissions", path: SETTINGS_PERMISSIONS_PATH },
+    { key: "general", label: translateDesktopText("General"), path: "/settings/general" },
+    { key: "overview", label: translateDesktopText("概览"), path: SETTINGS_OVERVIEW_PATH },
+    { key: "identities", label: translateDesktopText("身份"), path: SETTINGS_IDENTITIES_PATH },
+    { key: "permissions", label: translateDesktopText("权限管理"), path: SETTINGS_PERMISSIONS_PATH },
   ];
 
   if (routeAccess.isAgentEnabled("agent")) {
-    items.push({ key: "agent", label: "Agent", path: "/settings/agent" });
+    items.push({ key: "agent", label: translateDesktopText("智能体设置"), path: "/settings/agent" });
   }
 
   return items;
@@ -192,7 +195,9 @@ export function resolveSettingsSidebarItems(routeAccess: RouteAccess): SettingsS
 // Extends:
 //
 //   - AI Key 页面基础展示文案。
-export const AI_KEY_SIDEBAR_CONTENT = {
-  title: "AI Key 管理",
-  description: "管理本地可用模型提供方密钥。",
-};
+export function resolveAiKeySidebarContent(): { title: string; description: string } {
+  return {
+    title: translateDesktopText("AI Key 管理"),
+    description: translateDesktopText("管理本地可用模型提供方密钥。"),
+  };
+}

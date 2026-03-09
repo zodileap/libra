@@ -77,15 +77,18 @@ test("TestDesktopUpdateFlowShouldConnectApiDownloadAndInstall", () => {
 
   // 描述：
   //
-  //   - 路由与布局层应透传更新状态，标题栏左侧在下载完成后展示更新按钮。
+  //   - 路由与布局层应透传更新状态，标题栏左侧常驻展示更新入口，并按状态切换检查/安装动作。
   assert.match(routerTypesSource, /desktopUpdateState: DesktopUpdateState;/);
   assert.match(layoutSource, /desktopUpdateState: DesktopUpdateState;/);
   assert.match(layoutSource, /onCheckDesktopUpdate: \(\) => Promise<void>;/);
   assert.match(layoutSource, /onInstallDesktopUpdate: \(\) => Promise<void>;/);
+  assert.match(layoutSource, /onCheckDesktopUpdate=\{onCheckDesktopUpdate\}/);
   assert.match(sidebarSource, /desktopUpdateState: DesktopUpdateState;/);
   assert.doesNotMatch(userMenuSource, /const showUpdateButton = desktopUpdateState\.status === "ready";/);
   assert.match(appHeaderSource, /className="desk-app-header-leading-actions"/);
-  assert.match(appHeaderSource, /const showUpdateButton = desktopUpdateState\.status === "ready";/);
+  assert.match(appHeaderSource, /const shouldInstallDesktopUpdate = desktopUpdateState\.status === "ready";/);
+  assert.match(appHeaderSource, /t\("检查更新"\)/);
+  assert.match(appHeaderSource, /await onCheckDesktopUpdate\(\);/);
   assert.match(appHeaderSource, /icon="system_update_alt"/);
   assert.match(appHeaderSource, /await onInstallDesktopUpdate\(\);/);
 

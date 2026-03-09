@@ -2,6 +2,7 @@ use crate::workflow::{RetryClassifiedError, WorkflowRetryPolicy};
 use libra_mcp_common::ProtocolError;
 use serde::Serialize;
 use std::env;
+use std::time::{Duration, Instant};
 
 #[path = "llm/providers/mod.rs"]
 mod providers;
@@ -10,6 +11,7 @@ pub(crate) const LLM_RUNTIME_TAG: &str = "llm-v3-gateway";
 const DEFAULT_TIMEOUT_SECS: u64 = 300;
 const DEFAULT_RETRY_MAX: u8 = 1;
 const DEFAULT_RETRY_BACKOFF_MS: u64 = 400;
+const WAITING_PROGRESS_INTERVAL_MS: u64 = 1200;
 
 /// 描述：LLM 调用产生的 Token 使用量统计。
 #[derive(Debug, Clone, Default, Serialize)]
@@ -41,6 +43,9 @@ impl LlmUsage {
 
 /// 描述：LLM 文本增量回调签名，输出为原始文本分片。
 pub type LlmTextStreamObserver<'a> = dyn FnMut(&str) + 'a;
+
+/// 描述：LLM 等待阶段的进度回调签名，输出为适合直接展示的简短状态文案。
+pub type LlmProgressObserver<'a> = dyn FnMut(&str) + 'a;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LlmProvider {
@@ -193,6 +198,7 @@ pub fn call_model_with_stream(
         workdir,
         LlmGatewayPolicy::from_env(),
         Some(on_chunk),
+        None,
     )
 }
 
@@ -203,7 +209,7 @@ pub fn call_model_with_policy(
     workdir: Option<&str>,
     policy: LlmGatewayPolicy,
 ) -> Result<LlmRunResult, LlmGatewayError> {
-    call_model_with_policy_and_stream(provider, prompt, workdir, policy, None)
+    call_model_with_policy_and_stream(provider, prompt, workdir, policy, None, None)
 }
 
 /// 描述：按指定策略调用模型网关，并可选输出增量文本事件。
@@ -213,13 +219,14 @@ pub(crate) fn call_model_with_policy_and_stream(
     workdir: Option<&str>,
     policy: LlmGatewayPolicy,
     on_chunk: Option<&mut LlmTextStreamObserver>,
+    on_progress: Option<&mut LlmProgressObserver>,
 ) -> Result<LlmRunResult, LlmGatewayError> {
     match provider {
         LlmProvider::CodexCli => {
-            providers::codex_cli::call_with_retry(prompt, workdir, policy, on_chunk)
+            providers::codex_cli::call_with_retry(prompt, workdir, policy, on_chunk, on_progress)
         }
         LlmProvider::Gemini => {
-            providers::gemini::call_with_retry(prompt, workdir, policy, on_chunk)
+            providers::gemini::call_with_retry(prompt, workdir, policy, on_chunk, on_progress)
         }
         LlmProvider::Unknown => Err(LlmGatewayError::new(
             provider,
@@ -227,6 +234,26 @@ pub(crate) fn call_model_with_policy_and_stream(
             "unknown llm provider",
         )
         .with_suggestion("请将 provider 设置为 codex / codex-cli 或 gemini / gemini-cli")),
+    }
+}
+
+/// 描述：判断当前是否应继续发出“等待模型首个片段”心跳，避免等待阶段过于频繁地推送重复事件。
+///
+/// Params:
+///
+///   - last_emitted_at: 上一次发出等待心跳的时间。
+///   - now: 当前时间。
+///
+/// Returns:
+///
+///   - true: 应发出新的等待心跳。
+///   - false: 仍处于节流窗口内，跳过本次发送。
+pub(crate) fn should_emit_waiting_progress(last_emitted_at: Option<Instant>, now: Instant) -> bool {
+    match last_emitted_at {
+        None => true,
+        Some(last) => {
+            now.duration_since(last) >= Duration::from_millis(WAITING_PROGRESS_INTERVAL_MS)
+        }
     }
 }
 

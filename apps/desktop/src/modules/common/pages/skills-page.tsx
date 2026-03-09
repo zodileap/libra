@@ -80,7 +80,6 @@ function SkillCard({
           {!registered && onAdd ? (
             <AriButton
               type="text"
-              color="brand"
               icon="add"
               aria-label={t("添加技能")}
               disabled={busy}
@@ -235,17 +234,16 @@ export function SkillsPage() {
       description={t("已发现 {{count}} 个技能。", { count: overview.all.length })}
       actions={(
         <AriFlex align="center" space={8}>
-          <AriTooltip content={t("导入本地技能")} position="top" minWidth={0} matchTriggerWidth={false}>
-            <AriButton
-              type="text"
-              icon="add"
-              aria-label={t("导入本地技能")}
-              disabled={Boolean(busySkillId)}
-              onClick={() => {
-                void handleImportLocalSkill();
-              }}
-            />
-          </AriTooltip>
+          <AriButton
+            color="brand"
+            icon="add"
+            label={t("导入本地技能")}
+            size="sm"
+            disabled={Boolean(busySkillId)}
+            onClick={() => {
+              void handleImportLocalSkill();
+            }}
+          />
         </AriFlex>
       )}
     />

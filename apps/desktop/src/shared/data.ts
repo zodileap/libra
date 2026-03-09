@@ -1,38 +1,51 @@
 import type { AgentKey, AgentSession, AgentSummary, ShortcutItem } from "./types";
 import { IS_BROWSER } from "./constants";
+import { translateDesktopText } from "./i18n";
 
 // 描述:
 //
-//   - 定义桌面端可用智能体摘要列表，供导航与页面入口渲染使用。
-export const AGENTS: AgentSummary[] = [
-  {
-    key: "agent",
-    name: "智能体",
-    description: "项目开发、工作流编排与工具执行",
-    hint: "Build with workflows"
-  }
-];
+//   - 生成桌面端可用智能体摘要列表，供导航与页面入口渲染使用。
+//
+// Returns:
+//
+//   - 当前语言下的智能体摘要列表。
+export function resolveAgentSummaries(): AgentSummary[] {
+  return [
+    {
+      key: "agent",
+      name: translateDesktopText("智能体"),
+      description: translateDesktopText("项目开发、工作流编排与工具执行"),
+      hint: translateDesktopText("Build with workflows"),
+    },
+  ];
+}
 
 // 描述:
 //
-//   - 定义首页快捷入口卡片数据。
-export const SHORTCUTS: ShortcutItem[] = [
-  {
-    id: "shortcut-build",
-    title: "Build AI apps",
-    description: "快速创建项目与页面框架"
-  },
-  {
-    id: "shortcut-chat",
-    title: "Chat with agents",
-    description: "按约束资产进行多轮生成"
-  },
-  {
-    id: "shortcut-usage",
-    title: "Monitor usage",
-    description: "查看智能体调用和订阅使用情况"
-  }
-];
+//   - 生成首页快捷入口卡片数据，确保文案跟随当前语言切换。
+//
+// Returns:
+//
+//   - 当前语言下的快捷入口列表。
+export function resolveShortcutItems(): ShortcutItem[] {
+  return [
+    {
+      id: "shortcut-build",
+      title: translateDesktopText("Build AI apps"),
+      description: translateDesktopText("快速创建项目与页面框架"),
+    },
+    {
+      id: "shortcut-chat",
+      title: translateDesktopText("Chat with agents"),
+      description: translateDesktopText("按约束资产进行多轮生成"),
+    },
+    {
+      id: "shortcut-usage",
+      title: translateDesktopText("Monitor usage"),
+      description: translateDesktopText("查看智能体调用和订阅使用情况"),
+    },
+  ];
+}
 
 // 描述:
 //
@@ -292,20 +305,20 @@ const PROJECT_WORKSPACE_CAPABILITY_MANIFESTS: ProjectWorkspaceCapabilityManifest
   {
     id: "project-knowledge",
     kind: "knowledge",
-    title: "项目知识",
-    description: "维护结构化项目信息，并在工作流需要时注入项目语义基线。",
+    title: translateDesktopText("项目知识"),
+    description: translateDesktopText("维护结构化项目信息，并在工作流需要时注入项目语义基线。"),
   },
   {
     id: "dependency-policy",
     kind: "policy",
-    title: "依赖策略",
-    description: "维护依赖规范，并在发送前或生成后执行依赖合规检查。",
+    title: translateDesktopText("依赖策略"),
+    description: translateDesktopText("维护依赖规范，并在发送前或生成后执行依赖合规检查。"),
   },
   {
     id: "toolchain-integration",
     kind: "integration",
-    title: "工具接入",
-    description: "维护项目级 MCP 与 DCC Runtime 接入状态，供技能与工作流读取。",
+    title: translateDesktopText("工具接入"),
+    description: translateDesktopText("维护项目级 MCP 与 DCC Runtime 接入状态，供技能与工作流读取。"),
   },
 ];
 
@@ -991,65 +1004,67 @@ const PROJECT_PROFILE_SECTION_KEYS = {
 // 描述:
 //
 //   - 默认分类模板。若后续需要新增分类，可在此扩展而不破坏既有数据。
-const PROJECT_PROFILE_SECTION_TEMPLATES: Array<{
+function getProjectProfileSectionTemplates(): Array<{
   key: string;
   title: string;
   description: string;
   facets: Array<{ key: string; label: string }>;
-}> = [
-  {
-    key: PROJECT_PROFILE_SECTION_KEYS.businessContext,
-    title: "业务语义",
-    description: "描述项目要解决的问题、用户角色与关键业务流程。",
-    facets: [
-      { key: "coreObjects", label: "核心对象" },
-      { key: "rolesAndScenarios", label: "角色与场景" },
-      { key: "acceptanceCriteria", label: "验收标准" },
-    ],
-  },
-  {
-    key: PROJECT_PROFILE_SECTION_KEYS.interactionContracts,
-    title: "交互契约",
-    description: "描述前后端交互所依赖的数据模型、请求响应与 Mock 场景。",
-    facets: [
-      { key: "entities", label: "API 数据实体" },
-      { key: "requestModels", label: "API 请求模型" },
-      { key: "responseModels", label: "API 响应模型" },
-      { key: "mockCases", label: "API Mock 场景" },
-    ],
-  },
-  {
-    key: PROJECT_PROFILE_SECTION_KEYS.uiInformationArchitecture,
-    title: "界面信息架构",
-    description: "描述页面层级、导航菜单与页面元素区块。",
-    facets: [
-      { key: "pages", label: "页面清单" },
-      { key: "navigation", label: "导航与菜单项" },
-      { key: "pageElements", label: "页面元素结构" },
-    ],
-  },
-  {
-    key: PROJECT_PROFILE_SECTION_KEYS.frontendImplementationArchitecture,
-    title: "前端实现架构",
-    description: "描述项目目录、模块边界与实现约束。",
-    facets: [
-      { key: "directories", label: "前端目录结构" },
-      { key: "moduleBoundaries", label: "前端模块边界" },
-      { key: "implementationConstraints", label: "前端实现约束" },
-    ],
-  },
-  {
-    key: PROJECT_PROFILE_SECTION_KEYS.engineeringGuardrails,
-    title: "工程约束",
-    description: "描述测试、编码规范与交付约束。",
-    facets: [
-      { key: "codingConventions", label: "编码约定" },
-    ],
-  },
-];
+}> {
+  return [
+    {
+      key: PROJECT_PROFILE_SECTION_KEYS.businessContext,
+      title: translateDesktopText("业务语义"),
+      description: translateDesktopText("描述项目要解决的问题、用户角色与关键业务流程。"),
+      facets: [
+        { key: "coreObjects", label: translateDesktopText("核心对象") },
+        { key: "rolesAndScenarios", label: translateDesktopText("角色与场景") },
+        { key: "acceptanceCriteria", label: translateDesktopText("验收标准") },
+      ],
+    },
+    {
+      key: PROJECT_PROFILE_SECTION_KEYS.interactionContracts,
+      title: translateDesktopText("交互契约"),
+      description: translateDesktopText("描述前后端交互所依赖的数据模型、请求响应与 Mock 场景。"),
+      facets: [
+        { key: "entities", label: translateDesktopText("API 数据实体") },
+        { key: "requestModels", label: translateDesktopText("API 请求模型") },
+        { key: "responseModels", label: translateDesktopText("API 响应模型") },
+        { key: "mockCases", label: translateDesktopText("API Mock 场景") },
+      ],
+    },
+    {
+      key: PROJECT_PROFILE_SECTION_KEYS.uiInformationArchitecture,
+      title: translateDesktopText("界面信息架构"),
+      description: translateDesktopText("描述页面层级、导航菜单与页面元素区块。"),
+      facets: [
+        { key: "pages", label: translateDesktopText("页面清单") },
+        { key: "navigation", label: translateDesktopText("导航与菜单项") },
+        { key: "pageElements", label: translateDesktopText("页面元素结构") },
+      ],
+    },
+    {
+      key: PROJECT_PROFILE_SECTION_KEYS.frontendImplementationArchitecture,
+      title: translateDesktopText("前端实现架构"),
+      description: translateDesktopText("描述项目目录、模块边界与实现约束。"),
+      facets: [
+        { key: "directories", label: translateDesktopText("前端目录结构") },
+        { key: "moduleBoundaries", label: translateDesktopText("前端模块边界") },
+        { key: "implementationConstraints", label: translateDesktopText("前端实现约束") },
+      ],
+    },
+    {
+      key: PROJECT_PROFILE_SECTION_KEYS.engineeringGuardrails,
+      title: translateDesktopText("工程约束"),
+      description: translateDesktopText("描述测试、编码规范与交付约束。"),
+      facets: [
+        { key: "codingConventions", label: translateDesktopText("编码约定") },
+      ],
+    },
+  ];
+}
 
 const PROJECT_PROFILE_KNOWN_SECTION_KEY_SET = new Set(
-  PROJECT_PROFILE_SECTION_TEMPLATES.map((item) => item.key),
+  Object.values(PROJECT_PROFILE_SECTION_KEYS),
 );
 
 // 描述:
@@ -1147,7 +1162,7 @@ function normalizeProjectKnowledgeFacet(
 //
 //   - 分类模板数组。
 function buildProjectProfileSectionTemplateDraft(): ProjectWorkspaceKnowledgeSection[] {
-  return PROJECT_PROFILE_SECTION_TEMPLATES.map((section) => ({
+  return getProjectProfileSectionTemplates().map((section) => ({
     key: section.key,
     title: section.title,
     description: section.description,
@@ -1295,7 +1310,7 @@ function normalizeProjectKnowledgeSections(
         .map((facetItem, index) => {
           const facetValue = (facetItem || {}) as Partial<ProjectWorkspaceKnowledgeFacet>;
           const facetKey = String(facetValue.key || "").trim() || `facet_${index + 1}`;
-          const facetLabel = String(facetValue.label || "").trim() || `字段 ${index + 1}`;
+          const facetLabel = String(facetValue.label || "").trim() || translateDesktopText("字段 {{index}}", { index: index + 1 });
           return normalizeProjectKnowledgeFacet(facetValue, {
             key: facetKey,
             label: facetLabel,
@@ -1485,33 +1500,35 @@ function buildDefaultProjectWorkspaceProfile(
 ): ProjectWorkspaceProfile {
   const now = new Date().toISOString();
   const dependencyConstraintLines = normalizeWorkspaceDependencyRules(workspace.dependencyRules || [])
-    .map((item) => `依赖规范：${item}`)
+    .map((item) => translateDesktopText("依赖规范：{{item}}", { item }))
     .slice(0, 20);
   const moduleName = String(workspace.name || "").trim() || resolveWorkspaceNameFromPath(workspace.path || "");
-  const summary = `项目「${moduleName || "未命名项目"}」结构化语义基线，供智能体跨话题复用。`;
+  const summary = translateDesktopText("项目「{{name}}」结构化语义基线，供智能体跨话题复用。", {
+    name: moduleName || translateDesktopText("未命名项目"),
+  });
   const apiDataModel: ProjectWorkspaceApiDataModel = {
     entities: [
-      "核心业务实体（待补充字段）",
+      translateDesktopText("核心业务实体（待补充字段）"),
     ],
     requestModels: [
-      "关键交互请求模型（待补充）",
+      translateDesktopText("关键交互请求模型（待补充）"),
     ],
     responseModels: [
-      "关键交互响应模型（待补充）",
+      translateDesktopText("关键交互响应模型（待补充）"),
     ],
     mockCases: [
-      "核心接口 mock 场景（成功/失败/边界）",
+      translateDesktopText("核心接口 mock 场景（成功/失败/边界）"),
     ],
   };
   const frontendPageLayout: ProjectWorkspaceFrontendPageLayout = {
     pages: [
-      "页面清单（首页/列表/详情等）",
+      translateDesktopText("页面清单（首页/列表/详情等）"),
     ],
     navigation: [
-      "导航结构（顶部栏/侧边栏/菜单项）",
+      translateDesktopText("导航结构（顶部栏/侧边栏/菜单项）"),
     ],
     pageElements: [
-      "页面元素（筛选区/列表区/详情区/操作区）",
+      translateDesktopText("页面元素（筛选区/列表区/详情区/操作区）"),
     ],
   };
   const frontendCodeStructure: ProjectWorkspaceFrontendCodeStructure = {
@@ -1522,18 +1539,18 @@ function buildDefaultProjectWorkspaceProfile(
       "src/services",
     ],
     moduleBoundaries: [
-      "页面层负责布局编排，组件层负责复用 UI 单元",
-      "服务层负责 API 调用与数据转换，避免页面直接拼装接口细节",
+      translateDesktopText("页面层负责布局编排，组件层负责复用 UI 单元"),
+      translateDesktopText("服务层负责 API 调用与数据转换，避免页面直接拼装接口细节"),
     ],
     implementationConstraints: [
       ...dependencyConstraintLines,
-      "优先依据结构化项目信息生成与重构代码",
-      "前端实现应保持页面结构语义稳定",
+      translateDesktopText("优先依据结构化项目信息生成与重构代码"),
+      translateDesktopText("前端实现应保持页面结构语义稳定"),
     ],
   };
   const codingConventions = [
-    "新增功能需补充对应单元测试",
-    "优先复用现有组件与工具函数，避免重复实现",
+    translateDesktopText("新增功能需补充对应单元测试"),
+    translateDesktopText("优先复用现有组件与工具函数，避免重复实现"),
   ];
   const knowledgeSections = buildProjectKnowledgeSectionsFromLegacyFields(
     summary,
@@ -1698,12 +1715,15 @@ function readProjectWorkspaceGroups(): ProjectWorkspaceGroup[] {
     return parsed
       .filter((item) => item?.id && item?.path)
       .map((item) => {
+        const hasExplicitCapabilities = Object.prototype.hasOwnProperty.call(item, "enabledCapabilities");
         const normalizedCapabilities = normalizeProjectWorkspaceCapabilityIds(item.enabledCapabilities);
         return {
           id: String(item.id),
           path: normalizeWorkspacePath(String(item.path)),
           name: String(item.name || "").trim() || resolveWorkspaceNameFromPath(String(item.path)),
-          enabledCapabilities: normalizedCapabilities.length > 0
+          enabledCapabilities: hasExplicitCapabilities
+            ? normalizedCapabilities
+            : normalizedCapabilities.length > 0
             ? normalizedCapabilities
             : inferLegacyProjectWorkspaceCapabilityIds(item as Record<string, unknown>),
           dependencyRules: normalizeWorkspaceDependencyRules(item.dependencyRules),
@@ -1811,7 +1831,7 @@ export function getAgentProjectById(id: string): StoredAgentProject | null {
 export function resolveAgentSessionTitle(agentKey: AgentKey, sessionId?: string | null): string {
   void agentKey;
   if (!sessionId) {
-    return "会话详情";
+    return translateDesktopText("会话详情");
   }
 
   const meta = readSessionMeta();
@@ -1830,7 +1850,7 @@ export function resolveAgentSessionTitle(agentKey: AgentKey, sessionId?: string 
     return presetSession.title.trim();
   }
 
-  return "会话详情";
+  return translateDesktopText("会话详情");
 }
 
 // 描述：新增或覆盖智能体项目记录，保持最近项目排在最前并限制数量。
@@ -2544,14 +2564,14 @@ export function updateProjectWorkspaceGroupSettings(
   const currentProfile = getProjectWorkspaceProfile(workspaceId);
   if (currentProfile) {
     const stableConstraints = currentProfile.frontendCodeStructure.implementationConstraints
-      .filter((item) => !item.startsWith("依赖规范："));
+      .filter((item) => !item.startsWith(translateDesktopText("依赖规范：")));
     saveProjectWorkspaceProfile(
       workspaceId,
       {
         frontendCodeStructure: {
           implementationConstraints: nextEnabledCapabilities.includes("dependency-policy")
             ? [
-              ...normalizedRules.map((item) => `依赖规范：${item}`),
+              ...normalizedRules.map((item) => translateDesktopText("依赖规范：{{item}}", { item })),
               ...stableConstraints,
             ]
             : stableConstraints,
@@ -2727,7 +2747,7 @@ export function saveProjectWorkspaceProfile(
       ok: false,
       conflict: false,
       profile: null,
-      message: "项目不存在，无法保存结构化信息。",
+      message: translateDesktopText("项目不存在，无法保存结构化信息。"),
     };
   }
 
@@ -2741,7 +2761,7 @@ export function saveProjectWorkspaceProfile(
         ok: false,
         conflict: true,
         profile: current,
-        message: "结构化信息已被其他会话更新，请刷新后重试。",
+        message: translateDesktopText("结构化信息已被其他会话更新，请刷新后重试。"),
       };
     }
   }
@@ -2829,7 +2849,7 @@ export function saveProjectWorkspaceProfile(
     ok: true,
     conflict: false,
     profile: profiles[workspaceId],
-    message: "结构化信息已保存。",
+    message: translateDesktopText("结构化信息已保存。"),
   };
 }
 

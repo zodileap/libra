@@ -27,8 +27,8 @@ test("TestHomeAndAgentSidebarShouldUseProjectFirstLayout", () => {
   //
   //   - Home 侧边栏应新增图标列表入口，并承载“工作流 + 技能 + MCP”三个跳转能力。
   assert.match(sidebarSource, /const homeToolbarEntries = useMemo\(\(\) => \{/);
-  assert.match(sidebarSource, /label: "工作流"/);
-  assert.match(sidebarSource, /label: "技能"/);
+  assert.match(sidebarSource, /label: t\("工作流"\)/);
+  assert.match(sidebarSource, /label: t\("技能"\)/);
   assert.match(sidebarSource, /label: "MCP"/);
   assert.match(sidebarSource, /icon: "account_tree"/);
   assert.match(sidebarSource, /path: WORKFLOW_PAGE_PATH/);
@@ -40,12 +40,12 @@ test("TestHomeAndAgentSidebarShouldUseProjectFirstLayout", () => {
   // 描述：
   //
   //   - 智能体侧边栏应改为“返回 + 新项目入口 + 项目标题行（新增\/排序）+ 项目会话列表”结构。
-  assert.match(sidebarSource, /<SidebarBackHeader onBack=\{\(\) => navigate\("\/home"\)\} label="Home" \/>/);
+  assert.match(sidebarSource, /<SidebarBackHeader onBack=\{\(\) => navigate\("\/home"\)\} label=\{t\("Home"\)\} \/>/);
   assert.match(sidebarSource, /className="desk-sidebar-toolbar" padding=\{0\}/);
-  assert.match(sidebarSource, /key: "create-project",[\s\S]*label: "新项目"/);
-  assert.match(sidebarSource, /<AriTypography variant="caption" value="项目" \/>/);
-  assert.match(sidebarSource, /icon="note_stack_add"[\s\S]*aria-label="新项目"/);
-  assert.match(sidebarSource, /icon="sort"[\s\S]*aria-label="排序"/);
+  assert.match(sidebarSource, /key: "create-project",[\s\S]*label: t\("新项目"\)/);
+  assert.match(sidebarSource, /<AriTypography variant="caption" value=\{t\("项目"\)\} \/>/);
+  assert.match(sidebarSource, /icon="note_stack_add"[\s\S]*aria-label=\{t\("新项目"\)\}/);
+  assert.match(sidebarSource, /icon="sort"[\s\S]*aria-label=\{t\("排序"\)\}/);
   assert.match(sidebarSource, /const \[sessionSortMode, setSessionSortMode\] = useState<"default" \| "name">\("default"\);/);
   assert.match(sidebarSource, /const displayedSessions = useMemo\(\(\) => \{/);
   assert.match(sidebarSource, /buildSessionMenuItems\(displayedSessions\)/);

@@ -61,11 +61,11 @@ test("TestSidebarDeleteButtonsShouldUseGhostAndColor", () => {
   //   - 工作流删除按钮默认应为 ghost；进入“确定”确认态后应切为非 ghost。
   assert.match(
     source,
-    /type=\{pendingDeleteWorkflowId === item\.key \? "default" : "text"\}/,
+    /type=\{pendingDeleteWorkflowId === item\.id \? "default" : "text"\}/,
   );
   assert.match(
     source,
-    /ghost=\{pendingDeleteWorkflowId !== item\.key\}/,
+    /ghost=\{pendingDeleteWorkflowId !== item\.id\}/,
   );
 
   // 描述:
@@ -77,16 +77,15 @@ test("TestSidebarDeleteButtonsShouldUseGhostAndColor", () => {
   );
   assert.match(
     source,
-    /showActionsOnHover: pendingDeleteWorkflowId !== item\.key/,
+    /showActionsOnHover: pendingDeleteWorkflowId !== item\.id/,
   );
 
   // 描述:
   //
   //   - 删除失败提示需按场景区分，默认模板提示、目标缺失提示、通用失败提示不能混淆。
-  assert.match(
-    source,
-    /const warningContent = targetWorkflow\.shared\s*\?\s*"默认工作流不可删除，请先复制后再管理。"\s*:\s*"工作流删除失败，请稍后重试。";/,
-  );
+  assert.doesNotMatch(source, /默认工作流不可删除，请先复制后再管理。/);
+  assert.match(source, /t\("工作流不存在或已删除，请刷新后重试。"\)/);
+  assert.match(source, /t\("工作流删除失败，请稍后重试。"\)/);
 
   // 描述:
   //
@@ -95,10 +94,10 @@ test("TestSidebarDeleteButtonsShouldUseGhostAndColor", () => {
   assert.match(source, /visible=\{openWorkspaceActionMenuId === group\.workspace\.id\}/);
   assert.match(source, /icon="more_horiz"/);
   assert.match(source, /icon="settings"/);
-  assert.match(source, /aria-label="项目设置"/);
-  assert.match(source, /aria-label="在项目内新增话题"/);
+  assert.match(source, /aria-label=\{t\("项目设置"\)\}/);
+  assert.match(source, /aria-label=\{t\("在项目内新增话题"\)\}/);
   assert.match(source, /icon="edit"/);
-  assert.match(source, /\{ key: "delete", label: "删除", icon: "delete", fillIcon: "delete_fill" \}/);
+  assert.match(source, /\{ key: "delete", label: t\("删除"\), icon: "delete", fillIcon: "delete_fill" \}/);
   assert.doesNotMatch(source, /\{ key: "edit", label: "编辑", icon: "edit" \}/);
   assert.match(source, /expandIconPosition="none"/);
 });

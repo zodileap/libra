@@ -65,11 +65,60 @@ test("TestDesktopSidebarShouldRespectRouteAccessVisibility", () => {
   assert.match(layoutSource, /routeAccess: RouteAccess;/);
   assert.match(layoutSource, /<ClientSidebar[\s\S]*routeAccess=\{routeAccess\}/);
   assert.match(sidebarSource, /resolveSettingsSidebarItems\(routeAccess\)/);
-  assert.match(userMenuSource, /key: "overview"/);
-  assert.match(userMenuSource, /navigate\("\/settings\/overview"\)/);
+  assert.match(userMenuSource, /key: "general-settings"/);
+  assert.match(userMenuSource, /navigate\("\/settings\/general"\)/);
+  assert.match(userMenuSource, /key: "language"/);
   assert.match(userMenuSource, /key: "ai-key"/);
+  assert.match(userMenuSource, /DESKTOP_LANGUAGE_PREFERENCES\.map\(\(item\) => \(\{/);
+  assert.match(userMenuSource, /label: item === "auto" \? t\("自动检测"\) : getDesktopLanguageNativeLabel\(item\),/);
+  assert.match(userMenuSource, /selectedKey=\{`language:\$\{languagePreference\}`\}/);
+  assert.match(userMenuSource, /key: "language",[\s\S]*?icon: "translate"/);
+  assert.doesNotMatch(userMenuSource, /icon: language === item \? "check" : "translate"/);
+  assert.doesNotMatch(userMenuSource, /key: "overview"/);
+  assert.doesNotMatch(userMenuSource, /key: "identities"/);
   assert.match(commonRoutesSource, /routeAccess\.isAgentEnabled\(agent\.key\)/);
   assert.match(sidebarSource, /routeAccess\.isModuleEnabled\("workflow"\)/);
   assert.match(sidebarSource, /routeAccess\.isModuleEnabled\("skill"\)/);
   assert.match(sidebarSource, /routeAccess\.isModuleEnabled\("mcp"\)/);
+  assert.doesNotMatch(sidebarSource, /if \(pathname\.startsWith\("\/ai-keys"\)\) return "ai-key";/);
+  assert.doesNotMatch(sidebarSource, /function AiKeySidebar\(/);
+  assert.doesNotMatch(sidebarSource, /if \(mode === "ai-key"\)/);
+});
+
+test("TestUserHoverMenuShouldUseSettingsTriggerAndProfilePopover", () => {
+  const userMenuSource = readDesktopSource("src/sidebar/widgets/user-hover-menu.tsx");
+  const styleSource = readDesktopSource("src/styles.css");
+  const messagesSource = readDesktopSource("src/shared/i18n/messages.ts");
+
+  // 描述:
+  //
+  //   - 用户栏触发入口应切换为“设置图标 + 设置文本”，悬浮窗顶部展示账户与类型信息。
+  assert.match(userMenuSource, /AriDivider/);
+  assert.match(userMenuSource, /const accountLabel = t\("账户"\);/);
+  assert.match(userMenuSource, /const userTypeLabel = String\(selectedIdentityLabel \|\| ""\)\.trim\(\) \|\| t\("未配置身份"\);/);
+  assert.match(userMenuSource, /<SidebarEntryContent[\s\S]*icon="settings"[\s\S]*label=\{t\("设置"\)\}/s);
+  assert.match(userMenuSource, /<AriContainer className="desk-user-menu-popover" ghost>/);
+  assert.match(userMenuSource, /<AriContainer className="desk-user-menu-profile" padding=\{0\} ghost>/);
+  assert.match(userMenuSource, /<AriContainer padding=\{0\} ghost>[\s\S]*?<AriMenu[\s\S]*className="desk-user-menu-list"/);
+  assert.match(userMenuSource, /className="desk-user-menu-profile-head"/);
+  assert.match(userMenuSource, /<AriTypography className="desk-user-menu-profile-title" variant="body" value=\{accountLabel\} \/>/);
+  assert.match(userMenuSource, /<AriTypography className="desk-user-menu-profile-meta" variant="caption" value=\{userTypeLabel\} \/>/);
+  assert.match(userMenuSource, /label: t\("退出登录"\)/);
+  assert.match(userMenuSource, /trigger="click"/);
+  assert.match(userMenuSource, /matchTriggerWidth=\{false\}/);
+  assert.match(messagesSource, /"自动检测": "自动检测"/);
+  assert.match(messagesSource, /"自动检测": "Auto Detect"/);
+
+  // 描述:
+  //
+  //   - 样式层与文案层应补齐悬浮窗容器、资料头、分割线以及“账户/退出登录”文案。
+  assert.match(styleSource, /\.desk-user-menu-popover/);
+  assert.doesNotMatch(styleSource, /\.desk-user-menu-popover\s*\{[^}]*background:/s);
+  assert.match(styleSource, /\.desk-user-menu-profile-head/);
+  assert.match(styleSource, /\.desk-user-menu-profile-meta/);
+  assert.match(styleSource, /\.desk-user-menu-divider/);
+  assert.match(messagesSource, /"账户": "账户"/);
+  assert.match(messagesSource, /"退出登录": "退出登录"/);
+  assert.match(messagesSource, /"账户": "Account"/);
+  assert.match(messagesSource, /"退出登录": "Log out"/);
 });

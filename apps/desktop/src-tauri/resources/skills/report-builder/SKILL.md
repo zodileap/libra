@@ -1,6 +1,7 @@
 ---
 name: report-builder
-description: 汇总执行过程、产出与剩余风险，形成可交付报告。
+description: 汇总结果、风险和后续建议。
+title: 交付报告
 ---
 # 报告生成
 

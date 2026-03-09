@@ -1,4 +1,5 @@
 import type { AgentSkillItem } from "../../modules/common/services/skills";
+import { translateDesktopText } from "../i18n";
 import { normalizeAgentSkillId } from "./prompt-guidance";
 import type { AgentWorkflowDefinition } from "./types";
 
@@ -72,7 +73,7 @@ function buildSkillInstructionBlock(item: AgentWorkflowSkillPlanItem): string {
     lines.push(item.skillDescription);
   }
   if (item.instruction) {
-    lines.push(`节点要求：${item.instruction}`);
+    lines.push(translateDesktopText("节点要求：{{instruction}}", { instruction: item.instruction }));
   }
   lines.push(item.skillMarkdownBody);
   return lines.filter((line) => String(line || "").trim().length > 0).join("\n\n");
@@ -107,7 +108,7 @@ export function buildAgentWorkflowSkillExecutionPlan(
   }
 
   const items: AgentWorkflowSkillPlanItem[] = skillNodes.map((node) => {
-    const nodeTitle = String(node.title || "技能节点").trim() || "技能节点";
+    const nodeTitle = String(node.title || translateDesktopText("技能节点")).trim() || translateDesktopText("技能节点");
     const skillId = normalizeAgentSkillId(String(node.skillId || "").trim());
     const skillVersion = String(node.skillVersion || "").trim();
     const instruction = String(node.instruction || "").trim();
@@ -159,22 +160,29 @@ export function buildAgentWorkflowSkillExecutionPlan(
     .filter((item) => item.status !== "ready")
     .map((item) => {
       if (item.status === "missing_skill_id") {
-        return `节点「${item.nodeTitle}」未配置技能编码`;
+        return translateDesktopText("节点「{{title}}」未配置技能编码", { title: item.nodeTitle });
       }
-      return `技能「${item.skillId}」未在 Agent Skills 注册表中找到（节点：${item.nodeTitle}）`;
+      return translateDesktopText("技能「{{skillId}}」未在 Agent Skills 注册表中找到（节点：{{title}}）", {
+        skillId: item.skillId,
+        title: item.nodeTitle,
+      });
     });
 
   const planPrompt = readyItems.length > 0
     ? [
-        "【Skill 执行计划】",
+        translateDesktopText("【Skill 执行计划】"),
         ...readyItems.map((item, index) => {
-          const instructionText = item.instruction ? `；节点要求：${item.instruction}` : "";
-          const descriptionText = item.skillDescription ? `；技能说明：${item.skillDescription}` : "";
+          const instructionText = item.instruction
+            ? translateDesktopText("；节点要求：{{instruction}}", { instruction: item.instruction })
+            : "";
+          const descriptionText = item.skillDescription
+            ? translateDesktopText("；技能说明：{{description}}", { description: item.skillDescription })
+            : "";
           return `${index + 1}. ${item.nodeTitle}：${item.skillName} (${item.skillId})${descriptionText}${instructionText}`;
         }),
-        "执行约束：按顺序执行技能；若任一步骤失败，先输出阻塞原因与修复建议，再决定是否继续。",
+        translateDesktopText("执行约束：按顺序执行技能；若任一步骤失败，先输出阻塞原因与修复建议，再决定是否继续。"),
         "",
-        "【Skill 定义】",
+        translateDesktopText("【Skill 定义】"),
         ...readyItems.map((item) => buildSkillInstructionBlock(item)),
       ].join("\n\n")
     : "";

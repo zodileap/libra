@@ -23,10 +23,10 @@ test("TestSessionRenameModalConfirmButtonShouldUseBrandColor", () => {
   //   - “重命名会话”弹窗的确认按钮应使用品牌色，不应使用 primary。
   assert.match(
     source,
-    /title="重命名会话"[\s\S]*?<AriButton[\s\S]*?color="brand"[\s\S]*?label="确定"[\s\S]*?onClick=\{handleConfirmRename\}/,
+    /title=\{t\("重命名会话"\)\}[\s\S]*?<AriButton[\s\S]*?color="brand"[\s\S]*?label=\{t\("确定"\)\}[\s\S]*?onClick=\{handleConfirmRename\}/,
   );
   assert.doesNotMatch(
     source,
-    /title="重命名会话"[\s\S]*?<AriButton[\s\S]*?color="primary"[\s\S]*?label="确定"[\s\S]*?onClick=\{handleConfirmRename\}/,
+    /title=\{t\("重命名会话"\)\}[\s\S]*?<AriButton[\s\S]*?color="primary"[\s\S]*?label=\{t\("确定"\)\}[\s\S]*?onClick=\{handleConfirmRename\}/,
   );
 });

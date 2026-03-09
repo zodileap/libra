@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import { SessionPage } from "../../widgets/session/page";
 import { AGENT_SESSION_UI_CONFIG } from "../../widgets/session/config";
 import { resolveWorkflowEditorPath, WORKFLOW_PAGE_PATH } from "../common/routes";
+import { translateDesktopText } from "../../shared/i18n";
 import { AgentHomePage } from "./pages/agent-home-page";
 import { AgentSettingsPage } from "./pages/agent-settings-page";
 import { ProjectSettingsPage } from "./pages/project-settings-page";
@@ -94,8 +95,8 @@ export const ProjectSettingsPageLazy = lazy(async () => {
 
 // 描述：统一智能体侧边栏快捷入口配置，由路由模块定义。
 export const AGENT_SIDEBAR_QUICK_ACTIONS = [
-  { key: "settings", label: "智能体设置", icon: "settings", path: AGENT_SETTINGS_PATH },
-  { key: "workflow", label: "工作流设置", icon: "account_tree", path: AGENT_WORKFLOW_PATH },
+  { key: "settings", label: translateDesktopText("智能体设置"), icon: "settings", path: AGENT_SETTINGS_PATH },
+  { key: "workflow", label: translateDesktopText("工作流设置"), icon: "account_tree", path: AGENT_WORKFLOW_PATH },
 ] as const;
 
 // 描述：构建统一智能体工作流页跳转地址，保持 workflowId 查询参数一致。

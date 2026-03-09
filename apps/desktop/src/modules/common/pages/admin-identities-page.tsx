@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { AriButton, AriCard, AriContainer, AriFlex, AriMessage, AriTypography } from "aries_react";
 import { listAccountIdentities } from "../../../shared/services/backend-api";
 import type { ConsoleIdentityItem } from "../../../shared/types";
+import { useDesktopI18n } from "../../../shared/i18n";
 import { useDesktopHeaderSlot } from "../../../widgets/app-header/header-slot-context";
 import { DeskEmptyState, DeskStatusText } from "../../../widgets/settings-primitives";
 
@@ -12,31 +13,33 @@ interface AdminIdentitiesPageProps {
   onSelectIdentity: (value: ConsoleIdentityItem | null) => ConsoleIdentityItem | null;
 }
 
-// 描述：将身份类型转换为简洁中文文案，避免页面直接暴露后端原始枚举值。
+// 描述：将身份类型转换为简洁文案，避免页面直接暴露后端原始枚举值。
 //
 // Params:
 //
 //   - type: 身份类型编码。
+//   - t: 国际化函数。
 //
 // Returns:
 //
 //   - 面向用户的身份类型说明。
-function resolveIdentityTypeText(type: string): string {
+function resolveIdentityTypeText(type: string, t: (key: string) => string): string {
   if (type === "organization_member") {
-    return "公司成员";
+    return t("公司成员");
   }
   if (type === "department_member") {
-    return "部门成员";
+    return t("部门成员");
   }
   if (type === "individual") {
-    return "独立用户";
+    return t("独立用户");
   }
-  return type || "未分类";
+  return type || t("未分类");
 }
 
 // 描述：渲染 Desktop 身份管理页，展示当前账号可用身份与关联角色。
 export function AdminIdentitiesPage({ selectedIdentity, onSelectIdentity }: AdminIdentitiesPageProps) {
   const headerSlotElement = useDesktopHeaderSlot();
+  const { t } = useDesktopI18n();
   const [identities, setIdentities] = useState<ConsoleIdentityItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusText, setStatusText] = useState("");
@@ -48,7 +51,7 @@ export function AdminIdentitiesPage({ selectedIdentity, onSelectIdentity }: Admi
     try {
       setIdentities(await listAccountIdentities());
     } catch (err) {
-      const reason = err instanceof Error ? err.message : "身份列表加载失败，请稍后重试。";
+      const reason = err instanceof Error ? err.message : t("身份列表加载失败，请稍后重试。");
       setStatusText(reason);
     } finally {
       setLoading(false);
@@ -89,7 +92,7 @@ export function AdminIdentitiesPage({ selectedIdentity, onSelectIdentity }: Admi
   const handleSelectIdentity = (identity: ConsoleIdentityItem) => {
     onSelectIdentity(identity);
     AriMessage.success({
-      content: `已切换到 ${identity.scopeName}。`,
+      content: t("已切换到 {{scopeName}}。", { scopeName: identity.scopeName }),
       duration: 2200,
     });
   };
@@ -97,9 +100,9 @@ export function AdminIdentitiesPage({ selectedIdentity, onSelectIdentity }: Admi
   // 描述：生成页面头部并挂载到 Desktop 标题栏 slot。
   const headerNode = useMemo(() => (
     <AriContainer className="desk-project-settings-header" padding={0} data-tauri-drag-region>
-      <AriTypography className="desk-project-settings-header-title" variant="h4" value="身份管理" />
+      <AriTypography className="desk-project-settings-header-title" variant="h4" value={t("身份管理")} />
     </AriContainer>
-  ), []);
+  ), [t]);
 
   return (
     <AriContainer className="desk-content" showBorderRadius={false}>
@@ -108,12 +111,12 @@ export function AdminIdentitiesPage({ selectedIdentity, onSelectIdentity }: Admi
         <AriContainer className="desk-settings-panel">
           <AriFlex align="center" justify="space-between" wrap space={12}>
             <AriContainer padding={0}>
-              <AriTypography variant="h4" value="身份列表" />
-              <AriTypography variant="caption" value="一个账号可以挂载多个身份与角色，用于区分共享范围。" />
+              <AriTypography variant="h4" value={t("身份列表")} />
+              <AriTypography variant="caption" value={t("一个账号可以挂载多个身份与角色，用于区分共享范围。")} />
             </AriContainer>
             <AriButton
               icon="refresh"
-              label={loading ? "刷新中..." : "刷新"}
+              label={loading ? t("刷新中...") : t("刷新")}
               disabled={loading}
               onClick={() => {
                 void loadIdentities();
@@ -125,12 +128,14 @@ export function AdminIdentitiesPage({ selectedIdentity, onSelectIdentity }: Admi
         <AriContainer className="desk-settings-panel">
           <AriTypography
             variant="caption"
-            value={selectedIdentity ? `当前身份：${selectedIdentity.scopeName}` : "当前还未选定身份，将使用账号默认上下文。"}
+            value={selectedIdentity
+              ? t("当前身份：{{scopeName}}", { scopeName: selectedIdentity.scopeName })
+              : t("当前还未选定身份，将使用账号默认上下文。")}
           />
         </AriContainer>
 
         {identities.length === 0 && !loading ? (
-          <DeskEmptyState title="暂无身份" description="当前账号下还没有可展示的身份信息。" />
+          <DeskEmptyState title={t("暂无身份")} description={t("当前账号下还没有可展示的身份信息。")} />
         ) : (
           <AriContainer className="desk-admin-list">
             {identities.map((item) => (
@@ -138,15 +143,15 @@ export function AdminIdentitiesPage({ selectedIdentity, onSelectIdentity }: Admi
                 <AriFlex vertical align="flex-start" justify="flex-start" space={8}>
                   <AriFlex align="center" justify="space-between" wrap space={12}>
                     <AriTypography variant="h4" value={item.scopeName || item.id} />
-                    <AriTypography variant="caption" value={item.status || "unknown"} />
+                    <AriTypography variant="caption" value={item.status || t("未知")} />
                   </AriFlex>
-                  <AriTypography variant="caption" value={`身份类型：${resolveIdentityTypeText(item.type)}`} />
-                  <AriTypography variant="caption" value={`角色：${item.roles.join("、") || "未配置"}`} />
-                  <AriTypography variant="caption" value={`身份 ID：${item.id}`} />
+                  <AriTypography variant="caption" value={t("身份类型：{{type}}", { type: resolveIdentityTypeText(item.type, t) })} />
+                  <AriTypography variant="caption" value={t("角色：{{roles}}", { roles: item.roles.join("、") || t("未配置") })} />
+                  <AriTypography variant="caption" value={t("身份 ID：{{id}}", { id: item.id })} />
                   <AriButton
                     icon={selectedIdentity?.id === item.id ? "check_circle" : "how_to_reg"}
                     color={selectedIdentity?.id === item.id ? "primary" : "default"}
-                    label={selectedIdentity?.id === item.id ? "当前身份" : "设为当前"}
+                    label={selectedIdentity?.id === item.id ? t("当前身份") : t("设为当前")}
                     disabled={selectedIdentity?.id === item.id}
                     onClick={() => {
                       handleSelectIdentity(item);
@@ -158,7 +163,7 @@ export function AdminIdentitiesPage({ selectedIdentity, onSelectIdentity }: Admi
           </AriContainer>
         )}
 
-        {loading ? <DeskStatusText value="身份列表加载中..." /> : null}
+        {loading ? <DeskStatusText value={t("身份列表加载中...")} /> : null}
         {statusText ? <DeskStatusText value={statusText} /> : null}
       </AriContainer>
     </AriContainer>

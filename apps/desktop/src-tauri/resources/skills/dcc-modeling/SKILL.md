@@ -1,6 +1,7 @@
 ---
 name: dcc-modeling
-description: 通过已注册的 DCC MCP 完成建模、编辑、导入导出与跨软件操作。
+description: 通过已注册的 DCC MCP 完成建模、编辑和导入导出。
+title: 建模执行
 ---
 # 建模执行
 

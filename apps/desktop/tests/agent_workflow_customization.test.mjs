@@ -271,6 +271,8 @@ test("TestWorkflowPagesShouldUseListLayoutInSettings", () => {
   assert.match(overviewSource, /content=\{t\("管理"\)\}/);
   assert.match(overviewSource, /aria-label=\{t\("管理工作流"\)\}/);
   assert.match(overviewSource, /aria-label=\{readonly \? t\("添加工作流"\) : t\("复制工作流"\)\}/);
+  assert.match(overviewSource, /<AriButton\s*type="text"\s*icon=\{readonly \? "add" : "content_copy"\}\s*aria-label=\{readonly \? t\("添加工作流"\) : t\("复制工作流"\)\}/s);
+  assert.doesNotMatch(overviewSource, /<AriButton\s*type="text"\s*icon=\{readonly \? "add" : "content_copy"\}[\s\S]*color=\{readonly \? "brand" : "default"\}[\s\S]*aria-label=\{readonly \? t\("添加工作流"\) : t\("复制工作流"\)\}/s);
   assert.doesNotMatch(overviewSource, /aria-label=\{readonly \? t\("查看工作流"\) : t\("编辑工作流"\)\}/);
   assert.doesNotMatch(overviewSource, /aria-label=\{t\("删除工作流"\)\}/);
   assert.match(canvasSource, /desk-workflow-editor-main/);
@@ -326,6 +328,7 @@ test("TestWorkflowCanvasSidebarAndFloatingActionsShouldMatchUxRules", () => {
   const sidebarSource = readDesktopSource("src/sidebar/index.tsx");
   const overviewSource = readDesktopSource("src/modules/common/pages/workflows-page.tsx");
   const canvasSource = readDesktopSource("src/widgets/workflow/page.tsx");
+  const styleSource = readDesktopSource("src/styles.css");
 
   // 描述：
   //
@@ -335,12 +338,16 @@ test("TestWorkflowCanvasSidebarAndFloatingActionsShouldMatchUxRules", () => {
   assert.match(sidebarSource, /function WorkflowsSidebar/);
   assert.match(sidebarSource, /label=\{t\("返回"\)\}/);
   assert.match(sidebarSource, /label=\{t\("新增"\)\}/);
-  assert.match(sidebarSource, /onBack=\{\(\) => navigate\("\/home"\)\}/);
+  assert.match(sidebarSource, /onBack=\{\(\) => navigate\(WORKFLOW_PAGE_PATH\)\}/);
   assert.match(sidebarSource, /const isWorkflowEditorPage = location\.pathname\.startsWith\(WORKFLOW_EDITOR_PAGE_PATH\);/);
   assert.match(sidebarSource, /listAgentWorkflowOverview\(\)/);
   assert.match(sidebarSource, /workflowOverview\.all/);
   assert.match(sidebarSource, /label: t\("已注册"\), isGroup: true/);
   assert.match(sidebarSource, /label: t\("未注册"\), isGroup: true/);
+  assert.match(sidebarSource, /key: "workflow-group-registered-empty"/);
+  assert.match(sidebarSource, /value=\{t\("暂无已注册工作流"\)\}/);
+  assert.match(sidebarSource, /key: "workflow-group-templates-empty"/);
+  assert.match(sidebarSource, /value=\{t\("暂无未注册工作流"\)\}/);
   assert.match(sidebarSource, /if \(pendingDeleteWorkflowId !== workflowId\) \{\s*setPendingDeleteWorkflowId\(workflowId\);\s*return;\s*\}/s);
   assert.match(sidebarSource, /label=\{pendingDeleteWorkflowId === item\.id \? t\("确定"\) : undefined\}/);
   assert.match(sidebarSource, /showActionsOnHover: pendingDeleteWorkflowId !== item\.id/);
@@ -348,6 +355,12 @@ test("TestWorkflowCanvasSidebarAndFloatingActionsShouldMatchUxRules", () => {
   assert.match(overviewSource, /aria-label=\{readonly \? t\("添加工作流"\) : t\("复制工作流"\)\}/);
   assert.match(canvasSource, /className="desk-workflow-editor-floating-panel"/);
   assert.doesNotMatch(canvasSource, /desk-workflow-editor-sidebar/);
+  assert.match(styleSource, /--desk-workflow-node-surface:/);
+  assert.match(styleSource, /--desk-workflow-node-head-surface:/);
+  assert.match(styleSource, /--desk-workflow-node-content-surface:/);
+  assert.match(styleSource, /--desk-workflow-node-accent:/);
+  assert.match(styleSource, /\.desk-sidebar-group-empty-label \{/);
+  assert.doesNotMatch(styleSource, /\.desk-workflow-reactflow[\s\S]*background:\s*var\(--z-ramp-white-1000\);/s);
 });
 
 test("TestClientTsxLayoutShouldAvoidNativeDivElements", () => {

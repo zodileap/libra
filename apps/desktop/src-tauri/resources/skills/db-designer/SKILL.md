@@ -1,6 +1,7 @@
 ---
 name: db-designer
-description: 输出实体、字段、索引、约束与迁移策略。
+description: 输出实体、字段、索引和迁移方案。
+title: 数据库设计
 ---
 # 数据库设计
 

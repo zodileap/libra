@@ -15,6 +15,7 @@ import type {
   ConsolePermissionGrantItem,
   ConsolePermissionTemplate,
 } from "../../../shared/types";
+import { translateDesktopText, useDesktopI18n } from "../../../shared/i18n";
 import { useDesktopHeaderSlot } from "../../../widgets/app-header/header-slot-context";
 import { DeskEmptyState, DeskStatusText } from "../../../widgets/settings-primitives";
 
@@ -23,16 +24,17 @@ import { DeskEmptyState, DeskStatusText } from "../../../widgets/settings-primit
 //   - 权限表单默认值；保留一组最小示例，便于本地模式下直接完成授权演示。
 const DEFAULT_PERMISSION_FORM: ConsoleGrantPermissionReq = {
   targetUserId: "local-user-2",
-  targetUserName: "协作者",
+  targetUserName: translateDesktopText("协作者"),
   permissionCode: "",
   resourceType: "",
-  resourceName: "共享工作流空间",
+  resourceName: translateDesktopText("共享工作流空间"),
   expiresAt: "",
 };
 
 // 描述：渲染 Desktop 权限管理页，支持新增授权与撤销已存在记录。
 export function AdminPermissionsPage() {
   const headerSlotElement = useDesktopHeaderSlot();
+  const { t } = useDesktopI18n();
   const [searchParams] = useSearchParams();
   const [manageableUsers, setManageableUsers] = useState<ConsoleManageableUserItem[]>([]);
   const [permissionTemplates, setPermissionTemplates] = useState<ConsolePermissionTemplate[]>([]);
@@ -51,13 +53,13 @@ export function AdminPermissionsPage() {
   // 描述：根据概览跳转上下文生成轻量提示，避免页面出现额外解释块。
   const searchHintText = useMemo(() => {
     if (highlightedGrantId) {
-      return "已定位到指定授权记录。";
+      return t("已定位到指定授权记录。");
     }
     if (preferredTargetUserId) {
-      return "已预选授权目标。";
+      return t("已预选授权目标。");
     }
     return "";
-  }, [highlightedGrantId, preferredTargetUserId]);
+  }, [highlightedGrantId, preferredTargetUserId, t]);
 
   // 描述：根据当前输入的权限编码匹配模板，用于自动填充资源类型。
   const selectedTemplate = useMemo(
@@ -101,7 +103,7 @@ export function AdminPermissionsPage() {
         };
       });
     } catch (err) {
-      const reason = err instanceof Error ? err.message : "权限数据加载失败，请稍后重试。";
+      const reason = err instanceof Error ? err.message : t("权限数据加载失败，请稍后重试。");
       setStatusText(reason);
     } finally {
       setLoading(false);
@@ -152,7 +154,7 @@ export function AdminPermissionsPage() {
     }
     if (!form.targetUserId.trim() || !form.targetUserName.trim() || !form.resourceName.trim() || !selectedTemplate) {
       AriMessage.warning({
-        content: "请完整填写目标用户、资源名称并选择有效权限编码。",
+        content: t("请完整填写目标用户、资源名称并选择有效权限编码。"),
         duration: 2600,
       });
       return;
@@ -168,13 +170,13 @@ export function AdminPermissionsPage() {
         expiresAt: form.expiresAt?.trim() || undefined,
       });
       AriMessage.success({
-        content: "授权成功。",
+        content: t("授权成功。"),
         duration: 2200,
       });
       await loadPermissionData();
     } catch (err) {
       AriMessage.error({
-        content: err instanceof Error ? err.message : "授权失败，请稍后重试。",
+        content: err instanceof Error ? err.message : t("授权失败，请稍后重试。"),
         duration: 2800,
       });
     } finally {
@@ -195,13 +197,13 @@ export function AdminPermissionsPage() {
     try {
       await revokePermission(grantId);
       AriMessage.success({
-        content: "撤销成功。",
+        content: t("撤销成功。"),
         duration: 2200,
       });
       await loadPermissionData();
     } catch (err) {
       AriMessage.error({
-        content: err instanceof Error ? err.message : "撤销失败，请稍后重试。",
+        content: err instanceof Error ? err.message : t("撤销失败，请稍后重试。"),
         duration: 2800,
       });
     } finally {
@@ -212,9 +214,9 @@ export function AdminPermissionsPage() {
   // 描述：生成页面头部并挂载到全局标题栏 slot。
   const headerNode = useMemo(() => (
     <AriContainer className="desk-project-settings-header" padding={0} data-tauri-drag-region>
-      <AriTypography className="desk-project-settings-header-title" variant="h4" value="权限管理" />
+      <AriTypography className="desk-project-settings-header-title" variant="h4" value={t("权限管理")} />
     </AriContainer>
-  ), []);
+  ), [t]);
 
   return (
     <AriContainer className="desk-content" showBorderRadius={false}>
@@ -223,67 +225,75 @@ export function AdminPermissionsPage() {
         <AriContainer className="desk-settings-panel">
           <AriFlex vertical align="flex-start" justify="flex-start" space="var(--z-inset)">
             <AriContainer padding={0}>
-              <AriTypography variant="h4" value="新增授权" />
-              <AriTypography variant="caption" value="接入后端时可共享给其他账号；本地模式下会写入本地授权记录。" />
+              <AriTypography variant="h4" value={t("新增授权")} />
+              <AriTypography variant="caption" value={t("接入后端时可共享给其他账号；本地模式下会写入本地授权记录。")} />
             </AriContainer>
             <AriContainer className="desk-admin-form-grid">
               <AriContainer padding={0}>
-                <AriTypography variant="caption" value="授权目标" />
+                <AriTypography variant="caption" value={t("授权目标")} />
                 <AriSelect
                   value={form.targetUserId || undefined}
                   options={manageableUsers.map((item) => ({
-                    label: item.self ? `${item.name}（当前账号）` : item.name,
+                    label: item.self ? t("{{name}}（当前账号）", { name: item.name }) : item.name,
                     value: item.id,
                   }))}
-                  placeholder="请选择授权目标"
+                  placeholder={t("请选择授权目标")}
                   searchable
                   allowClear
                   onChange={handleChangeTargetUser}
                 />
               </AriContainer>
               <AriInput
-                label="目标用户名称"
+                label={t("目标用户名称")}
                 value={selectedUser?.name || form.targetUserName}
-                placeholder="请选择授权目标"
+                placeholder={t("请选择授权目标")}
                 disabled
               />
               <AriInput
-                label="目标用户邮箱"
-                value={selectedUser?.email || "未设置邮箱"}
+                label={t("目标用户邮箱")}
+                value={selectedUser?.email || t("未设置邮箱")}
                 disabled
               />
               <AriInput
-                label="权限编码"
+                label={t("权限编码")}
                 value={form.permissionCode}
-                placeholder="例如 workflow.manage"
+                placeholder={t("例如 workflow.manage")}
                 onChange={(value: string) => patchForm({ permissionCode: value })}
               />
               <AriInput
-                label="资源名称"
+                label={t("资源名称")}
                 value={form.resourceName}
-                placeholder="例如共享工作流空间"
+                placeholder={t("例如共享工作流空间")}
                 onChange={(value: string) => patchForm({ resourceName: value })}
               />
             </AriContainer>
             <AriTypography
               variant="caption"
               value={selectedUser
-                ? `身份范围：${selectedUser.identityScopes.join("、") || "未配置身份"} · 状态：${selectedUser.status}${selectedUser.self ? " · 当前账号" : ""}`
-                : "请选择授权目标后查看身份范围与状态。"}
+                ? t("身份范围：{{scopes}} · 状态：{{status}}{{currentAccount}}", {
+                  scopes: selectedUser.identityScopes.join("、") || t("未配置身份"),
+                  status: selectedUser.status,
+                  currentAccount: selectedUser.self ? t(" · 当前账号") : "",
+                })
+                : t("请选择授权目标后查看身份范围与状态。")}
             />
             <AriTypography
               variant="caption"
-              value={`可用模板：${permissionTemplates.map((item) => item.code).join("、") || "暂无可用模板"}`}
+              value={t("可用模板：{{templates}}", {
+                templates: permissionTemplates.map((item) => item.code).join("、") || t("暂无可用模板"),
+              })}
             />
             <AriFlex align="center" justify="space-between" wrap space="var(--z-inset)">
               <AriTypography
                 variant="caption"
-                value={selectedTemplate ? `资源类型：${selectedTemplate.resourceType}` : "请输入有效权限编码后自动填充资源类型。"}
+                value={selectedTemplate
+                  ? t("资源类型：{{resourceType}}", { resourceType: selectedTemplate.resourceType })
+                  : t("请输入有效权限编码后自动填充资源类型。")}
               />
               <AriButton
                 icon="add_task"
                 color="primary"
-                label={submitting ? "提交中..." : "新增授权"}
+                label={submitting ? t("提交中...") : t("新增授权")}
                 disabled={submitting}
                 onClick={() => {
                   void handleGrantPermission();
@@ -294,7 +304,7 @@ export function AdminPermissionsPage() {
         </AriContainer>
 
         {permissionGrants.length === 0 && !loading ? (
-          <DeskEmptyState title="暂无授权记录" description="可通过上方表单为其他账号新增共享权限。" />
+          <DeskEmptyState title={t("暂无授权记录")} description={t("可通过上方表单为其他账号新增共享权限。")} />
         ) : (
           <AriContainer className="desk-admin-list">
             {permissionGrants.map((grant) => (
@@ -309,23 +319,29 @@ export function AdminPermissionsPage() {
                     <AriTypography variant="h4" value={`${grant.targetUserName} (${grant.targetUserId})`} />
                     <AriButton
                       icon="delete"
-                      label={revokingGrantId === grant.id ? "撤销中..." : "撤销"}
+                      label={revokingGrantId === grant.id ? t("撤销中...") : t("撤销")}
                       disabled={Boolean(revokingGrantId)}
                       onClick={() => {
                         void handleRevokePermission(grant.id);
                       }}
                     />
                   </AriFlex>
-                  <AriTypography variant="caption" value={`权限：${grant.permissionCode}`} />
-                  <AriTypography variant="caption" value={`资源：${grant.resourceType} / ${grant.resourceName}`} />
-                  <AriTypography variant="caption" value={`授权人：${grant.grantedBy}，状态：${grant.status}`} />
+                  <AriTypography variant="caption" value={t("权限：{{permissionCode}}", { permissionCode: grant.permissionCode })} />
+                  <AriTypography variant="caption" value={t("资源：{{resourceType}} / {{resourceName}}", {
+                    resourceType: grant.resourceType,
+                    resourceName: grant.resourceName,
+                  })} />
+                  <AriTypography variant="caption" value={t("授权人：{{grantedBy}}，状态：{{status}}", {
+                    grantedBy: grant.grantedBy,
+                    status: grant.status,
+                  })} />
                 </AriFlex>
               </AriCard>
             ))}
           </AriContainer>
         )}
 
-        {loading ? <DeskStatusText value="权限数据加载中..." /> : null}
+        {loading ? <DeskStatusText value={t("权限数据加载中...")} /> : null}
         {searchHintText ? <DeskStatusText value={searchHintText} /> : null}
         {statusText ? <DeskStatusText value={statusText} /> : null}
       </AriContainer>

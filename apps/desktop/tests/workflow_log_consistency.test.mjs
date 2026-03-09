@@ -53,7 +53,7 @@ test("TestSessionConfigShouldUseUnifiedAgentNaming", () => {
   //
   //   - 会话 UI 配置应只保留统一智能体命名。
   assert.match(configSource, /export const AGENT_SESSION_UI_CONFIG: SessionAgentUiConfig = \{/);
-  assert.match(configSource, /workflowFallbackLabel: "智能体工作流"/);
+  assert.match(configSource, /workflowFallbackLabel: translateDesktopText\("智能体工作流"\)/);
   assert.match(configSource, /return AGENT_SESSION_UI_CONFIG;/);
   assert.doesNotMatch(configSource, /SCENE_SESSION_UI_CONFIG/);
   assert.doesNotMatch(configSource, /MODEL_SESSION_UI_CONFIG/);
@@ -253,12 +253,12 @@ test("TestDevDebugFloatShouldUseCompactCopyFirstPanel", () => {
   // 描述:
   //
   //   - Dev 调试窗口应采用精简模式，仅保留复制入口与基础提示，不再展示过程日志列表。
-  assert.match(source, /label="复制会话内容"/);
+  assert.match(source, /label=\{t\("复制会话内容"\)\}/);
   assert.match(source, /resolveCopyTargetSessionId/);
   assert.match(source, /libra:session-debug-request/);
   assert.match(source, /libra:session-copy-request/);
   assert.match(source, /libra:session-copy-result/);
-  assert.match(source, /当前会话已连接，点击“复制会话内容”可导出完整排查信息。/);
+  assert.match(source, /t\("当前会话已连接，点击“复制会话内容”可导出完整排查信息。"\)/);
   assert.doesNotMatch(source, /执行全链路（前端视角）/);
   assert.doesNotMatch(source, /Agent 日志/);
   assert.doesNotMatch(source, /Workflow 步骤/);

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { COMMANDS, IS_BROWSER } from "../../../shared/constants";
+import { translateDesktopText } from "../../../shared/i18n";
 import { checkDccRuntimeStatus } from "../../../shared/services/dcc-runtime";
 
 // 描述：
@@ -446,7 +447,7 @@ export async function installApifoxMcpRuntime() {
     await invoke<ApifoxMcpRuntimeStatusResponse>(COMMANDS.INSTALL_APIFOX_MCP_RUNTIME);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err || "").trim();
-    throw new Error(reason || "安装 Apifox Runtime 失败，请检查 Node.js/npm 环境后重试。");
+    throw new Error(reason || translateDesktopText("安装 Apifox Runtime 失败，请检查 Node.js/npm 环境后重试。"));
   }
 }
 
@@ -458,7 +459,7 @@ export async function uninstallApifoxMcpRuntime() {
     await invoke<ApifoxMcpRuntimeStatusResponse>(COMMANDS.UNINSTALL_APIFOX_MCP_RUNTIME);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err || "").trim();
-    throw new Error(reason || "卸载 Apifox Runtime 失败，请稍后重试。");
+    throw new Error(reason || translateDesktopText("卸载 Apifox Runtime 失败，请稍后重试。"));
   }
 }
 
@@ -496,7 +497,7 @@ export async function saveMcpRegistration(
   });
   const normalizedRecord = normalizeMcpRegistrationItem(rawRecord);
   if (!normalizedRecord) {
-    throw new Error("保存 MCP 后返回数据不完整，请重试。");
+    throw new Error(translateDesktopText("保存 MCP 后返回数据不完整，请重试。"));
   }
   return normalizedRecord;
 }
@@ -551,7 +552,7 @@ export async function validateMcpRegistration(
     }
     return {
       ok: false,
-      message: runtimeStatus?.message || "Apifox Runtime 未安装，请先安装 Runtime。",
+      message: runtimeStatus?.message || translateDesktopText("Apifox Runtime 未安装，请先安装 Runtime。"),
       resolvedPath: runtimeStatus?.entry_path || "",
     };
   }
@@ -559,14 +560,14 @@ export async function validateMcpRegistration(
     if (!payload.software) {
       return {
         ok: false,
-        message: "DCC Runtime 缺少软件标识，请先填写软件名称。",
+        message: translateDesktopText("DCC Runtime 缺少软件标识，请先填写软件名称。"),
         resolvedPath: "",
       };
     }
     const runtimeStatus = await checkDccRuntimeStatus(payload.software);
     return {
       ok: runtimeStatus.available,
-      message: runtimeStatus.message || "DCC Runtime 校验完成。",
+      message: runtimeStatus.message || translateDesktopText("DCC Runtime 校验完成。"),
       resolvedPath: runtimeStatus.resolvedPath,
     };
   }

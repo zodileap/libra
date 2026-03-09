@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { AriButton, AriContainer, AriFlex } from "aries_react";
 import type { DesktopUpdateState } from "../../shell/types";
+import { useDesktopI18n } from "../../shared/i18n";
 
 // 描述:
 //
@@ -9,6 +10,7 @@ interface DesktopAppHeaderProps {
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
   desktopUpdateState: DesktopUpdateState;
+  onCheckDesktopUpdate: () => Promise<void>;
   onInstallDesktopUpdate: () => Promise<void>;
   debugFloatVisible: boolean;
   onToggleDebugFloat: () => void;
@@ -22,17 +24,28 @@ export function DesktopAppHeader({
   sidebarCollapsed,
   onToggleSidebar,
   desktopUpdateState,
+  onCheckDesktopUpdate,
   onInstallDesktopUpdate,
   debugFloatVisible,
   onToggleDebugFloat,
   onHeaderSlotElementChange,
 }: DesktopAppHeaderProps) {
-  const sidebarToggleLabel = sidebarCollapsed ? "展开侧边栏" : "收起侧边栏";
+  const { t } = useDesktopI18n();
+  const sidebarToggleLabel = sidebarCollapsed ? t("展开侧边栏") : t("收起侧边栏");
   const [updateButtonLoading, setUpdateButtonLoading] = useState(false);
-  const showUpdateButton = desktopUpdateState.status === "ready";
-  const updateButtonLabel = desktopUpdateState.targetVersion
-    ? `更新 ${desktopUpdateState.targetVersion}`
-    : "更新";
+  // 描述：根据更新状态切换标题栏按钮语义；未准备安装时统一回退为“检查更新”入口。
+  const shouldInstallDesktopUpdate = desktopUpdateState.status === "ready";
+  const updateButtonDisabled = updateButtonLoading
+    || desktopUpdateState.status === "checking"
+    || desktopUpdateState.status === "downloading"
+    || desktopUpdateState.status === "installing";
+  const updateButtonLabel = shouldInstallDesktopUpdate
+    ? (
+      desktopUpdateState.targetVersion
+        ? t("更新 {{version}}", { version: desktopUpdateState.targetVersion })
+        : t("更新")
+    )
+    : t("检查更新");
 
   // 描述：同步标题栏 slot DOM 节点到布局层上下文，供页面通过 hook 复用。
   useEffect(() => {
@@ -70,23 +83,25 @@ export function DesktopAppHeader({
               aria-label={sidebarToggleLabel}
               onClick={onToggleSidebar}
             />
-            {showUpdateButton ? (
-              <AriButton
-                type="text"
-                icon="system_update_alt"
-                color="brand"
-                label={updateButtonLabel}
-                disabled={updateButtonLoading}
-                onClick={async () => {
-                  setUpdateButtonLoading(true);
-                  try {
+            <AriButton
+              type="text"
+              icon="system_update_alt"
+              color="brand"
+              label={updateButtonLabel}
+              disabled={updateButtonDisabled}
+              onClick={async () => {
+                setUpdateButtonLoading(true);
+                try {
+                  if (shouldInstallDesktopUpdate) {
                     await onInstallDesktopUpdate();
-                  } finally {
-                    setUpdateButtonLoading(false);
+                    return;
                   }
-                }}
-              />
-            ) : null}
+                  await onCheckDesktopUpdate();
+                } finally {
+                  setUpdateButtonLoading(false);
+                }
+              }}
+            />
           </AriFlex>
         </AriContainer>
         <AriContainer
@@ -113,7 +128,7 @@ export function DesktopAppHeader({
                   type="text"
                   icon="bug_report"
                   color={debugFloatVisible ? "primary" : "default"}
-                  aria-label={debugFloatVisible ? "关闭 Dev 调试窗口" : "打开 Dev 调试窗口"}
+                  aria-label={debugFloatVisible ? t("关闭 Dev 调试窗口") : t("打开 Dev 调试窗口")}
                   onClick={onToggleDebugFloat}
                 />
               ) : null}

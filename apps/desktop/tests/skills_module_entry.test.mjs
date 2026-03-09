@@ -97,14 +97,17 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   assert.match(skillsPageSource, /DeskOverviewDetailsModal/);
   assert.match(skillsPageSource, /DeskOverviewDetailRow/);
   assert.match(skillsPageSource, /mode="slot"/);
-  assert.match(skillsPageSource, /content=\{t\("导入本地技能"\)\}/);
-  assert.match(skillsPageSource, /aria-label=\{t\("导入本地技能"\)\}/);
+  assert.match(skillsPageSource, /color="brand"/);
+  assert.match(skillsPageSource, /label=\{t\("导入本地技能"\)\}/);
+  assert.match(skillsPageSource, /size="sm"/);
   assert.match(skillsPageSource, /icon="add"/);
   assert.match(skillsPageSource, /title=\{t\("移除技能"\)\}/);
   assert.match(skillsPageSource, /type="text"/);
   assert.match(skillsPageSource, /content=\{t\("管理"\)\}/);
   assert.match(skillsPageSource, /aria-label=\{t\("管理技能"\)\}/);
   assert.match(skillsPageSource, /aria-label=\{t\("添加技能"\)\}/);
+  assert.match(skillsPageSource, /!registered && onAdd \? \(\s*<AriButton\s*type="text"\s*icon="add"\s*aria-label=\{t\("添加技能"\)\}/s);
+  assert.doesNotMatch(skillsPageSource, /!registered && onAdd \? \(\s*<AriButton[\s\S]*color="brand"[\s\S]*aria-label=\{t\("添加技能"\)\}/s);
   assert.doesNotMatch(skillsPageSource, /label="刷新"/);
   assert.match(skillsPageSource, /pickLocalAgentSkillFolder/);
   assert.match(skillsPageSource, /importAgentSkillFromPath/);
@@ -243,6 +246,8 @@ test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
   assert.match(mcpPageSource, /label=\{t\("卸载 Runtime"\)\}/);
   assert.match(mcpPageSource, /label=\{dccRuntimeStatusMap\[managingTemplateItem\.software\]\?\.available \? t\("校验 Runtime"\) : t\("准备 Runtime"\)\}/);
   assert.match(mcpPageSource, /aria-label=\{alreadyRegistered \? t\("模板已添加"\) : t\("添加 MCP"\)\}/);
+  assert.match(mcpPageSource, /<AriButton\s*type="text"\s*icon="add"\s*aria-label=\{alreadyRegistered \? t\("模板已添加"\) : t\("添加 MCP"\)\}/s);
+  assert.doesNotMatch(mcpPageSource, /<AriButton\s*type="text"[\s\S]*color=\{alreadyRegistered \? "default" : "brand"\}[\s\S]*aria-label=\{alreadyRegistered \? t\("模板已添加"\) : t\("添加 MCP"\)\}/s);
   assert.match(mcpPageSource, /value=\{workspaceId\}/);
   assert.match(mcpPageSource, /label: t\("全局（User）"\)/);
   assert.match(mcpPageSource, /label=\{t\("作用域"\)\}/);

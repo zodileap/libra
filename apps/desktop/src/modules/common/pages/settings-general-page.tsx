@@ -1,7 +1,12 @@
 import { useEffect, useState } from "react";
-import { AriButton, AriContainer, AriFlex, AriInput, AriSwitch, AriTypography } from "aries_react";
+import { AriButton, AriContainer, AriFlex, AriInput, AriSelect, AriSwitch, AriTypography } from "aries_react";
 import type { ColorThemeMode, ConsoleIdentityItem, DesktopBackendConfig } from "../types";
 import { DeskPageHeader, DeskSectionTitle, DeskSettingsRow, DeskStatusText } from "../../../widgets/settings-primitives";
+import {
+  DESKTOP_LANGUAGE_PREFERENCES,
+  getDesktopLanguageNativeLabel,
+  useDesktopI18n,
+} from "../../../shared/i18n";
 
 // 描述：定义通用设置页组件入参。
 interface SettingsGeneralPageProps {
@@ -45,6 +50,7 @@ export function SettingsGeneralPage({
   onBackendConfigChange,
   onBackendConfigReset,
 }: SettingsGeneralPageProps) {
+  const { languagePreference, setLanguagePreference, t } = useDesktopI18n();
   const [opaqueWindow, setOpaqueWindow] = useState(false);
   const [pointerCursor, setPointerCursor] = useState(false);
   const [backendDraft, setBackendDraft] = useState<DesktopBackendConfig>(backendConfig);
@@ -68,7 +74,7 @@ export function SettingsGeneralPage({
   // 描述：保存后端接入配置；启用后端时会校验地址格式，避免把错误地址写入运行态。
   const handleSaveBackendConfig = () => {
     if (backendDraft.enabled && !isValidBackendAddress(backendDraft.baseUrl)) {
-      setBackendStatus("请输入有效的后端地址，例如 http://127.0.0.1:10001。");
+      setBackendStatus(t("请输入有效的后端地址，例如 http://127.0.0.1:10001。"));
       return;
     }
     const saved = onBackendConfigChange({
@@ -76,44 +82,44 @@ export function SettingsGeneralPage({
       baseUrl: backendDraft.baseUrl.trim(),
     });
     setBackendDraft(saved);
-    setBackendStatus(saved.enabled ? "后端接入配置已保存。" : "已切换为本地模式。");
+    setBackendStatus(saved.enabled ? t("后端接入配置已保存。") : t("已切换为本地模式。"));
   };
 
   // 描述：恢复默认后端配置；恢复后 Desktop 会重新回到纯本地模式。
   const handleResetBackendConfig = () => {
     const restored = onBackendConfigReset();
     setBackendDraft(restored);
-    setBackendStatus("后端接入配置已恢复为默认值。");
+    setBackendStatus(t("后端接入配置已恢复为默认值。"));
   };
 
   return (
     <AriContainer className="desk-content" showBorderRadius={false}>
       <AriContainer className="desk-settings-shell">
-        <DeskPageHeader title="General" description="统一管理主题、基础交互和后端接入。" />
+        <DeskPageHeader title={t("General")} description={t("统一管理主题、基础交互和后端接入。")} />
 
-        <DeskSectionTitle title="Appearance" />
+        <DeskSectionTitle title={t("Appearance")} />
 
         <AriContainer className="desk-settings-panel">
-          <DeskSettingsRow title="Theme" description="Use light, dark, or match your system">
+          <DeskSettingsRow title={t("Theme")} description={t("Use light, dark, or match your system")}>
             <AriFlex className="desk-theme-group" align="center" space={8}>
               <AriButton
                 size="sm"
                 icon="light_mode"
-                label="Light"
+                label={t("Light")}
                 color={colorThemeMode === "light" ? "primary" : "default"}
                 onClick={() => onColorThemeModeChange("light")}
               />
               <AriButton
                 size="sm"
                 icon="dark_mode"
-                label="Dark"
+                label={t("Dark")}
                 color={colorThemeMode === "dark" ? "primary" : "default"}
                 onClick={() => onColorThemeModeChange("dark")}
               />
               <AriButton
                 size="sm"
                 icon="desktop_windows"
-                label="System"
+                label={t("System")}
                 color={colorThemeMode === "system" ? "primary" : "default"}
                 onClick={() => onColorThemeModeChange("system")}
               />
@@ -121,37 +127,55 @@ export function SettingsGeneralPage({
           </DeskSettingsRow>
 
           <DeskSettingsRow
-            title="Use opaque window background"
-            description="Make windows use a solid background rather than system translucency"
+            title={t("当前语言")}
+            description={t("选择界面语言。首次启动默认跟随系统，未匹配时回退为英文。")}
+          >
+            <AriSelect
+              value={languagePreference}
+              options={DESKTOP_LANGUAGE_PREFERENCES.map((item) => ({
+                value: item,
+                label: item === "auto" ? t("自动检测") : getDesktopLanguageNativeLabel(item),
+              }))}
+              onChange={(value) => {
+                if (value === "auto" || value === "zh-CN" || value === "en-US") {
+                  setLanguagePreference(value);
+                }
+              }}
+            />
+          </DeskSettingsRow>
+
+          <DeskSettingsRow
+            title={t("Use opaque window background")}
+            description={t("Make windows use a solid background rather than system translucency")}
           >
             <AriSwitch checked={opaqueWindow} onChange={setOpaqueWindow} />
           </DeskSettingsRow>
 
           <DeskSettingsRow
-            title="Use pointer cursors"
-            description="Change the cursor to a pointer when hovering over interactive elements"
+            title={t("Use pointer cursors")}
+            description={t("Change the cursor to a pointer when hovering over interactive elements")}
           >
             <AriSwitch checked={pointerCursor} onChange={setPointerCursor} />
           </DeskSettingsRow>
         </AriContainer>
 
-        <DeskSectionTitle title="Backend" />
+        <DeskSectionTitle title={t("Backend")} />
 
         <AriContainer className="desk-settings-panel">
-          <DeskSettingsRow title="Current Identity" description="登录后会自动选择身份，也可以在 Identities 页面手动切换。">
+          <DeskSettingsRow title={t("Current Identity")} description={t("登录后会自动选择身份，也可以在 Identities 页面手动切换。")}>
             <AriContainer padding={0}>
-              <AriTypography variant="caption" value={selectedIdentity?.scopeName || "未选定身份"} />
+              <AriTypography variant="caption" value={selectedIdentity?.scopeName || t("未选定身份")} />
             </AriContainer>
           </DeskSettingsRow>
 
-          <DeskSettingsRow title="Use Backend" description="启用后可共享账号、工作流与会话存储。">
+          <DeskSettingsRow title={t("Use Backend")} description={t("启用后可共享账号、工作流与会话存储。")}>
             <AriSwitch
               checked={backendDraft.enabled}
               onChange={(value) => patchBackendDraft({ enabled: value })}
             />
           </DeskSettingsRow>
 
-          <DeskSettingsRow title="Backend URL" description="输入统一后端入口地址，例如 http://127.0.0.1:10001。">
+          <DeskSettingsRow title={t("Backend URL")} description={t("输入统一后端入口地址，例如 http://127.0.0.1:10001。")}>
             <AriInput
               value={backendDraft.baseUrl}
               placeholder="http://127.0.0.1:10001"
@@ -159,10 +183,10 @@ export function SettingsGeneralPage({
             />
           </DeskSettingsRow>
 
-          <DeskSettingsRow title="Actions" description="未接入后端时，Desktop 将只使用本地存储。">
+          <DeskSettingsRow title={t("Actions")} description={t("未接入后端时，Desktop 将只使用本地存储。")}>
             <AriFlex align="center" space={8}>
-              <AriButton icon="save" label="保存设置" color="primary" onClick={handleSaveBackendConfig} />
-              <AriButton icon="settings_backup_restore" label="恢复默认" onClick={handleResetBackendConfig} />
+              <AriButton icon="save" label={t("保存设置")} color="primary" onClick={handleSaveBackendConfig} />
+              <AriButton icon="settings_backup_restore" label={t("恢复默认")} onClick={handleResetBackendConfig} />
             </AriFlex>
           </DeskSettingsRow>
         </AriContainer>

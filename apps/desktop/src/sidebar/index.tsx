@@ -58,7 +58,6 @@ import {
   listAgentWorkflowOverview,
 } from "@/widgets/workflow";
 import {
-  AI_KEY_SIDEBAR_CONTENT,
   MCP_PAGE_PATH,
   resolveHomeSidebarAgentItems,
   resolveWorkflowEditorPath,
@@ -74,6 +73,12 @@ import {
   resolveAgentSessionPath,
 } from "../modules/agent/routes";
 import type { RouteAccess } from "../router/types";
+import {
+  compareDesktopText,
+  formatDesktopDateTime,
+  translateDesktopText,
+  useDesktopI18n,
+} from "../shared/i18n";
 import { SidebarBackHeader } from "./widgets/sidebar-back-header";
 import { UserHoverMenu } from "./widgets/user-hover-menu";
 
@@ -197,11 +202,11 @@ function isGenericSidebarProgressText(value: string): boolean {
   if (!normalized) {
     return true;
   }
-  return normalized === "正在思考…"
-    || normalized === "正在准备执行..."
-    || normalized === "正在生成执行结果…"
-    || normalized === "正在整理输出..."
-    || normalized === "智能体正在思考…";
+  return normalized === translateDesktopText("正在思考…")
+    || normalized === translateDesktopText("正在准备执行...")
+    || normalized === translateDesktopText("正在生成执行结果…")
+    || normalized === translateDesktopText("正在整理输出...")
+    || normalized === translateDesktopText("智能体正在思考…");
 }
 
 // 描述：
@@ -268,13 +273,13 @@ function resolveSidebarAssistantMessageText(
   const currentMessageText = String(currentText || "").trim();
   const summaryText = String(currentSummary || "").trim();
   if (payload.kind === STREAM_KINDS.STARTED) {
-    return "正在准备执行...";
+    return translateDesktopText("正在准备执行...");
   }
   if (payload.kind === STREAM_KINDS.LLM_STARTED) {
-    return "正在生成执行结果…";
+    return translateDesktopText("正在生成执行结果…");
   }
   if (payload.kind === STREAM_KINDS.LLM_FINISHED) {
-    return text || "正在整理输出...";
+    return text || translateDesktopText("正在整理输出...");
   }
   if (payload.kind === STREAM_KINDS.DELTA) {
     const delta = String(payload.delta || "");
@@ -285,20 +290,24 @@ function resolveSidebarAssistantMessageText(
     return `${baseText}${delta}`;
   }
   if (payload.kind === STREAM_KINDS.FINAL) {
-    return text || currentMessageText || summaryText || "执行完成";
+    return text || currentMessageText || summaryText || translateDesktopText("执行完成");
   }
   if (payload.kind === STREAM_KINDS.CANCELLED) {
-    return text || currentMessageText || summaryText || "任务已取消";
+    return text || currentMessageText || summaryText || translateDesktopText("任务已取消");
   }
   if (payload.kind === STREAM_KINDS.ERROR) {
     const errorCode = resolveStreamErrorCode(payload);
     if (isCancelErrorCode(errorCode)) {
-      return text ? `任务已取消：${text}` : (currentMessageText || summaryText || "任务已取消");
+      return text
+        ? translateDesktopText("任务已取消：{{message}}", { message: text })
+        : (currentMessageText || summaryText || translateDesktopText("任务已取消"));
     }
     if (text) {
-      return text.startsWith("执行失败：") ? text : `执行失败：${text}`;
+      return text.startsWith(translateDesktopText("执行失败："))
+        ? text
+        : translateDesktopText("执行失败：{{message}}", { message: text });
     }
-    return currentMessageText || summaryText || "执行失败：未知错误";
+    return currentMessageText || summaryText || translateDesktopText("执行失败：未知错误");
   }
   if (payload.kind === STREAM_KINDS.PLANNING && text.startsWith("__libra_planning__:")) {
     try {
@@ -309,17 +318,20 @@ function resolveSidebarAssistantMessageText(
     } catch (_error) {
       // 描述：后台同步恢复时忽略规划元数据解析失败，继续走兜底文案。
     }
-    return currentMessageText || summaryText || "正在思考…";
+    return currentMessageText || summaryText || translateDesktopText("正在思考…");
   }
   if (payload.kind === STREAM_KINDS.HEARTBEAT) {
-    if (text.includes("已等待约") || heartbeatCount <= 1) {
-      return text || currentMessageText || summaryText || "正在思考…";
+    if (text.includes(translateDesktopText("已等待约")) || heartbeatCount <= 1) {
+      return text || currentMessageText || summaryText || translateDesktopText("正在思考…");
     }
     const waitedSeconds = Math.max(1, Math.round(heartbeatCount * 1.2));
-    const baseText = text || currentMessageText || summaryText || "正在思考…";
-    return `${baseText}（已等待约 ${waitedSeconds} 秒）`;
+    const baseText = text || currentMessageText || summaryText || translateDesktopText("正在思考…");
+    return translateDesktopText("{{message}}（已等待约 {{seconds}} 秒）", {
+      message: baseText,
+      seconds: waitedSeconds,
+    });
   }
-  return text || currentMessageText || summaryText || "正在思考…";
+  return text || currentMessageText || summaryText || translateDesktopText("正在思考…");
 }
 
 // 描述：
@@ -384,12 +396,11 @@ function matchAgentKey(pathname: string): AgentKey | null {
 // Returns:
 //
 //   - 侧边栏模式标识。
-function matchSidebarMode(pathname: string): "home" | "agent" | "settings" | "ai-key" | "workflow" {
+function matchSidebarMode(pathname: string): "home" | "agent" | "settings" | "workflow" {
   if (pathname.startsWith("/session/")) return "agent";
   if (pathname.startsWith(PROJECT_SETTINGS_PATH)) return "agent";
   if (pathname.startsWith(AGENT_HOME_PATH)) return "agent";
   if (pathname.startsWith("/settings")) return "settings";
-  if (pathname.startsWith("/ai-keys")) return "ai-key";
   if (pathname.startsWith(WORKFLOW_EDITOR_PAGE_PATH)) return "workflow";
   return "home";
 }
@@ -416,7 +427,7 @@ function toAgentSession(agentKey: AgentKey, entity: { id: string; last_at?: stri
   return {
     id: entity.id,
     agentKey,
-    title: "会话详情",
+    title: translateDesktopText("会话详情"),
     updatedAt: updatedAtText,
   };
 }
@@ -426,7 +437,7 @@ function toSessionUpdatedAtText(lastAt?: string): string {
   if (!lastAt) {
     return "-";
   }
-  return new Date(lastAt).toLocaleString("zh-CN", {
+  return formatDesktopDateTime(lastAt, {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -457,6 +468,7 @@ function HomeSidebar({
   onCheckDesktopUpdate: () => Promise<void>;
   onInstallDesktopUpdate: () => Promise<void>;
 }) {
+  const { t } = useDesktopI18n();
   const navigate = useNavigate();
   const location = useLocation();
   const selectedKey = location.pathname.startsWith(AGENT_HOME_PATH) ? "agent" : "";
@@ -469,19 +481,19 @@ function HomeSidebar({
     return [
       {
         key: "workflow",
-        label: "工作流",
+        label: t("工作流"),
         icon: "account_tree",
         enabled: routeAccess.isModuleEnabled("workflow"),
         path: WORKFLOW_PAGE_PATH,
-        deniedMessage: "当前构建未启用工作流模块。",
+        deniedMessage: t("当前构建未启用工作流模块。"),
       },
       {
         key: "skills",
-        label: "技能",
+        label: t("技能"),
         icon: "new_releases",
         enabled: routeAccess.isModuleEnabled("skill"),
         path: SKILL_PAGE_PATH,
-        deniedMessage: "当前构建未启用技能模块。",
+        deniedMessage: t("当前构建未启用技能模块。"),
       },
       {
         key: "mcp",
@@ -489,10 +501,10 @@ function HomeSidebar({
         icon: "hub",
         enabled: routeAccess.isModuleEnabled("mcp"),
         path: MCP_PAGE_PATH,
-        deniedMessage: "当前构建未启用 MCP 模块。",
+        deniedMessage: t("当前构建未启用 MCP 模块。"),
       },
     ];
-  }, [routeAccess]);
+  }, [routeAccess, t]);
 
   // 描述：根据当前路径同步首页工具栏选中态。
   const selectedToolbarKey = useMemo(() => {
@@ -526,7 +538,7 @@ function HomeSidebar({
             }
             if (!target.enabled || !target.path) {
               AriMessage.warning({
-                content: target.deniedMessage,
+                content: target.deniedMessage || t("当前入口不可用。"),
                 duration: 2500,
               });
               return;
@@ -550,7 +562,7 @@ function HomeSidebar({
             }
             if (!target.enabled) {
               AriMessage.warning({
-                content: target.deniedMessage || "当前入口不可用。",
+                content: target.deniedMessage || t("当前入口不可用。"),
                 duration: 2500,
               });
               return;
@@ -598,6 +610,7 @@ function AgentSidebar({
   onCheckDesktopUpdate: () => Promise<void>;
   onInstallDesktopUpdate: () => Promise<void>;
 }) {
+  const { compareText, t } = useDesktopI18n();
   const navigate = useNavigate();
   const location = useLocation();
   const [loading, setLoading] = useState(false);
@@ -637,19 +650,19 @@ function AgentSidebar({
     () => [
       {
         key: "workflow",
-        label: "工作流",
+        label: t("工作流"),
         icon: "account_tree",
         enabled: routeAccess.isModuleEnabled("workflow"),
         path: WORKFLOW_PAGE_PATH,
-        deniedMessage: "当前构建未启用工作流模块。",
+        deniedMessage: t("当前构建未启用工作流模块。"),
       },
       {
         key: "skills",
-        label: "技能",
+        label: t("技能"),
         icon: "new_releases",
         enabled: routeAccess.isModuleEnabled("skill"),
         path: SKILL_PAGE_PATH,
-        deniedMessage: "当前构建未启用技能模块。",
+        deniedMessage: t("当前构建未启用技能模块。"),
       },
       {
         key: "mcp",
@@ -657,16 +670,16 @@ function AgentSidebar({
         icon: "hub",
         enabled: routeAccess.isModuleEnabled("mcp"),
         path: MCP_PAGE_PATH,
-        deniedMessage: "当前构建未启用 MCP 模块。",
+        deniedMessage: t("当前构建未启用 MCP 模块。"),
       },
       {
         key: "create-project",
-        label: "新项目",
+        label: t("新项目"),
         icon: "note_stack_add",
         enabled: true,
       },
     ],
-    [routeAccess],
+    [routeAccess, t],
   );
   const selectedToolbarKey = useMemo(() => {
     if (location.pathname.startsWith(SKILL_PAGE_PATH)) {
@@ -783,8 +796,8 @@ function AgentSidebar({
     if (sessionSortMode === "default") {
       return sessions;
     }
-    return [...sessions].sort((a, b) => a.title.localeCompare(b.title, "zh-CN"));
-  }, [sessionSortMode, sessions]);
+    return [...sessions].sort((a, b) => compareText(a.title, b.title));
+  }, [compareText, sessionSortMode, sessions]);
 
   // 描述：强制重建会话菜单组件实例，解决删除后子菜单高度缓存未更新的问题。
   const reloadSessionSidebarMenu = () => {
@@ -821,8 +834,8 @@ function AgentSidebar({
     if (payload.kind === STREAM_KINDS.FINAL) {
       return {
         key,
-        intro: "执行完成",
-        step: text || "执行结束，正在输出最终结果…",
+        intro: t("执行完成"),
+        step: text || t("执行结束，正在输出最终结果…"),
         status: "finished" as const,
         data: {
           __segment_kind: payload.kind,
@@ -832,8 +845,8 @@ function AgentSidebar({
     if (payload.kind === STREAM_KINDS.CANCELLED) {
       return {
         key,
-        intro: "任务已取消",
-        step: text || "当前任务已终止，不再继续执行。",
+        intro: t("任务已取消"),
+        step: text || t("当前任务已终止，不再继续执行。"),
         status: "finished" as const,
         data: {
           __segment_kind: payload.kind,
@@ -847,7 +860,7 @@ function AgentSidebar({
       }
       return {
         key,
-        intro: `第 ${turnSummaryMatch[1]} 轮执行结果`,
+        intro: t("第 {{turn}} 轮执行结果", { turn: turnSummaryMatch[1] }),
         step: String(turnSummaryMatch[2] || "").trim() || text,
         status: "finished" as const,
       };
@@ -866,8 +879,8 @@ function AgentSidebar({
       }
       return {
         key,
-        intro: `执行工具：${toolName || "unknown"}`,
-        step: text ? `执行中：${text}` : "执行中：正在调用系统工具…",
+        intro: t("执行工具：{{tool}}", { tool: toolName || "unknown" }),
+        step: text ? t("执行中：{{message}}", { message: text }) : t("执行中：正在调用系统工具…"),
         status: "running" as const,
         data: {
           __segment_kind: payload.kind,
@@ -878,11 +891,11 @@ function AgentSidebar({
       const data = resolveToolCallEventData(payload);
       const toolName = String(data.name || "").trim();
       const runOk = data.ok !== false;
-      const stepText = String(data.result || "").trim() || text || "任务步骤执行完成";
+      const stepText = String(data.result || "").trim() || text || t("任务步骤执行完成");
       return {
         key,
-        intro: `工具完成：${toolName || "unknown"}`,
-        step: `${runOk ? "已完成" : "失败"}：${stepText}`,
+        intro: t("工具完成：{{tool}}", { tool: toolName || "unknown" }),
+        step: t("{{status}}：{{step}}", { status: runOk ? t("已完成") : t("失败"), step: stepText }),
         status: runOk ? "finished" as const : "failed" as const,
         data: {
           __segment_kind: payload.kind,
@@ -890,13 +903,13 @@ function AgentSidebar({
       };
     }
     if (payload.kind === STREAM_KINDS.HEARTBEAT) {
-      const heartbeatText = text || "等待执行结果回传…";
+      const heartbeatText = text || t("等待执行结果回传…");
       const intro = heartbeatText.includes("（")
         ? heartbeatText.split("（")[0]
         : heartbeatText;
       return {
         key,
-        intro: intro || "等待执行结果回传…",
+        intro: intro || t("等待执行结果回传…"),
         step: heartbeatText,
         status: "running" as const,
         data: {
@@ -906,11 +919,11 @@ function AgentSidebar({
     }
     if (payload.kind === STREAM_KINDS.REQUIRE_APPROVAL) {
       const data = resolveApprovalEventData(payload);
-      const approvalToolName = String(data.tool_name || "").trim() || "高危操作";
+      const approvalToolName = String(data.tool_name || "").trim() || t("高危操作");
       return {
         key,
-        intro: "需要人工授权",
-        step: `正在请求执行 ${approvalToolName}`,
+        intro: t("需要人工授权"),
+        step: t("正在请求执行 {{tool}}", { tool: approvalToolName }),
         status: "running" as const,
         data: buildApprovalSegmentData(payload),
       };
@@ -920,8 +933,8 @@ function AgentSidebar({
       if (isCancelErrorCode(errorCode)) {
         return {
           key,
-          intro: "任务已取消",
-          step: text || "任务已终止，不再继续执行。",
+          intro: t("任务已取消"),
+          step: text || t("任务已终止，不再继续执行。"),
           status: "finished" as const,
           data: {
             __segment_kind: payload.kind,
@@ -931,8 +944,8 @@ function AgentSidebar({
       }
       return {
         key,
-        intro: "执行失败",
-        step: text || "执行失败，请查看详情后重试。",
+        intro: t("执行失败"),
+        step: text || t("执行失败，请查看详情后重试。"),
         status: "failed" as const,
         data: {
           __segment_kind: payload.kind,
@@ -945,7 +958,7 @@ function AgentSidebar({
     }
     return {
       key,
-      intro: "执行进度更新",
+      intro: t("执行进度更新"),
       step: text,
       status: "running" as const,
     };
@@ -958,7 +971,7 @@ function AgentSidebar({
     const segmentKind = segment.data && typeof segment.data.__segment_kind === "string"
       ? segment.data.__segment_kind
       : "";
-    return segment.intro === "需要人工授权" || segmentKind === STREAM_KINDS.REQUIRE_APPROVAL;
+    return segment.intro === t("需要人工授权") || segmentKind === STREAM_KINDS.REQUIRE_APPROVAL;
   };
 
   // 描述：将片段追加到运行元数据，并保证同一时刻仅有一个 running 片段。
@@ -999,11 +1012,12 @@ function AgentSidebar({
     const incomingErrorCode = segment.data && typeof segment.data.__error_code === "string"
       ? String(segment.data.__error_code || "").trim()
       : "";
-    const isHumanRefusedError = incomingSegmentKind === STREAM_KINDS.ERROR
-      && (
-        incomingErrorCode === "core.agent.human_refused"
-        || incomingStepText.includes("拒绝")
-      );
+      const isHumanRefusedError = incomingSegmentKind === STREAM_KINDS.ERROR
+        && (
+          incomingErrorCode === "core.agent.human_refused"
+          || incomingStepText.includes(t("拒绝"))
+          || incomingStepText.toLowerCase().includes("reject")
+        );
     const normalizedSegments = (current.segments || []).map((item) => {
       if (item.status !== "running") {
         return item;
@@ -1022,12 +1036,12 @@ function AgentSidebar({
         return {
           ...item,
           status: "failed" as const,
-          step: `已拒绝 ${toolName || "该工具"} 的执行请求。`,
+          step: t("已拒绝 {{tool}} 的执行请求。", { tool: toolName || t("该工具") }),
           data: {
             ...stepData,
             __step_type: "approval_decision",
             approval_decision: "rejected",
-            approval_tool_name: toolName || "该工具",
+            approval_tool_name: toolName || t("该工具"),
           },
         };
       }
@@ -1035,24 +1049,24 @@ function AgentSidebar({
         return {
           ...item,
           status: "finished" as const,
-          step: `授权流程已取消，未执行 ${toolName || "该工具"}。`,
+          step: t("授权流程已取消，未执行 {{tool}}。", { tool: toolName || t("该工具") }),
           data: {
             ...stepData,
             __step_type: "approval_decision",
             approval_decision: "cancelled",
-            approval_tool_name: toolName || "该工具",
+            approval_tool_name: toolName || t("该工具"),
           },
         };
       }
       return {
         ...item,
         status: "finished" as const,
-        step: `已处理 ${toolName || "该工具"} 的授权请求。`,
+        step: t("已处理 {{tool}} 的授权请求。", { tool: toolName || t("该工具") }),
         data: {
           ...stepData,
           __step_type: "approval_decision",
           approval_decision: "handled",
-          approval_tool_name: toolName || "该工具",
+          approval_tool_name: toolName || t("该工具"),
         },
       };
     });
@@ -1182,7 +1196,7 @@ function AgentSidebar({
       const created = await createRuntimeSession(user.id, "agent");
       if (!created.id) {
         AriMessage.warning({
-          content: "创建话题失败，请稍后重试。",
+          content: t("创建话题失败，请稍后重试。"),
           duration: 2500,
         });
         return;
@@ -1192,7 +1206,7 @@ function AgentSidebar({
       navigate(`${resolveAgentSessionPath(created.id)}?workspaceId=${encodeURIComponent(workspaceId)}`);
     } catch (_err) {
       AriMessage.warning({
-        content: "创建话题失败，请稍后重试。",
+        content: t("创建话题失败，请稍后重试。"),
         duration: 2500,
       });
     } finally {
@@ -1343,7 +1357,7 @@ function AgentSidebar({
                 ? "delete_fill"
                 : "delete"
           }
-          label={deletingSessionId === item.id ? "删除中" : pendingDeleteSessionId === item.id ? "确定" : undefined}
+          label={deletingSessionId === item.id ? t("删除中") : pendingDeleteSessionId === item.id ? t("确定") : undefined}
           disabled={deletingSessionId === item.id}
           onMouseEnter={() => {
             setHoveredDeleteSessionId(item.id);
@@ -1383,7 +1397,7 @@ function AgentSidebar({
             content={(
               <AriMenu
                 items={[
-                  { key: "delete", label: "删除", icon: "delete", fillIcon: "delete_fill" },
+                  { key: "delete", label: t("删除"), icon: "delete", fillIcon: "delete_fill" },
                 ]}
                 onSelect={(key: string) => {
                   setOpenWorkspaceActionMenuId("");
@@ -1399,7 +1413,7 @@ function AgentSidebar({
               type="text"
               ghost
               icon="more_horiz"
-              aria-label="项目更多操作"
+              aria-label={t("项目更多操作")}
               data-workspace-action-trigger="true"
               onClick={(event: MouseEvent<HTMLButtonElement>) => {
                 event.preventDefault();
@@ -1413,7 +1427,7 @@ function AgentSidebar({
             type="text"
             ghost
             icon="settings"
-            aria-label="项目设置"
+            aria-label={t("项目设置")}
             onClick={(event: MouseEvent<HTMLButtonElement>) => {
               event.preventDefault();
               event.stopPropagation();
@@ -1426,7 +1440,7 @@ function AgentSidebar({
             type="text"
             ghost
             icon="edit"
-            aria-label="在项目内新增话题"
+            aria-label={t("在项目内新增话题")}
             disabled={creatingWorkspaceSessionId === group.workspace.id}
             onClick={(event: MouseEvent<HTMLButtonElement>) => {
               event.preventDefault();
@@ -1449,6 +1463,7 @@ function AgentSidebar({
     isProjectAgent,
     openWorkspaceActionMenuId,
     pendingDeleteSessionId,
+    t,
   ]);
 
   // 描述：处理项目目录树菜单点击，父节点进入项目设置页，子节点进入会话详情。
@@ -1523,7 +1538,7 @@ function AgentSidebar({
         key: "pin",
         label: renderContextMenuItemLabel({
           key: "pin",
-          label: contextTargetSession?.pinned ? "取消固定会话" : "固定会话",
+          label: contextTargetSession?.pinned ? t("取消固定会话") : t("固定会话"),
           icon: "pinboard",
           fillIcon: "pinboard_fill",
           forceFill: Boolean(contextTargetSession?.pinned),
@@ -1533,7 +1548,7 @@ function AgentSidebar({
         key: "rename",
         label: renderContextMenuItemLabel({
           key: "rename",
-          label: "重命名会话",
+          label: t("重命名会话"),
           icon: "edit",
           fillIcon: "edit_fill",
         }),
@@ -1542,13 +1557,13 @@ function AgentSidebar({
         key: "delete",
         label: renderContextMenuItemLabel({
           key: "delete",
-          label: "删除会话",
+          label: t("删除会话"),
           icon: "delete",
           fillIcon: "delete_fill",
         }),
       },
     ];
-  }, [contextTargetSession?.pinned, hoveredContextMenuActionKey]);
+  }, [contextTargetSession?.pinned, hoveredContextMenuActionKey, t]);
 
   useEffect(() => {
     void refreshSessions();
@@ -1735,7 +1750,7 @@ function AgentSidebar({
       } else if (payload.kind === STREAM_KINDS.CANCELLED) {
         nextMeta.status = "finished";
         nextMeta.finishedAt = now;
-        nextMeta.summary = String(payload.message || "").trim() || nextMeta.summary || "任务已取消";
+        nextMeta.summary = String(payload.message || "").trim() || nextMeta.summary || t("任务已取消");
         nextSending = false;
       } else if (payload.kind === STREAM_KINDS.ERROR) {
         const errorCode = resolveStreamErrorCode(payload);
@@ -1793,7 +1808,7 @@ function AgentSidebar({
         unlisten();
       }
     };
-  }, [isProjectAgent]);
+  }, [isProjectAgent, t]);
 
   useEffect(() => {
     if (!openWorkspaceActionMenuId || !IS_BROWSER) {
@@ -1851,7 +1866,7 @@ function AgentSidebar({
             }
             if (!target.enabled || !target.path) {
               AriMessage.warning({
-                content: target.deniedMessage || "当前入口不可用。",
+                content: target.deniedMessage || t("当前入口不可用。"),
                 duration: 2500,
               });
               return;
@@ -1861,14 +1876,14 @@ function AgentSidebar({
         />
       </AriContainer>
       <AriFlex className="desk-agent-session-header" align="center" justify="space-between">
-        <AriTypography variant="caption" value="项目" />
+        <AriTypography variant="caption" value={t("项目")} />
         <AriFlex className="desk-agent-session-header-actions" align="center" space={4}>
           <AriButton
             size="sm"
             type="text"
             ghost
             icon="note_stack_add"
-            aria-label="新项目"
+            aria-label={t("新项目")}
             onClick={handleCreateSession}
           />
           <AriButton
@@ -1877,7 +1892,7 @@ function AgentSidebar({
             ghost
             icon="sort"
             color={sessionSortMode === "name" ? "primary" : "default"}
-            aria-label="排序"
+            aria-label={t("排序")}
             onClick={handleToggleSessionSortMode}
           />
         </AriFlex>
@@ -1930,7 +1945,7 @@ function AgentSidebar({
               />
             ) : (
               <AriContainer className="desk-project-workspace-empty">
-                <AriTypography variant="caption" value="请先在“新增”页面选择至少一个工作目录。" />
+                <AriTypography variant="caption" value={t("请先在“新增”页面选择至少一个工作目录。")} />
               </AriContainer>
             )
           ) : (
@@ -1957,7 +1972,7 @@ function AgentSidebar({
 
       <AriModal
         visible={renameModalVisible}
-        title="重命名会话"
+        title={t("重命名会话")}
         onClose={() => {
           setRenameModalVisible(false);
           setRenamingSessionId("");
@@ -1966,7 +1981,7 @@ function AgentSidebar({
         footer={(
           <AriFlex justify="flex-end" align="center" space={8}>
             <AriButton
-              label="取消"
+              label={t("取消")}
               onClick={() => {
                 setRenameModalVisible(false);
                 setRenamingSessionId("");
@@ -1975,7 +1990,7 @@ function AgentSidebar({
             />
             <AriButton
               color="brand"
-              label="确定"
+              label={t("确定")}
               onClick={handleConfirmRename}
             />
           </AriFlex>
@@ -1985,7 +2000,7 @@ function AgentSidebar({
           variant="borderless"
           value={renameValue}
           onChange={setRenameValue}
-          placeholder="输入新的会话标题"
+          placeholder={t("输入新的会话标题")}
         />
       </AriModal>
     </AriContainer>
@@ -2012,6 +2027,7 @@ function WorkflowsSidebar({
   onCheckDesktopUpdate: () => Promise<void>;
   onInstallDesktopUpdate: () => Promise<void>;
 }) {
+  const { t } = useDesktopI18n();
   const navigate = useNavigate();
   const location = useLocation();
   const [workflowVersion, setWorkflowVersion] = useState(0);
@@ -2085,7 +2101,7 @@ function WorkflowsSidebar({
     const targetWorkflow = workflows.find((item) => item.key === workflowId && !item.readonly);
     if (!targetWorkflow) {
       AriMessage.warning({
-        content: "工作流不存在或已删除，请刷新后重试。",
+        content: t("工作流不存在或已删除，请刷新后重试。"),
         duration: 3000,
         showClose: true,
       });
@@ -2095,7 +2111,7 @@ function WorkflowsSidebar({
     const deleted = deleteAgentWorkflow(targetWorkflow.id);
     if (!deleted) {
       AriMessage.warning({
-        content: "工作流删除失败，请稍后重试。",
+        content: t("工作流删除失败，请稍后重试。"),
         duration: 3000,
         showClose: true,
       });
@@ -2137,7 +2153,7 @@ function WorkflowsSidebar({
                   ? "delete_fill"
                   : "delete"
             }
-            label={pendingDeleteWorkflowId === item.id ? "确定" : undefined}
+            label={pendingDeleteWorkflowId === item.id ? t("确定") : undefined}
             onMouseEnter={() => {
               setHoveredDeleteWorkflowId(item.id);
             }}
@@ -2159,25 +2175,55 @@ function WorkflowsSidebar({
         label: item.name,
         icon: "inventory_2",
       }));
+      const registeredSectionItems = registeredItems.length > 0
+        ? registeredItems
+        : [
+            {
+              key: "workflow-group-registered-empty",
+              disabled: true,
+              label: (
+                <AriTypography
+                  className="desk-sidebar-group-empty-label"
+                  variant="caption"
+                  value={t("暂无已注册工作流")}
+                />
+              ),
+            },
+          ];
+      const templateSectionItems = templateItems.length > 0
+        ? templateItems
+        : [
+            {
+              key: "workflow-group-templates-empty",
+              disabled: true,
+              label: (
+                <AriTypography
+                  className="desk-sidebar-group-empty-label"
+                  variant="caption"
+                  value={t("暂无未注册工作流")}
+                />
+              ),
+            },
+          ];
       return [
-        { key: "workflow-group-registered", label: "已注册", isGroup: true },
-        ...registeredItems,
-        { key: "workflow-group-templates", label: "未注册", isGroup: true },
-        ...templateItems,
+        { key: "workflow-group-registered", label: t("已注册"), isGroup: true },
+        ...registeredSectionItems,
+        { key: "workflow-group-templates", label: t("未注册"), isGroup: true },
+        ...templateSectionItems,
       ];
     },
-    [handleDeleteWorkflow, hoveredDeleteWorkflowId, pendingDeleteWorkflowId, workflowOverview.registered, workflowOverview.templates],
+    [handleDeleteWorkflow, hoveredDeleteWorkflowId, pendingDeleteWorkflowId, t, workflowOverview.registered, workflowOverview.templates],
   );
 
   return (
     <AriContainer className="desk-sidebar">
       <SidebarBackHeader
-        onBack={() => navigate("/home")}
-        label="返回"
+        onBack={() => navigate(WORKFLOW_PAGE_PATH)}
+        label={t("返回")}
         rightAction={(
           <AriButton
             icon={createButtonHovered ? "note_stack_add_fill" : "note_stack_add"}
-            label="新增"
+            label={t("新增")}
             onMouseEnter={() => {
               setCreateButtonHovered(true);
             }}
@@ -2239,6 +2285,7 @@ function SettingsSidebar({
   onCheckDesktopUpdate: () => Promise<void>;
   onInstallDesktopUpdate: () => Promise<void>;
 }) {
+  const { t } = useDesktopI18n();
   const navigate = useNavigate();
   const location = useLocation();
   // 描述：根据权限与模块开关解析可见设置菜单项。
@@ -2262,7 +2309,7 @@ function SettingsSidebar({
 
   return (
     <AriContainer className="desk-sidebar">
-      <SidebarBackHeader onBack={() => navigate("/home")} label="Home" />
+      <SidebarBackHeader onBack={() => navigate("/home")} label={t("Home")} />
       <AriContainer className="desk-sidebar-section">
         <AriMenu
           items={settingItems}
@@ -2292,49 +2339,7 @@ function SettingsSidebar({
 
 // 描述:
 //
-//   - 渲染 AI Key 页面侧边栏文案与返回入口。
-function AiKeySidebar({
-  user,
-  selectedIdentity,
-  onLogout,
-  routeAccess,
-  desktopUpdateState,
-  onCheckDesktopUpdate,
-  onInstallDesktopUpdate,
-}: {
-  user: LoginUser;
-  selectedIdentity: ConsoleIdentityItem | null;
-  onLogout: () => Promise<void>;
-  routeAccess: RouteAccess;
-  desktopUpdateState: DesktopUpdateState;
-  onCheckDesktopUpdate: () => Promise<void>;
-  onInstallDesktopUpdate: () => Promise<void>;
-}) {
-  const navigate = useNavigate();
-  return (
-    <AriContainer className="desk-sidebar">
-      <SidebarBackHeader onBack={() => navigate("/home")} label="Home" />
-      <AriContainer className="desk-sidebar-section">
-        <AriTypography variant="h4" value={AI_KEY_SIDEBAR_CONTENT.title} />
-        <AriTypography variant="caption" value={AI_KEY_SIDEBAR_CONTENT.description} />
-      </AriContainer>
-      <AriContainer className="desk-sidebar-spacer" />
-      <UserHoverMenu
-        user={user}
-        selectedIdentityLabel={selectedIdentity?.scopeName || ""}
-        onLogout={onLogout}
-        routeAccess={routeAccess}
-        desktopUpdateState={desktopUpdateState}
-        onCheckDesktopUpdate={onCheckDesktopUpdate}
-        onInstallDesktopUpdate={onInstallDesktopUpdate}
-      />
-    </AriContainer>
-  );
-}
-
-// 描述:
-//
-//   - 侧边栏总入口，根据路由模式切换 home/agent/settings/workflow/ai-key 视图。
+//   - 侧边栏总入口，根据路由模式切换 home/agent/settings/workflow 视图。
 export function ClientSidebar({
   user,
   selectedIdentity,
@@ -2353,20 +2358,6 @@ export function ClientSidebar({
   if (mode === "settings") {
     return (
       <SettingsSidebar
-        user={user}
-        selectedIdentity={selectedIdentity}
-        onLogout={onLogout}
-        routeAccess={routeAccess}
-        desktopUpdateState={desktopUpdateState}
-        onCheckDesktopUpdate={onCheckDesktopUpdate}
-        onInstallDesktopUpdate={onInstallDesktopUpdate}
-      />
-    );
-  }
-
-  if (mode === "ai-key") {
-    return (
-      <AiKeySidebar
         user={user}
         selectedIdentity={selectedIdentity}
         onLogout={onLogout}

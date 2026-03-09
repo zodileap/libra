@@ -1,6 +1,6 @@
 use crate::llm::{
-    LlmGatewayError, LlmGatewayPolicy, LlmProvider, LlmRunResult, LlmTextStreamObserver, LlmUsage,
-    LLM_RUNTIME_TAG,
+    should_emit_waiting_progress, LlmGatewayError, LlmGatewayPolicy, LlmProgressObserver,
+    LlmProvider, LlmRunResult, LlmTextStreamObserver, LlmUsage, LLM_RUNTIME_TAG,
 };
 use crate::workflow::{run_step_with_retry, DefaultWorkflowRecoveryHook};
 use std::env;
@@ -28,6 +28,7 @@ pub fn call_with_retry(
     workdir: Option<&str>,
     policy: LlmGatewayPolicy,
     mut on_chunk: Option<&mut LlmTextStreamObserver>,
+    mut on_progress: Option<&mut LlmProgressObserver>,
 ) -> Result<LlmRunResult, LlmGatewayError> {
     let bins = resolve_gemini_bins();
     call_with_retry_and_bins(
@@ -36,6 +37,8 @@ pub fn call_with_retry(
         policy,
         #[allow(clippy::needless_option_as_deref)]
         on_chunk.as_deref_mut(),
+        #[allow(clippy::needless_option_as_deref)]
+        on_progress.as_deref_mut(),
         bins.as_slice(),
     )
 }
@@ -45,6 +48,7 @@ fn call_with_retry_and_bins(
     workdir: Option<&str>,
     policy: LlmGatewayPolicy,
     mut on_chunk: Option<&mut LlmTextStreamObserver>,
+    mut on_progress: Option<&mut LlmProgressObserver>,
     bins: &[String],
 ) -> Result<LlmRunResult, LlmGatewayError> {
     let hook = DefaultWorkflowRecoveryHook;
@@ -56,6 +60,8 @@ fn call_with_retry_and_bins(
             attempt,
             #[allow(clippy::needless_option_as_deref)]
             on_chunk.as_deref_mut(),
+            #[allow(clippy::needless_option_as_deref)]
+            on_progress.as_deref_mut(),
             bins,
         )
     });
@@ -68,6 +74,7 @@ fn call_once(
     timeout_secs: u64,
     attempt: u8,
     mut on_chunk: Option<&mut LlmTextStreamObserver>,
+    mut on_progress: Option<&mut LlmProgressObserver>,
     bins: &[String],
 ) -> Result<LlmRunResult, LlmGatewayError> {
     let provider = LlmProvider::Gemini;
@@ -100,10 +107,13 @@ fn call_once(
     let started = Instant::now();
     let mut stdout_text = String::new();
     let mut stderr_text = String::new();
+    let mut last_progress_at: Option<Instant> = None;
+    let mut has_received_stdout = false;
     let status = loop {
         match rx.recv_timeout(Duration::from_millis(40)) {
             Ok(chunk) => match chunk.stream {
                 GeminiOutputStreamKind::Stdout => {
+                    has_received_stdout = true;
                     stdout_text.push_str(chunk.text.as_str());
                     if let Some(callback) = on_chunk.as_deref_mut() {
                         callback(chunk.text.as_str());
@@ -136,6 +146,12 @@ fn call_once(
                     .with_retryable(true)
                     .with_attempts(attempt));
                 }
+                maybe_emit_waiting_progress(
+                    on_progress.as_deref_mut(),
+                    &mut last_progress_at,
+                    has_received_stdout,
+                    "Gemini CLI 已启动，正在等待首个响应分片…",
+                );
                 thread::sleep(Duration::from_millis(80));
             }
             Err(err) => {
@@ -201,6 +217,33 @@ fn call_once(
         content: final_message,
         usage,
     })
+}
+
+/// 描述：在 Gemini CLI 尚未返回首个 stdout 分片时，按节流窗口向上层发送等待进度。
+///
+/// Params:
+///
+///   - on_progress: 等待进度回调。
+///   - last_progress_at: 最近一次发送等待进度的时间。
+///   - has_received_stdout: 是否已经收到首个 stdout 分片。
+///   - message: 本次要发送的进度文案。
+fn maybe_emit_waiting_progress(
+    mut on_progress: Option<&mut LlmProgressObserver>,
+    last_progress_at: &mut Option<Instant>,
+    has_received_stdout: bool,
+    message: &str,
+) {
+    if has_received_stdout {
+        return;
+    }
+    let Some(callback) = on_progress.as_deref_mut() else {
+        return;
+    };
+    let now = Instant::now();
+    if should_emit_waiting_progress(*last_progress_at, now) {
+        callback(message);
+        *last_progress_at = Some(now);
+    }
 }
 
 fn append_gemini_prompt_args(command: &mut Command, prompt: &str) {
@@ -368,6 +411,7 @@ stacktrace: omitted"#;
                     backoff_millis: 0,
                 },
             },
+            None,
             None,
             bins.as_slice(),
         );

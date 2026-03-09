@@ -1,6 +1,7 @@
 ---
 name: test-runner
-description: 执行测试、定位失败原因并输出修复建议。
+description: 执行测试并输出失败定位和修复建议。
+title: 测试执行
 ---
 # 测试执行
 

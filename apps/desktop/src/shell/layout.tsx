@@ -51,6 +51,7 @@ export function DesktopLayout({
             setSidebarCollapsed((current) => !current);
           }}
           desktopUpdateState={desktopUpdateState}
+          onCheckDesktopUpdate={onCheckDesktopUpdate}
           onInstallDesktopUpdate={onInstallDesktopUpdate}
           debugFloatVisible={debugFloatVisible}
           onToggleDebugFloat={() => {

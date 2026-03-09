@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AriButton, AriCard, AriContainer, AriMessage, AriTypography } from "aries_react";
+import { useDesktopI18n } from "../shared/i18n";
 
 // 描述:
 //
@@ -29,6 +30,7 @@ interface SessionCopyResultPayload {
 //
 //   - 在开发环境渲染调试浮层并订阅会话与后端调试事件。
 export function DevDebugFloat({ visible = true }: DevDebugFloatProps) {
+  const { t } = useDesktopI18n();
   const [collapsed, setCollapsed] = useState(false);
   const [snapshot, setSnapshot] = useState<SessionDebugSnapshot | null>(null);
   const [copyingSessionId, setCopyingSessionId] = useState("");
@@ -105,12 +107,12 @@ export function DevDebugFloat({ visible = true }: DevDebugFloatProps) {
       setCopyingSessionId("");
       if (payload.ok) {
         AriMessage.success({
-          content: payload.message || "会话内容已复制",
+          content: payload.message || t("会话内容已复制"),
           duration: 1800,
         });
       } else {
         AriMessage.error({
-          content: payload.message || "复制失败，请检查系统剪贴板权限",
+          content: payload.message || t("复制失败，请检查系统剪贴板权限"),
           duration: 2200,
         });
       }
@@ -132,14 +134,14 @@ export function DevDebugFloat({ visible = true }: DevDebugFloatProps) {
       window.removeEventListener("libra:session-debug", handleSessionDebug as EventListener);
       window.removeEventListener("libra:session-copy-result", handleSessionCopyResult as EventListener);
     };
-  }, [visible]);
+  }, [t, visible]);
 
   // 描述：向会话页发起“复制会话内容（含过程）”请求，仅在存在已打开会话时可触发。
   const handleRequestCopySessionContent = () => {
     const targetSessionId = resolveCopyTargetSessionId();
     if (!targetSessionId) {
       AriMessage.warning({
-        content: "请先打开一个会话再复制",
+        content: t("请先打开一个会话再复制"),
         duration: 1800,
       });
       return;
@@ -154,7 +156,7 @@ export function DevDebugFloat({ visible = true }: DevDebugFloatProps) {
       copyingSessionIdRef.current = "";
       setCopyingSessionId("");
       AriMessage.error({
-        content: "复制超时，请重试或确认当前会话页仍处于打开状态",
+        content: t("复制超时，请重试或确认当前会话页仍处于打开状态"),
         duration: 2200,
       });
     }, 6000);
@@ -179,19 +181,19 @@ export function DevDebugFloat({ visible = true }: DevDebugFloatProps) {
     >
       <AriCard className="desk-dev-debug-card">
         <AriContainer className="desk-dev-debug-head">
-          <AriTypography variant="h4" value="Dev 调试窗口" />
+          <AriTypography variant="h4" value={t("Dev 调试窗口")} />
           <AriContainer className="desk-dev-debug-head-actions" padding={0}>
             <AriButton
               type="text"
               icon="content_copy"
-              label="复制会话内容"
+              label={t("复制会话内容")}
               disabled={!copyTargetSessionId || Boolean(copyingSessionId)}
               onClick={handleRequestCopySessionContent}
             />
             <AriButton
               type="text"
               icon={collapsed ? "unfold_more" : "unfold_less"}
-              label={collapsed ? "展开" : "收起"}
+              label={collapsed ? t("展开") : t("收起")}
               onClick={() => setCollapsed((value) => !value)}
             />
           </AriContainer>
@@ -203,8 +205,8 @@ export function DevDebugFloat({ visible = true }: DevDebugFloatProps) {
               variant="caption"
               value={
                 copyTargetSessionId
-                  ? "当前会话已连接，点击“复制会话内容”可导出完整排查信息。"
-                  : "请先打开一个会话，再复制会话内容。"
+                  ? t("当前会话已连接，点击“复制会话内容”可导出完整排查信息。")
+                  : t("请先打开一个会话，再复制会话内容。")
               }
             />
           </AriContainer>

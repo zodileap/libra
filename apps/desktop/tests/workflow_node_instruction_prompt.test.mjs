@@ -26,7 +26,7 @@ test("TestWorkflowEngineShouldInjectNodeInstructionIntoPrompt", () => {
   //
   //   - 统一智能体工作流应直接从 graph 节点提取 instruction，并拼接到最终 Prompt。
   assert.match(source, /const normalizedInstruction = String\(node\.instruction \|\| ""\)\.trim\(\);/);
-  assert.match(source, /本节点要求：\$\{normalizedInstruction\}/);
+  assert.match(source, /translateDesktopText\("- \{\{label\}\}：技能编码 \{\{skillId\}\}；本节点要求：\{\{instruction\}\}"/);
   assert.match(source, /const skillChainLines = \(workflow\?\.graph\?\.nodes \|\| \[\]\)/);
   assert.match(source, /filter\(\(node\) => node\.type === "skill"\)/);
   assert.match(source, /return \[/);

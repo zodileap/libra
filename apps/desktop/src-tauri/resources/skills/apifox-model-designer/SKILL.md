@@ -1,6 +1,7 @@
 ---
 name: apifox-model-designer
-description: 定义 API 实体、请求模型、响应模型，并约束同步步骤。
+description: 设计接口模型并整理同步步骤。
+title: 接口建模
 ---
 # 交互契约设计
 

@@ -25,6 +25,7 @@ pub struct AgentSkillRecord {
 struct AgentSkillFrontmatter {
     name: String,
     description: String,
+    title: Option<String>,
 }
 
 /// 描述：将多来源技能根目录规整为可扫描列表，并移除重复路径，避免开发态与打包态目录被重复解析。
@@ -256,7 +257,11 @@ fn load_skill_record_from_file(
     let runtime_requirements = read_optional_runtime_requirements(skill_root)?;
     Ok(AgentSkillRecord {
         id: frontmatter.name.clone(),
-        name: frontmatter.name,
+        name: frontmatter
+            .title
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or(frontmatter.name),
         description: frontmatter.description.trim().to_string(),
         source: source.to_string(),
         root_path: skill_root.to_string_lossy().to_string(),

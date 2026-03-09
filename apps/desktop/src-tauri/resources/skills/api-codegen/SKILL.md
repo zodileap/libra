@@ -1,6 +1,7 @@
 ---
 name: api-codegen
-description: 基于既有设计生成接口代码、调用层与测试骨架。
+description: 生成接口代码、调用层和测试骨架。
+title: 接口开发
 ---
 # 接口代码生成
 

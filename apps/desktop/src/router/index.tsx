@@ -40,6 +40,7 @@ import { DesktopLayout } from "../shell/layout";
 import type { AgentKey } from "../shared/types";
 import { isAgentAuthorized, isModuleEnabled, resolveBuildEnabledModules } from "./module-access";
 import type { AuthState, DesktopRouteModuleKey, RouteAccess } from "./types";
+import { useDesktopI18n } from "../shared/i18n";
 
 // 描述:
 //
@@ -197,9 +198,10 @@ function useRouteAccess(auth: AuthState): RouteAccess {
 
 // 描述：提供统一页面加载骨架，避免懒加载时出现空白闪烁。
 function RouteLoadingFallback() {
+  const { t } = useDesktopI18n();
   return (
     <AriContainer className="desk-main-loading">
-      <AriTypography variant="caption" value="页面加载中..." />
+      <AriTypography variant="caption" value={t("页面加载中...")} />
     </AriContainer>
   );
 }

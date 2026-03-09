@@ -8,8 +8,24 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_GLOB_WALK_DEPTH: usize = 64;
+const REWRITE_DIFF_CONTEXT_RADIUS: usize = 3;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RewriteDiffSummary {
+    added_lines: usize,
+    removed_lines: usize,
+    diff_preview: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RewriteDiffOp<'a> {
+    Equal(&'a str),
+    Add(&'a str),
+    Remove(&'a str),
+}
 
 pub struct ReadTextTool;
 
@@ -95,11 +111,7 @@ impl AgentTool for WriteTextTool {
         )?;
         let target = resolve_sandbox_path(context.sandbox_root, path.as_str())?;
         let previous = fs::read_to_string(&target).ok();
-        let previous_line_count = count_text_lines(previous.as_deref().unwrap_or(""));
-        let next_line_count = count_text_lines(content.as_str());
-        let (added_lines, removed_lines) =
-            calculate_line_delta(previous_line_count, next_line_count);
-        let diff_preview = build_rewrite_diff_preview(
+        let diff_summary = build_rewrite_diff_summary(
             target.to_string_lossy().as_ref(),
             previous.as_deref(),
             content.as_str(),
@@ -116,9 +128,9 @@ impl AgentTool for WriteTextTool {
         Ok(json!({
             "path": target.to_string_lossy().to_string(),
             "bytes": content.len(),
-            "added_lines": added_lines,
-            "removed_lines": removed_lines,
-            "diff_preview": diff_preview,
+            "added_lines": diff_summary.added_lines,
+            "removed_lines": diff_summary.removed_lines,
+            "diff_preview": diff_summary.diff_preview,
         }))
     }
 }
@@ -163,11 +175,7 @@ impl AgentTool for WriteJsonTool {
                 format!("写入 JSON 文件失败: {}", err),
             )
         })?;
-        let previous_line_count = count_text_lines(previous.as_deref().unwrap_or(""));
-        let next_line_count = count_text_lines(pretty.as_str());
-        let (added_lines, removed_lines) =
-            calculate_line_delta(previous_line_count, next_line_count);
-        let diff_preview = build_rewrite_diff_preview(
+        let diff_summary = build_rewrite_diff_summary(
             target.to_string_lossy().as_ref(),
             previous.as_deref(),
             pretty.as_str(),
@@ -176,54 +184,338 @@ impl AgentTool for WriteJsonTool {
             "path": target.to_string_lossy().to_string(),
             "bytes": pretty.len(),
             "success": true,
-            "added_lines": added_lines,
-            "removed_lines": removed_lines,
-            "diff_preview": diff_preview,
+            "added_lines": diff_summary.added_lines,
+            "removed_lines": diff_summary.removed_lines,
+            "diff_preview": diff_summary.diff_preview,
         }))
     }
 }
 
-/// 描述：计算文本总行数，空文本返回 0，避免 `lines()` 对空串返回 1 的歧义。
-fn count_text_lines(text: &str) -> usize {
-    let normalized = text.trim_end_matches('\n');
-    if normalized.trim().is_empty() {
-        return 0;
+/// 描述：按文本真实内容拆分行，保留空白行但忽略“空串无内容”的伪行。
+///
+/// Params:
+///
+///   - text: 原始文本。
+///
+/// Returns:
+///
+///   - 0: 拆分后的逐行文本切片。
+fn split_text_lines(text: &str) -> Vec<&str> {
+    if text.is_empty() {
+        return Vec::new();
     }
-    normalized.lines().count()
+    text.lines().collect()
 }
 
-/// 描述：根据前后行数估算新增/删除行数，用于前端展示 `+/-` 编辑摘要。
-fn calculate_line_delta(previous_lines: usize, next_lines: usize) -> (usize, usize) {
-    if next_lines >= previous_lines {
-        (next_lines - previous_lines, 0)
-    } else {
-        (0, previous_lines - next_lines)
+/// 描述：构建整文件重写的差异摘要，优先使用 Git 生成标准 unified diff，失败时回退内置逐行 diff。
+///
+/// Params:
+///
+///   - path: 当前编辑文件路径。
+///   - previous: 编辑前文本。
+///   - next: 编辑后文本。
+///
+/// Returns:
+///
+///   - 0: 结构化差异摘要，包含真实新增/删除行数与 diff 预览。
+fn build_rewrite_diff_summary(
+    path: &str,
+    previous: Option<&str>,
+    next: &str,
+) -> RewriteDiffSummary {
+    let previous_text = previous.unwrap_or("");
+    if let Some(git_bin) = resolve_executable_binary("git", "--version") {
+        if let Some(summary) =
+            build_rewrite_diff_summary_with_git(git_bin.as_str(), path, previous_text, next)
+        {
+            return summary;
+        }
+    }
+    build_rewrite_diff_summary_fallback(path, previous_text, next)
+}
+
+/// 描述：借助 Git `diff --no-index` 生成标准 unified diff，保证 hunk 行号和新增/删除统计准确。
+///
+/// Params:
+///
+///   - git_bin: Git 可执行文件路径。
+///   - path: 当前编辑文件路径。
+///   - previous: 编辑前文本。
+///   - next: 编辑后文本。
+///
+/// Returns:
+///
+///   - 0: 生成成功时返回结构化差异摘要；失败返回 None，交由内置算法兜底。
+fn build_rewrite_diff_summary_with_git(
+    git_bin: &str,
+    path: &str,
+    previous: &str,
+    next: &str,
+) -> Option<RewriteDiffSummary> {
+    let runtime_dir = build_rewrite_diff_runtime_dir()?;
+    let previous_path = runtime_dir.join("before.txt");
+    let next_path = runtime_dir.join("after.txt");
+    if fs::write(&previous_path, previous.as_bytes()).is_err()
+        || fs::write(&next_path, next.as_bytes()).is_err()
+    {
+        let _ = fs::remove_dir_all(&runtime_dir);
+        return None;
+    }
+
+    let output = Command::new(git_bin)
+        .arg("diff")
+        .arg("--no-index")
+        .arg("--no-color")
+        .arg("--text")
+        .arg(format!("--unified={}", REWRITE_DIFF_CONTEXT_RADIUS))
+        .arg("--label")
+        .arg(path)
+        .arg("--label")
+        .arg(path)
+        .arg("--")
+        .arg(previous_path.as_os_str())
+        .arg(next_path.as_os_str())
+        .output()
+        .ok();
+
+    let _ = fs::remove_dir_all(&runtime_dir);
+    let output = output?;
+    if !output.status.success() && output.status.code() != Some(1) {
+        return None;
+    }
+
+    let diff_preview = String::from_utf8_lossy(output.stdout.as_slice())
+        .trim_end_matches('\n')
+        .to_string();
+    let (added_lines, removed_lines) = count_unified_diff_change_lines(diff_preview.as_str());
+    Some(RewriteDiffSummary {
+        added_lines,
+        removed_lines,
+        diff_preview,
+    })
+}
+
+/// 描述：在无法使用 Git 时，基于逐行 LCS 结果构建 unified diff，保证重写场景仍能得到稳定行号。
+///
+/// Params:
+///
+///   - path: 当前编辑文件路径。
+///   - previous: 编辑前文本。
+///   - next: 编辑后文本。
+///
+/// Returns:
+///
+///   - 0: 结构化差异摘要。
+fn build_rewrite_diff_summary_fallback(
+    path: &str,
+    previous: &str,
+    next: &str,
+) -> RewriteDiffSummary {
+    let previous_lines = split_text_lines(previous);
+    let next_lines = split_text_lines(next);
+    let operations =
+        build_rewrite_diff_operations(previous_lines.as_slice(), next_lines.as_slice());
+    let diff_preview = build_unified_diff_preview(path, operations.as_slice());
+    let (added_lines, removed_lines) = count_unified_diff_change_lines(diff_preview.as_str());
+    RewriteDiffSummary {
+        added_lines,
+        removed_lines,
+        diff_preview,
     }
 }
 
-/// 描述：构建“整文件重写”场景的差异预览，供执行流展开查看。
-fn build_rewrite_diff_preview(path: &str, previous: Option<&str>, next: &str) -> String {
-    let mut lines: Vec<String> = Vec::new();
-    lines.push(format!("--- {}", path));
-    lines.push(format!("+++ {}", path));
-    let previous_lines = previous
-        .unwrap_or("")
+/// 描述：为重写 diff 创建临时目录，避免覆盖用户工作区文件。
+///
+/// Returns:
+///
+///   - 0: 成功时返回临时目录路径；失败返回 None。
+fn build_rewrite_diff_runtime_dir() -> Option<std::path::PathBuf> {
+    let now_nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    let runtime_dir = std::env::temp_dir().join(format!(
+        "libra-agent-write-diff-{}-{}",
+        std::process::id(),
+        now_nanos
+    ));
+    fs::create_dir_all(&runtime_dir).ok()?;
+    Some(runtime_dir)
+}
+
+/// 描述：根据统一 diff 文本统计真实新增/删除行数，忽略头部元信息与 hunk 标记。
+///
+/// Params:
+///
+///   - diff_preview: unified diff 文本。
+///
+/// Returns:
+///
+///   - 0: 新增行数。
+///   - 1: 删除行数。
+fn count_unified_diff_change_lines(diff_preview: &str) -> (usize, usize) {
+    diff_preview
         .lines()
-        .map(|line| format!("-{}", line))
-        .collect::<Vec<String>>();
-    let next_lines = next
-        .lines()
-        .map(|line| format!("+{}", line))
-        .collect::<Vec<String>>();
-    let preview_limit = 120usize;
-    let mut merged = previous_lines;
-    merged.extend(next_lines);
-    if merged.len() > preview_limit {
-        merged.truncate(preview_limit);
-        merged.push("...".to_string());
+        .fold((0usize, 0usize), |(added, removed), line| {
+            if line.starts_with("+++ ")
+                || line.starts_with("--- ")
+                || line.starts_with("@@ ")
+                || line.starts_with("diff --git ")
+                || line.starts_with("index ")
+                || line.starts_with("\\ No newline at end of file")
+            {
+                return (added, removed);
+            }
+            if line.starts_with('+') {
+                return (added.saturating_add(1), removed);
+            }
+            if line.starts_with('-') {
+                return (added, removed.saturating_add(1));
+            }
+            (added, removed)
+        })
+}
+
+/// 描述：基于前后文本的最长公共子序列生成逐行操作列表，供 unified diff 渲染使用。
+///
+/// Params:
+///
+///   - previous_lines: 编辑前逐行文本。
+///   - next_lines: 编辑后逐行文本。
+///
+/// Returns:
+///
+///   - 0: 逐行差异操作列表。
+fn build_rewrite_diff_operations<'a>(
+    previous_lines: &[&'a str],
+    next_lines: &[&'a str],
+) -> Vec<RewriteDiffOp<'a>> {
+    let previous_len = previous_lines.len();
+    let next_len = next_lines.len();
+    let mut lcs = vec![vec![0usize; next_len + 1]; previous_len + 1];
+
+    for previous_index in (0..previous_len).rev() {
+        for next_index in (0..next_len).rev() {
+            lcs[previous_index][next_index] =
+                if previous_lines[previous_index] == next_lines[next_index] {
+                    lcs[previous_index + 1][next_index + 1].saturating_add(1)
+                } else {
+                    lcs[previous_index + 1][next_index].max(lcs[previous_index][next_index + 1])
+                };
+        }
     }
-    lines.extend(merged);
-    lines.join("\n")
+
+    let mut operations: Vec<RewriteDiffOp<'a>> = Vec::new();
+    let mut previous_index = 0usize;
+    let mut next_index = 0usize;
+    while previous_index < previous_len && next_index < next_len {
+        if previous_lines[previous_index] == next_lines[next_index] {
+            operations.push(RewriteDiffOp::Equal(previous_lines[previous_index]));
+            previous_index += 1;
+            next_index += 1;
+            continue;
+        }
+
+        if lcs[previous_index + 1][next_index] >= lcs[previous_index][next_index + 1] {
+            operations.push(RewriteDiffOp::Remove(previous_lines[previous_index]));
+            previous_index += 1;
+            continue;
+        }
+
+        operations.push(RewriteDiffOp::Add(next_lines[next_index]));
+        next_index += 1;
+    }
+
+    while previous_index < previous_len {
+        operations.push(RewriteDiffOp::Remove(previous_lines[previous_index]));
+        previous_index += 1;
+    }
+    while next_index < next_len {
+        operations.push(RewriteDiffOp::Add(next_lines[next_index]));
+        next_index += 1;
+    }
+    operations
+}
+
+/// 描述：把逐行操作转换为 unified diff 文本，并附带真实 hunk 行号，供前端显示局部变更。
+///
+/// Params:
+///
+///   - path: 当前编辑文件路径。
+///   - operations: 逐行差异操作。
+///
+/// Returns:
+///
+///   - 0: unified diff 文本；无差异时返回空串。
+fn build_unified_diff_preview(path: &str, operations: &[RewriteDiffOp<'_>]) -> String {
+    let changed_indexes = operations
+        .iter()
+        .enumerate()
+        .filter_map(|(index, operation)| match operation {
+            RewriteDiffOp::Add(_) | RewriteDiffOp::Remove(_) => Some(index),
+            RewriteDiffOp::Equal(_) => None,
+        })
+        .collect::<Vec<usize>>();
+    if changed_indexes.is_empty() {
+        return String::new();
+    }
+
+    let mut hunk_ranges: Vec<(usize, usize)> = Vec::new();
+    for changed_index in changed_indexes {
+        let range_start = changed_index.saturating_sub(REWRITE_DIFF_CONTEXT_RADIUS);
+        let range_end = (changed_index + REWRITE_DIFF_CONTEXT_RADIUS + 1).min(operations.len());
+        if let Some((_, last_end)) = hunk_ranges.last_mut() {
+            if range_start <= *last_end {
+                *last_end = (*last_end).max(range_end);
+                continue;
+            }
+        }
+        hunk_ranges.push((range_start, range_end));
+    }
+
+    let mut old_prefix_counts = vec![0usize; operations.len() + 1];
+    let mut new_prefix_counts = vec![0usize; operations.len() + 1];
+    for (index, operation) in operations.iter().enumerate() {
+        old_prefix_counts[index + 1] = old_prefix_counts[index]
+            + usize::from(matches!(
+                operation,
+                RewriteDiffOp::Equal(_) | RewriteDiffOp::Remove(_)
+            ));
+        new_prefix_counts[index + 1] = new_prefix_counts[index]
+            + usize::from(matches!(
+                operation,
+                RewriteDiffOp::Equal(_) | RewriteDiffOp::Add(_)
+            ));
+    }
+
+    let mut diff_lines = vec![format!("--- {}", path), format!("+++ {}", path)];
+    for (range_start, range_end) in hunk_ranges {
+        let old_count = old_prefix_counts[range_end].saturating_sub(old_prefix_counts[range_start]);
+        let new_count = new_prefix_counts[range_end].saturating_sub(new_prefix_counts[range_start]);
+        let old_start = if old_count == 0 {
+            old_prefix_counts[range_start]
+        } else {
+            old_prefix_counts[range_start].saturating_add(1)
+        };
+        let new_start = if new_count == 0 {
+            new_prefix_counts[range_start]
+        } else {
+            new_prefix_counts[range_start].saturating_add(1)
+        };
+        diff_lines.push(format!(
+            "@@ -{},{} +{},{} @@",
+            old_start, old_count, new_start, new_count
+        ));
+        for operation in &operations[range_start..range_end] {
+            match operation {
+                RewriteDiffOp::Equal(line) => diff_lines.push(format!(" {}", line)),
+                RewriteDiffOp::Add(line) => diff_lines.push(format!("+{}", line)),
+                RewriteDiffOp::Remove(line) => diff_lines.push(format!("-{}", line)),
+            }
+        }
+    }
+
+    diff_lines.join("\n")
 }
 
 pub struct ListDirTool;
@@ -700,5 +992,68 @@ mod tests {
     fn should_match_glob_pattern() {
         assert!(glob_match("src/*.rs", "src/lib.rs"));
         assert!(!glob_match("src/*.ts", "src/lib.rs"));
+    }
+
+    /// 描述：验证覆盖写入即使前后总行数一致，也会按真实变更统计新增和删除行数。
+    #[test]
+    fn should_count_real_changed_lines_for_full_rewrite() {
+        let summary = build_rewrite_diff_summary_fallback(
+            "requirements.md",
+            "# 旧标题\n## 旧章节\n- 旧需求 A\n- 旧需求 B\n",
+            "# 新标题\n## 新章节\n- 新需求 A\n- 新需求 B\n",
+        );
+
+        assert_eq!(
+            summary,
+            RewriteDiffSummary {
+                added_lines: 4,
+                removed_lines: 4,
+                diff_preview: [
+                    "--- requirements.md",
+                    "+++ requirements.md",
+                    "@@ -1,4 +1,4 @@",
+                    "-# 旧标题",
+                    "-## 旧章节",
+                    "-- 旧需求 A",
+                    "-- 旧需求 B",
+                    "+# 新标题",
+                    "+## 新章节",
+                    "+- 新需求 A",
+                    "+- 新需求 B",
+                ]
+                .join("\n"),
+            }
+        );
+    }
+
+    /// 描述：验证整文件替换时 unified diff hunk 会同时从旧文本和新文本的真实起始行号开始。
+    #[test]
+    fn should_build_unified_diff_with_real_hunk_line_numbers() {
+        let summary = build_rewrite_diff_summary_fallback(
+            "requirements.md",
+            "# 需求分析 - 用户管理系统\n## 1. 业务目标与角色\n- 目标\n- 角色\n",
+            "# 需求分析 - 用户管理系统 (Vben Admin)\n## 1. 需求拆解清单\n- 用户列表查询\n- 用户新增/编辑\n",
+        );
+
+        assert_eq!(summary.added_lines, 4);
+        assert_eq!(summary.removed_lines, 4);
+        assert!(summary.diff_preview.contains("@@ -1,4 +1,4 @@"));
+        assert!(summary.diff_preview.contains("-# 需求分析 - 用户管理系统"));
+        assert!(summary
+            .diff_preview
+            .contains("+# 需求分析 - 用户管理系统 (Vben Admin)"));
+    }
+
+    /// 描述：验证新增文件场景会生成从新文本第一行开始的 hunk 行号，而不是错误地沿用旧文件尾部行号。
+    #[test]
+    fn should_build_addition_hunk_from_new_file_start() {
+        let summary =
+            build_rewrite_diff_summary_fallback("requirements.md", "", "# 初始化\n- 新增内容\n");
+
+        assert_eq!(summary.added_lines, 2);
+        assert_eq!(summary.removed_lines, 0);
+        assert!(summary.diff_preview.contains("@@ -0,0 +1,2 @@"));
+        assert!(summary.diff_preview.contains("+# 初始化"));
+        assert!(summary.diff_preview.contains("+- 新增内容"));
     }
 }

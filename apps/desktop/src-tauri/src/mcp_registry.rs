@@ -224,8 +224,8 @@ fn builtin_mcp_templates() -> Vec<McpTemplateRecord> {
     vec![
         McpTemplateRecord {
             id: "apifox-official".to_string(),
-            name: "Apifox 官方 MCP".to_string(),
-            description: "通过应用私有 Runtime 启动 Apifox 官方 MCP Server。".to_string(),
+            name: "Apifox 接口工具".to_string(),
+            description: "通过内置运行时接入 Apifox。".to_string(),
             domain: "general".to_string(),
             software: "".to_string(),
             capabilities: Vec::new(),
@@ -245,8 +245,8 @@ fn builtin_mcp_templates() -> Vec<McpTemplateRecord> {
         },
         McpTemplateRecord {
             id: "generic-stdio".to_string(),
-            name: "通用 Stdio MCP".to_string(),
-            description: "适合通过本地命令拉起的 MCP Server，例如 uvx、npx 或已安装二进制。"
+            name: "本地命令 MCP".to_string(),
+            description: "适合通过本地命令启动的 MCP 服务。"
                 .to_string(),
             domain: "general".to_string(),
             software: "".to_string(),
@@ -267,8 +267,8 @@ fn builtin_mcp_templates() -> Vec<McpTemplateRecord> {
         },
         McpTemplateRecord {
             id: "generic-http".to_string(),
-            name: "通用 HTTP MCP".to_string(),
-            description: "适合通过 HTTP 地址接入的 MCP Server。".to_string(),
+            name: "HTTP 地址 MCP".to_string(),
+            description: "适合通过 HTTP 地址接入的 MCP 服务。".to_string(),
             domain: "general".to_string(),
             software: "".to_string(),
             capabilities: Vec::new(),
@@ -288,8 +288,8 @@ fn builtin_mcp_templates() -> Vec<McpTemplateRecord> {
         },
         McpTemplateRecord {
             id: "blender-local-bridge".to_string(),
-            name: "Blender 本地 Bridge".to_string(),
-            description: "通过本地 Bridge 接入 Blender 的场景检查、几何编辑与导入导出能力。"
+            name: "Blender 建模桥接".to_string(),
+            description: "连接 Blender，提供场景检查、编辑和导入导出能力。"
                 .to_string(),
             domain: "dcc".to_string(),
             software: "blender".to_string(),
@@ -319,8 +319,8 @@ fn builtin_mcp_templates() -> Vec<McpTemplateRecord> {
         },
         McpTemplateRecord {
             id: "maya-local-bridge".to_string(),
-            name: "Maya 本地 Bridge".to_string(),
-            description: "通过本地 Bridge 接入 Maya 的场景编辑、材质处理与导入导出能力。"
+            name: "Maya 建模桥接".to_string(),
+            description: "连接 Maya，提供场景编辑、材质处理和导入导出能力。"
                 .to_string(),
             domain: "dcc".to_string(),
             software: "maya".to_string(),
@@ -350,8 +350,8 @@ fn builtin_mcp_templates() -> Vec<McpTemplateRecord> {
         },
         McpTemplateRecord {
             id: "c4d-local-bridge".to_string(),
-            name: "C4D 本地 Bridge".to_string(),
-            description: "通过本地 Bridge 接入 Cinema 4D 的场景编辑、材质处理与导入导出能力。"
+            name: "C4D 建模桥接".to_string(),
+            description: "连接 Cinema 4D，提供场景编辑、材质处理和导入导出能力。"
                 .to_string(),
             domain: "dcc".to_string(),
             software: "c4d".to_string(),

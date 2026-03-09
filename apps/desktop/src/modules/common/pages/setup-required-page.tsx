@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { AriButton, AriCard, AriContainer, AriFlex, AriInput, AriTypography } from "aries_react";
 import type { DesktopBackendConfig } from "../../../shared/types";
+import { useDesktopI18n } from "../../../shared/i18n";
 
 // 描述：初始化未完成阻断页组件入参。
 interface SetupRequiredPageProps {
@@ -50,6 +51,7 @@ export function SetupRequiredPage({
   onUseLocalMode,
   onSaveBackendConfig,
 }: SetupRequiredPageProps) {
+  const { t } = useDesktopI18n();
   const [backendBaseUrl, setBackendBaseUrl] = useState(backendConfig.baseUrl);
   const [draftError, setDraftError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -65,7 +67,7 @@ export function SetupRequiredPage({
       return;
     }
     if (!isValidBackendAddress(backendBaseUrl)) {
-      setDraftError("请输入有效的后端地址，例如 http://127.0.0.1:10001。");
+      setDraftError(t("请输入有效的后端地址，例如 http://127.0.0.1:10001。"));
       return;
     }
     setDraftError("");
@@ -84,20 +86,20 @@ export function SetupRequiredPage({
     <AriContainer className="desk-setup-required">
       <AriCard className="desk-setup-required-card">
         <AriFlex vertical align="flex-start" justify="flex-start" space={14}>
-          <AriTypography variant="h1" value={checking ? "检查后端状态" : "后端尚未完成初始化"} />
+          <AriTypography variant="h1" value={checking ? t("检查后端状态") : t("后端尚未完成初始化")} />
           <AriTypography
             variant="caption"
-            value={checking ? "正在读取后端安装状态，请稍候。" : "你可以先完成后端初始化，也可以继续以本地模式进入 Desktop。"}
+            value={checking ? t("正在读取后端安装状态，请稍候。") : t("你可以先完成后端初始化，也可以继续以本地模式进入 Desktop。")}
           />
           <AriContainer className="desk-setup-required-status">
             <AriTypography variant="caption" value={message} />
-            {currentStep ? <AriTypography variant="caption" value={`当前步骤：${currentStep}`} /> : null}
-            {systemName ? <AriTypography variant="caption" value={`系统名称：${systemName}`} /> : null}
-            <AriTypography variant="caption" value={`初始化入口：${setupUrl}`} />
+            {currentStep ? <AriTypography variant="caption" value={t("当前步骤：{{step}}", { step: currentStep })} /> : null}
+            {systemName ? <AriTypography variant="caption" value={t("系统名称：{{name}}", { name: systemName })} /> : null}
+            <AriTypography variant="caption" value={t("初始化入口：{{url}}", { url: setupUrl })} />
           </AriContainer>
           <AriContainer className="desk-setup-required-form">
             <AriInput
-              label="后端地址"
+              label={t("后端地址")}
               value={backendBaseUrl}
               placeholder="http://127.0.0.1:10001"
               onChange={setBackendBaseUrl}
@@ -107,7 +109,7 @@ export function SetupRequiredPage({
           <AriFlex className="desk-setup-required-actions" align="center" justify="flex-start" wrap space={12}>
             <AriButton
               icon="open_in_browser"
-              label="打开初始化"
+              label={t("打开初始化")}
               color="primary"
               disabled={checking || saving}
               onClick={() => {
@@ -116,7 +118,7 @@ export function SetupRequiredPage({
             />
             <AriButton
               icon="arrow_forward"
-              label="本地进入"
+              label={t("本地进入")}
               disabled={checking || saving}
               onClick={() => {
                 void onUseLocalMode();
@@ -124,7 +126,7 @@ export function SetupRequiredPage({
             />
             <AriButton
               icon="save"
-              label={saving ? "检查中..." : "保存并检查"}
+              label={saving ? t("检查中...") : t("保存并检查")}
               loading={saving}
               disabled={checking}
               onClick={() => {

@@ -1,6 +1,7 @@
 ---
 name: frontend-page-builder
-description: 根据页面元素结构完成布局与交互实现。
+description: 根据页面结构完成布局和交互。
+title: 页面实现
 ---
 # 页面实现
 

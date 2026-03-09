@@ -466,7 +466,6 @@ function McpTemplateCard({
           </AriTooltip>
           <AriButton
             type="text"
-            color={alreadyRegistered ? "default" : "brand"}
             icon="add"
             aria-label={alreadyRegistered ? t("模板已添加") : t("添加 MCP")}
             disabled={busy || alreadyRegistered}

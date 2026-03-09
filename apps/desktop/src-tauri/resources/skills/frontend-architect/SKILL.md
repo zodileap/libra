@@ -1,6 +1,7 @@
 ---
 name: frontend-architect
-description: 规划前端目录结构、模块边界与实现约束。
+description: 规划目录结构、模块边界和实现约束。
+title: 前端架构
 ---
 # 前端架构设计
 

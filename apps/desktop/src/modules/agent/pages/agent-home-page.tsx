@@ -11,7 +11,7 @@ import {
 } from "aries_react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
-  AGENTS,
+  resolveAgentSummaries,
   bindProjectSessionWorkspace,
   getLastUsedProjectWorkspaceId,
   getProjectWorkspaceProfile,
@@ -26,6 +26,7 @@ import { PROJECT_SETTINGS_PATH, resolveAgentSessionPath } from "../routes";
 import { createRuntimeSession } from "../../../shared/services/backend-api";
 import { AgentPage } from "../../../widgets/agent/page";
 import type { LoginUser, DccMcpCapabilities } from "../../../shared/types";
+import { useDesktopI18n } from "../../../shared/i18n";
 
 // 描述:
 //
@@ -112,6 +113,7 @@ function normalizeUniqueStrings(value: unknown): string[] {
 // 描述：统一智能体入口页包装器，复用通用 agent 组件并固定为单一 agent。
 export function AgentHomePage(props: AgentHomePageProps) {
   const navigate = useNavigate();
+  const { t } = useDesktopI18n();
   const [searchParams, setSearchParams] = useSearchParams();
   const [prompt, setPrompt] = useState("");
   const [status, setStatus] = useState("");
@@ -124,7 +126,11 @@ export function AgentHomePage(props: AgentHomePageProps) {
   const [gitInstallModalVisible, setGitInstallModalVisible] = useState(false);
   const [gitInstallMessage, setGitInstallMessage] = useState("");
   const { currentUser } = props;
-  const agent = useMemo(() => AGENTS.find((item) => item.key === "agent") || AGENTS[0], []);
+  const agentSummaries = resolveAgentSummaries();
+  const agent = useMemo(
+    () => agentSummaries.find((item) => item.key === "agent") || agentSummaries[0],
+    [agentSummaries],
+  );
 
   // 描述：刷新项目目录分组列表，供智能体选择会话目录。
   const refreshWorkspaceGroups = () => {
@@ -168,7 +174,7 @@ export function AgentHomePage(props: AgentHomePageProps) {
       const moduleCandidates = normalizeUniqueStrings(seed.module_candidates);
       const directorySummary = normalizeUniqueStrings(seed.directory_summary);
       const pageSummary = frontendPages.length > 0
-        ? `页面：${frontendPages.join("、")}`
+        ? t("页面：{{items}}", { items: frontendPages.join("、") })
         : "";
       const baseSummary = String(profileCurrent.summary || "").trim();
       const stableSummary = baseSummary.replace(/页面：[^；。]+/g, "").trim().replace(/[；。\s]+$/g, "");
@@ -176,14 +182,14 @@ export function AgentHomePage(props: AgentHomePageProps) {
         ? [stableSummary || baseSummary, pageSummary].filter((item) => item.length > 0).join("；")
         : baseSummary;
       const stableConstraints = profileCurrent.frontendCodeStructure.implementationConstraints
-        .filter((item) => !item.startsWith("目录摘要："))
-        .filter((item) => !item.startsWith("语言："))
-        .filter((item) => !item.startsWith("包管理器："))
-        .filter((item) => !item.startsWith("构建工具："));
+        .filter((item) => !item.startsWith(t("目录摘要：")))
+        .filter((item) => !item.startsWith(t("语言：")))
+        .filter((item) => !item.startsWith(t("包管理器：")))
+        .filter((item) => !item.startsWith(t("构建工具：")));
       const mergedConstraints = normalizeUniqueStrings([
         ...frontendCodeConstraints,
         ...stableConstraints,
-        ...directorySummary.map((item) => `目录摘要：${item}`),
+        ...directorySummary.map((item) => t("目录摘要：{{item}}", { item })),
       ]);
       const mergedDirectories = normalizeUniqueStrings([
         ...frontendCodeDirectories,
@@ -220,10 +226,10 @@ export function AgentHomePage(props: AgentHomePageProps) {
         },
       );
       if (!saveResult.ok && !saveResult.conflict) {
-        console.warn("项目结构化初始化分析写入失败：", saveResult.message);
+        console.warn(t("项目结构化初始化分析写入失败："), saveResult.message);
       }
     } catch (err) {
-      console.warn("项目结构化初始化分析失败：", err);
+      console.warn(t("项目结构化初始化分析失败："), err);
     }
   };
 
@@ -268,7 +274,7 @@ export function AgentHomePage(props: AgentHomePageProps) {
   const handleCreateWorkspaceGroup = (pathValue: string) => {
     const created = upsertProjectWorkspaceGroup(pathValue);
     if (!created) {
-      setStatus("请输入有效的工作目录路径。");
+      setStatus(t("请输入有效的工作目录路径。"));
       return null;
     }
     setStatus("");
@@ -303,12 +309,12 @@ export function AgentHomePage(props: AgentHomePageProps) {
     try {
       const selectedPath = await invoke<string | null>("pick_local_project_folder");
       if (!selectedPath) {
-        setStatus("已取消目录选择。");
+        setStatus(t("已取消目录选择。"));
         return;
       }
       handleCreateWorkspaceGroup(selectedPath);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "选择目录失败";
+      const message = err instanceof Error ? err.message : t("选择目录失败");
       setStatus(message);
     } finally {
       setFolderPickLoading(false);
@@ -326,11 +332,11 @@ export function AgentHomePage(props: AgentHomePageProps) {
       if (result.available) {
         return true;
       }
-      setGitInstallMessage(result.message || "未检测到可用的 Git，请先安装。\n安装后再继续使用“Git 地址创建项目”。");
+      setGitInstallMessage(result.message || t("未检测到可用的 Git，请先安装。\n安装后再继续使用“Git 地址创建项目”。"));
       setGitInstallModalVisible(true);
       return false;
     } catch (_err) {
-      setGitInstallMessage("检测 Git 可用性失败。请先安装 Git 后再重试。\n安装完成后重启应用。");
+      setGitInstallMessage(t("检测 Git 可用性失败。请先安装 Git 后再重试。\n安装完成后重启应用。"));
       setGitInstallModalVisible(true);
       return false;
     } finally {
@@ -342,7 +348,7 @@ export function AgentHomePage(props: AgentHomePageProps) {
   const handleCloneGitRepository = async () => {
     const normalizedRepoUrl = gitRepoUrl.trim();
     if (!normalizedRepoUrl) {
-      setStatus("请输入 Git 仓库地址。");
+      setStatus(t("请输入 Git 仓库地址。"));
       return;
     }
     if (gitCloneLoading) {
@@ -355,20 +361,20 @@ export function AgentHomePage(props: AgentHomePageProps) {
     }
 
     setGitCloneLoading(true);
-    setStatus("正在克隆仓库，请稍候...");
+    setStatus(t("正在克隆仓库，请稍候..."));
     try {
       const cloned = await invoke<GitCloneResponse>("clone_git_repository", {
         repoUrl: normalizedRepoUrl,
       });
       const created = handleCreateWorkspaceGroup(cloned.path);
       if (!created) {
-        setStatus(`仓库已克隆，但目录创建失败：${cloned.path}`);
+        setStatus(t("仓库已克隆，但目录创建失败：{{path}}", { path: cloned.path }));
         return;
       }
       setGitRepoUrl("");
-      setStatus(cloned.message || `已克隆项目：${cloned.name}`);
+      setStatus(cloned.message || t("已克隆项目：{{name}}", { name: cloned.name }));
     } catch (err) {
-      const message = err instanceof Error ? err.message : "克隆仓库失败";
+      const message = err instanceof Error ? err.message : t("克隆仓库失败");
       setStatus(message);
     } finally {
       setGitCloneLoading(false);
@@ -402,24 +408,24 @@ export function AgentHomePage(props: AgentHomePageProps) {
     const normalizedWorkflowId = String(options?.workflowId || "").trim();
     const usingQuickStartPreset = normalizedWorkflowId.length > 0 || normalizedSkillIds.length > 0;
     if (!usingQuickStartPreset && !normalizedPrompt) {
-      setStatus("请先输入需求再开始对话。");
+      setStatus(t("请先输入需求再开始对话。"));
       return;
     }
     if (!currentUser) {
-      setStatus("用户未登录，无法创建会话。");
+      setStatus(t("用户未登录，无法创建会话。"));
       return;
     }
     if (!selectedWorkspace) {
-      setStatus("请先选择至少一个项目目录后再开始对话。");
+      setStatus(t("请先选择至少一个项目目录后再开始对话。"));
       return;
     }
 
-    setStatus("正在创建会话...");
+    setStatus(t("正在创建会话..."));
     setSending(true);
     try {
       const session = await createRuntimeSession(currentUser.id, "agent");
       if (!session.id) {
-        setStatus("创建会话失败，请稍后重试。");
+        setStatus(t("创建会话失败，请稍后重试。"));
         return;
       }
 
@@ -440,7 +446,7 @@ export function AgentHomePage(props: AgentHomePageProps) {
       }
       setStatus("");
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "创建会话失败";
+      const msg = err instanceof Error ? err.message : t("创建会话失败");
       setStatus(msg);
     } finally {
       setSending(false);
@@ -460,15 +466,15 @@ export function AgentHomePage(props: AgentHomePageProps) {
     const presets: AgentQuickStartPreset[] = [
       {
         id: "quick-code",
-        title: "写代码",
-        description: "直接按默认代码工作流开始一个新的开发话题。",
+        title: t("写代码"),
+        description: t("直接按默认代码工作流开始一个新的开发话题。"),
         icon: "edit",
         workflowId: QUICK_START_CODE_WORKFLOW_ID,
       },
       {
         id: "quick-modeling",
-        title: "建模",
-        description: "直接按内置建模技能开始一个新的 DCC 话题。",
+        title: t("建模"),
+        description: t("直接按内置建模技能开始一个新的 DCC 话题。"),
         icon: "new_releases",
         skillIds: [QUICK_START_MODELING_SKILL_ID],
       },
@@ -478,7 +484,7 @@ export function AgentHomePage(props: AgentHomePageProps) {
       title: item.title,
       description: item.description,
       icon: item.icon,
-      actionLabel: "快速开始",
+      actionLabel: t("快速开始"),
       disabled: !selectedWorkspace,
       onAction: () => {
         void handleStartConversation({
@@ -493,7 +499,7 @@ export function AgentHomePage(props: AgentHomePageProps) {
   const onboardingContent = !selectedWorkspace ? (
     <AriContainer className="desk-project-workspace-onboarding" padding={0}>
       <AriCard className="desk-project-workspace-onboarding-card">
-        <AriTypography variant="h4" value="选择项目" />
+        <AriTypography variant="h4" value={t("选择项目")} />
 
         {/* 描述：将“项目接入方式”拆分为独立卡片并纵向排列，降低首次接入认知负担。 */}
         <AriContainer className="desk-project-workspace-method-list">
@@ -505,7 +511,7 @@ export function AgentHomePage(props: AgentHomePageProps) {
               flexItem={[{ index: 0, flex: 1, overflow: "visible" }]}
             >
               <AriContainer className="desk-project-workspace-method-main">
-                <AriTypography variant="body" value="本地文件夹" />
+                <AriTypography variant="body" value={t("本地文件夹")} />
               </AriContainer>
               <AriFlex
                 vertical
@@ -515,7 +521,7 @@ export function AgentHomePage(props: AgentHomePageProps) {
               >
                 <AriButton
                   color="info"
-                  label={folderPickLoading ? "打开中..." : "选择"}
+                  label={folderPickLoading ? t("打开中...") : t("选择")}
                   disabled={folderPickLoading || gitCloneLoading}
                   onClick={() => {
                     void handlePickLocalFolder();
@@ -533,12 +539,12 @@ export function AgentHomePage(props: AgentHomePageProps) {
               flexItem={[{ index: 0, flex: 1, overflow: "visible" }]}
             >
               <AriContainer className="desk-project-workspace-method-main">
-                <AriTypography variant="body" value="Git 仓库" />
+                <AriTypography variant="body" value={t("Git 仓库")} />
                 <AriInput
                   variant="borderless"
                   value={gitRepoUrl}
                   onChange={setGitRepoUrl}
-                  placeholder="输入 Git 地址"
+                  placeholder={t("输入 Git 地址")}
                   className="desk-project-workspace-git-input"
                   enableHoverFocusEffect={false}
                 />
@@ -551,7 +557,7 @@ export function AgentHomePage(props: AgentHomePageProps) {
               >
                 <AriButton
                   color="info"
-                  label={gitCloneLoading ? "开启中..." : "开启"}
+                  label={gitCloneLoading ? t("开启中...") : t("开启")}
                   disabled={gitCloneLoading || folderPickLoading}
                   onClick={() => {
                     void handleCloneGitRepository();
@@ -571,21 +577,21 @@ export function AgentHomePage(props: AgentHomePageProps) {
 
       <AriModal
         visible={gitInstallModalVisible}
-        title="未检测到 Git"
+        title={t("未检测到 Git")}
         onClose={() => {
           setGitInstallModalVisible(false);
         }}
         footer={
           <AriFlex justify="flex-end" align="center" space={8}>
             <AriButton
-              label="取消"
+              label={t("取消")}
               onClick={() => {
                 setGitInstallModalVisible(false);
               }}
             />
             <AriButton
               color="primary"
-              label="确认并前往下载"
+              label={t("确认并前往下载")}
               onClick={() => {
                 void handleOpenGitDownload();
               }}
@@ -595,7 +601,7 @@ export function AgentHomePage(props: AgentHomePageProps) {
       >
         <AriTypography
           variant="body"
-          value={gitInstallMessage || "未检测到 Git，请先安装后再继续。"}
+          value={gitInstallMessage || t("未检测到 Git，请先安装后再继续。")}
         />
       </AriModal>
     </AriContainer>
@@ -604,7 +610,7 @@ export function AgentHomePage(props: AgentHomePageProps) {
   // 描述：当已选中项目目录时展示当前项目信息与切换入口。
   const guideContent = selectedWorkspace ? (
     <AriCard className="desk-agent-guide-card">
-      <AriTypography variant="h4" value="当前项目" />
+      <AriTypography variant="h4" value={t("当前项目")} />
       <AriTypography variant="caption" value={selectedWorkspace.path} />
       <AriContainer className="desk-inline-gap" />
       <AriFlex align="center" justify="space-between" space={8}>
@@ -612,13 +618,13 @@ export function AgentHomePage(props: AgentHomePageProps) {
         <AriFlex align="center" space={8}>
           <AriButton
             type="default"
-            label="项目信息"
+            label={t("项目信息")}
             icon="settings"
             onClick={handleOpenProjectSettingsPage}
           />
           <AriButton
             type="default"
-            label="切换项目"
+            label={t("切换项目")}
             icon="folder"
             onClick={handleOpenWorkspaceSelectionPage}
           />
@@ -629,13 +635,13 @@ export function AgentHomePage(props: AgentHomePageProps) {
 
   return (
     <AgentPage
-      title="智能体"
+      title={t("智能体")}
       description={agent.description}
       prompt={prompt}
       status={status}
       sending={sending}
       canSend={Boolean(selectedWorkspace)}
-      promptPlaceholder="输入代码任务，例如：重构登录模块并补上测试"
+      promptPlaceholder={t("输入代码任务，例如：重构登录模块并补上测试")}
       agentLayerLabel="Agent"
       starterItems={starterItems}
       onPromptChange={setPrompt}

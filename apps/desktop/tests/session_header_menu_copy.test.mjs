@@ -39,7 +39,7 @@ test("TestSessionCopyShouldBeMovedToDevDebugPanel", () => {
   assert.match(sessionSource, /## 一、会话概览/);
   assert.match(sessionSource, /## 二、环境与配置/);
   assert.match(sessionSource, /### 2\.1 会话配置/);
-  assert.match(sessionSource, /### 2\.2 项目信息（含结构化项目信息）/);
+  assert.match(sessionSource, /### 2\.2 项目信息（含项目能力）/);
   assert.match(sessionSource, /## 三、会话内容/);
   assert.match(sessionSource, /### 3\.1 会话消息/);
   assert.doesNotMatch(sessionSource, /### 3\.2 AI 原始收发/);
@@ -60,8 +60,8 @@ test("TestSessionCopyShouldBeMovedToDevDebugPanel", () => {
   assert.match(sessionSource, /group\.steps\.map\(\(step\) => renderRunSegment\(step\)\)/);
   assert.match(sessionSource, /group\.steps\.map\(\(step\) => renderRunSegment\(step, "collapsed-"\)\)/);
   assert.match(sessionSource, /const wrapMarkdownCodeFence = \(content: string, language = "text"\) =>/);
-  assert.match(sessionSource, /wrapMarkdownCodeFence\(rawPromptForCopy \|\| "（无）", "text"\)/);
-  assert.match(sessionSource, /wrapMarkdownCodeFence\(responseRaw \|\| "（无）", "text"\)/);
+  assert.match(sessionSource, /wrapMarkdownCodeFence\(rawPromptForCopy \|\| t\("（无）"\), "text"\)/);
+  assert.match(sessionSource, /wrapMarkdownCodeFence\(responseRaw \|\| t\("（无）"\), "text"\)/);
   assert.match(sessionSource, /sessionAiPromptRaw/);
   assert.match(sessionSource, /sessionAiResponseRaw/);
   assert.match(sessionSource, /sessionAiRawByMessage/);
@@ -82,7 +82,11 @@ test("TestSessionCopyShouldBeMovedToDevDebugPanel", () => {
   assert.match(sessionSource, /可使用技能列表/);
   assert.doesNotMatch(sessionSource, /技能（已安装并匹配）/);
   assert.doesNotMatch(sessionSource, /技能（仅 ID，未在已安装列表命中）/);
-  assert.match(sessionSource, /#### 结构化项目信息/);
+  assert.match(sessionSource, /#### 项目能力/);
+  assert.match(sessionSource, /#### 项目知识/);
+  assert.match(sessionSource, /#### 依赖策略/);
+  assert.match(sessionSource, /#### 工具接入/);
+  assert.doesNotMatch(sessionSource, /#### 结构化项目信息/);
   assert.match(sessionSource, /window\.addEventListener\("libra:session-copy-request"/);
   assert.match(sessionSource, /new CustomEvent\("libra:session-copy-result"/);
   assert.match(sessionSource, /会话内容（含过程）已复制/);
@@ -90,7 +94,7 @@ test("TestSessionCopyShouldBeMovedToDevDebugPanel", () => {
   // 描述：
   //
   //   - Dev 调试窗口应承载“复制会话内容”按钮，并仅在打开会话时允许点击。
-  assert.match(devDebugSource, /label="复制会话内容"/);
+  assert.match(devDebugSource, /label=\{t\("复制会话内容"\)\}/);
   assert.match(devDebugSource, /const resolveSessionIdFromLocation = \(\) =>/);
   assert.match(devDebugSource, /const resolveCopyTargetSessionId = \(\) =>/);
   assert.match(devDebugSource, /const copyTargetSessionId = resolveCopyTargetSessionId\(\);/);

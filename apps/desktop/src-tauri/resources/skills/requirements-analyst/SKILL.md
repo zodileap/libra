@@ -1,6 +1,7 @@
 ---
 name: requirements-analyst
-description: 拆解需求、边界条件与可验证验收项。
+description: 拆解需求、边界和验收标准。
+title: 需求分析
 ---
 # 需求分析
 

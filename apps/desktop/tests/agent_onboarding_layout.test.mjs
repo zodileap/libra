@@ -27,7 +27,7 @@ test("TestAgentOnboardingShouldRenderMethodCardsInVerticalOrder", () => {
   //
   //   - 项目接入区应展示“标题 + 两张方式卡片（本地文件夹在上，Git 仓库在下）”的结构。
   assert.match(source, /className=\"desk-project-workspace-onboarding-card\"/);
-  assert.match(source, /<AriTypography variant=\"h4\" value=\"选择项目\" \/>/);
+  assert.match(source, /<AriTypography variant=\"h4\" value=\{t\("选择项目"\)\} \/>/);
   assert.doesNotMatch(source, /value=\"选择接入方式\"/);
   assert.match(source, /className=\"desk-project-workspace-method-list\"/);
   assert.match(source, /className=\"desk-project-workspace-method-card\"/);
@@ -35,23 +35,23 @@ test("TestAgentOnboardingShouldRenderMethodCardsInVerticalOrder", () => {
   assert.match(source, /className=\"desk-project-workspace-method-action\"/);
   assert.match(source, /flexItem=\{\[\{ index: 0, flex: 1, overflow: \"visible\" \}\]\}/);
   assert.match(source, /vertical\s+justify=\"center\"\s+align=\"flex-end\"\s+className=\"desk-project-workspace-method-action\"/s);
-  assert.match(source, /<AriTypography variant=\"body\" value=\"本地文件夹\" \/>/);
-  assert.match(source, /label=\{folderPickLoading \? "打开中\.\.\." : "选择"\}/);
+  assert.match(source, /<AriTypography variant=\"body\" value=\{t\("本地文件夹"\)\} \/>/);
+  assert.match(source, /label=\{folderPickLoading \? t\("打开中\.\.\."\) : t\("选择"\)\}/);
   const infoColorMatches = source.match(/color=\"info\"/g) || [];
   assert.equal(infoColorMatches.length >= 2, true);
-  assert.match(source, /<AriTypography variant=\"body\" value=\"Git 仓库\" \/>/);
-  assert.match(source, /label=\{gitCloneLoading \? "开启中\.\.\." : "开启"\}/);
+  assert.match(source, /<AriTypography variant=\"body\" value=\{t\("Git 仓库"\)\} \/>/);
+  assert.match(source, /label=\{gitCloneLoading \? t\("开启中\.\.\."\) : t\("开启"\)\}/);
   assert.match(source, /className=\"desk-project-workspace-git-input\"/);
   assert.match(source, /className=\"desk-project-workspace-git-input\"[\s\S]*enableHoverFocusEffect=\{false\}/);
   assert.doesNotMatch(source, /desk-project-workspace-link-btn/);
 
-  const localMethodIndex = source.indexOf("value=\"本地文件夹\"");
-  const gitMethodIndex = source.indexOf("value=\"Git 仓库\"");
+  const localMethodIndex = source.indexOf("t(\"本地文件夹\")");
+  const gitMethodIndex = source.indexOf("t(\"Git 仓库\")");
   assert.equal(localMethodIndex >= 0, true);
   assert.equal(gitMethodIndex >= 0, true);
   assert.equal(localMethodIndex < gitMethodIndex, true);
 
-  const gitTitleIndex = source.indexOf("value=\"Git 仓库\"");
+  const gitTitleIndex = source.indexOf("t(\"Git 仓库\")");
   const gitInputIndex = source.indexOf("className=\"desk-project-workspace-git-input\"");
   assert.equal(gitTitleIndex >= 0, true);
   assert.equal(gitInputIndex >= 0, true);

@@ -13,6 +13,7 @@ import {
   AriModal,
   AriTypography,
 } from "aries_react";
+import { useDesktopI18n } from "../shared/i18n";
 
 // 描述：
 //
@@ -169,7 +170,7 @@ export function DeskOverviewCard({
         space={12}
         flexItem={[{ index: 1, flex: 1, overflow: "hidden", minWidth: 0 }]}
       >
-        <AriContainer className="desk-overview-card-icon-wrap" padding={0}>
+        <AriContainer className="desk-overview-card-icon-wrap">
           {icon}
         </AriContainer>
         <AriContainer className="desk-overview-card-content" padding={0}>
@@ -249,6 +250,7 @@ export function DeskOverviewDetailsModal({
   footer,
   onClose,
 }: DeskOverviewDetailsModalProps) {
+  const { t } = useDesktopI18n();
   return (
     <AriModal
       visible={visible}
@@ -258,7 +260,7 @@ export function DeskOverviewDetailsModal({
       footer={
         footer ?? (
           <AriFlex justify="flex-end" align="center" space={8}>
-            <AriButton icon="close" label="关闭" onClick={onClose} />
+            <AriButton icon="close" label={t("关闭")} onClick={onClose} />
           </AriFlex>
         )
       }

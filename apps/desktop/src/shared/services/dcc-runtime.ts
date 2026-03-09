@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { COMMANDS } from "../constants";
+import { translateDesktopText } from "../i18n";
 
 // 描述：
 //
@@ -67,7 +68,7 @@ export function normalizeInvokeErrorDetail(err: unknown): NormalizedInvokeErrorD
             try {
               return JSON.stringify(err);
             } catch (_jsonErr) {
-              return "未知错误";
+              return translateDesktopText("未知错误");
             }
           })();
     return {
@@ -78,7 +79,7 @@ export function normalizeInvokeErrorDetail(err: unknown): NormalizedInvokeErrorD
     };
   }
   return {
-    message: "未知错误",
+    message: translateDesktopText("未知错误"),
     retryable: false,
   };
 }

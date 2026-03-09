@@ -37,6 +37,10 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { listAgentSkills } from "../../modules/common/services";
 import type { AgentSkillItem } from "../../modules/common/services";
 import {
+  listProjectWorkspaceCapabilityManifests,
+  type ProjectWorkspaceCapabilityId,
+} from "../../shared/data";
+import {
   createAgentWorkflowFromTemplate,
   deleteAgentWorkflow,
   getAgentWorkflowById,
@@ -50,6 +54,7 @@ import type {
   WorkflowGraphNode,
   WorkflowGraphNodeType,
 } from "../../shared/workflow";
+import { translateDesktopText, useDesktopI18n } from "../../shared/i18n";
 import { useDesktopHeaderSlot } from "../app-header/header-slot-context";
 import { DeskEmptyState } from "../settings-primitives";
 
@@ -143,8 +148,8 @@ function parseCanvasNodeData(
   const normalizedSkillVersion = String(source.skillVersion || "").trim();
   return {
     title:
-      String(source.title || source.label || "未命名节点").trim() ||
-      "未命名节点",
+      String(source.title || source.label || translateDesktopText("未命名节点")).trim() ||
+      translateDesktopText("未命名节点"),
     description: String(source.description || "").trim(),
     instruction: String(source.instruction || "").trim(),
     type: nodeType,
@@ -258,6 +263,7 @@ function WorkflowCanvasFlowNode({
   data,
   selected,
 }: NodeProps<WorkflowCanvasNode>) {
+  const { t } = useDesktopI18n();
   const parsed = parseCanvasNodeData(data);
   const nodeKind = parseNodeKind(parsed.description);
   const roleLabel = resolveNodeRoleLabel(parsed.type, nodeKind);
@@ -308,7 +314,7 @@ function WorkflowCanvasFlowNode({
               className="desk-workflow-node-head-icon"
               name={roleIcon}
               size="sm"
-              color="var(--z-color-text-brand)"
+              color="var(--desk-workflow-node-accent)"
             />
             <AriTypography
               className="desk-workflow-node-title"
@@ -316,8 +322,8 @@ function WorkflowCanvasFlowNode({
               value={parsed.title}
             />
           </AriFlex>
-          <AriTag bordered size="sm" color="var(--z-color-text-brand)">
-            {roleLabel}
+          <AriTag bordered size="sm" color="var(--desk-workflow-node-accent)">
+            {t(roleLabel)}
           </AriTag>
         </AriFlex>
         <AriContainer
@@ -471,7 +477,7 @@ function resolveNewNodePosition(count: number): { x: number; y: number } {
 function buildSkillSelectOptions(availableSkills: AgentSkillItem[], selectedSkillId: string) {
   const options = availableSkills.map((item) => ({
     value: item.id,
-    label: `${item.name}（${item.id}）`,
+    label: translateDesktopText("{{name}}（{{id}}）", { name: item.name, id: item.id }),
   }));
   const normalizedSkillId = String(selectedSkillId || "").trim();
   if (!normalizedSkillId) {
@@ -498,6 +504,7 @@ function buildSkillSelectOptions(availableSkills: AgentSkillItem[], selectedSkil
 //
 export function WorkflowCanvasPage() {
   const navigate = useNavigate();
+  const { t } = useDesktopI18n();
   const [searchParams] = useSearchParams();
   const preferredWorkflowId = searchParams.get("workflowId") || "";
   const headerSlotElement = useDesktopHeaderSlot();
@@ -510,6 +517,10 @@ export function WorkflowCanvasPage() {
     useState(false);
   const [workflowEditName, setWorkflowEditName] = useState("");
   const [workflowEditDescription, setWorkflowEditDescription] = useState("");
+  const [workflowRequiredCapabilities, setWorkflowRequiredCapabilities] = useState<ProjectWorkspaceCapabilityId[]>([]);
+  const [workflowOptionalCapabilities, setWorkflowOptionalCapabilities] = useState<ProjectWorkspaceCapabilityId[]>([]);
+  const [workflowEditRequiredCapabilities, setWorkflowEditRequiredCapabilities] = useState<ProjectWorkspaceCapabilityId[]>([]);
+  const [workflowEditOptionalCapabilities, setWorkflowEditOptionalCapabilities] = useState<ProjectWorkspaceCapabilityId[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState("");
   const [selectedEdgeId, setSelectedEdgeId] = useState("");
   const [canvasMode, setCanvasMode] = useState<WorkflowCanvasMode>("select");
@@ -543,6 +554,10 @@ export function WorkflowCanvasPage() {
   );
   const workflowReadonly = isReadonlyAgentWorkflow(selectedWorkflow);
   const canEditWorkflow = Boolean(selectedWorkflow) && !workflowReadonly;
+  const workflowCapabilityManifests = useMemo(
+    () => listProjectWorkspaceCapabilityManifests(),
+    [],
+  );
 
   // 描述：
   //
@@ -599,7 +614,7 @@ export function WorkflowCanvasPage() {
       } catch (_err) {
         setAvailableSkills([]);
         AriMessage.warning({
-          content: "加载技能目录失败，稍后重试。",
+          content: t("加载技能目录失败，稍后重试。"),
           duration: 2200,
           showClose: true,
         });
@@ -634,6 +649,16 @@ export function WorkflowCanvasPage() {
       "promptPrefix" in selectedWorkflow
         ? String(selectedWorkflow.promptPrefix || "")
         : "",
+    );
+    setWorkflowRequiredCapabilities(
+      Array.isArray(selectedWorkflow.requiredCapabilities)
+        ? selectedWorkflow.requiredCapabilities
+        : [],
+    );
+    setWorkflowOptionalCapabilities(
+      Array.isArray(selectedWorkflow.optionalCapabilities)
+        ? selectedWorkflow.optionalCapabilities
+        : [],
     );
 
     const graph = selectedWorkflow.graph || { nodes: [], edges: [] };
@@ -725,8 +750,8 @@ export function WorkflowCanvasPage() {
         position,
         className: "desk-workflow-flow-node",
         data: {
-          label: `节点 ${nextIndex}`,
-          title: `节点 ${nextIndex}`,
+          label: t("节点 {{index}}", { index: nextIndex }),
+          title: t("节点 {{index}}", { index: nextIndex }),
           description: "",
           instruction: "",
           nodeType: "action",
@@ -758,9 +783,9 @@ export function WorkflowCanvasPage() {
         position,
         className: "desk-workflow-flow-node",
         data: {
-          label: `技能节点 ${nextIndex}`,
-          title: `技能节点 ${nextIndex}`,
-          description: "绑定并执行指定技能。",
+          label: t("技能节点 {{index}}", { index: nextIndex }),
+          title: t("技能节点 {{index}}", { index: nextIndex }),
+          description: t("绑定并执行指定技能。"),
           instruction: "",
           nodeType: "skill",
           skillId: "",
@@ -864,6 +889,8 @@ export function WorkflowCanvasPage() {
     }
     setWorkflowEditName(workflowName);
     setWorkflowEditDescription(workflowDescription);
+    setWorkflowEditRequiredCapabilities(workflowRequiredCapabilities);
+    setWorkflowEditOptionalCapabilities(workflowOptionalCapabilities);
     setWorkflowEditModalVisible(true);
   };
 
@@ -874,6 +901,46 @@ export function WorkflowCanvasPage() {
     setWorkflowEditModalVisible(false);
     setWorkflowEditName("");
     setWorkflowEditDescription("");
+    setWorkflowEditRequiredCapabilities([]);
+    setWorkflowEditOptionalCapabilities([]);
+  };
+
+  // 描述：
+  //
+  //   - 切换编辑弹窗内的项目能力归属，保持“必需/可选”互斥，便于工作流声明依赖能力。
+  //
+  // Params:
+  //
+  //   - capabilityId: 目标项目能力 ID。
+  //   - targetBucket: 目标能力分组。
+  const toggleWorkflowEditCapability = (
+    capabilityId: ProjectWorkspaceCapabilityId,
+    targetBucket: "required" | "optional",
+  ) => {
+    if (workflowReadonly) {
+      return;
+    }
+
+    if (targetBucket === "required") {
+      setWorkflowEditRequiredCapabilities((current) =>
+        current.includes(capabilityId)
+          ? current.filter((item) => item !== capabilityId)
+          : [...current, capabilityId],
+      );
+      setWorkflowEditOptionalCapabilities((current) =>
+        current.filter((item) => item !== capabilityId),
+      );
+      return;
+    }
+
+    setWorkflowEditOptionalCapabilities((current) =>
+      current.includes(capabilityId)
+        ? current.filter((item) => item !== capabilityId)
+        : [...current, capabilityId],
+    );
+    setWorkflowEditRequiredCapabilities((current) =>
+      current.filter((item) => item !== capabilityId),
+    );
   };
 
   // 描述：
@@ -887,7 +954,7 @@ export function WorkflowCanvasPage() {
     const trimmedName = workflowEditName.trim();
     if (!trimmedName) {
       AriMessage.warning({
-        content: "工作流名称不能为空。",
+        content: t("工作流名称不能为空。"),
         duration: 2200,
         showClose: true,
       });
@@ -895,6 +962,8 @@ export function WorkflowCanvasPage() {
     }
     setWorkflowName(trimmedName);
     setWorkflowDescription(workflowEditDescription.trim());
+    setWorkflowRequiredCapabilities(workflowEditRequiredCapabilities);
+    setWorkflowOptionalCapabilities(workflowEditOptionalCapabilities);
     closeWorkflowEditModal();
   };
 
@@ -908,7 +977,7 @@ export function WorkflowCanvasPage() {
     const deleted = deleteAgentWorkflow(selectedWorkflow.id);
     if (!deleted) {
       AriMessage.warning({
-        content: "当前工作流不支持删除。",
+        content: t("当前工作流不支持删除。"),
         duration: 2200,
         showClose: true,
       });
@@ -918,7 +987,7 @@ export function WorkflowCanvasPage() {
     setSelectedEdgeId("");
     refreshWorkflows();
     AriMessage.success({
-      content: "工作流已删除。",
+      content: t("工作流已删除。"),
       duration: 2200,
       showClose: true,
     });
@@ -934,7 +1003,7 @@ export function WorkflowCanvasPage() {
     const copied = createAgentWorkflowFromTemplate(selectedWorkflow.id);
     refreshWorkflows();
     AriMessage.success({
-      content: `已复制 ${selectedWorkflow.name}`,
+      content: t("已复制 {{name}}", { name: selectedWorkflow.name }),
       duration: 1800,
       showClose: true,
     });
@@ -950,11 +1019,11 @@ export function WorkflowCanvasPage() {
     [availableSkills, selectedNodeData?.skillId],
   );
   const workflowInfoName =
-    workflowName.trim() || selectedWorkflow?.name || "未命名工作流";
+    workflowName.trim() || selectedWorkflow?.name || t("未命名工作流");
   const workflowInfoDescription =
-    workflowDescription.trim() || selectedWorkflow?.description || "未填写说明";
+    workflowDescription.trim() || selectedWorkflow?.description || t("未填写说明");
   const workflowInfoVersion = selectedWorkflow?.version || 0;
-  const workflowInfoModeText = workflowReadonly ? "只读模板" : "可编辑";
+  const workflowInfoModeText = workflowReadonly ? t("只读模板") : t("可编辑");
   const hasPendingWorkflowChanges = useMemo(() => {
     if (!selectedWorkflow) {
       return false;
@@ -987,6 +1056,20 @@ export function WorkflowCanvasPage() {
       return true;
     }
 
+    if (
+      JSON.stringify(workflowRequiredCapabilities)
+      !== JSON.stringify(selectedWorkflow.requiredCapabilities || [])
+    ) {
+      return true;
+    }
+
+    if (
+      JSON.stringify(workflowOptionalCapabilities)
+      !== JSON.stringify(selectedWorkflow.optionalCapabilities || [])
+    ) {
+      return true;
+    }
+
     const currentGraph = selectedWorkflow.graph || { nodes: [], edges: [] };
     return JSON.stringify(workflowGraph) !== JSON.stringify(currentGraph);
   }, [
@@ -994,7 +1077,9 @@ export function WorkflowCanvasPage() {
     workflowDescription,
     workflowGraph,
     workflowName,
+    workflowOptionalCapabilities,
     workflowPromptPrefix,
+    workflowRequiredCapabilities,
   ]);
 
   // 描述：
@@ -1016,6 +1101,8 @@ export function WorkflowCanvasPage() {
         name: trimmedName,
         description: workflowDescription.trim(),
         promptPrefix: workflowPromptPrefix.trim(),
+        requiredCapabilities: workflowRequiredCapabilities,
+        optionalCapabilities: workflowOptionalCapabilities,
         graph: workflowGraph,
         version: selectedWorkflow.version + 1,
       });
@@ -1033,7 +1120,9 @@ export function WorkflowCanvasPage() {
     workflowDescription,
     workflowGraph,
     workflowName,
+    workflowOptionalCapabilities,
     workflowPromptPrefix,
+    workflowRequiredCapabilities,
   ]);
 
   // 描述：
@@ -1062,12 +1151,12 @@ export function WorkflowCanvasPage() {
         ? [
             {
               key: "delete",
-              label: "删除",
+              label: t("删除"),
               icon: "delete",
             },
           ]
         : [],
-    [canEditWorkflow, contextTarget?.id],
+    [canEditWorkflow, contextTarget?.id, t],
   );
 
   const workflowHeaderNode = (
@@ -1095,7 +1184,10 @@ export function WorkflowCanvasPage() {
           <AriTypography
             className="desk-workflow-head-subtitle"
             variant="caption"
-            value={`工作流 · ${workflowInfoDescription} · v${workflowInfoVersion}`}
+            value={t("工作流 · {{description}} · v{{version}}", {
+              description: workflowInfoDescription,
+              version: workflowInfoVersion,
+            })}
           />
         </AriFlex>
         <AriFlex
@@ -1105,14 +1197,14 @@ export function WorkflowCanvasPage() {
         >
           <AriButton
             type="text"
-            icon={workflowReadonly ? "folder" : "edit"}
-            aria-label={workflowReadonly ? "查看工作流" : "编辑工作流"}
+            icon="edit"
+            aria-label={workflowReadonly ? t("查看工作流") : t("编辑工作流")}
             onClick={openWorkflowEditModal}
           />
           <AriButton
             type="text"
             icon="content_copy"
-            aria-label="复制工作流"
+            aria-label={t("复制工作流")}
             onClick={duplicateCurrentWorkflow}
           />
           {canEditWorkflow ? (
@@ -1121,7 +1213,7 @@ export function WorkflowCanvasPage() {
               color="danger"
               ghost
               icon="delete"
-              aria-label="删除工作流"
+              aria-label={t("删除工作流")}
               onClick={deleteCurrentWorkflow}
             />
           ) : null}
@@ -1141,22 +1233,22 @@ export function WorkflowCanvasPage() {
         : null}
       {!selectedWorkflow ? (
         <AriContainer className="desk-settings-shell">
-          <DeskEmptyState title="未选择工作流" description="请先从工作流面板或侧边栏选择一个工作流。" />
+          <DeskEmptyState title={t("未选择工作流")} description={t("请先从工作流面板或侧边栏选择一个工作流。")} />
         </AriContainer>
       ) : null}
       {selectedWorkflow ? (
         <>
           <AriModal
             visible={workflowEditModalVisible}
-            title={workflowReadonly ? "查看工作流" : "编辑工作流"}
+            title={workflowReadonly ? t("查看工作流") : t("编辑工作流")}
             onClose={closeWorkflowEditModal}
             footer={
               <AriFlex justify="flex-end" align="center" space={8}>
-                <AriButton label={workflowReadonly ? "关闭" : "取消"} onClick={closeWorkflowEditModal} />
+                <AriButton label={workflowReadonly ? t("关闭") : t("取消")} onClick={closeWorkflowEditModal} />
                 {workflowReadonly ? null : (
                   <AriButton
                     color="brand"
-                    label="确定"
+                    label={t("确定")}
                     onClick={confirmWorkflowEdit}
                   />
                 )}
@@ -1164,21 +1256,81 @@ export function WorkflowCanvasPage() {
             }
           >
             <AriForm layout="vertical" labelAlign="left" density="compact">
-              <AriFormItem label="工作流名称" name="workflow.edit.name">
+              <AriFormItem label={t("工作流名称")} name="workflow.edit.name">
                 <AriInput
                   value={workflowEditName}
                   onChange={setWorkflowEditName}
                   disabled={workflowReadonly}
-                  placeholder="请输入工作流名称"
+                  placeholder={t("请输入工作流名称")}
                 />
               </AriFormItem>
-              <AriFormItem label="工作流说明" name="workflow.edit.description">
+              <AriFormItem label={t("工作流说明")} name="workflow.edit.description">
                 <AriInput
                   value={workflowEditDescription}
                   onChange={setWorkflowEditDescription}
                   disabled={workflowReadonly}
-                  placeholder="请输入工作流说明"
+                  placeholder={t("请输入工作流说明")}
                 />
+              </AriFormItem>
+              <AriFormItem label={t("必需项目能力")} name="workflow.edit.requiredCapabilities">
+                <AriFlex direction="column" space={8}>
+                  {workflowCapabilityManifests.map((item) => {
+                    const selected = workflowEditRequiredCapabilities.includes(item.id);
+                    return (
+                      <AriFlex
+                        key={`workflow-required-${item.id}`}
+                        align="center"
+                        justify="space-between"
+                        space={8}
+                      >
+                        <AriContainer padding={0}>
+                          <AriTypography variant="body" value={item.title} />
+                          <AriTypography variant="caption" value={item.description} />
+                        </AriContainer>
+                        <AriButton
+                          icon="check"
+                          label={selected ? t("已设为必需") : t("设为必需")}
+                          color={selected ? "brand" : "default"}
+                          ghost={!selected}
+                          disabled={workflowReadonly}
+                          onClick={() => {
+                            toggleWorkflowEditCapability(item.id, "required");
+                          }}
+                        />
+                      </AriFlex>
+                    );
+                  })}
+                </AriFlex>
+              </AriFormItem>
+              <AriFormItem label={t("可选项目能力")} name="workflow.edit.optionalCapabilities">
+                <AriFlex direction="column" space={8}>
+                  {workflowCapabilityManifests.map((item) => {
+                    const selected = workflowEditOptionalCapabilities.includes(item.id);
+                    return (
+                      <AriFlex
+                        key={`workflow-optional-${item.id}`}
+                        align="center"
+                        justify="space-between"
+                        space={8}
+                      >
+                        <AriContainer padding={0}>
+                          <AriTypography variant="body" value={item.title} />
+                          <AriTypography variant="caption" value={item.description} />
+                        </AriContainer>
+                        <AriButton
+                          icon="add"
+                          label={selected ? t("已设为可选") : t("设为可选")}
+                          color={selected ? "brand" : "default"}
+                          ghost={!selected}
+                          disabled={workflowReadonly}
+                          onClick={() => {
+                            toggleWorkflowEditCapability(item.id, "optional");
+                          }}
+                        />
+                      </AriFlex>
+                    );
+                  })}
+                </AriFlex>
               </AriFormItem>
             </AriForm>
           </AriModal>
@@ -1380,7 +1532,7 @@ export function WorkflowCanvasPage() {
                         color="danger"
                         icon="delete"
                         ghost
-                        aria-label="删除该节点"
+                        aria-label={t("删除该节点")}
                         disabled={!canEditWorkflow}
                         onClick={deleteSelectedNode}
                       />
@@ -1394,30 +1546,30 @@ export function WorkflowCanvasPage() {
                     density="compact"
                     maxWidth="100%"
                   >
-                    <AriFormItem label="节点名称" name="selectedNode.title">
+                    <AriFormItem label={t("节点名称")} name="selectedNode.title">
                       <AriInput
                         value={selectedNodeData.title}
                         disabled={!canEditWorkflow}
                         onChange={(value: string) => patchSelectedNode({ title: value })}
-                        placeholder="请输入节点名称"
+                        placeholder={t("请输入节点名称")}
                       />
                     </AriFormItem>
-                    <AriFormItem label="节点说明" name="selectedNode.description">
+                    <AriFormItem label={t("节点说明")} name="selectedNode.description">
                       <AriInput
                         value={selectedNodeData.description}
                         disabled={!canEditWorkflow}
                         onChange={(value: string) =>
                           patchSelectedNode({ description: value })
                         }
-                        placeholder="请输入节点说明"
+                        placeholder={t("请输入节点说明")}
                       />
                     </AriFormItem>
-                    <AriFormItem label="节点类型" name="selectedNode.type">
+                    <AriFormItem label={t("节点类型")} name="selectedNode.type">
                       <AriFlex className="desk-workflow-node-type-switch" align="center" space={8}>
                         <AriButton
                           size="sm"
                           icon="folder"
-                          label="动作"
+                          label={t("动作")}
                           color={selectedNodeType === "action" ? "brand" : "default"}
                           ghost={selectedNodeType !== "action"}
                           disabled={!canEditWorkflow}
@@ -1430,7 +1582,7 @@ export function WorkflowCanvasPage() {
                         <AriButton
                           size="sm"
                           icon="new_releases"
-                          label="技能"
+                          label={t("技能")}
                           color={selectedNodeType === "skill" ? "brand" : "default"}
                           ghost={selectedNodeType !== "skill"}
                           disabled={!canEditWorkflow}
@@ -1444,14 +1596,14 @@ export function WorkflowCanvasPage() {
                     </AriFormItem>
                     {selectedNodeType === "skill" ? (
                       <>
-                        <AriFormItem label="技能编码" name="selectedNode.skillId">
+                        <AriFormItem label={t("技能编码")} name="selectedNode.skillId">
                           <AriSelect
                             value={selectedNodeData.skillId || undefined}
                             options={skillSelectOptions}
                             searchable
                             allowClear
                             disabled={!canEditWorkflow}
-                            placeholder="请选择技能"
+                            placeholder={t("请选择技能")}
                             onChange={(value: unknown) => {
                               const selectedSkillId = typeof value === "string"
                                 ? value
@@ -1469,14 +1621,14 @@ export function WorkflowCanvasPage() {
                         </AriFormItem>
                       </>
                     ) : null}
-                    <AriFormItem label="指令" name="selectedNode.instruction">
+                    <AriFormItem label={t("指令")} name="selectedNode.instruction">
                       <AriInput.TextArea
                         value={selectedNodeData.instruction || ""}
                         disabled={!canEditWorkflow}
                         onChange={(value: string) =>
                           patchSelectedNode({ instruction: value })
                         }
-                        placeholder="请输入该节点命中后的 AI 提示词"
+                        placeholder={t("请输入该节点命中后的 AI 提示词")}
                         rows={3}
                         autoSize={{ minRows: 3, maxRows: 8 }}
                       />

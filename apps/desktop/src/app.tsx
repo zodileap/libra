@@ -44,6 +44,12 @@ import {
 	defaultServiceUrl,
 	STORAGE_KEYS,
 } from "./shared/constants";
+import {
+	DesktopI18nProvider,
+	translateDesktopText,
+	useDesktopI18nController,
+} from "./shared/i18n";
+
 // 描述：
 //
 //   - 为 Desktop HashRouter 显式启用 React Router v7 兼容行为，避免开发期 Future Flag 告警，同时提前对齐后续升级语义。
@@ -122,15 +128,19 @@ interface DesktopSetupGateState {
 //   - 面向用户的提示文案。
 function buildSetupGateMessage(status: SetupStatus): string {
 	if (status.lastError) {
-		return `系统尚未完成初始化，最近一次安装错误：${status.lastError}`;
+		return translateDesktopText("系统尚未完成初始化，最近一次安装错误：{{error}}", {
+			error: status.lastError,
+		});
 	}
 	if (status.accountAvailable === false) {
-		return "系统尚未完成初始化，account 服务当前不可用，请先启动 account 和 setup 服务。";
+		return translateDesktopText("系统尚未完成初始化，account 服务当前不可用，请先启动 account 和 setup 服务。");
 	}
 	if (status.currentStep) {
-		return `系统尚未完成初始化，请继续执行 ${status.currentStep} 步骤。`;
+		return translateDesktopText("系统尚未完成初始化，请继续执行 {{step}} 步骤。", {
+			step: status.currentStep,
+		});
 	}
-	return "系统尚未完成初始化，请先在 Web 完成安装向导。";
+	return translateDesktopText("系统尚未完成初始化，请先在 Web 完成安装向导。");
 }
 
 // 描述：
@@ -353,14 +363,16 @@ const appConfig = setAppConfig({
 //
 //   - 渲染桌面端应用根组件，负责认证恢复、主题同步与全局能力注入。
 export default function App() {
+	const desktopI18n = useDesktopI18nController();
+	const { t, formatDateTime } = desktopI18n;
 	// 描述：桌面端启动前的初始化状态检测结果；未完成安装时用于阻断登录入口。
 	const [desktopSetupGate, setDesktopSetupGate] = useState<DesktopSetupGateState>({
 		checking: hasEnabledDesktopBackend(readDesktopBackendConfig()),
 		installed: hasEnabledDesktopBackend(readDesktopBackendConfig()) ? null : true,
 		setupUrl: buildDesktopWebSetupUrl(readDesktopBackendConfig()),
 		message: hasEnabledDesktopBackend(readDesktopBackendConfig())
-			? "正在检查系统初始化状态..."
-			: "当前未接入后端，Desktop 将使用本地模式运行。",
+			? t("正在检查系统初始化状态...")
+			: t("当前未接入后端，Desktop 将使用本地模式运行。"),
 		currentStep: "",
 		systemName: "",
 	});
@@ -424,7 +436,7 @@ export default function App() {
 	});
 	// 描述：AI Provider 配置与启用状态列表。
 	const [aiKeys, setAiKeys] = useState<AiKeyItem[]>(() => {
-		const now = new Date().toLocaleString("zh-CN", {
+		const now = formatDateTime(new Date(), {
 			month: "2-digit",
 			day: "2-digit",
 			hour: "2-digit",
@@ -447,7 +459,7 @@ export default function App() {
 		currentVersion: "",
 		targetVersion: "",
 		progress: 0,
-		message: "尚未检查更新",
+		message: t("尚未检查更新"),
 		downloadPath: "",
 	});
 	// 描述：标记更新检查进行中，避免并发触发重复下载。
@@ -516,7 +528,7 @@ export default function App() {
 				checking: true,
 				installed: null,
 				setupUrl: buildDesktopWebSetupUrl(saved),
-				message: "正在检查系统初始化状态...",
+				message: t("正在检查系统初始化状态..."),
 				currentStep: "",
 				systemName: "",
 			});
@@ -530,13 +542,13 @@ export default function App() {
 				checking: false,
 				installed: true,
 				setupUrl: buildDesktopWebSetupUrl(saved),
-				message: "当前未接入后端，Desktop 将使用本地模式运行。",
+				message: t("当前未接入后端，Desktop 将使用本地模式运行。"),
 				currentStep: "",
 				systemName: "",
 			});
 		}
 		return saved;
-	}, [updateSelectedIdentity]);
+	}, [t, updateSelectedIdentity]);
 
 	// 描述：将桌面端后端接入配置恢复为默认值，便于快速回退到纯本地模式。
 	const restoreBackendConfig = useCallback(() => {
@@ -549,12 +561,12 @@ export default function App() {
 			checking: false,
 			installed: true,
 			setupUrl: buildDesktopWebSetupUrl(restored),
-			message: "当前未接入后端，Desktop 将使用本地模式运行。",
+			message: t("当前未接入后端，Desktop 将使用本地模式运行。"),
 			currentStep: "",
 			systemName: "",
 		});
 		return restored;
-	}, [updateSelectedIdentity]);
+	}, [t, updateSelectedIdentity]);
 
 	// 描述：按指定后端配置检查 setup 服务安装状态；未完成安装时仅提示用户去初始化，仍允许切回本地模式。
 	const refreshDesktopSetupGateByConfig = useCallback(async (config: DesktopBackendConfig) => {
@@ -563,7 +575,7 @@ export default function App() {
 				checking: false,
 				installed: true,
 				setupUrl: buildDesktopWebSetupUrl(config),
-				message: "当前未接入后端，Desktop 将使用本地模式运行。",
+				message: t("当前未接入后端，Desktop 将使用本地模式运行。"),
 				currentStep: "",
 				systemName: "",
 			});
@@ -573,7 +585,7 @@ export default function App() {
 		setDesktopSetupGate((prev) => ({
 			...prev,
 			checking: true,
-			message: "正在检查系统初始化状态...",
+			message: t("正在检查系统初始化状态..."),
 			setupUrl: buildDesktopWebSetupUrl(config),
 		}));
 
@@ -585,7 +597,7 @@ export default function App() {
 					checking: false,
 					installed: true,
 					setupUrl: nextSetupUrl,
-					message: "系统初始化已完成。",
+					message: t("系统初始化已完成。"),
 					currentStep: status.currentStep || "",
 					systemName: status.systemConfig?.systemName || "",
 				});
@@ -607,11 +619,11 @@ export default function App() {
 				checking: false,
 				installed: false,
 				setupUrl: buildDesktopWebSetupUrl(config),
-				message: `初始化状态检查失败：${detail}`,
+				message: t("初始化状态检查失败：{{detail}}", { detail }),
 			}));
 			console.warn("check setup status failed:", err);
 		}
-	}, []);
+	}, [t]);
 
 	// 描述：使用当前后端配置重新检查 setup 服务状态；本地模式下直接跳过远端初始化检测。
 	const refreshDesktopSetupGate = useCallback(async () => {
@@ -749,8 +761,8 @@ export default function App() {
 					const popupKey = `${health.available}-${health.outdated}-${health.version}-${health.minimum_version}-${health.bin_path}`;
 					if (!codexPopupShownRef.current.has(popupKey) && (!health.available || health.outdated)) {
 						codexPopupShownRef.current.add(popupKey);
-						const updateHint = "建议执行：pnpm add -g @openai/codex@latest";
-						const detail = health.bin_path ? `\n当前路径：${health.bin_path}` : "";
+						const updateHint = t("建议执行：pnpm add -g @openai/codex@latest");
+						const detail = health.bin_path ? `\n${t("当前路径：{{path}}", { path: health.bin_path })}` : "";
 						AriMessage.warning({
 							content: `${health.message}${detail}\n${updateHint}`,
 							duration: 5000,
@@ -761,14 +773,14 @@ export default function App() {
 					if (disposed) {
 						return;
 					}
-					const popupKey = `codex-check-error:${String(err)}`;
-					if (!codexPopupShownRef.current.has(popupKey)) {
-						codexPopupShownRef.current.add(popupKey);
-						AriMessage.error({
-							content: `Codex CLI 检测失败：${String(err)}`,
-							duration: 5000,
-							showClose: true,
-						});
+						const popupKey = `codex-check-error:${String(err)}`;
+						if (!codexPopupShownRef.current.has(popupKey)) {
+							codexPopupShownRef.current.add(popupKey);
+							AriMessage.error({
+								content: t("Codex CLI 检测失败：{{error}}", { error: String(err) }),
+								duration: 5000,
+								showClose: true,
+							});
 					}
 				}
 			}
@@ -782,9 +794,12 @@ export default function App() {
 					const popupKey = `${health.available}-${health.outdated}-${health.version}-${health.minimum_version}-${health.bin_path}`;
 					if (!geminiCliPopupShownRef.current.has(popupKey) && (!health.available || health.outdated)) {
 						geminiCliPopupShownRef.current.add(popupKey);
-						const detail = health.bin_path ? `\n当前路径：${health.bin_path}` : "";
+						const detail = health.bin_path ? `\n${t("当前路径：{{path}}", { path: health.bin_path })}` : "";
 						AriMessage.warning({
-							content: `Gemini CLI 检测异常：${health.message}${detail}`,
+							content: t("Gemini CLI 检测异常：{{message}}{{detail}}", {
+								message: health.message,
+								detail,
+							}),
 							duration: 5000,
 							showClose: true,
 						});
@@ -793,14 +808,14 @@ export default function App() {
 					if (disposed) {
 						return;
 					}
-					const popupKey = `gemini-cli-check-error:${String(err)}`;
-					if (!geminiCliPopupShownRef.current.has(popupKey)) {
-						geminiCliPopupShownRef.current.add(popupKey);
-						AriMessage.error({
-							content: `Gemini CLI 检测失败：${String(err)}`,
-							duration: 5000,
-							showClose: true,
-						});
+						const popupKey = `gemini-cli-check-error:${String(err)}`;
+						if (!geminiCliPopupShownRef.current.has(popupKey)) {
+							geminiCliPopupShownRef.current.add(popupKey);
+							AriMessage.error({
+								content: t("Gemini CLI 检测失败：{{error}}", { error: String(err) }),
+								duration: 5000,
+								showClose: true,
+							});
 					}
 				}
 			}
@@ -811,7 +826,7 @@ export default function App() {
 		return () => {
 			disposed = true;
 		};
-	}, [aiKeys]);
+	}, [aiKeys, t]);
 
 	// 描述：轮询 Tauri 更新状态并同步到前端。
 	const syncDesktopUpdateState = useCallback(async () => {
@@ -834,7 +849,7 @@ export default function App() {
 			setDesktopUpdateState((prev) => ({
 				...prev,
 				status: "idle",
-				message: "当前为本地模式，未接入后端更新服务。",
+				message: t("当前为本地模式，未接入后端更新服务。"),
 			}));
 			return;
 		}
@@ -848,7 +863,7 @@ export default function App() {
 				...prev,
 				status: "checking",
 				currentVersion: runtimeInfo.current_version,
-				message: "正在检查更新...",
+				message: t("正在检查更新..."),
 			}));
 
 			const update = await requestDesktopUpdateCheck({
@@ -866,8 +881,8 @@ export default function App() {
 					targetVersion: update.latestVersion || "",
 					progress: 0,
 					message: update.latestVersion
-						? "当前已是最新版本"
-						: "未配置可用更新源",
+						? t("当前已是最新版本")
+						: t("未配置可用更新源"),
 					downloadPath: "",
 				});
 				return;
@@ -897,17 +912,17 @@ export default function App() {
 			setDesktopUpdateState((prev) => ({
 				...prev,
 				status: "failed",
-				message: "更新检查失败，请稍后重试。",
+				message: t("更新检查失败，请稍后重试。"),
 			}));
 			AriMessage.warning({
-				content: "更新检查失败，请稍后重试。",
+				content: t("更新检查失败，请稍后重试。"),
 				duration: 2800,
 			});
 			console.warn("check desktop update failed:", err);
 		} finally {
 			checkingDesktopUpdateRef.current = false;
 		}
-	}, [backendEnabled, stopDesktopUpdatePolling, syncDesktopUpdateState]);
+	}, [backendEnabled, stopDesktopUpdatePolling, syncDesktopUpdateState, t]);
 
 	// 描述：触发桌面端安装更新（打开系统安装器）。
 	const installDesktopUpdate = useCallback(async () => {
@@ -918,16 +933,16 @@ export default function App() {
 			);
 			setDesktopUpdateState(mapDesktopUpdateStateResponse(payload));
 			AriMessage.success({
-				content: payload.message || "已启动更新安装器，请按系统提示完成更新。",
+				content: payload.message || t("已启动更新安装器，请按系统提示完成更新。"),
 				duration: 3200,
 			});
 		} catch (_err) {
 			AriMessage.warning({
-				content: "启动安装失败，请重新下载更新包后重试。",
+				content: t("启动安装失败，请重新下载更新包后重试。"),
 				duration: 3000,
 			});
 		}
-	}, []);
+	}, [t]);
 
 	// 描述：打开 Web 初始化页，便于用户在未安装状态下直接进入浏览器完成 setup。
 	const openDesktopSetupUrl = useCallback(async () => {
@@ -935,11 +950,11 @@ export default function App() {
 			await invoke<boolean>("open_external_url", { url: desktopSetupGate.setupUrl });
 		} catch (_err) {
 			AriMessage.warning({
-				content: "无法打开浏览器，请手动访问初始化地址完成安装。",
+				content: t("无法打开浏览器，请手动访问初始化地址完成安装。"),
 				duration: 3000,
 			});
 		}
-	}, [desktopSetupGate.setupUrl]);
+	}, [desktopSetupGate.setupUrl, t]);
 
 	useEffect(() => {
 		if (!backendEnabled || !user) {
@@ -984,15 +999,17 @@ export default function App() {
 				);
 				AriMessage.success({
 					content: nextSelectedIdentity
-						? `登录成功，当前身份已切换为 ${nextSelectedIdentity.scopeName}。`
-						: "登录成功。",
+						? t("登录成功，当前身份已切换为 {{scopeName}}。", {
+							scopeName: nextSelectedIdentity.scopeName,
+						})
+						: t("登录成功。"),
 					duration: 2600,
 				});
 			},
 			logout: async () => {
 				if (!backendEnabled) {
 					AriMessage.info({
-						content: "当前为本地模式，可在设置中接入后端服务。",
+						content: t("当前为本地模式，可在设置中接入后端服务。"),
 						duration: 2400,
 					});
 					return;
@@ -1037,6 +1054,7 @@ export default function App() {
 			restoreBackendConfig,
 			updateSelectedIdentity,
 			backendEnabled,
+			t,
 		]
 	);
 	// 描述：仅在已启用后端且初始化未完成时显示初始化引导页；未接入后端时直接进入本地模式。
@@ -1044,25 +1062,27 @@ export default function App() {
 
 	return (
 		<StrictMode>
-			<AriApp appConfig={appConfig}>
-				{shouldShowSetupGate ? (
-					<SetupRequiredPage
-						checking={desktopSetupGate.checking}
-						setupUrl={desktopSetupGate.setupUrl}
-						message={desktopSetupGate.message}
-						currentStep={desktopSetupGate.currentStep}
-						systemName={desktopSetupGate.systemName}
-						backendConfig={backendConfig}
-						onOpenSetup={openDesktopSetupUrl}
-						onUseLocalMode={switchToLocalDesktopMode}
-						onSaveBackendConfig={saveSetupGateBackendConfig}
-					/>
-				) : (
-					<HashRouter future={desktopRouterFuture}>
-						<DesktopRouter auth={auth} />
-					</HashRouter>
-				)}
-			</AriApp>
+			<DesktopI18nProvider value={desktopI18n}>
+				<AriApp appConfig={appConfig}>
+					{shouldShowSetupGate ? (
+						<SetupRequiredPage
+							checking={desktopSetupGate.checking}
+							setupUrl={desktopSetupGate.setupUrl}
+							message={desktopSetupGate.message}
+							currentStep={desktopSetupGate.currentStep}
+							systemName={desktopSetupGate.systemName}
+							backendConfig={backendConfig}
+							onOpenSetup={openDesktopSetupUrl}
+							onUseLocalMode={switchToLocalDesktopMode}
+							onSaveBackendConfig={saveSetupGateBackendConfig}
+						/>
+					) : (
+						<HashRouter future={desktopRouterFuture}>
+							<DesktopRouter auth={auth} />
+						</HashRouter>
+					)}
+				</AriApp>
+			</DesktopI18nProvider>
 		</StrictMode>
 	);
 }

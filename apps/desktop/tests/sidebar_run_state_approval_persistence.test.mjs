@@ -40,9 +40,9 @@ test("TestSidebarRunStateShouldPreserveApprovalAcrossNavigation", () => {
   //
   //   - 侧边栏应保留 require_approval 片段与关键 data，确保切页返回后仍可审批。
   assert.match(sidebarSource, /if \(payload\.kind === STREAM_KINDS\.REQUIRE_APPROVAL\) \{/);
-  assert.match(sidebarSource, /intro: "需要人工授权"/);
-  assert.match(sidebarSource, /const approvalToolName = String\(data\.tool_name \|\| ""\)\.trim\(\) \|\| "高危操作";/);
-  assert.match(sidebarSource, /step: `正在请求执行 \$\{approvalToolName\}`/);
+  assert.match(sidebarSource, /intro: t\("需要人工授权"\)/);
+  assert.match(sidebarSource, /const approvalToolName = String\(data\.tool_name \|\| ""\)\.trim\(\) \|\| t\("高危操作"\);/);
+  assert.match(sidebarSource, /step: t\("正在请求执行 \{\{tool\}\}", \{ tool: approvalToolName \}\)/);
   assert.match(sidebarSource, /buildApprovalSegmentData\(payload\)/);
   assert.match(sidebarSource, /const APPROVAL_TOOL_ARGS_PREVIEW_MAX_CHARS = 2000;/);
 
@@ -54,7 +54,7 @@ test("TestSidebarRunStateShouldPreserveApprovalAcrossNavigation", () => {
   assert.match(sidebarSource, /if \(!shouldResolveApprovalPending\) \{\s*return item;\s*\}/s);
   assert.match(sidebarSource, /incomingSegmentKind === STREAM_KINDS\.TOOL_CALL_FINISHED/);
   assert.match(sidebarSource, /incomingErrorCode === "core\.agent\.human_refused"/);
-  assert.match(sidebarSource, /step: `已拒绝 \$\{toolName \|\| "该工具"\} 的执行请求。`/);
+  assert.match(sidebarSource, /step: t\("已拒绝 \{\{tool\}\} 的执行请求。", \{ tool: toolName \|\| t\("该工具"\) \}\)/);
   assert.match(sidebarSource, /__step_type: "approval_decision"/);
   assert.match(sidebarSource, /approval_decision: "rejected"/);
   assert.match(sidebarSource, /approval_decision: "handled"/);

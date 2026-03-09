@@ -55,6 +55,17 @@
   --desk-workflow-card-padding: var(--z-inset);
   --desk-workflow-card-border: color-mix(in srgb, var(--z-color-primary) 24%, var(--z-color-border-glass));
   --desk-workflow-muted-text: color-mix(in srgb, var(--z-color-text) 74%, var(--z-color-border-glass));
+  --desk-workflow-node-surface: color-mix(in srgb, var(--desk-container-bg) 90%, var(--z-color-bg-tertiary));
+  --desk-workflow-node-surface-active: color-mix(in srgb, var(--z-color-bg-active) 72%, var(--desk-container-bg));
+  --desk-workflow-node-head-surface: color-mix(in srgb, var(--z-color-bg-active) 22%, var(--z-color-bg-tertiary));
+  --desk-workflow-node-head-surface-active: color-mix(in srgb, var(--z-color-bg-active) 44%, var(--z-color-bg-tertiary));
+  --desk-workflow-node-content-surface: color-mix(in srgb, var(--z-color-use-bg) 88%, var(--z-color-bg-subtle));
+  --desk-workflow-node-content-surface-active: color-mix(in srgb, var(--z-color-bg-active) 18%, var(--z-color-use-bg));
+  --desk-workflow-node-border: color-mix(in srgb, var(--z-color-border-brand) 24%, var(--z-color-border-glass));
+  --desk-workflow-node-border-active: color-mix(in srgb, var(--z-color-border-active) 68%, var(--z-color-border-glass));
+  --desk-workflow-node-head-border: color-mix(in srgb, var(--z-color-border-brand) 28%, var(--z-color-border-glass));
+  --desk-workflow-node-head-border-active: color-mix(in srgb, var(--z-color-border-active) 34%, var(--z-color-border-glass));
+  --desk-workflow-node-accent: var(--z-color-text-brand);
   --desk-workflow-summary-min-width: calc(var(--z-inset) * 8.5);
   --desk-workflow-toolbar-min-height: calc(var(--z-inset) * 4.5);
   --desk-workflow-sidebar-width: calc(var(--z-inset) * 21);
@@ -62,8 +73,15 @@
   --desk-workflow-stage-padding: var(--z-inset);
   --desk-sidebar-entry-hover-bg: var(--desk-container-bg);
   --desk-sidebar-entry-hover-border: var(--z-color-border-brand);
+  --desk-user-menu-width: calc(var(--z-inset) * 18);
+  --desk-user-menu-padding: var(--z-inset-sm);
+  --desk-user-menu-gap: var(--z-inset-sm);
+  --desk-user-menu-meta-color: color-mix(in srgb, var(--z-color-text) 68%, var(--z-color-border-glass));
   --desk-admin-card-active-border: color-mix(in srgb, var(--z-color-border-active) 62%, var(--z-color-border-glass));
   --desk-admin-card-active-shadow: var(--z-color-box-shadow);
+  --desk-ai-key-card-actions-width: calc(var(--z-inset) * 9.5);
+  --desk-ai-key-card-input-max-width: calc(var(--z-inset) * 20);
+  --desk-ai-key-card-surface: color-mix(in srgb, var(--desk-container-bg) 92%, var(--z-color-bg-subtle));
   color: var(--desk-root-color);
   background: var(--desk-root-bg);
   font-synthesis: none;
@@ -259,6 +277,10 @@ body {
   padding: var(--z-inset-sm);
 }
 
+.desk-sidebar-group-empty-label {
+  color: color-mix(in srgb, var(--z-color-text) 56%, var(--z-color-border-glass));
+}
+
 .desk-context-menu-item-label {
   width: 100%;
   min-width: 0;
@@ -303,6 +325,39 @@ body {
   width: 100%;
   text-align: left;
   color: inherit;
+}
+
+.desk-user-menu-popover {
+  width: var(--desk-user-menu-width);
+  max-width: 100%;
+  padding: var(--desk-user-menu-padding);
+}
+
+.desk-user-menu-profile-head {
+  min-width: 0;
+  gap: var(--desk-user-menu-gap);
+}
+
+.desk-user-menu-profile-title,
+.desk-user-menu-profile-meta {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desk-user-menu-profile-meta {
+  margin-top: var(--z-inset-xs);
+  color: var(--desk-user-menu-meta-color);
+}
+
+.desk-user-menu-divider {
+  margin: var(--desk-user-menu-gap) 0;
+}
+
+.desk-user-menu-list {
+  width: 100%;
 }
 
 .desk-sidebar-entry-content {
@@ -481,11 +536,11 @@ body {
 }
 
 .desk-overview-card-icon-wrap {
-  width: calc(var(--z-inset) * 2);
-  height: calc(var(--z-inset) * 2);
-  border-radius: var(--z-border-radius);
+  width: calc(var(--z-inset) * 3);
+  height: calc(var(--z-inset) * 3);
+  border-radius: calc(var(--z-inset) * 3) !important;
   border: var(--desk-border-width) solid var(--z-color-border-glass);
-  background: color-mix(in srgb, var(--z-color-primary) 14%, var(--z-color-use-bg));
+  background: var(--z-color-bg-tertiary);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -668,6 +723,60 @@ body {
   overflow: hidden;
 }
 
+.desk-ai-key-list {
+  display: grid;
+  gap: var(--z-inset-sm);
+  padding: var(--z-inset);
+}
+
+.desk-ai-key-card {
+  border: var(--desk-border-width) solid var(--z-color-border-glass);
+  border-radius: var(--z-border-radius-lg);
+  background: var(--desk-ai-key-card-surface);
+}
+
+.desk-ai-key-card-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--desk-ai-key-card-actions-width);
+  gap: var(--z-inset);
+  padding: var(--z-inset);
+}
+
+.desk-ai-key-card-main {
+  min-width: 0;
+  display: grid;
+  gap: var(--z-inset-sm);
+}
+
+.desk-ai-key-card-title-line,
+.desk-ai-key-card-meta {
+  flex-wrap: wrap;
+}
+
+.desk-ai-key-card-title {
+  min-width: 0;
+}
+
+.desk-ai-key-card-meta-text {
+  color: var(--desk-user-menu-meta-color);
+}
+
+.desk-ai-key-card-input-wrap {
+  width: min(100%, var(--desk-ai-key-card-input-max-width));
+}
+
+.desk-ai-key-card-actions {
+  min-width: 0;
+}
+
+.desk-ai-key-card-actions-stack {
+  width: 100%;
+}
+
+.desk-ai-key-card-toggle {
+  width: 100%;
+}
+
 .desk-agent-settings-note-card {
   border: var(--desk-border-width) solid var(--z-color-border-glass);
   border-radius: var(--z-border-radius-lg);
@@ -823,12 +932,13 @@ body {
 .desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node,
 .desk-workflow-reactflow .react-flow__node-workflowNode.desk-workflow-flow-node {
   padding: 0;
-  border: var(--desk-border-width) solid transparent;
+  border: var(--desk-border-width) solid var(--desk-workflow-node-border);
   border-radius: var(--z-border-radius-lg);
-  background: var(--z-ramp-white-1000);
+  background: var(--desk-workflow-node-surface);
   box-shadow: var(--z-color-box-shadow);
   color: var(--z-color-text);
   transition:
+    background-color var(--z-duration-fast-4),
     border-color var(--z-duration-fast-4),
     box-shadow var(--z-duration-fast-4);
 }
@@ -837,7 +947,8 @@ body {
 .desk-workflow-reactflow .react-flow__node-workflowNode.is-active,
 .desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.selected,
 .desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.is-active {
-  border-color: var(--z-color-border-active);
+  border-color: var(--desk-workflow-node-border-active);
+  background: var(--desk-workflow-node-surface-active);
   box-shadow: var(--z-color-box-shadow-popover);
   transform: translateY(calc(var(--desk-border-width) * -0.5));
 }
@@ -855,7 +966,7 @@ body {
   min-height: calc(var(--desk-workflow-node-height) * 0.72);
   border: none;
   border-radius: inherit;
-  background: var(--z-ramp-white-1000);
+  background: var(--desk-workflow-node-surface);
   overflow: hidden;
   transition: none !important;
 }
@@ -864,9 +975,8 @@ body {
 .desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node .desk-workflow-node-head {
   min-height: calc(var(--z-inset) * 2.35);
   padding: var(--z-inset-sm) var(--z-inset);
-  background: var(--z-color-brand-tertiary);
-  border-bottom: var(--desk-border-width) solid
-    color-mix(in srgb, var(--z-color-border-brand) 28%, var(--z-color-border-glass));
+  background: var(--desk-workflow-node-head-surface);
+  border-bottom: var(--desk-border-width) solid var(--desk-workflow-node-head-border);
 }
 
 .desk-workflow-node-head-main {
@@ -882,8 +992,8 @@ body {
 .desk-workflow-reactflow .react-flow__node-workflowNode.is-active .desk-workflow-node-head,
 .desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.selected .desk-workflow-node-head,
 .desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.is-active .desk-workflow-node-head {
-  background: var(--z-color-brand-tertiary);
-  border-bottom-color: color-mix(in srgb, var(--z-color-border-active) 34%, var(--z-color-border-glass));
+  background: var(--desk-workflow-node-head-surface-active);
+  border-bottom-color: var(--desk-workflow-node-head-border-active);
 }
 
 .desk-workflow-reactflow .react-flow__node-workflowNode .desk-workflow-node-title,
@@ -892,7 +1002,7 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--z-color-text-brand);
+  color: var(--desk-workflow-node-accent);
 }
 
 .desk-workflow-node-content {
@@ -904,6 +1014,21 @@ body {
   border: var(--desk-border-width) solid
     color-mix(in srgb, var(--z-color-border-glass) 74%, transparent);
   border-radius: var(--z-border-radius);
+  background: var(--desk-workflow-node-content-surface);
+}
+
+.desk-workflow-reactflow .react-flow__node-workflowNode.selected .desk-workflow-node-body,
+.desk-workflow-reactflow .react-flow__node-workflowNode.is-active .desk-workflow-node-body,
+.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.selected .desk-workflow-node-body,
+.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.is-active .desk-workflow-node-body {
+  background: var(--desk-workflow-node-surface-active);
+}
+
+.desk-workflow-reactflow .react-flow__node-workflowNode.selected .desk-workflow-node-content,
+.desk-workflow-reactflow .react-flow__node-workflowNode.is-active .desk-workflow-node-content,
+.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.selected .desk-workflow-node-content,
+.desk-workflow-reactflow .react-flow__node.desk-workflow-flow-node.is-active .desk-workflow-node-content {
+  background: var(--desk-workflow-node-content-surface-active);
 }
 
 .desk-workflow-node-description {
@@ -2037,6 +2162,22 @@ body {
 
   .desk-settings-row-actions {
     width: 100%;
+    justify-content: flex-start;
+  }
+
+  .desk-ai-key-card-body {
+    grid-template-columns: 1fr;
+  }
+
+  .desk-ai-key-card-input-wrap {
+    width: 100%;
+  }
+
+  .desk-ai-key-card-actions-stack {
+    align-items: flex-start;
+  }
+
+  .desk-ai-key-card-toggle {
     justify-content: flex-start;
   }
 

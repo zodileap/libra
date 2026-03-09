@@ -67,7 +67,6 @@ function WorkflowCard({
           <AriButton
             type="text"
             icon={readonly ? "add" : "content_copy"}
-            color={readonly ? "brand" : "default"}
             aria-label={readonly ? t("添加工作流") : t("复制工作流")}
             onClick={() => {
               if (readonly) {
