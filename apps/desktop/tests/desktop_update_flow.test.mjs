@@ -39,6 +39,7 @@ test("TestDesktopUpdateFlowShouldConnectApiDownloadAndInstall", () => {
   const appSource = readDesktopSource("src/app.tsx");
   const constantsSource = readDesktopSource("src/shared/constants.ts");
   const backendApiSource = readDesktopSource("src/shared/services/backend-api.ts");
+  const endpointSource = readDesktopSource("src/shared/services/service-endpoints.ts");
   const sidebarSource = readDesktopSource("src/sidebar/index.tsx");
   const userMenuSource = readDesktopSource("src/sidebar/widgets/user-hover-menu.tsx");
   const appHeaderSource = readDesktopSource("src/widgets/app-header/index.tsx");
@@ -54,26 +55,40 @@ test("TestDesktopUpdateFlowShouldConnectApiDownloadAndInstall", () => {
 
   // 描述：
   //
-  //   - 前端应声明更新命令常量，并通过 App 层串联“检查->下载->安装”流程。
+  //   - 前端应声明更新命令常量，并通过 App 层串联“静态清单优先，Runtime 回退，再执行下载->安装”流程。
   assert.match(constantsSource, /GET_DESKTOP_RUNTIME_INFO/);
   assert.match(constantsSource, /START_DESKTOP_UPDATE_DOWNLOAD/);
   assert.match(constantsSource, /GET_DESKTOP_UPDATE_STATE/);
   assert.match(constantsSource, /INSTALL_DOWNLOADED_DESKTOP_UPDATE/);
   assert.match(appSource, /requestDesktopUpdateCheck/);
+  assert.match(appSource, /checkDesktopUpdateFromManifest/);
+  assert.match(appSource, /buildDesktopUpdateManifestUrl/);
+  assert.match(appSource, /const desktopUpdateManifestUrl = buildDesktopUpdateManifestUrl\(backendConfig\);/);
   assert.match(appSource, /const checkDesktopUpdate = useCallback/);
+  assert.match(appSource, /if \(desktopUpdateManifestUrl\) \{/);
+  assert.match(appSource, /if \(!backendEnabled\) \{\s*throw manifestErr;\s*\}/s);
+  assert.match(appSource, /message: t\("未配置可用更新源"\),/);
   assert.match(appSource, /COMMANDS\.START_DESKTOP_UPDATE_DOWNLOAD/);
   assert.match(appSource, /COMMANDS\.INSTALL_DOWNLOADED_DESKTOP_UPDATE/);
   assert.match(appSource, /desktopUpdateState/);
   assert.match(appSource, /checkDesktopUpdate,/);
   assert.match(appSource, /installDesktopUpdate,/);
   assert.match(appSource, /window\.setInterval\(\(\) => \{\s*void syncDesktopUpdateState\(\)\.then\(\(nextState\) => \{/s);
+  assert.match(appSource, /\(\!backendEnabled && !desktopUpdateManifestUrl\) \|\| !user/);
 
   // 描述：
   //
-  //   - API 层应通过 runtime workflow 接口完成桌面更新检查请求。
+  //   - API 层应同时支持静态 manifest 检查与 runtime workflow 接口检查。
   assert.match(backendApiSource, /export interface DesktopUpdateCheckResult/);
+  assert.match(backendApiSource, /interface DesktopStaticUpdateManifest/);
+  assert.match(backendApiSource, /requestDesktopUpdateManifest/);
+  assert.match(backendApiSource, /buildDesktopUpdateManifestTarget/);
+  assert.match(backendApiSource, /compareSemverVersion/);
+  assert.match(backendApiSource, /export async function checkDesktopUpdateFromManifest\(/);
+  assert.match(backendApiSource, /manifest\.platforms\?\.\[target\]/);
   assert.match(backendApiSource, /export async function checkDesktopUpdate\(/);
   assert.match(backendApiSource, /\/workflow\/v1\/desktop-update\/check/);
+  assert.match(endpointSource, /export function buildDesktopUpdateManifestUrl\(/);
 
   // 描述：
   //

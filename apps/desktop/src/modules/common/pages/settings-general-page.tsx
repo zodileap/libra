@@ -41,6 +41,28 @@ function isValidBackendAddress(value: string): boolean {
   }
 }
 
+// 描述：判断静态更新清单地址是否为合法的 HTTP(S) 完整 URL。
+//
+// Params:
+//
+//   - value: 静态更新清单地址输入值。
+//
+// Returns:
+//
+//   - true: 地址合法。
+function isValidUpdateManifestUrl(value: string): boolean {
+  const text = value.trim();
+  if (!text) {
+    return false;
+  }
+  try {
+    const url = new URL(text);
+    return (url.protocol === "http:" || url.protocol === "https:") && Boolean(url.host);
+  } catch (_err) {
+    return false;
+  }
+}
+
 // 描述：渲染通用设置页，统一管理主题模式与桌面端后端接入配置。
 export function SettingsGeneralPage({
   colorThemeMode,
@@ -77,25 +99,38 @@ export function SettingsGeneralPage({
       setBackendStatus(t("请输入有效的后端地址，例如 http://127.0.0.1:10001。"));
       return;
     }
+    if (backendDraft.updateManifestUrl.trim() && !isValidUpdateManifestUrl(backendDraft.updateManifestUrl)) {
+      setBackendStatus(t("请输入有效的更新清单地址，例如 https://open.zodileap.com/libra/updates/latest.json。"));
+      return;
+    }
     const saved = onBackendConfigChange({
       enabled: backendDraft.enabled,
       baseUrl: backendDraft.baseUrl.trim(),
+      updateManifestUrl: backendDraft.updateManifestUrl.trim(),
     });
     setBackendDraft(saved);
-    setBackendStatus(saved.enabled ? t("后端接入配置已保存。") : t("已切换为本地模式。"));
+    if (saved.enabled) {
+      setBackendStatus(t("后端与更新源配置已保存。"));
+      return;
+    }
+    if (saved.updateManifestUrl) {
+      setBackendStatus(t("更新源配置已保存；当前为本地模式。"));
+      return;
+    }
+    setBackendStatus(t("已切换为本地模式，且未启用自动更新。"));
   };
 
   // 描述：恢复默认后端配置；恢复后 Desktop 会重新回到纯本地模式。
   const handleResetBackendConfig = () => {
     const restored = onBackendConfigReset();
     setBackendDraft(restored);
-    setBackendStatus(t("后端接入配置已恢复为默认值。"));
+    setBackendStatus(t("后端与更新源配置已恢复为默认值。"));
   };
 
   return (
     <AriContainer className="desk-content" showBorderRadius={false}>
       <AriContainer className="desk-settings-shell">
-        <DeskPageHeader title={t("General")} description={t("统一管理主题、基础交互和后端接入。")} />
+        <DeskPageHeader title={t("General")} description={t("统一管理主题、基础交互、更新源和后端接入。")} />
 
         <DeskSectionTitle title={t("Appearance")} />
 
@@ -180,6 +215,17 @@ export function SettingsGeneralPage({
               value={backendDraft.baseUrl}
               placeholder="http://127.0.0.1:10001"
               onChange={(value) => patchBackendDraft({ baseUrl: value })}
+            />
+          </DeskSettingsRow>
+
+          <DeskSettingsRow
+            title={t("Update Manifest URL")}
+            description={t("默认使用官方静态 latest.json；你也可以改成自己私有部署的 HTTPS 地址。留空时：若已接入后端则回退到 Runtime 更新接口；未接入后端则不检查更新。")}
+          >
+            <AriInput
+              value={backendDraft.updateManifestUrl}
+              placeholder="https://open.zodileap.com/libra/updates/latest.json"
+              onChange={(value) => patchBackendDraft({ updateManifestUrl: value })}
             />
           </DeskSettingsRow>
 

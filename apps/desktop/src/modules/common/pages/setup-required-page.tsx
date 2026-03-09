@@ -76,6 +76,7 @@ export function SetupRequiredPage({
       await onSaveBackendConfig({
         enabled: true,
         baseUrl: backendBaseUrl.trim(),
+        updateManifestUrl: backendConfig.updateManifestUrl,
       });
     } finally {
       setSaving(false);

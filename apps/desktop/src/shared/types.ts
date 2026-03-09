@@ -126,6 +126,7 @@ export interface DesktopUpdateState {
 export interface DesktopBackendConfig {
   enabled: boolean;
   baseUrl: string;
+  updateManifestUrl: string;
 }
 
 // 描述：

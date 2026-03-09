@@ -99,6 +99,24 @@ export interface DesktopUpdateCheckResult {
   channel: string;
 }
 
+// 描述：
+//
+//   - 定义静态更新清单中的平台项结构，兼容 Tauri 静态 JSON 的 `platforms[target]` 形态。
+interface DesktopStaticUpdatePlatformItem {
+  signature?: string;
+  url?: string;
+}
+
+// 描述：
+//
+//   - 定义桌面端静态更新清单结构，供公开站点和私有自托管静态更新源复用。
+interface DesktopStaticUpdateManifest {
+  version?: string;
+  notes?: string;
+  pub_date?: string;
+  platforms?: Record<string, DesktopStaticUpdatePlatformItem>;
+}
+
 // 描述:
 //
 //   - 定义后端 API 错误对象，附带业务码与 HTTP 状态。
@@ -483,6 +501,167 @@ async function request<T>(url: string, options?: RequestOptions): Promise<T> {
   return envelope.data;
 }
 
+// 描述：请求静态更新清单并返回原始 JSON；该接口不要求统一响应包结构。
+//
+// Params:
+//
+//   - manifestUrl: 静态更新清单地址。
+//
+// Returns:
+//
+//   - 解析后的静态更新清单对象。
+async function requestDesktopUpdateManifest(manifestUrl: string): Promise<DesktopStaticUpdateManifest> {
+  let response: Response;
+  try {
+    response = await fetch(manifestUrl, {
+      method: "GET",
+      cache: "no-store",
+    });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new BackendApiError(buildNetworkFailureMessage(manifestUrl, detail), -1, 0);
+  }
+
+  if (!response.ok) {
+    const fallbackMessage = response.status >= 500
+      ? translateDesktopText("服务暂时不可用，请稍后重试。")
+      : translateDesktopText("请求失败，请检查输入后重试。");
+    throw new BackendApiError(
+      buildBackendErrorMessage(-1, "", fallbackMessage),
+      -1,
+      response.status,
+    );
+  }
+
+  try {
+    return (await response.json()) as DesktopStaticUpdateManifest;
+  } catch (_err) {
+    throw new BackendApiError(translateDesktopText("响应体解析失败"), -1, response.status);
+  }
+}
+
+// 描述：归一化桌面端平台标识，兼容常见平台别名。
+//
+// Params:
+//
+//   - rawValue: 原始平台值。
+//
+// Returns:
+//
+//   - Tauri 静态更新清单使用的平台值。
+function normalizeDesktopUpdatePlatform(rawValue: string): string {
+  const value = String(rawValue || "").trim().toLowerCase();
+  if (value === "win32" || value === "windows") {
+    return "windows";
+  }
+  if (value === "mac" || value === "macos" || value === "darwin") {
+    return "darwin";
+  }
+  if (value === "linux") {
+    return "linux";
+  }
+  return value;
+}
+
+// 描述：归一化桌面端架构标识，兼容 `x64/x86_64` 与 `arm64/aarch64` 的常见差异。
+//
+// Params:
+//
+//   - rawValue: 原始架构值。
+//
+// Returns:
+//
+//   - Tauri 静态更新清单使用的架构值。
+function normalizeDesktopUpdateArch(rawValue: string): string {
+  const value = String(rawValue || "").trim().toLowerCase();
+  if (value === "x64" || value === "x86_64" || value === "amd64") {
+    return "x86_64";
+  }
+  if (value === "arm64" || value === "aarch64") {
+    return "aarch64";
+  }
+  if (value === "x86" || value === "i686") {
+    return "i686";
+  }
+  return value;
+}
+
+// 描述：根据平台与架构构建静态更新清单目标键，例如 `windows-x86_64`。
+//
+// Params:
+//
+//   - platform: 平台值。
+//   - arch: 架构值。
+//
+// Returns:
+//
+//   - 静态更新清单目标键。
+function buildDesktopUpdateManifestTarget(platform: string, arch: string): string {
+  const normalizedPlatform = normalizeDesktopUpdatePlatform(platform);
+  const normalizedArch = normalizeDesktopUpdateArch(arch);
+  if (!normalizedPlatform || !normalizedArch) {
+    return "";
+  }
+  return `${normalizedPlatform}-${normalizedArch}`;
+}
+
+// 描述：比较语义化版本号，返回 -1 / 0 / 1。
+//
+// Params:
+//
+//   - current: 当前版本。
+//   - target: 目标版本。
+//
+// Returns:
+//
+//   - -1: 当前版本更旧。
+//   - 0: 版本相同或无法比较。
+//   - 1: 当前版本更高。
+function compareSemverVersion(current: string, target: string): number {
+  const currentParts = parseSemverParts(current);
+  const targetParts = parseSemverParts(target);
+  if (currentParts.length === 0 || targetParts.length === 0) {
+    return 0;
+  }
+
+  const limit = Math.max(currentParts.length, targetParts.length);
+  while (currentParts.length < limit) {
+    currentParts.push(0);
+  }
+  while (targetParts.length < limit) {
+    targetParts.push(0);
+  }
+
+  for (let index = 0; index < limit; index += 1) {
+    if (currentParts[index] < targetParts[index]) {
+      return -1;
+    }
+    if (currentParts[index] > targetParts[index]) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+// 描述：将语义化版本号解析为数值数组，兼容 `v1.2.3` 与标签后缀。
+//
+// Params:
+//
+//   - rawValue: 原始版本字符串。
+//
+// Returns:
+//
+//   - 数值化后的版本段数组。
+function parseSemverParts(rawValue: string): number[] {
+  const normalized = String(rawValue || "").trim().toLowerCase().replace(/^v/, "").split("-")[0];
+  if (!normalized) {
+    return [];
+  }
+
+  const parts = normalized.split(".").map((item) => Number.parseInt(item, 10));
+  return parts.every((item) => Number.isFinite(item)) ? parts : [];
+}
+
 // 描述：账号登录并返回用户与令牌。
 export async function loginByPassword(email: string, password: string): Promise<{ token: string; user: LoginUser; expiresAt: string }> {
   if (!isDesktopBackendEnabled()) {
@@ -726,6 +905,53 @@ export async function checkDesktopUpdate(params: {
     channel: params.channel,
   });
   return request<DesktopUpdateCheckResult>(`${runtimeBaseUrl}/workflow/v1/desktop-update/check${query}`);
+}
+
+// 描述：从静态更新清单检查桌面端新版本；适用于公开站点和私有自托管的 `latest.json` 更新源。
+//
+// Params:
+//
+//   - manifestUrl: 静态更新清单地址。
+//   - platform: 当前运行平台。
+//   - arch: 当前运行架构。
+//   - currentVersion: 当前版本。
+//
+// Returns:
+//
+//   - 统一后的桌面端更新检查结果。
+export async function checkDesktopUpdateFromManifest(params: {
+  manifestUrl: string;
+  platform: string;
+  arch: string;
+  currentVersion: string;
+}): Promise<DesktopUpdateCheckResult> {
+  const manifest = await requestDesktopUpdateManifest(params.manifestUrl);
+  const latestVersion = String(manifest.version || "").trim();
+  const target = buildDesktopUpdateManifestTarget(params.platform, params.arch);
+  const platformItem = target ? manifest.platforms?.[target] : undefined;
+  const downloadUrl = String(platformItem?.url || "").trim();
+
+  if (!latestVersion || !downloadUrl) {
+    return {
+      hasUpdate: false,
+      latestVersion: "",
+      downloadUrl: "",
+      checksumSha256: "",
+      releaseNotes: String(manifest.notes || "").trim(),
+      publishedAt: String(manifest.pub_date || "").trim(),
+      channel: "static",
+    };
+  }
+
+  return {
+    hasUpdate: compareSemverVersion(params.currentVersion, latestVersion) < 0,
+    latestVersion,
+    downloadUrl,
+    checksumSha256: "",
+    releaseNotes: String(manifest.notes || "").trim(),
+    publishedAt: String(manifest.pub_date || "").trim(),
+    channel: "static",
+  };
 }
 
 // 描述：创建会话。

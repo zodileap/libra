@@ -6,6 +6,7 @@ import { DesktopRouter } from "./router";
 import { SetupRequiredPage } from "./modules/common/pages/setup-required-page";
 import {
 	checkDesktopUpdate as requestDesktopUpdateCheck,
+	checkDesktopUpdateFromManifest,
 	clearAuthToken,
 	getSetupStatus,
 	getAuthToken,
@@ -21,6 +22,7 @@ import {
 	setUnauthorizedHandler,
 } from "./shared/services/backend-api";
 import {
+	buildDesktopUpdateManifestUrl,
 	buildDesktopWebSetupUrl,
 	hasEnabledDesktopBackend,
 	readDesktopBackendConfig,
@@ -472,6 +474,8 @@ export default function App() {
 	const geminiCliPopupShownRef = useRef<Set<string>>(new Set());
 	// 描述：根据当前配置判断 Desktop 是否已接入远端后端。
 	const backendEnabled = hasEnabledDesktopBackend(backendConfig);
+	// 描述：当前静态更新清单地址；优先使用该地址进行更新检查，方便私有自托管。
+	const desktopUpdateManifestUrl = buildDesktopUpdateManifestUrl(backendConfig);
 
 	// 描述：保存当前选中的身份上下文，并同步到本地缓存供 Desktop 重启恢复。
 	const updateSelectedIdentity = useCallback((value: ConsoleIdentityItem | null) => {
@@ -845,14 +849,6 @@ export default function App() {
 
 	// 描述：检查桌面端更新；命中新版时自动后台下载。
 	const checkDesktopUpdate = useCallback(async () => {
-		if (!backendEnabled) {
-			setDesktopUpdateState((prev) => ({
-				...prev,
-				status: "idle",
-				message: t("当前为本地模式，未接入后端更新服务。"),
-			}));
-			return;
-		}
 		if (checkingDesktopUpdateRef.current) {
 			return;
 		}
@@ -866,12 +862,45 @@ export default function App() {
 				message: t("正在检查更新..."),
 			}));
 
-			const update = await requestDesktopUpdateCheck({
-				platform: runtimeInfo.platform,
-				arch: runtimeInfo.arch,
-				currentVersion: runtimeInfo.current_version,
-				channel: "stable",
-			});
+			let update: Awaited<ReturnType<typeof requestDesktopUpdateCheck>>;
+			if (desktopUpdateManifestUrl) {
+				try {
+					update = await checkDesktopUpdateFromManifest({
+						manifestUrl: desktopUpdateManifestUrl,
+						platform: runtimeInfo.platform,
+						arch: runtimeInfo.arch,
+						currentVersion: runtimeInfo.current_version,
+					});
+				} catch (manifestErr) {
+					if (!backendEnabled) {
+						throw manifestErr;
+					}
+					update = await requestDesktopUpdateCheck({
+						platform: runtimeInfo.platform,
+						arch: runtimeInfo.arch,
+						currentVersion: runtimeInfo.current_version,
+						channel: "stable",
+					});
+				}
+			} else if (backendEnabled) {
+				update = await requestDesktopUpdateCheck({
+					platform: runtimeInfo.platform,
+					arch: runtimeInfo.arch,
+					currentVersion: runtimeInfo.current_version,
+					channel: "stable",
+				});
+			} else {
+				stopDesktopUpdatePolling();
+				setDesktopUpdateState({
+					status: "idle",
+					currentVersion: runtimeInfo.current_version,
+					targetVersion: "",
+					progress: 0,
+					message: t("未配置可用更新源"),
+					downloadPath: "",
+				});
+				return;
+			}
 
 			if (!update.hasUpdate || !update.downloadUrl) {
 				stopDesktopUpdatePolling();
@@ -922,7 +951,7 @@ export default function App() {
 		} finally {
 			checkingDesktopUpdateRef.current = false;
 		}
-	}, [backendEnabled, stopDesktopUpdatePolling, syncDesktopUpdateState, t]);
+	}, [backendEnabled, desktopUpdateManifestUrl, stopDesktopUpdatePolling, syncDesktopUpdateState, t]);
 
 	// 描述：触发桌面端安装更新（打开系统安装器）。
 	const installDesktopUpdate = useCallback(async () => {
@@ -957,7 +986,7 @@ export default function App() {
 	}, [desktopSetupGate.setupUrl, t]);
 
 	useEffect(() => {
-		if (!backendEnabled || !user) {
+		if ((!backendEnabled && !desktopUpdateManifestUrl) || !user) {
 			stopDesktopUpdatePolling();
 			return;
 		}
@@ -968,7 +997,7 @@ export default function App() {
 		return () => {
 			window.clearInterval(timer);
 		};
-	}, [backendEnabled, user, checkDesktopUpdate, stopDesktopUpdatePolling]);
+	}, [backendEnabled, desktopUpdateManifestUrl, user, checkDesktopUpdate, stopDesktopUpdatePolling]);
 
 	useEffect(() => {
 		return () => {

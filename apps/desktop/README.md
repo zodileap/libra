@@ -14,3 +14,8 @@ Desktop 主入口（Tauri，macOS/Windows）。
 - 接入统一登录态与智能体入口。
 - 预留 DCC 连接层接口。
 
+## 更新源
+
+- Desktop 默认静态更新源：`https://open.zodileap.com/libra/updates/latest.json`
+- 用户可在 `Settings > General > Update Manifest URL` 中改成自己的私有 HTTPS 更新源
+- 私有自托管说明见 [../docs/desktop-self-hosted-updates.md](../docs/desktop-self-hosted-updates.md)
