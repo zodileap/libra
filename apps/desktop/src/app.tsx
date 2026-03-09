@@ -837,7 +837,8 @@ export default function App() {
 	}, []);
 
 		// 描述：检查桌面端更新；命中新版后交由官方 updater 自动下载、安装并重启应用。
-		const checkDesktopUpdate = useCallback(async () => {
+		const runDesktopUpdateCheck = useCallback(async (options?: { silent?: boolean }) => {
+			const silent = options?.silent === true;
 			if (checkingDesktopUpdateRef.current) {
 				return;
 			}
@@ -853,6 +854,12 @@ export default function App() {
 						message: t("未配置可用更新源"),
 						downloadPath: "",
 					});
+					if (!silent) {
+						AriMessage.warning({
+							content: t("未配置可用更新源"),
+							duration: 2800,
+						});
+					}
 					return;
 				}
 
@@ -862,6 +869,24 @@ export default function App() {
 				);
 				const nextState = mapDesktopUpdateStateResponse(payload);
 				setDesktopUpdateState(nextState);
+				if (!silent) {
+					if (nextState.status === "failed") {
+						AriMessage.error({
+							content: nextState.message || t("更新检查失败，请稍后重试。"),
+							duration: 3200,
+						});
+					} else if (nextState.status === "downloading" || nextState.status === "installing") {
+						AriMessage.success({
+							content: nextState.message || t("发现新版本时将自动下载并安装，完成后自动重启应用。"),
+							duration: 3200,
+						});
+					} else if (nextState.message) {
+						AriMessage.success({
+							content: nextState.message,
+							duration: 2800,
+						});
+					}
+				}
 				if (nextState.status === "downloading" || nextState.status === "installing") {
 					stopDesktopUpdatePolling();
 					desktopUpdatePollTimerRef.current = window.setInterval(() => {
@@ -891,6 +916,10 @@ export default function App() {
 			}
 		}, [desktopUpdateManifestUrl, desktopUpdateState.currentVersion, stopDesktopUpdatePolling, syncDesktopUpdateState, t]);
 
+		const checkDesktopUpdate = useCallback(async () => {
+			await runDesktopUpdateCheck();
+		}, [runDesktopUpdateCheck]);
+
 		// 描述：保留安装更新入口；官方 updater 方案下更新已在“检查更新”里自动完成，因此这里只保留兼容提示。
 		const installDesktopUpdate = useCallback(async () => {
 			AriMessage.success({
@@ -916,14 +945,14 @@ export default function App() {
 				stopDesktopUpdatePolling();
 				return;
 			}
-			void checkDesktopUpdate();
+			void runDesktopUpdateCheck({ silent: true });
 			const timer = window.setInterval(() => {
-				void checkDesktopUpdate();
+				void runDesktopUpdateCheck({ silent: true });
 			}, 30 * 60 * 1000);
 			return () => {
 				window.clearInterval(timer);
 			};
-		}, [desktopUpdateManifestUrl, user, checkDesktopUpdate, stopDesktopUpdatePolling]);
+		}, [desktopUpdateManifestUrl, user, runDesktopUpdateCheck, stopDesktopUpdatePolling]);
 
 	useEffect(() => {
 		return () => {
