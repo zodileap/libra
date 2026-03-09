@@ -44,6 +44,13 @@ import {
 	defaultServiceUrl,
 	STORAGE_KEYS,
 } from "./shared/constants";
+// 描述：
+//
+//   - 为 Desktop HashRouter 显式启用 React Router v7 兼容行为，避免开发期 Future Flag 告警，同时提前对齐后续升级语义。
+const desktopRouterFuture = {
+	v7_startTransition: true,
+	v7_relativeSplatPath: true,
+};
 
 // 描述:
 //
@@ -1051,7 +1058,7 @@ export default function App() {
 						onSaveBackendConfig={saveSetupGateBackendConfig}
 					/>
 				) : (
-					<HashRouter>
+					<HashRouter future={desktopRouterFuture}>
 						<DesktopRouter auth={auth} />
 					</HashRouter>
 				)}

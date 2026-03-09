@@ -67,9 +67,13 @@ test("TestDesktopAppShouldSupportOptionalBackendMode", () => {
   assert.match(source, /setAvailableAgents\(getLocalAvailableAgents\(\)\);/);
   assert.match(source, /const saveSetupGateBackendConfig = useCallback\(/);
   assert.match(source, /const switchToLocalDesktopMode = useCallback\(async \(\) => \{/);
+  assert.match(source, /const desktopRouterFuture = \{/);
+  assert.match(source, /v7_startTransition: true,/);
+  assert.match(source, /v7_relativeSplatPath: true,/);
   assert.match(source, /await invoke<boolean>\("open_external_url", \{ url: desktopSetupGate\.setupUrl \}\);/);
   assert.match(source, /const shouldShowSetupGate = backendEnabled && \(desktopSetupGate\.checking \|\| desktopSetupGate\.installed !== true\);/);
   assert.match(source, /<SetupRequiredPage/);
+  assert.match(source, /<HashRouter future=\{desktopRouterFuture\}>/);
   assert.match(source, /backendConfig=\{backendConfig\}/);
   assert.match(source, /onOpenSetup=\{openDesktopSetupUrl\}/);
   assert.match(source, /onUseLocalMode=\{switchToLocalDesktopMode\}/);
