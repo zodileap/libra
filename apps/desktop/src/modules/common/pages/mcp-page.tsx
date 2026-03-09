@@ -48,6 +48,7 @@ import {
   DeskPageHeader,
   DeskSectionTitle,
 } from "../../../widgets/settings-primitives";
+import { translateDesktopText, useDesktopI18n } from "../../../shared/i18n";
 
 // 描述：
 //
@@ -140,7 +141,7 @@ async function buildDccRuntimeStatusMap(
         return [software, {
           available: false,
           software,
-          message: "读取 DCC Runtime 状态失败，请稍后重试。",
+          message: translateDesktopText("读取 DCC Runtime 状态失败，请稍后重试。"),
           resolvedPath: "",
           runtimeKind: "dcc_bridge",
           requiredEnvKeys: [],
@@ -164,7 +165,9 @@ async function buildDccRuntimeStatusMap(
 //
 //   - 自动准备能力文案。
 function renderDccRuntimeAutoPrepareLabel(status?: DccRuntimeStatus): string {
-  return status?.supportsAutoPrepare ? "自动准备：支持" : "自动准备：手动";
+  return status?.supportsAutoPrepare
+    ? translateDesktopText("自动准备：支持")
+    : translateDesktopText("自动准备：手动");
 }
 
 // 描述：
@@ -182,7 +185,7 @@ function renderDccRuntimeEnvRequirementLabel(status?: DccRuntimeStatus): string 
   if (!status?.requiredEnvKeys || status.requiredEnvKeys.length === 0) {
     return "";
   }
-  return `环境变量：${status.requiredEnvKeys.join("、")}`;
+  return translateDesktopText("环境变量：{{keys}}", { keys: status.requiredEnvKeys.join("、") });
 }
 
 // 描述：
@@ -361,7 +364,7 @@ function renderTransportLabel(transport: string): string {
 //
 //   - 标签文案。
 function renderDomainLabel(domain: McpDomain): string {
-  return domain === "dcc" ? "DCC" : "General";
+  return domain === "dcc" ? "DCC" : translateDesktopText("通用");
 }
 
 // 描述：
@@ -389,7 +392,7 @@ function renderSoftwareLabel(software: string): string {
   if (normalizedSoftware === "houdini") {
     return "Houdini";
   }
-  return normalizedSoftware || "未指定";
+  return normalizedSoftware || translateDesktopText("未指定");
 }
 
 // 描述：
@@ -404,7 +407,7 @@ function renderSoftwareLabel(software: string): string {
 //
 //   - 标签文案。
 function renderScopeLabel(scope: McpScope): string {
-  return scope === "workspace" ? "Workspace" : "User";
+  return scope === "workspace" ? translateDesktopText("Workspace") : translateDesktopText("User");
 }
 
 // 描述：
@@ -419,14 +422,15 @@ function RegisteredMcpCard({
   busy: boolean;
   onManage: (item: McpRegistrationItem) => void;
 }) {
+  const { t } = useDesktopI18n();
   return (
     <DeskOverviewCard
       icon={<AriIcon name="hub" />}
       title={item.name}
-      description={item.description || "未填写 MCP 描述"}
+      description={item.description || t("未填写 MCP 描述")}
       actions={(
-        <AriTooltip content="管理" position="top" minWidth={0} matchTriggerWidth={false}>
-          <AriButton type="text" icon="settings" aria-label="管理 MCP" disabled={busy} onClick={() => onManage(item)} />
+        <AriTooltip content={t("管理")} position="top" minWidth={0} matchTriggerWidth={false}>
+          <AriButton type="text" icon="settings" aria-label={t("管理 MCP")} disabled={busy} onClick={() => onManage(item)} />
         </AriTooltip>
       )}
     />
@@ -449,21 +453,22 @@ function McpTemplateCard({
   onManage: (item: McpTemplateItem) => void;
   onCreate: (item: McpTemplateItem) => void;
 }) {
+  const { t } = useDesktopI18n();
   return (
     <DeskOverviewCard
       icon={<AriIcon name="hub" />}
       title={item.name}
-      description={item.description || "未填写模板描述"}
+      description={item.description || t("未填写模板描述")}
       actions={(
         <>
-          <AriTooltip content="管理" position="top" minWidth={0} matchTriggerWidth={false}>
-            <AriButton type="text" icon="settings" aria-label="管理模板" disabled={busy} onClick={() => onManage(item)} />
+          <AriTooltip content={t("管理")} position="top" minWidth={0} matchTriggerWidth={false}>
+            <AriButton type="text" icon="settings" aria-label={t("管理模板")} disabled={busy} onClick={() => onManage(item)} />
           </AriTooltip>
           <AriButton
             type="text"
             color={alreadyRegistered ? "default" : "brand"}
             icon="add"
-            aria-label={alreadyRegistered ? "模板已添加" : "添加 MCP"}
+            aria-label={alreadyRegistered ? t("模板已添加") : t("添加 MCP")}
             disabled={busy || alreadyRegistered}
             onClick={() => onCreate(item)}
           />
@@ -477,6 +482,7 @@ function McpTemplateCard({
 //
 //   - 渲染 MCP 管理页，展示真实注册表、推荐模板与 Apifox Runtime 管理入口。
 export function McpPage() {
+  const { t } = useDesktopI18n();
   const headerSlotElement = useDesktopHeaderSlot();
   const location = useLocation();
   const navigate = useNavigate();
@@ -510,13 +516,13 @@ export function McpPage() {
   );
   const workspaceOptions = useMemo(
     () => [
-      { label: "全局（User）", value: "" },
+      { label: t("全局（User）"), value: "" },
       ...workspaceGroups.map((item) => ({
         label: item.name || item.path,
         value: item.id,
       })),
     ],
-    [workspaceGroups],
+    [t, workspaceGroups],
   );
 
   // 描述：
@@ -572,7 +578,7 @@ export function McpPage() {
           setApifoxRuntimeStatus(null);
           setDccRuntimeStatusMap({});
           AriMessage.error({
-            content: "加载 MCP 注册表失败，请稍后重试。",
+            content: t("加载 MCP 注册表失败，请稍后重试。"),
             duration: 2200,
           });
         }
@@ -625,7 +631,7 @@ export function McpPage() {
   const handleSaveDraft = useCallback(async () => {
     const draft = buildEditorDraft();
     if (!draft.name?.trim()) {
-      AriMessage.error({ content: "请填写 MCP 名称。", duration: 1800 });
+      AriMessage.error({ content: t("请填写 MCP 名称。"), duration: 1800 });
       return;
     }
     setBusyActionId(draft.id || draft.templateId || "__save__");
@@ -633,7 +639,9 @@ export function McpPage() {
       const saved = await saveMcpRegistration(draft, mcpRegistryContext);
       await reloadOverview();
       AriMessage.success({
-        content: draft.id ? `已更新 ${saved.name}` : `已注册 ${saved.name}`,
+        content: draft.id
+          ? t("已更新 {{name}}", { name: saved.name })
+          : t("已注册 {{name}}", { name: saved.name }),
         duration: 1800,
       });
       setEditorVisible(false);
@@ -645,7 +653,7 @@ export function McpPage() {
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err || "").trim();
       AriMessage.error({
-        content: reason || "保存 MCP 失败，请稍后重试。",
+        content: reason || t("保存 MCP 失败，请稍后重试。"),
         duration: 2200,
       });
     } finally {
@@ -665,19 +673,19 @@ export function McpPage() {
       );
       if (validation.ok) {
         AriMessage.success({
-          content: validation.message || `已通过 ${item.name} 校验。`,
+          content: validation.message || t("已通过 {{name}} 校验。", { name: item.name }),
           duration: 2200,
         });
       } else {
         AriMessage.error({
-          content: validation.message || `${item.name} 校验失败，请检查配置。`,
+          content: validation.message || t("{{name}} 校验失败，请检查配置。", { name: item.name }),
           duration: 2600,
         });
       }
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err || "").trim();
       AriMessage.error({
-        content: reason || "校验 MCP 失败，请稍后重试。",
+        content: reason || t("校验 MCP 失败，请稍后重试。"),
         duration: 2200,
       });
     } finally {
@@ -697,7 +705,7 @@ export function McpPage() {
       await removeMcpRegistration(removingItem.id, removingItem.scope, mcpRegistryContext);
       await reloadOverview();
       AriMessage.success({
-        content: `已移除 ${removingItem.name}`,
+        content: t("已移除 {{name}}", { name: removingItem.name }),
         duration: 1800,
       });
       if (editingDraft.id === removingItem.id) {
@@ -708,7 +716,7 @@ export function McpPage() {
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err || "").trim();
       AriMessage.error({
-        content: reason || "移除 MCP 失败，请稍后重试。",
+        content: reason || t("移除 MCP 失败，请稍后重试。"),
         duration: 2200,
       });
     } finally {
@@ -725,13 +733,13 @@ export function McpPage() {
       await installApifoxMcpRuntime();
       await reloadOverview();
       AriMessage.success({
-        content: "已安装 Apifox Runtime。",
+        content: t("已安装 Apifox Runtime。"),
         duration: 1800,
       });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err || "").trim();
       AriMessage.error({
-        content: reason || "安装 Apifox Runtime 失败，请稍后重试。",
+        content: reason || t("安装 Apifox Runtime 失败，请稍后重试。"),
         duration: 2200,
       });
     } finally {
@@ -748,13 +756,13 @@ export function McpPage() {
       await uninstallApifoxMcpRuntime();
       await reloadOverview();
       AriMessage.success({
-        content: "已卸载 Apifox Runtime。",
+        content: t("已卸载 Apifox Runtime。"),
         duration: 1800,
       });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err || "").trim();
       AriMessage.error({
-        content: reason || "卸载 Apifox Runtime 失败，请稍后重试。",
+        content: reason || t("卸载 Apifox Runtime 失败，请稍后重试。"),
         duration: 2200,
       });
     } finally {
@@ -769,7 +777,7 @@ export function McpPage() {
     const software = String(item.software || "").trim().toLowerCase();
     if (!software) {
       AriMessage.error({
-        content: "当前 DCC 模板缺少软件标识，无法准备 Runtime。",
+        content: t("当前 DCC 模板缺少软件标识，无法准备 Runtime。"),
         duration: 2200,
       });
       return;
@@ -780,19 +788,19 @@ export function McpPage() {
       await reloadOverview();
       if (status.available) {
         AriMessage.success({
-          content: status.message || `${renderSoftwareLabel(software)} Runtime 已就绪。`,
+          content: status.message || t("{{software}} Runtime 已就绪。", { software: renderSoftwareLabel(software) }),
           duration: 2200,
         });
       } else {
         AriMessage.error({
-          content: status.message || `${renderSoftwareLabel(software)} Runtime 尚未就绪。`,
+          content: status.message || t("{{software}} Runtime 尚未就绪。", { software: renderSoftwareLabel(software) }),
           duration: 2600,
         });
       }
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err || "").trim();
       AriMessage.error({
-        content: reason || "准备 DCC Runtime 失败，请稍后重试。",
+        content: reason || t("准备 DCC Runtime 失败，请稍后重试。"),
         duration: 2200,
       });
     } finally {
@@ -828,8 +836,11 @@ export function McpPage() {
       mode="slot"
       title="MCP"
       description={activeProjectWorkspace
-        ? `已注册 ${overview.registered.length} 个；当前项目：${activeProjectWorkspace.name || activeProjectWorkspace.path}`
-        : `已注册 ${overview.registered.length} 个；当前显示全局 user 级 MCP。`}
+        ? t("已注册 {{count}} 个；当前项目：{{name}}", {
+          count: overview.registered.length,
+          name: activeProjectWorkspace.name || activeProjectWorkspace.path,
+        })
+        : t("已注册 {{count}} 个；当前显示全局 user 级 MCP。", { count: overview.registered.length })}
       actions={(
         <AriFlex align="center" space={8}>
           <AriSelect
@@ -838,19 +849,9 @@ export function McpPage() {
             onChange={handleWorkspaceSelectionChange}
           />
           <AriButton
-            ghost
-            icon="refresh"
-            label="刷新"
-            size="sm"
-            disabled={Boolean(busyActionId) || runtimeBusy}
-            onClick={() => {
-              void reloadOverview();
-            }}
-          />
-          <AriButton
             color="brand"
             icon="add"
-            label="新增 MCP"
+            label={t("新增 MCP")}
             size="sm"
             disabled={Boolean(busyActionId) || runtimeBusy}
             onClick={() => openEditor({
@@ -868,8 +869,8 @@ export function McpPage() {
     handleWorkspaceSelectionChange,
     openEditor,
     overview.registered.length,
-    reloadOverview,
     runtimeBusy,
+    t,
     workspaceId,
     workspaceOptions,
   ]);
@@ -879,7 +880,7 @@ export function McpPage() {
       <AriContainer className="desk-content" showBorderRadius={false}>
         {headerSlotElement ? createPortal(headerNode, headerSlotElement) : null}
         <AriContainer className="desk-settings-shell desk-skills-shell">
-          <AriTypography variant="caption" value="MCP 注册表加载中..." />
+          <AriTypography variant="caption" value={t("MCP 注册表加载中...")} />
         </AriContainer>
       </AriContainer>
     );
@@ -890,15 +891,15 @@ export function McpPage() {
       {headerSlotElement ? createPortal(headerNode, headerSlotElement) : null}
       <DeskOverviewDetailsModal
         visible={Boolean(managingTemplateItem)}
-        title={managingTemplateItem ? `${managingTemplateItem.name} · 详情` : "模板详情"}
-        description={managingTemplateItem?.description || "未填写模板描述"}
+        title={managingTemplateItem ? t("{{name}} · 详情", { name: managingTemplateItem.name }) : t("模板详情")}
+        description={managingTemplateItem?.description || t("未填写模板描述")}
         footer={managingTemplateItem ? (
           <AriFlex justify="flex-end" align="center" space={8}>
             {managingTemplateItem.runtimeKind === "apifox_runtime" ? (
               apifoxRuntimeStatus?.installed ? (
                 <AriButton
                   icon="delete"
-                  label="卸载 Runtime"
+                  label={t("卸载 Runtime")}
                   disabled={runtimeBusy}
                   onClick={() => {
                     void handleUninstallApifoxRuntime();
@@ -907,7 +908,7 @@ export function McpPage() {
               ) : (
                 <AriButton
                   icon="download"
-                  label="安装 Runtime"
+                  label={t("安装 Runtime")}
                   disabled={runtimeBusy}
                   onClick={() => {
                     void handleInstallApifoxRuntime();
@@ -918,7 +919,7 @@ export function McpPage() {
             {managingTemplateItem.runtimeKind === "dcc_bridge" ? (
               <AriButton
                 icon={dccRuntimeStatusMap[managingTemplateItem.software]?.available ? "check_circle" : "build"}
-                label={dccRuntimeStatusMap[managingTemplateItem.software]?.available ? "校验 Runtime" : "准备 Runtime"}
+                label={dccRuntimeStatusMap[managingTemplateItem.software]?.available ? t("校验 Runtime") : t("准备 Runtime")}
                 disabled={runtimeBusy}
                 onClick={() => {
                   void handlePrepareDccRuntime(managingTemplateItem);
@@ -928,7 +929,7 @@ export function McpPage() {
             <AriButton
               color="brand"
               icon="add"
-              label="添加"
+              label={t("添加")}
               disabled={Boolean(busyActionId) || registeredTemplateIds.has(managingTemplateItem.id)}
               onClick={() => {
                 openEditor({
@@ -937,58 +938,71 @@ export function McpPage() {
                 });
               }}
             />
-            <AriButton icon="close" label="关闭" onClick={() => setManagingTemplateItem(null)} />
+            <AriButton icon="close" label={t("关闭")} onClick={() => setManagingTemplateItem(null)} />
           </AriFlex>
         ) : undefined}
         onClose={() => setManagingTemplateItem(null)}
       >
         {managingTemplateItem ? (
           <>
-            <DeskOverviewDetailRow label="传输" value={renderTransportLabel(managingTemplateItem.transport)} />
-            <DeskOverviewDetailRow label="领域" value={renderDomainLabel(managingTemplateItem.domain)} />
+            <DeskOverviewDetailRow label={t("传输")} value={renderTransportLabel(managingTemplateItem.transport)} />
+            <DeskOverviewDetailRow label={t("领域")} value={renderDomainLabel(managingTemplateItem.domain)} />
             {managingTemplateItem.domain === "dcc" && managingTemplateItem.software ? (
-              <DeskOverviewDetailRow label="软件" value={renderSoftwareLabel(managingTemplateItem.software)} />
+              <DeskOverviewDetailRow label={t("软件")} value={renderSoftwareLabel(managingTemplateItem.software)} />
             ) : null}
             {managingTemplateItem.officialProvider ? (
-              <DeskOverviewDetailRow label="提供方" value={managingTemplateItem.officialProvider} />
+              <DeskOverviewDetailRow label={t("提供方")} value={managingTemplateItem.officialProvider} />
             ) : null}
             {managingTemplateItem.domain === "dcc" ? (
               <DeskOverviewDetailRow
-                label="能力"
-                value={`${managingTemplateItem.capabilities.length > 0 ? managingTemplateItem.capabilities.join("、") : "未声明"}；优先级：${managingTemplateItem.priority}`}
+                label={t("能力")}
+                value={t("{{capabilities}}；优先级：{{priority}}", {
+                  capabilities: managingTemplateItem.capabilities.length > 0
+                    ? managingTemplateItem.capabilities.join("、")
+                    : t("未声明"),
+                  priority: managingTemplateItem.priority,
+                })}
               />
             ) : null}
             <DeskOverviewDetailRow
-              label="接入"
+              label={t("接入")}
               value={managingTemplateItem.runtimeKind === "apifox_runtime"
-                ? `Runtime：${apifoxRuntimeStatus?.installed ? "已安装" : "未安装"}${apifoxRuntimeStatus?.version ? `（${apifoxRuntimeStatus.version}）` : ""}`
+                ? t("Runtime：{{status}}{{version}}", {
+                  status: apifoxRuntimeStatus?.installed ? t("已安装") : t("未安装"),
+                  version: apifoxRuntimeStatus?.version ? `（${apifoxRuntimeStatus.version}）` : "",
+                })
                 : managingTemplateItem.runtimeKind === "dcc_bridge"
-                  ? `Runtime：${dccRuntimeStatusMap[managingTemplateItem.software]?.available ? "已就绪" : "未就绪"}${dccRuntimeStatusMap[managingTemplateItem.software]?.resolvedPath ? `（${dccRuntimeStatusMap[managingTemplateItem.software]?.resolvedPath}）` : ""}`
+                  ? t("Runtime：{{status}}{{path}}", {
+                    status: dccRuntimeStatusMap[managingTemplateItem.software]?.available ? t("已就绪") : t("未就绪"),
+                    path: dccRuntimeStatusMap[managingTemplateItem.software]?.resolvedPath
+                      ? `（${dccRuntimeStatusMap[managingTemplateItem.software]?.resolvedPath}）`
+                      : "",
+                  })
                   : managingTemplateItem.transport === "http"
-                    ? `示例地址：${managingTemplateItem.url || "无"}`
-                    : "按需填写命令、参数和环境变量。"}
+                    ? t("示例地址：{{url}}", { url: managingTemplateItem.url || t("无") })
+                    : t("按需填写命令、参数和环境变量。")}
             />
             {managingTemplateItem.runtimeKind === "dcc_bridge" ? (
               <DeskOverviewDetailRow label="Runtime" value={renderDccRuntimeAutoPrepareLabel(dccRuntimeStatusMap[managingTemplateItem.software])} />
             ) : null}
             {managingTemplateItem.runtimeKind === "dcc_bridge" && renderDccRuntimeEnvRequirementLabel(dccRuntimeStatusMap[managingTemplateItem.software]) ? (
-              <DeskOverviewDetailRow label="环境要求" value={renderDccRuntimeEnvRequirementLabel(dccRuntimeStatusMap[managingTemplateItem.software]) || ""} />
+              <DeskOverviewDetailRow label={t("环境要求")} value={renderDccRuntimeEnvRequirementLabel(dccRuntimeStatusMap[managingTemplateItem.software]) || ""} />
             ) : null}
-            {managingTemplateItem.docsUrl ? <DeskOverviewDetailRow label="文档" value={managingTemplateItem.docsUrl} /> : null}
+            {managingTemplateItem.docsUrl ? <DeskOverviewDetailRow label={t("文档")} value={managingTemplateItem.docsUrl} /> : null}
           </>
         ) : null}
       </DeskOverviewDetailsModal>
       <AriModal
         visible={editorVisible}
-        title={editingDraft.id ? "编辑 MCP" : "新增 MCP"}
+        title={editingDraft.id ? t("编辑 MCP") : t("新增 MCP")}
         onClose={() => setEditorVisible(false)}
         footer={(
           <AriFlex justify="flex-end" align="center" space={8}>
-            <AriButton label="取消" onClick={() => setEditorVisible(false)} />
+            <AriButton label={t("取消")} onClick={() => setEditorVisible(false)} />
             {editingDraft.id ? (
               <AriButton
                 icon="check_circle"
-                label="校验"
+                label={t("校验")}
                 disabled={Boolean(busyActionId)}
                 onClick={() => {
                   const target = overview.registered.find((item) => item.id === editingDraft.id);
@@ -1003,7 +1017,7 @@ export function McpPage() {
               <AriButton
                 color="danger"
                 icon="delete"
-                label="移除"
+                label={t("移除")}
                 disabled={Boolean(busyActionId)}
                 onClick={() => {
                   const target = overview.registered.find((item) => item.id === editingDraft.id);
@@ -1014,32 +1028,32 @@ export function McpPage() {
                 }}
               />
             ) : null}
-            <AriButton color="brand" icon="save" label="保存" onClick={handleSaveDraft} />
+            <AriButton color="brand" icon="save" label={t("保存")} onClick={handleSaveDraft} />
           </AriFlex>
         )}
       >
         <AriForm layout="vertical" labelAlign="left" density="compact">
-          <AriFormItem label="名称" name="mcp.editor.name">
+          <AriFormItem label={t("名称")} name="mcp.editor.name">
             <AriInput
               value={editingDraft.name || ""}
               onChange={(value: string) => setEditingDraft((current) => ({ ...current, name: value }))}
-              placeholder="请输入 MCP 名称"
+              placeholder={t("请输入 MCP 名称")}
             />
           </AriFormItem>
-          <AriFormItem label="说明" name="mcp.editor.description">
+          <AriFormItem label={t("说明")} name="mcp.editor.description">
             <AriInput.TextArea
               value={editingDraft.description || ""}
               onChange={(value: string) => setEditingDraft((current) => ({ ...current, description: value }))}
-              placeholder="请输入 MCP 说明"
+              placeholder={t("请输入 MCP 说明")}
               rows={3}
             />
           </AriFormItem>
-          <AriFormItem label="领域" name="mcp.editor.domain">
+          <AriFormItem label={t("领域")} name="mcp.editor.domain">
             <AriSelect
               value={editingDraft.domain || "general"}
               options={[
-                { label: "General（通用）", value: "general" },
-                { label: "DCC（建模软件）", value: "dcc" },
+                { label: t("General（通用）"), value: "general" },
+                { label: t("DCC（建模软件）"), value: "dcc" },
               ]}
               onChange={(value: unknown) => {
                 const nextDomain = String(value || "general") === "dcc" ? "dcc" : "general";
@@ -1056,38 +1070,38 @@ export function McpPage() {
           </AriFormItem>
           {editingDraft.domain === "dcc" ? (
             <>
-              <AriFormItem label="软件标识" name="mcp.editor.software">
+              <AriFormItem label={t("软件标识")} name="mcp.editor.software">
                 <AriInput
                   value={editingDraft.software || ""}
                   onChange={(value: string) => setEditingDraft((current) => ({ ...current, software: value }))}
-                  placeholder="例如：blender、maya、c4d"
+                  placeholder={t("例如：blender、maya、c4d")}
                 />
               </AriFormItem>
-              <AriFormItem label="能力列表（每行一个）" name="mcp.editor.capabilities">
+              <AriFormItem label={t("能力列表（每行一个）")} name="mcp.editor.capabilities">
                 <AriInput.TextArea
                   value={capabilitiesText}
                   onChange={setCapabilitiesText}
-                  placeholder="例如：scene.inspect\nmesh.edit\nfile.export"
+                  placeholder={t("例如：scene.inspect\nmesh.edit\nfile.export")}
                   rows={4}
                 />
               </AriFormItem>
-              <AriFormItem label="优先级" name="mcp.editor.priority">
+              <AriFormItem label={t("优先级")} name="mcp.editor.priority">
                 <AriInput
                   value={String(editingDraft.priority || 0)}
                   onChange={(value: string) => setEditingDraft((current) => ({
                     ...current,
                     priority: Number.parseInt(String(value || "0").trim() || "0", 10) || 0,
                   }))}
-                  placeholder="数值越大优先级越高"
+                  placeholder={t("数值越大优先级越高")}
                 />
               </AriFormItem>
-              <AriFormItem label="支持导入" name="mcp.editor.supportsImport">
+              <AriFormItem label={t("支持导入")} name="mcp.editor.supportsImport">
                 <AriSwitch
                   checked={editingDraft.supportsImport === true}
                   onChange={(checked: boolean) => setEditingDraft((current) => ({ ...current, supportsImport: checked }))}
                 />
               </AriFormItem>
-              <AriFormItem label="支持导出" name="mcp.editor.supportsExport">
+              <AriFormItem label={t("支持导出")} name="mcp.editor.supportsExport">
                 <AriSwitch
                   checked={editingDraft.supportsExport === true}
                   onChange={(checked: boolean) => setEditingDraft((current) => ({ ...current, supportsExport: checked }))}
@@ -1095,7 +1109,7 @@ export function McpPage() {
               </AriFormItem>
             </>
           ) : null}
-          <AriFormItem label="传输方式" name="mcp.editor.transport">
+          <AriFormItem label={t("传输方式")} name="mcp.editor.transport">
             <AriSelect
               value={editingDraft.transport}
               options={[
@@ -1108,14 +1122,14 @@ export function McpPage() {
               }}
             />
           </AriFormItem>
-          <AriFormItem label="作用域" name="mcp.editor.scope">
+          <AriFormItem label={t("作用域")} name="mcp.editor.scope">
             <AriSelect
               value={editingDraft.scope || "user"}
               options={[
-                { label: "User（全局）", value: "user" },
+                { label: t("User（全局）"), value: "user" },
                 ...(activeWorkspacePath
                   ? [{
-                    label: `Workspace（${activeProjectWorkspace?.name || "当前项目"}）`,
+                    label: t("Workspace（{{name}}）", { name: activeProjectWorkspace?.name || t("当前项目") }),
                     value: "workspace",
                   }]
                   : []),
@@ -1126,7 +1140,7 @@ export function McpPage() {
               }}
             />
           </AriFormItem>
-          <AriFormItem label="启用" name="mcp.editor.enabled">
+          <AriFormItem label={t("启用")} name="mcp.editor.enabled">
             <AriSwitch
               checked={editingDraft.enabled !== false}
               onChange={(checked: boolean) => setEditingDraft((current) => ({ ...current, enabled: checked }))}
@@ -1134,128 +1148,130 @@ export function McpPage() {
           </AriFormItem>
           {editingDraft.transport === "stdio" ? (
             editingDraft.runtimeKind === "apifox_runtime" ? (
-              <AriFormItem label="运行方式" name="mcp.editor.runtimeKind">
+              <AriFormItem label={t("运行方式")} name="mcp.editor.runtimeKind">
                 <AriTypography
                   variant="caption"
                   value={apifoxRuntimeStatus?.installed
-                    ? `Apifox Runtime 已安装：${apifoxRuntimeStatus.entryPath || "应用私有目录"}`
-                    : "Apifox Runtime 未安装，请先在模板卡片中安装 Runtime。"}
+                    ? t("Apifox Runtime 已安装：{{path}}", { path: apifoxRuntimeStatus.entryPath || t("应用私有目录") })
+                    : t("Apifox Runtime 未安装，请先在模板卡片中安装 Runtime。")}
                 />
               </AriFormItem>
             ) : editingDraft.runtimeKind === "dcc_bridge" ? (
-              <AriFormItem label="运行方式" name="mcp.editor.runtimeKind">
+              <AriFormItem label={t("运行方式")} name="mcp.editor.runtimeKind">
                 <AriTypography
                   variant="caption"
                   value={editingDraft.software
-                    ? `${renderSoftwareLabel(editingDraft.software)} Runtime 由 DCC Bridge 管理，请在模板卡片中准备或校验 Runtime。`
-                    : "DCC Runtime 由 DCC Bridge 管理，请先填写软件标识后再回到模板卡片准备 Runtime。"}
+                    ? t("{{software}} Runtime 由 DCC Bridge 管理，请在模板卡片中准备或校验 Runtime。", {
+                      software: renderSoftwareLabel(editingDraft.software),
+                    })
+                    : t("DCC Runtime 由 DCC Bridge 管理，请先填写软件标识后再回到模板卡片准备 Runtime。")}
                 />
                 {editingDraft.software ? (
                   <>
                     <AriTypography
                       variant="caption"
                       value={editingDraft.software.trim().toLowerCase() === "blender"
-                        ? "自动准备：支持"
-                        : "自动准备：手动"}
+                        ? t("自动准备：支持")
+                        : t("自动准备：手动")}
                     />
                     {editingDraft.software.trim().toLowerCase() === "maya" ? (
-                      <AriTypography variant="caption" value="环境变量：MAYA_BIN" />
+                      <AriTypography variant="caption" value={t("环境变量：MAYA_BIN")} />
                     ) : null}
                     {editingDraft.software.trim().toLowerCase() === "c4d" ? (
-                      <AriTypography variant="caption" value="环境变量：C4D_BIN" />
+                      <AriTypography variant="caption" value={t("环境变量：C4D_BIN")} />
                     ) : null}
                   </>
                 ) : null}
               </AriFormItem>
             ) : (
               <>
-                <AriFormItem label="命令" name="mcp.editor.command">
+                <AriFormItem label={t("命令")} name="mcp.editor.command">
                   <AriInput
                     value={editingDraft.command || ""}
                     onChange={(value: string) => setEditingDraft((current) => ({ ...current, command: value }))}
-                    placeholder="例如：npx、uvx 或可执行文件绝对路径"
+                    placeholder={t("例如：npx、uvx 或可执行文件绝对路径")}
                   />
                 </AriFormItem>
-                <AriFormItem label="参数（每行一个）" name="mcp.editor.args">
+                <AriFormItem label={t("参数（每行一个）")} name="mcp.editor.args">
                   <AriInput.TextArea
                     value={argsText}
                     onChange={setArgsText}
-                    placeholder="例如：-y\napifox-mcp-server@latest"
+                    placeholder={t("例如：-y\napifox-mcp-server@latest")}
                     rows={4}
                   />
                 </AriFormItem>
-                <AriFormItem label="环境变量（KEY=value）" name="mcp.editor.env">
+                <AriFormItem label={t("环境变量（KEY=value）")} name="mcp.editor.env">
                   <AriInput.TextArea
                     value={envText}
                     onChange={setEnvText}
-                    placeholder="例如：API_KEY=xxx"
+                    placeholder={t("例如：API_KEY=xxx")}
                     rows={4}
                   />
                 </AriFormItem>
-                <AriFormItem label="工作目录" name="mcp.editor.cwd">
+                <AriFormItem label={t("工作目录")} name="mcp.editor.cwd">
                   <AriInput
                     value={editingDraft.cwd || ""}
                     onChange={(value: string) => setEditingDraft((current) => ({ ...current, cwd: value }))}
-                    placeholder="可选，留空则使用默认目录"
+                    placeholder={t("可选，留空则使用默认目录")}
                   />
                 </AriFormItem>
               </>
             )
           ) : (
             <>
-              <AriFormItem label="地址" name="mcp.editor.url">
+              <AriFormItem label={t("地址")} name="mcp.editor.url">
                 <AriInput
                   value={editingDraft.url || ""}
                   onChange={(value: string) => setEditingDraft((current) => ({ ...current, url: value }))}
-                  placeholder="请输入 http:// 或 https:// 地址"
+                  placeholder={t("请输入 http:// 或 https:// 地址")}
                 />
               </AriFormItem>
-              <AriFormItem label="请求头（KEY=value）" name="mcp.editor.headers">
+              <AriFormItem label={t("请求头（KEY=value）")} name="mcp.editor.headers">
                 <AriInput.TextArea
                   value={headersText}
                   onChange={setHeadersText}
-                  placeholder="例如：Authorization=Bearer xxx"
+                  placeholder={t("例如：Authorization=Bearer xxx")}
                   rows={4}
                 />
               </AriFormItem>
             </>
           )}
-          <AriFormItem label="文档地址" name="mcp.editor.docsUrl">
+          <AriFormItem label={t("文档地址")} name="mcp.editor.docsUrl">
             <AriInput
               value={editingDraft.docsUrl || ""}
               onChange={(value: string) => setEditingDraft((current) => ({ ...current, docsUrl: value }))}
-              placeholder="可选，便于团队查看接入文档"
+              placeholder={t("可选，便于团队查看接入文档")}
             />
           </AriFormItem>
-          <AriFormItem label="提供方" name="mcp.editor.officialProvider">
+          <AriFormItem label={t("提供方")} name="mcp.editor.officialProvider">
             <AriInput
               value={editingDraft.officialProvider || ""}
               onChange={(value: string) => setEditingDraft((current) => ({ ...current, officialProvider: value }))}
-              placeholder="可选，例如 Apifox"
+              placeholder={t("可选，例如 Apifox")}
             />
           </AriFormItem>
         </AriForm>
       </AriModal>
       <AriModal
         visible={Boolean(removingItem)}
-        title="移除 MCP"
+        title={t("移除 MCP")}
         onClose={() => setRemovingItem(null)}
         footer={(
           <AriFlex justify="flex-end" align="center" space={8}>
-            <AriButton label="取消" onClick={() => setRemovingItem(null)} />
-            <AriButton color="danger" icon="delete" label="移除" onClick={handleConfirmRemove} />
+            <AriButton label={t("取消")} onClick={() => setRemovingItem(null)} />
+            <AriButton color="danger" icon="delete" label={t("移除")} onClick={handleConfirmRemove} />
           </AriFlex>
         )}
       >
         <AriTypography
           variant="body"
-          value={removingItem ? `确认移除 ${removingItem.name} 吗？该操作会删除本地注册项。` : ""}
+          value={removingItem ? t("确认移除 {{name}} 吗？该操作会删除本地注册项。", { name: removingItem.name }) : ""}
         />
       </AriModal>
       <AriContainer className="desk-settings-shell desk-skills-shell">
-        <DeskSectionTitle title="已注册" />
+        <DeskSectionTitle title={t("已注册")} />
         {overview.registered.length === 0 ? (
-          <DeskEmptyState title="暂无已注册 MCP" description="可从下方未注册模板新增，或直接创建自定义 MCP。" />
+          <DeskEmptyState title={t("暂无已注册 MCP")} description={t("可从下方未注册模板新增，或直接创建自定义 MCP。")} />
         ) : (
           <AriContainer className="desk-skill-grid">
             {overview.registered.map((item) => (
@@ -1269,9 +1285,9 @@ export function McpPage() {
           </AriContainer>
         )}
 
-        <DeskSectionTitle title="未注册" />
+        <DeskSectionTitle title={t("未注册")} />
         {overview.templates.length === 0 ? (
-          <DeskEmptyState title="暂无未注册 MCP" description="当前应用未提供可直接添加的内置模板。" />
+          <DeskEmptyState title={t("暂无未注册 MCP")} description={t("当前应用未提供可直接添加的内置模板。")} />
         ) : (
           <AriContainer className="desk-skill-grid">
             {overview.templates.map((item) => (

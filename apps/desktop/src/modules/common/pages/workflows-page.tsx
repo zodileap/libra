@@ -24,6 +24,7 @@ import {
   DeskPageHeader,
   DeskSectionTitle,
 } from "../../../widgets/settings-primitives";
+import { useDesktopI18n } from "../../../shared/i18n";
 
 // 描述：
 //
@@ -46,19 +47,20 @@ function WorkflowCard({
   onCopy?: (workflow: AgentWorkflowDefinition) => void;
   onAdd?: (workflow: AgentWorkflowDefinition) => void;
 }) {
+  const { t } = useDesktopI18n();
   const readonly = isReadonlyAgentWorkflow(workflow);
   return (
     <DeskOverviewCard
       icon={<AriIcon name="account_tree" />}
       title={workflow.name}
-      description={workflow.description || (readonly ? "当前模板尚未填写说明。" : "当前工作流尚未填写说明。")}
+      description={workflow.description || (readonly ? t("当前模板尚未填写说明。") : t("当前工作流尚未填写说明。"))}
       actions={(
         <>
-          <AriTooltip content="管理" position="top" minWidth={0} matchTriggerWidth={false}>
+          <AriTooltip content={t("管理")} position="top" minWidth={0} matchTriggerWidth={false}>
             <AriButton
               type="text"
               icon="settings"
-              aria-label="管理工作流"
+              aria-label={t("管理工作流")}
               onClick={() => onManage(workflow)}
             />
           </AriTooltip>
@@ -66,7 +68,7 @@ function WorkflowCard({
             type="text"
             icon={readonly ? "add" : "content_copy"}
             color={readonly ? "brand" : "default"}
-            aria-label={readonly ? "添加工作流" : "复制工作流"}
+            aria-label={readonly ? t("添加工作流") : t("复制工作流")}
             onClick={() => {
               if (readonly) {
                 onAdd?.(workflow);
@@ -85,6 +87,7 @@ function WorkflowCard({
 //
 //   - 渲染工作流总览页，按“已注册 / 未注册模板”拆分展示，并统一提供新增、复制和添加入口。
 export function WorkflowsPage() {
+  const { t } = useDesktopI18n();
   const navigate = useNavigate();
   const headerSlotElement = useDesktopHeaderSlot();
   const [workflowVersion, setWorkflowVersion] = useState(0);
@@ -114,11 +117,11 @@ export function WorkflowsPage() {
     const copied = createAgentWorkflowFromTemplate(workflow.id);
     refreshWorkflowOverview();
     AriMessage.success({
-      content: `已复制 ${workflow.name}`,
+      content: t("已复制 {{name}}", { name: workflow.name }),
       duration: 1800,
     });
     navigate(resolveWorkflowEditorPath(copied.id));
-  }, [navigate, refreshWorkflowOverview]);
+  }, [navigate, refreshWorkflowOverview, t]);
 
   // 描述：
   //
@@ -136,11 +139,11 @@ export function WorkflowsPage() {
     const created = createAgentWorkflowFromTemplate(workflow.id);
     refreshWorkflowOverview();
     AriMessage.success({
-      content: `已添加 ${workflow.name}`,
+      content: t("已添加 {{name}}", { name: workflow.name }),
       duration: 1800,
     });
     navigate(resolveWorkflowEditorPath(created.id));
-  }, [navigate, refreshWorkflowOverview]);
+  }, [navigate, refreshWorkflowOverview, t]);
 
   // 描述：
   //
@@ -148,36 +151,29 @@ export function WorkflowsPage() {
   const headerNode = useMemo(() => (
     <DeskPageHeader
       mode="slot"
-      title="工作流"
-      description="已注册工作流可继续管理，未注册模板可直接添加。"
+      title={t("工作流")}
+      description={t("已注册工作流可继续管理，未注册模板可直接添加。")}
       actions={(
         <AriFlex align="center" space={8}>
           <AriButton
-            ghost
-            icon="refresh"
-            label="刷新"
-            size="sm"
-            onClick={refreshWorkflowOverview}
-          />
-          <AriButton
             color="brand"
             icon="add"
-            label="新增工作流"
+            label={t("新增工作流")}
             size="sm"
             onClick={handleCreateWorkflow}
           />
         </AriFlex>
       )}
     />
-  ), [handleCreateWorkflow, refreshWorkflowOverview]);
+  ), [handleCreateWorkflow, t]);
 
   return (
     <AriContainer className="desk-content" showBorderRadius={false}>
       {headerSlotElement ? createPortal(headerNode, headerSlotElement) : null}
       <AriContainer className="desk-settings-shell desk-skills-shell">
-        <DeskSectionTitle title="已注册" />
+        <DeskSectionTitle title={t("已注册")} />
         {workflowOverview.registered.length === 0 ? (
-          <DeskEmptyState title="暂无已注册工作流" description="点击右上角新增，或从下方内置模板复制一份开始编辑。" />
+          <DeskEmptyState title={t("暂无已注册工作流")} description={t("点击右上角新增，或从下方内置模板复制一份开始编辑。")} />
         ) : (
           <AriContainer className="desk-workflow-grid">
             {workflowOverview.registered.map((item) => (
@@ -191,9 +187,9 @@ export function WorkflowsPage() {
           </AriContainer>
         )}
 
-        <DeskSectionTitle title="未注册" />
+        <DeskSectionTitle title={t("未注册")} />
         {workflowOverview.templates.length === 0 ? (
-          <DeskEmptyState title="暂无内置模板" description="当前应用未提供可直接复制的内置工作流模板。" />
+          <DeskEmptyState title={t("暂无内置模板")} description={t("当前应用未提供可直接复制的内置工作流模板。")} />
         ) : (
           <AriContainer className="desk-workflow-grid">
             {workflowOverview.templates.map((item) => (

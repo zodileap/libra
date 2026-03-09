@@ -74,12 +74,14 @@ test("TestWorkflowStorageShouldNormalizeDefaultAgentWorkflowGraph", () => {
 
   // 描述：
   //
-  //   - 默认智能体工作流模板在列表构建阶段必须归一化图结构，并统一使用当前工作流存储键。
-  assert.match(source, /const templates = DEFAULT_AGENT_WORKFLOWS\.map/);
+  //   - 默认智能体工作流模板在列表构建阶段必须归一化图结构，并在模板已注册后从“未注册”区隐藏。
   assert.match(source, /const registered = readSavedAgentWorkflows\(\)\s*\.filter/);
+  assert.match(source, /const registeredTemplateIdSet = new Set/);
   assert.match(source, /window\.localStorage\.getItem\(STORAGE_KEYS\.AGENT_WORKFLOWS\)/);
   assert.match(source, /function normalizeAgentWorkflowId\(/);
+  assert.match(source, /const templates = resolveDefaultAgentWorkflows\(\)/);
   assert.match(source, /normalizeAgentWorkflow\(\{ \.\.\.item, source: "builtin" \}\)/);
+  assert.match(source, /\.filter\(\(item\) => !registeredTemplateIdSet\.has\(item\.id\)\)/);
 });
 
 test("TestRouterShouldExposeAgentSettingsRoute", () => {
@@ -159,8 +161,8 @@ test("TestAgentShouldShowStandaloneWorkspaceOnboardingWhenNoWorkspace", () => {
   assert.match(source, /const onboardingContent = !selectedWorkspace \? \(/);
   assert.match(source, /className=\"desk-project-workspace-onboarding\"/);
   assert.match(source, /className=\"desk-project-workspace-onboarding-card\"/);
-  assert.match(source, /value=\"选择项目\"/);
-  assert.match(source, /label=\{gitCloneLoading \? "开启中\.\.\." : "开启"\}/);
+  assert.match(source, /value=\{t\("选择项目"\)\}/);
+  assert.match(source, /label=\{gitCloneLoading \? t\("开启中\.\.\."\) : t\("开启"\)\}/);
   assert.match(source, /invoke<string \| null>\(\"pick_local_project_folder\"\)/);
   assert.match(source, /invoke<GitCliHealthResponse>\(\"check_git_cli_health\"\)/);
   assert.match(source, /invoke<GitCloneResponse>\(\"clone_git_repository\"/);
@@ -170,8 +172,8 @@ test("TestAgentShouldShowStandaloneWorkspaceOnboardingWhenNoWorkspace", () => {
   assert.match(source, /reason: "workspace_seed_bootstrap"/);
   assert.match(source, /if \(profileBefore\?\.revision && profileBefore\.revision > 1\) \{/);
   assert.match(source, /invoke\(\"open_external_url\", \{ url: \"https:\/\/git-scm\.com\/downloads\" \}\)/);
-  assert.match(source, /title=\"未检测到 Git\"/);
-  assert.match(source, /label=\"确认并前往下载\"/);
+  assert.match(source, /title=\{t\("未检测到 Git"\)\}/);
+  assert.match(source, /label=\{t\("确认并前往下载"\)\}/);
   assert.match(source, /<AriInput\s+variant=\"borderless\"/s);
   assert.match(source, /const forceWorkspacePickerMode = useMemo/);
   assert.match(source, /getLastUsedProjectWorkspaceId\(\)/);
@@ -198,11 +200,11 @@ test("TestAgentSettingsPageShouldSeparateWorkflowManagement", () => {
   // 描述：
   //
   //   - 统一智能体设置页应仅保留执行偏好与工作流入口，不再承载工作流 CRUD。
-  assert.match(source, /title="智能体设置"/);
-  assert.match(source, /label="进入工作流设置"/);
-  assert.match(source, /label="打开工作流设置"/);
+  assert.match(source, /title=\{t\("智能体设置"\)\}/);
+  assert.match(source, /label=\{t\("进入工作流设置"\)\}/);
+  assert.match(source, /label=\{t\("打开工作流设置"\)\}/);
   assert.match(source, /navigate\("\/workflows"\)/);
-  assert.match(source, /title="执行偏好"/);
+  assert.match(source, /title=\{t\("执行偏好"\)\}/);
   assert.match(source, /AriSwitch/);
   assert.doesNotMatch(source, /createAgentWorkflowFromTemplate/);
   assert.doesNotMatch(source, /deleteAgentWorkflow/);
@@ -262,14 +264,15 @@ test("TestWorkflowPagesShouldUseListLayoutInSettings", () => {
   assert.doesNotMatch(overviewSource, /DeskOverviewDetailsModal/);
   assert.doesNotMatch(overviewSource, /DeskOverviewDetailRow/);
   assert.match(overviewSource, /mode="slot"/);
-  assert.match(overviewSource, /DeskSectionTitle title="已注册"/);
-  assert.match(overviewSource, /DeskSectionTitle title="未注册"/);
-  assert.match(overviewSource, /label="新增工作流"/);
-  assert.match(overviewSource, /content="管理"/);
-  assert.match(overviewSource, /aria-label="管理工作流"/);
-  assert.match(overviewSource, /aria-label=\{readonly \? "添加工作流" : "复制工作流"\}/);
-  assert.doesNotMatch(overviewSource, /aria-label=\{readonly \? "查看工作流" : "编辑工作流"\}/);
-  assert.doesNotMatch(overviewSource, /aria-label="删除工作流"/);
+  assert.match(overviewSource, /DeskSectionTitle title=\{t\("已注册"\)\}/);
+  assert.match(overviewSource, /DeskSectionTitle title=\{t\("未注册"\)\}/);
+  assert.match(overviewSource, /label=\{t\("新增工作流"\)\}/);
+  assert.doesNotMatch(overviewSource, /label=\{t\("刷新"\)\}/);
+  assert.match(overviewSource, /content=\{t\("管理"\)\}/);
+  assert.match(overviewSource, /aria-label=\{t\("管理工作流"\)\}/);
+  assert.match(overviewSource, /aria-label=\{readonly \? t\("添加工作流"\) : t\("复制工作流"\)\}/);
+  assert.doesNotMatch(overviewSource, /aria-label=\{readonly \? t\("查看工作流"\) : t\("编辑工作流"\)\}/);
+  assert.doesNotMatch(overviewSource, /aria-label=\{t\("删除工作流"\)\}/);
   assert.match(canvasSource, /desk-workflow-editor-main/);
   assert.doesNotMatch(canvasSource, /desk-workflow-editor-sidebar/);
   assert.match(canvasSource, /desk-workflow-editor-floating-panel/);
@@ -330,19 +333,19 @@ test("TestWorkflowCanvasSidebarAndFloatingActionsShouldMatchUxRules", () => {
   assert.match(sidebarSource, /if \(pathname\.startsWith\(WORKFLOW_EDITOR_PAGE_PATH\)\) return "workflow";/);
   assert.doesNotMatch(sidebarSource, /if \(pathname\.includes\("\/workflows"\)\) return "workflow";/);
   assert.match(sidebarSource, /function WorkflowsSidebar/);
-  assert.match(sidebarSource, /label="返回"/);
-  assert.match(sidebarSource, /label="新增"/);
+  assert.match(sidebarSource, /label=\{t\("返回"\)\}/);
+  assert.match(sidebarSource, /label=\{t\("新增"\)\}/);
   assert.match(sidebarSource, /onBack=\{\(\) => navigate\("\/home"\)\}/);
   assert.match(sidebarSource, /const isWorkflowEditorPage = location\.pathname\.startsWith\(WORKFLOW_EDITOR_PAGE_PATH\);/);
   assert.match(sidebarSource, /listAgentWorkflowOverview\(\)/);
   assert.match(sidebarSource, /workflowOverview\.all/);
-  assert.match(sidebarSource, /label: "已注册", isGroup: true/);
-  assert.match(sidebarSource, /label: "未注册", isGroup: true/);
+  assert.match(sidebarSource, /label: t\("已注册"\), isGroup: true/);
+  assert.match(sidebarSource, /label: t\("未注册"\), isGroup: true/);
   assert.match(sidebarSource, /if \(pendingDeleteWorkflowId !== workflowId\) \{\s*setPendingDeleteWorkflowId\(workflowId\);\s*return;\s*\}/s);
-  assert.match(sidebarSource, /label=\{pendingDeleteWorkflowId === item\.id \? "确定" : undefined\}/);
+  assert.match(sidebarSource, /label=\{pendingDeleteWorkflowId === item\.id \? t\("确定"\) : undefined\}/);
   assert.match(sidebarSource, /showActionsOnHover: pendingDeleteWorkflowId !== item\.id/);
   assert.doesNotMatch(sidebarSource, /setPendingDeleteWorkflowId\(\(current\) => \(current === item\.key \? "" : current\)\);/);
-  assert.match(overviewSource, /aria-label=\{readonly \? "添加工作流" : "复制工作流"\}/);
+  assert.match(overviewSource, /aria-label=\{readonly \? t\("添加工作流"\) : t\("复制工作流"\)\}/);
   assert.match(canvasSource, /className="desk-workflow-editor-floating-panel"/);
   assert.doesNotMatch(canvasSource, /desk-workflow-editor-sidebar/);
 });

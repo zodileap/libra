@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { COMMANDS } from "../../../shared/constants";
+import { translateDesktopText } from "../../../shared/i18n";
 
 // 描述：
 //
@@ -37,6 +38,39 @@ interface RawAgentSkillItem {
   removable?: unknown;
 }
 
+interface SkillDisplayPreset {
+  name: string;
+  description: string;
+}
+
+function resolveExternalSkillDisplayPreset(skillId: string): SkillDisplayPreset | null {
+  if (skillId === "doc") {
+    return {
+      name: translateDesktopText("文档处理"),
+      description: translateDesktopText("读取、创建或编辑 Word 文档，适合排版和格式要求较高的文档任务。"),
+    };
+  }
+  if (skillId === "repo-readme") {
+    return {
+      name: translateDesktopText("仓库说明"),
+      description: translateDesktopText("编写和维护仓库 README，适合整理项目简介、快速开始和使用说明。"),
+    };
+  }
+  if (skillId === "skill-creator") {
+    return {
+      name: translateDesktopText("技能创建"),
+      description: translateDesktopText("创建或更新 Codex 技能，适合沉淀专用流程、提示词和工具约束。"),
+    };
+  }
+  if (skillId === "skill-installer") {
+    return {
+      name: translateDesktopText("技能安装"),
+      description: translateDesktopText("安装或同步 Codex 技能，适合从列表或仓库导入技能包。"),
+    };
+  }
+  return null;
+}
+
 // 描述：
 //
 //   - 将未知值规整为对象，供技能运行时元数据统一消费；非法值统一回退为空对象。
@@ -53,6 +87,40 @@ function normalizeRuntimeRequirements(rawValue: unknown): Record<string, unknown
     return {};
   }
   return rawValue as Record<string, unknown>;
+}
+
+// 描述：
+//
+//   - 解析技能展示名称。对于外部通用技能，统一输出中文友好名称，避免直接暴露英文目录名。
+//
+// Params:
+//
+//   - skillId: 技能唯一标识。
+//   - rawName: Tauri 返回的原始技能名称。
+//
+// Returns:
+//
+//   - 前端用于展示的技能名称。
+function resolveSkillDisplayName(skillId: string, rawName: string): string {
+  const preset = resolveExternalSkillDisplayPreset(skillId);
+  return preset?.name || rawName;
+}
+
+// 描述：
+//
+//   - 解析技能展示说明。对于外部通用技能，统一输出简短中文说明，避免直接展示英文长描述。
+//
+// Params:
+//
+//   - skillId: 技能唯一标识。
+//   - rawDescription: Tauri 返回的原始技能说明。
+//
+// Returns:
+//
+//   - 前端用于展示的技能说明。
+function resolveSkillDisplayDescription(skillId: string, rawDescription: string): string {
+  const preset = resolveExternalSkillDisplayPreset(skillId);
+  return preset?.description || rawDescription;
 }
 
 // 描述：
@@ -79,8 +147,8 @@ function normalizeAgentSkillItem(rawItem: unknown): AgentSkillItem | null {
   }
   return {
     id,
-    name,
-    description: String(source.description || "").trim(),
+    name: resolveSkillDisplayName(id, name),
+    description: resolveSkillDisplayDescription(id, String(source.description || "").trim()),
     source: String(source.source || "builtin").trim() || "builtin",
     rootPath: String(source.root_path || "").trim(),
     skillFilePath,
@@ -150,7 +218,7 @@ export async function importAgentSkillFromPath(path: string): Promise<AgentSkill
   });
   const normalized = normalizeAgentSkillItem(payload);
   if (!normalized) {
-    throw new Error("导入技能后的返回结果无效。");
+    throw new Error(translateDesktopText("导入技能后的返回结果无效。"));
   }
   return normalized;
 }

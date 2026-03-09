@@ -53,7 +53,7 @@ test("TestSkillsModuleShouldExposeRouteAndSidebarEntry", () => {
   // 描述：
   //
   //   - Home 侧边栏工具栏应包含技能与 MCP 入口。
-  assert.match(sidebarSource, /label: "技能"/);
+  assert.match(sidebarSource, /label: t\("技能"\)/);
   assert.match(sidebarSource, /label: "MCP"/);
   assert.match(sidebarSource, /path: SKILL_PAGE_PATH/);
   assert.match(sidebarSource, /path: MCP_PAGE_PATH/);
@@ -63,7 +63,7 @@ test("TestSkillsModuleShouldExposeRouteAndSidebarEntry", () => {
   // 描述：
   //
   //   - 模块清单与类型定义应注册 skill/mcp 键，参与构建模块开关控制。
-  assert.match(manifestSource, /\{ key: "skill", title: "技能" \}/);
+  assert.match(manifestSource, /\{ key: "skill", title: translateDesktopText\("技能"\) \}/);
   assert.match(manifestSource, /\{ key: "mcp", title: "MCP" \}/);
   assert.match(routerTypesSource, /\| "skill"/);
   assert.match(routerTypesSource, /\| "mcp"/);
@@ -89,24 +89,27 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   // 描述：
   //
   //   - 技能页应展示“已注册/未注册”分区，并将标题、说明和操作统一挂到标题栏 slot。
-  assert.match(skillsPageSource, /DeskSectionTitle title="已注册"/);
-  assert.match(skillsPageSource, /DeskSectionTitle title="未注册"/);
+  assert.match(skillsPageSource, /DeskSectionTitle title=\{t\("已注册"\)\}/);
+  assert.match(skillsPageSource, /DeskSectionTitle title=\{t\("未注册"\)\}/);
   assert.match(skillsPageSource, /DeskPageHeader/);
   assert.match(skillsPageSource, /DeskOverviewCard/);
   assert.match(skillsPageSource, /icon=\{<AriIcon name="new_releases" \/>\}/);
   assert.match(skillsPageSource, /DeskOverviewDetailsModal/);
   assert.match(skillsPageSource, /DeskOverviewDetailRow/);
   assert.match(skillsPageSource, /mode="slot"/);
-  assert.match(skillsPageSource, /label="导入本地技能"/);
-  assert.match(skillsPageSource, /title="移除技能"/);
+  assert.match(skillsPageSource, /content=\{t\("导入本地技能"\)\}/);
+  assert.match(skillsPageSource, /aria-label=\{t\("导入本地技能"\)\}/);
+  assert.match(skillsPageSource, /icon="add"/);
+  assert.match(skillsPageSource, /title=\{t\("移除技能"\)\}/);
   assert.match(skillsPageSource, /type="text"/);
-  assert.match(skillsPageSource, /content="管理"/);
-  assert.match(skillsPageSource, /aria-label="管理技能"/);
-  assert.match(skillsPageSource, /aria-label="添加技能"/);
+  assert.match(skillsPageSource, /content=\{t\("管理"\)\}/);
+  assert.match(skillsPageSource, /aria-label=\{t\("管理技能"\)\}/);
+  assert.match(skillsPageSource, /aria-label=\{t\("添加技能"\)\}/);
+  assert.doesNotMatch(skillsPageSource, /label="刷新"/);
   assert.match(skillsPageSource, /pickLocalAgentSkillFolder/);
   assert.match(skillsPageSource, /importAgentSkillFromPath/);
   assert.match(skillsPageSource, /removeAgentSkill/);
-  assert.match(skillsPageSource, /已添加/);
+  assert.match(skillsPageSource, /t\("已添加 \{\{name\}\}"/);
   assert.match(skillsPageSource, /createPortal\(headerNode, headerSlotElement\)/);
 
   // 描述：
@@ -120,6 +123,15 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   assert.match(skillServiceSource, /invoke<string \| null>\(COMMANDS\.PICK_AGENT_SKILL_FOLDER\)/);
   assert.match(skillServiceSource, /COMMANDS\.IMPORT_AGENT_SKILL_FROM_PATH/);
   assert.match(skillServiceSource, /COMMANDS\.REMOVE_USER_AGENT_SKILL/);
+  assert.match(skillServiceSource, /function resolveExternalSkillDisplayPreset\(skillId: string\): SkillDisplayPreset \| null/);
+  assert.match(skillServiceSource, /if \(skillId === "doc"\) \{\s*return \{\s*name: translateDesktopText\("文档处理"\)/s);
+  assert.match(skillServiceSource, /if \(skillId === "repo-readme"\) \{\s*return \{\s*name: translateDesktopText\("仓库说明"\)/s);
+  assert.match(skillServiceSource, /if \(skillId === "skill-creator"\) \{\s*return \{\s*name: translateDesktopText\("技能创建"\)/s);
+  assert.match(skillServiceSource, /if \(skillId === "skill-installer"\) \{\s*return \{\s*name: translateDesktopText\("技能安装"\)/s);
+  assert.match(skillServiceSource, /function resolveSkillDisplayName\(skillId: string, rawName: string\): string/);
+  assert.match(skillServiceSource, /function resolveSkillDisplayDescription\(skillId: string, rawDescription: string\): string/);
+  assert.match(skillServiceSource, /name: resolveSkillDisplayName\(id, name\)/);
+  assert.match(skillServiceSource, /description: resolveSkillDisplayDescription\(id, String\(source\.description \|\| ""\)\.trim\(\)\)/);
   assert.doesNotMatch(skillServiceSource, /SKILL_CATALOG/);
   assert.doesNotMatch(skillServiceSource, /localStorage/);
 
@@ -143,6 +155,8 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   assert.match(tauriSkillRegistrySource, /resolve_external_skill_root/);
   assert.match(tauriSkillRegistrySource, /CODEX_HOME/);
   assert.match(tauriSkillRegistrySource, /copy_directory_recursive/);
+  assert.match(tauriSkillRegistrySource, /title: Option<String>/);
+  assert.match(tauriSkillRegistrySource, /unwrap_or\(frontmatter\.name\)/);
   assert.match(tauriMainSource, /mod agent_skills;/);
   assert.match(tauriMainSource, /list_agent_skills,/);
   assert.match(tauriMainSource, /pick_agent_skill_folder,/);
@@ -161,8 +175,10 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   //
   //   - 至少应存在一个标准内置技能包，并包含合法 frontmatter 与正文。
   assert.match(builtinSkillSource, /^---\nname: requirements-analyst\ndescription:/);
+  assert.match(builtinSkillSource, /title: 需求分析/);
   assert.match(builtinSkillSource, /# 需求分析/);
   assert.match(dccSkillSource, /^---\nname: dcc-modeling\ndescription:/);
+  assert.match(dccSkillSource, /title: 建模执行/);
   assert.match(dccSkillSource, /# 建模执行/);
   assert.match(dccSkillSource, /如果用户表达了“跨软件导出\/导入\/迁移”意图，但没有明确提到两个或以上建模软件，必须先让用户选择源软件和目标软件/);
   assert.match(dccSkillRuntimeSource, /"domain": "dcc-modeling"/);
@@ -221,6 +237,7 @@ test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
   assert.match(mcpPageSource, /type="text"/);
   assert.match(mcpPageSource, /content="管理"/);
   assert.match(mcpPageSource, /aria-label="管理 MCP"/);
+  assert.doesNotMatch(mcpPageSource, /label="刷新"/);
   assert.match(mcpPageSource, /aria-label="管理模板"/);
   assert.match(mcpPageSource, /label="安装 Runtime"/);
   assert.match(mcpPageSource, /label="卸载 Runtime"/);
@@ -278,8 +295,12 @@ test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
   assert.match(mcpRegistrySource, /builtin_mcp_templates/);
   assert.match(mcpRegistrySource, /slugify_identifier/);
   assert.match(mcpRegistrySource, /normalize_registration_payload/);
-  assert.match(mcpRegistrySource, /Apifox 官方 MCP/);
-  assert.match(mcpRegistrySource, /Blender 本地 Bridge/);
+  assert.match(mcpRegistrySource, /Apifox 接口工具/);
+  assert.match(mcpRegistrySource, /本地命令 MCP/);
+  assert.match(mcpRegistrySource, /HTTP 地址 MCP/);
+  assert.match(mcpRegistrySource, /Blender 建模桥接/);
+  assert.match(mcpRegistrySource, /Maya 建模桥接/);
+  assert.match(mcpRegistrySource, /C4D 建模桥接/);
   assert.match(mcpRegistrySource, /maya-local-bridge/);
   assert.match(mcpRegistrySource, /c4d-local-bridge/);
   assert.match(mcpRegistrySource, /docs_url: "https:\/\/www\.blender\.org\/download\/"/);
