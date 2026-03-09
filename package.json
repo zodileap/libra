@@ -9,6 +9,7 @@
     "dev:desktop": "pnpm --dir apps/desktop dev",
     "build:desktop": "pnpm --dir apps/desktop build",
     "package:desktop": "pnpm --dir apps/desktop package",
+    "release:desktop": "bash scripts/package-desktop-release.sh",
     "bootstrap": "bash scripts/bootstrap.sh"
   }
 }

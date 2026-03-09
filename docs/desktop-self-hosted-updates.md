@@ -87,6 +87,45 @@ location /libra-updates/downloads/ {
 
 文本类资源建议同时开启 gzip。
 
+## 推荐发布流程
+
+如果你的 Desktop 安装包是在专门的构建主机上生成，推荐分成两段：
+
+1. 在构建主机打包 Desktop
+2. 把产物上传到更新服务器
+3. 在更新服务器维护 `latest.json`
+
+仓库内置了一个只负责打包的脚本：
+
+```bash
+pnpm run release:desktop
+```
+
+或者直接：
+
+```bash
+./scripts/package-desktop-release.sh --copy-to /path/to/libra-updates/downloads
+```
+
+它会：
+
+- 校验 Desktop 版本号是否一致
+- 执行 `tauri build`
+- 可选把构建产物复制到 `downloads/<version>/`
+
+它不会：
+
+- 自动生成 `latest.json`
+- 自动上传到远端服务器
+- 自动修改线上更新清单
+
+所以发布顺序应该是：
+
+1. 在 `source` 中更新 Desktop 版本
+2. 在构建主机执行打包脚本
+3. 上传生成好的安装包到服务器 `downloads/<version>/`
+4. 手工更新服务器上的 `latest.json`
+
 ## Libra Desktop 当前行为
 
 - 优先读取 `Update Manifest URL`

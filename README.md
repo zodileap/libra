@@ -102,12 +102,39 @@ Desktop 的行为是：
 - 若后端未初始化，会提示打开 `/setup` 或继续本地模式
 - 进入后也可以在 `Settings > General` 中切换后端模式和修改后端地址
 
+### 6. 打包 Desktop 发布产物
+
+如果你在专门的构建主机上打包 Desktop，可直接运行：
+
+```bash
+pnpm run release:desktop
+```
+
+如果你希望构建完成后顺手把产物整理到某个 `downloads` 根目录下：
+
+```bash
+./scripts/package-desktop-release.sh --copy-to /path/to/libra-updates/downloads
+```
+
+脚本会：
+
+- 校验 `package.json`、`apps/desktop/package.json`、`tauri.conf.json`、`Cargo.toml` 的 Desktop 版本号是否一致
+- 执行 `tauri build`
+- 可选复制产物到 `downloads/<version>/`
+
+约束：
+
+- 这个脚本不会生成 `latest.json`
+- 这个脚本不会上传服务器文件
+- 服务器上的 `latest.json` 仍需要手工维护或由服务器侧流程维护
+
 ## 常用命令
 
 ```bash
 pnpm run dev:desktop
 pnpm run build:desktop
 pnpm run package:desktop
+pnpm run release:desktop
 pnpm run dev:backend
 ./scripts/start-open-source-stack.sh
 ```
