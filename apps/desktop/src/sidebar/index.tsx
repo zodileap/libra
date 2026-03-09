@@ -21,6 +21,7 @@ import {
   getProjectWorkspaceIdBySessionId,
   getLastUsedProjectWorkspaceId,
   getAgentSessionMetaSnapshot,
+  getSessionMessages,
   getSessionRunState,
   isSessionRunning,
   listProjectWorkspaceGroups,
@@ -29,6 +30,7 @@ import {
   renameAgentSession,
   resolveAgentSessionTitle,
   SESSION_RUN_STATE_UPDATED_EVENT,
+  upsertSessionMessages,
   upsertSessionRunState,
   setLastUsedProjectWorkspaceId,
   togglePinnedAgentSession,
@@ -51,9 +53,9 @@ import type {
 import type { AgentTextStreamEvent } from "../shared/types";
 import { EVENT_AGENT_TEXT_STREAM, IS_BROWSER, isCancelErrorCode, STREAM_KINDS } from "../shared/constants";
 import {
-  createAgentWorkflowFromTemplate,
+  createAgentWorkflow,
   deleteAgentWorkflow,
-  listAgentWorkflows,
+  listAgentWorkflowOverview,
 } from "@/widgets/workflow";
 import {
   AI_KEY_SIDEBAR_CONTENT,
@@ -62,6 +64,7 @@ import {
   resolveWorkflowEditorPath,
   resolveSettingsSidebarItems,
   SKILL_PAGE_PATH,
+  WORKFLOW_EDITOR_PAGE_PATH,
   WORKFLOW_PAGE_PATH,
 } from "../modules/common/routes";
 import {
@@ -180,6 +183,147 @@ function truncateRunText(value: string, maxChars: number): string {
 
 // 描述：
 //
+//   - 判断运行中文案是否属于泛化占位；后台恢复时若已拿到更具体的进度文本，应避免再次回退到这类占位。
+//
+// Params:
+//
+//   - value: 待判断的运行中文案。
+//
+// Returns:
+//
+//   - true: 属于泛化占位。
+function isGenericSidebarProgressText(value: string): boolean {
+  const normalized = String(value || "").trim();
+  if (!normalized) {
+    return true;
+  }
+  return normalized === "正在思考…"
+    || normalized === "正在准备执行..."
+    || normalized === "正在生成执行结果…"
+    || normalized === "正在整理输出..."
+    || normalized === "智能体正在思考…";
+}
+
+// 描述：
+//
+//   - 在侧边栏后台监听中，为指定助手消息覆盖/新增最新文本，保证切到其他页面后返回仍能恢复离开前的真实进度文案。
+//
+// Params:
+//
+//   - messages: 当前会话的已持久化消息列表。
+//   - messageId: 助手消息 ID。
+//   - text: 最新助手文案。
+//
+// Returns:
+//
+//   - 更新后的消息列表。
+function upsertSidebarAssistantMessageById(
+  messages: Array<{ id?: string; role: "user" | "assistant"; text: string }>,
+  messageId: string,
+  text: string,
+): Array<{ id?: string; role: "user" | "assistant"; text: string }> {
+  const normalizedMessageId = String(messageId || "").trim();
+  if (!normalizedMessageId) {
+    return messages;
+  }
+  const normalizedText = String(text || "");
+  let matched = false;
+  const nextMessages = messages.map((item) => {
+    if (String(item.id || "").trim() !== normalizedMessageId) {
+      return item;
+    }
+    matched = true;
+    return {
+      ...item,
+      role: "assistant" as const,
+      text: normalizedText,
+    };
+  });
+  if (matched) {
+    return nextMessages;
+  }
+  return [...nextMessages, { id: normalizedMessageId, role: "assistant", text: normalizedText }];
+}
+
+// 描述：
+//
+//   - 根据后台收到的文本流事件推导“当前助手消息文本”；该文本会在离开会话页期间落盘，保证重新进入时与停留在会话页的视觉结果一致。
+//
+// Params:
+//
+//   - payload: 当前文本流事件。
+//   - currentText: 当前已持久化的助手消息文本。
+//   - currentSummary: 当前运行态 summary。
+//
+// Returns:
+//
+//   - 应持久化的助手消息文本。
+function resolveSidebarAssistantMessageText(
+  payload: AgentTextStreamEvent,
+  currentText: string,
+  currentSummary: string,
+  heartbeatCount: number,
+): string {
+  const text = String(payload.message || "").trim();
+  const currentMessageText = String(currentText || "").trim();
+  const summaryText = String(currentSummary || "").trim();
+  if (payload.kind === STREAM_KINDS.STARTED) {
+    return "正在准备执行...";
+  }
+  if (payload.kind === STREAM_KINDS.LLM_STARTED) {
+    return "正在生成执行结果…";
+  }
+  if (payload.kind === STREAM_KINDS.LLM_FINISHED) {
+    return text || "正在整理输出...";
+  }
+  if (payload.kind === STREAM_KINDS.DELTA) {
+    const delta = String(payload.delta || "");
+    if (!delta) {
+      return currentMessageText || summaryText;
+    }
+    const baseText = isGenericSidebarProgressText(currentMessageText) ? "" : currentMessageText;
+    return `${baseText}${delta}`;
+  }
+  if (payload.kind === STREAM_KINDS.FINAL) {
+    return text || currentMessageText || summaryText || "执行完成";
+  }
+  if (payload.kind === STREAM_KINDS.CANCELLED) {
+    return text || currentMessageText || summaryText || "任务已取消";
+  }
+  if (payload.kind === STREAM_KINDS.ERROR) {
+    const errorCode = resolveStreamErrorCode(payload);
+    if (isCancelErrorCode(errorCode)) {
+      return text ? `任务已取消：${text}` : (currentMessageText || summaryText || "任务已取消");
+    }
+    if (text) {
+      return text.startsWith("执行失败：") ? text : `执行失败：${text}`;
+    }
+    return currentMessageText || summaryText || "执行失败：未知错误";
+  }
+  if (payload.kind === STREAM_KINDS.PLANNING && text.startsWith("__libra_planning__:")) {
+    try {
+      const meta = JSON.parse(text.slice("__libra_planning__:".length).trim()) as Record<string, unknown>;
+      if (meta && typeof meta.text === "string" && String(meta.text || "").trim()) {
+        return truncateRunText(String(meta.text || "").trim(), 300);
+      }
+    } catch (_error) {
+      // 描述：后台同步恢复时忽略规划元数据解析失败，继续走兜底文案。
+    }
+    return currentMessageText || summaryText || "正在思考…";
+  }
+  if (payload.kind === STREAM_KINDS.HEARTBEAT) {
+    if (text.includes("已等待约") || heartbeatCount <= 1) {
+      return text || currentMessageText || summaryText || "正在思考…";
+    }
+    const waitedSeconds = Math.max(1, Math.round(heartbeatCount * 1.2));
+    const baseText = text || currentMessageText || summaryText || "正在思考…";
+    return `${baseText}（已等待约 ${waitedSeconds} 秒）`;
+  }
+  return text || currentMessageText || summaryText || "正在思考…";
+}
+
+// 描述：
+//
 //   - 构建授权运行片段 data，只保留跨页恢复所需关键字段并裁剪超长参数。
 function buildApprovalSegmentData(payload: AgentTextStreamEvent): Record<string, unknown> {
   const rawData = payload.data && typeof payload.data === "object"
@@ -246,7 +390,7 @@ function matchSidebarMode(pathname: string): "home" | "agent" | "settings" | "ai
   if (pathname.startsWith(AGENT_HOME_PATH)) return "agent";
   if (pathname.startsWith("/settings")) return "settings";
   if (pathname.startsWith("/ai-keys")) return "ai-key";
-  if (pathname.includes("/workflows")) return "workflow";
+  if (pathname.startsWith(WORKFLOW_EDITOR_PAGE_PATH)) return "workflow";
   return "home";
 }
 
@@ -480,6 +624,8 @@ function AgentSidebar({
   const selectedSessionKey = location.pathname.includes("/session/")
     ? location.pathname.split("/").pop() || ""
     : "";
+  const activePathnameRef = useRef(location.pathname);
+  const activeSelectedSessionKeyRef = useRef(selectedSessionKey);
   const selectedWorkspaceFromQuery = useMemo(() => {
     if (!isProjectAgent) {
       return "";
@@ -1450,6 +1596,11 @@ function AgentSidebar({
   }, [isProjectAgent, selectedSessionKey]);
 
   useEffect(() => {
+    activePathnameRef.current = location.pathname;
+    activeSelectedSessionKeyRef.current = selectedSessionKey;
+  }, [location.pathname, selectedSessionKey]);
+
+  useEffect(() => {
     if (!selectedSessionKey) {
       return;
     }
@@ -1533,14 +1684,18 @@ function AgentSidebar({
       // 描述：
       //
       //   - 当前正处于该会话详情页时，由会话页负责写入运行态，侧边栏跳过以避免双写造成主线程抖动。
-      const isActiveSessionPage = location.pathname.includes("/session/")
-        && selectedSessionKey === sessionId;
+      const isActiveSessionPage = activePathnameRef.current.includes("/session/")
+        && activeSelectedSessionKeyRef.current === sessionId;
       if (isActiveSessionPage) {
         return;
       }
       const now = Date.now();
       const snapshot = getSessionRunState("agent", sessionId);
       const activeMessageId = String(snapshot?.activeMessageId || "").trim() || `assistant-stream-${now}`;
+      const storedMessages = getSessionMessages("agent", sessionId);
+      const currentMessageText = String(
+        storedMessages.find((item) => item.role === "assistant" && String(item.id || "").trim() === activeMessageId)?.text || "",
+      ).trim();
       const runMetaMap = { ...(snapshot?.runMetaMap || {}) };
       const baseMeta = runMetaMap[activeMessageId] || {
         status: "running" as const,
@@ -1594,6 +1749,25 @@ function AgentSidebar({
         nextSending = true;
       }
       runMetaMap[activeMessageId] = nextMeta;
+      const heartbeatCount = nextMeta.segments.filter((item) => {
+        const segmentKind = item.data && typeof item.data.__segment_kind === "string"
+          ? item.data.__segment_kind
+          : "";
+        return segmentKind === STREAM_KINDS.HEARTBEAT;
+      }).length;
+      const nextMessageText = resolveSidebarAssistantMessageText(
+        payload,
+        currentMessageText,
+        nextMeta.summary,
+        heartbeatCount,
+      );
+      if (payload.kind !== STREAM_KINDS.DELTA && nextMessageText && nextMessageText !== currentMessageText) {
+        upsertSessionMessages({
+          agentKey: "agent",
+          sessionId,
+          messages: upsertSidebarAssistantMessageById(storedMessages, activeMessageId, nextMessageText),
+        });
+      }
       upsertSessionRunState({
         agentKey: "agent",
         sessionId,
@@ -1844,31 +2018,39 @@ function WorkflowsSidebar({
   const [pendingDeleteWorkflowId, setPendingDeleteWorkflowId] = useState("");
   const [hoveredDeleteWorkflowId, setHoveredDeleteWorkflowId] = useState("");
   const [createButtonHovered, setCreateButtonHovered] = useState(false);
+  const isWorkflowEditorPage = location.pathname.startsWith(WORKFLOW_EDITOR_PAGE_PATH);
 
   // 描述：解析当前路由中的 workflowId，用于高亮当前菜单项。
   const selectedWorkflowIdFromQuery = useMemo(() => {
     return new URLSearchParams(location.search).get("workflowId")?.trim() || "";
   }, [location.search]);
-  // 描述：读取统一工作流列表，当前收敛为单智能体工作流集合。
+  // 描述：读取工作流总览；编辑页侧边栏需要同时展示“已注册 / 未注册”两组数据。
+  const workflowOverview = useMemo(
+    () => listAgentWorkflowOverview(),
+    [workflowVersion],
+  );
   const workflows = useMemo(
     () =>
-      listAgentWorkflows().map((item) => ({
+      workflowOverview.all.map((item) => ({
         key: item.id,
         id: item.id,
         name: item.name,
-        shared: item.shared,
+        readonly: item.source !== "user",
       })),
-    [workflowVersion, selectedWorkflowIdFromQuery],
+    [workflowOverview.all],
   );
 
-  // 描述：归一化当前选中工作流，查询参数为空或非法时回退到首项。
+  // 描述：仅在编辑页计算当前选中工作流，工作流总览页不高亮任何侧边栏项。
   const selectedWorkflow = useMemo(() => {
+    if (!isWorkflowEditorPage) {
+      return null;
+    }
     const matched = workflows.find((item) => item.id === selectedWorkflowIdFromQuery);
     if (matched) {
       return matched;
     }
-    return workflows[0] || null;
-  }, [selectedWorkflowIdFromQuery, workflows]);
+    return null;
+  }, [isWorkflowEditorPage, selectedWorkflowIdFromQuery, workflows]);
   const selectedWorkflowMenuKey = selectedWorkflow?.key || "";
 
   // 描述：导航到工作流编辑页并携带 workflowId 参数，保证画布页和侧边栏选中态一致。
@@ -1877,29 +2059,15 @@ function WorkflowsSidebar({
     navigate(targetPath, replace ? { replace: true } : undefined);
   };
 
-  // 描述：当 query 丢失或无效时自动修正 URL，避免画布页和侧边栏选中不一致。
-  useEffect(() => {
-    if (!selectedWorkflow) {
-      return;
-    }
-    if (
-      selectedWorkflow.id === selectedWorkflowIdFromQuery
-    ) {
-      return;
-    }
-    navigateToWorkflowPage(selectedWorkflow.id, true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedWorkflow, selectedWorkflowIdFromQuery]);
-
   // 描述：路由变化时清空删除确认态，避免跨工作流残留“确定删除”状态。
   useEffect(() => {
     setPendingDeleteWorkflowId("");
     setHoveredDeleteWorkflowId("");
   }, [location.pathname, location.search]);
 
-  // 描述：基于当前选中工作流创建新工作流，并自动切换到新建项继续编辑。
+  // 描述：新增空白工作流，并自动切换到新建项继续编辑。
   const handleCreateWorkflow = () => {
-    const created = createAgentWorkflowFromTemplate(selectedWorkflow?.id || undefined);
+    const created = createAgentWorkflow();
     setWorkflowVersion((value) => value + 1);
     setPendingDeleteWorkflowId("");
     navigateToWorkflowPage(created.id);
@@ -1914,7 +2082,7 @@ function WorkflowsSidebar({
       return;
     }
 
-    const targetWorkflow = workflows.find((item) => item.key === workflowId);
+    const targetWorkflow = workflows.find((item) => item.key === workflowId && !item.readonly);
     if (!targetWorkflow) {
       AriMessage.warning({
         content: "工作流不存在或已删除，请刷新后重试。",
@@ -1926,11 +2094,8 @@ function WorkflowsSidebar({
     }
     const deleted = deleteAgentWorkflow(targetWorkflow.id);
     if (!deleted) {
-      const warningContent = targetWorkflow.shared
-        ? "默认工作流不可删除，请先复制后再管理。"
-        : "工作流删除失败，请稍后重试。";
       AriMessage.warning({
-        content: warningContent,
+        content: "工作流删除失败，请稍后重试。",
         duration: 3000,
         showClose: true,
       });
@@ -1942,49 +2107,66 @@ function WorkflowsSidebar({
     setPendingDeleteWorkflowId("");
 
     if (selectedWorkflow?.key === workflowId) {
-      const nextWorkflows = listAgentWorkflows().map((item) => ({ id: item.id }));
+      const nextWorkflows = listAgentWorkflowOverview().all.map((item) => ({ id: item.id }));
       const nextTarget = nextWorkflows[0];
-      navigateToWorkflowPage(nextTarget?.id || "", true);
+      if (nextTarget?.id) {
+        navigateToWorkflowPage(nextTarget.id, true);
+        return;
+      }
+      navigate(WORKFLOW_PAGE_PATH, { replace: true });
     }
   };
 
-  // 描述：构建工作流菜单定义，支持图标删除与 hover 动作展示。
+  // 描述：构建工作流菜单定义，使用 AriMenu 分组语义同时展示“已注册 / 未注册”，并仅为已注册工作流显示删除动作。
   const workflowMenuItems = useMemo(
-    () =>
-      workflows.map((item) => ({
-        key: item.key,
+    () => {
+      const registeredItems = workflowOverview.registered.map((item) => ({
+        key: item.id,
         label: item.name,
+        icon: "account_tree",
         actions: (
           <AriButton
             size="sm"
-            type={pendingDeleteWorkflowId === item.key ? "default" : "text"}
-            ghost={pendingDeleteWorkflowId !== item.key}
-            color={pendingDeleteWorkflowId === item.key ? "danger" : "default"}
+            type={pendingDeleteWorkflowId === item.id ? "default" : "text"}
+            ghost={pendingDeleteWorkflowId !== item.id}
+            color={pendingDeleteWorkflowId === item.id ? "danger" : "default"}
             icon={
-              pendingDeleteWorkflowId === item.key
+              pendingDeleteWorkflowId === item.id
                 ? undefined
-                : hoveredDeleteWorkflowId === item.key
+                : hoveredDeleteWorkflowId === item.id
                   ? "delete_fill"
                   : "delete"
             }
-            label={pendingDeleteWorkflowId === item.key ? "确定" : undefined}
+            label={pendingDeleteWorkflowId === item.id ? "确定" : undefined}
             onMouseEnter={() => {
-              setHoveredDeleteWorkflowId(item.key);
+              setHoveredDeleteWorkflowId(item.id);
             }}
             onMouseLeave={() => {
-              setHoveredDeleteWorkflowId((current) => (current === item.key ? "" : current));
+              setHoveredDeleteWorkflowId((current) => (current === item.id ? "" : current));
             }}
             onClick={(event: MouseEvent<HTMLElement>) => {
-              handleDeleteWorkflow(event, item.key);
+              handleDeleteWorkflow(event, item.id);
             }}
           />
         ),
         // 描述：
         //
         //   - 进入“确定删除”态后固定显示动作区，避免鼠标轻微移出或菜单重绘导致确认态被意外打断。
-        showActionsOnHover: pendingDeleteWorkflowId !== item.key,
-      })),
-    [workflows, pendingDeleteWorkflowId, hoveredDeleteWorkflowId],
+        showActionsOnHover: pendingDeleteWorkflowId !== item.id,
+      }));
+      const templateItems = workflowOverview.templates.map((item) => ({
+        key: item.id,
+        label: item.name,
+        icon: "inventory_2",
+      }));
+      return [
+        { key: "workflow-group-registered", label: "已注册", isGroup: true },
+        ...registeredItems,
+        { key: "workflow-group-templates", label: "未注册", isGroup: true },
+        ...templateItems,
+      ];
+    },
+    [handleDeleteWorkflow, hoveredDeleteWorkflowId, pendingDeleteWorkflowId, workflowOverview.registered, workflowOverview.templates],
   );
 
   return (

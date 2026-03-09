@@ -33,11 +33,14 @@ import {
   AriTag,
   AriTypography,
 } from "aries_react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { listAgentSkills } from "../../modules/common/services";
 import type { AgentSkillItem } from "../../modules/common/services";
 import {
+  createAgentWorkflowFromTemplate,
   deleteAgentWorkflow,
+  getAgentWorkflowById,
+  isReadonlyAgentWorkflow,
   listAgentWorkflows,
   saveAgentWorkflow,
 } from "../../shared/workflow";
@@ -48,6 +51,7 @@ import type {
   WorkflowGraphNodeType,
 } from "../../shared/workflow";
 import { useDesktopHeaderSlot } from "../app-header/header-slot-context";
+import { DeskEmptyState } from "../settings-primitives";
 
 // 描述:
 //
@@ -493,6 +497,7 @@ function buildSkillSelectOptions(availableSkills: AgentSkillItem[], selectedSkil
 // Params:
 //
 export function WorkflowCanvasPage() {
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const preferredWorkflowId = searchParams.get("workflowId") || "";
   const headerSlotElement = useDesktopHeaderSlot();
@@ -533,12 +538,11 @@ export function WorkflowCanvasPage() {
   );
 
   const selectedWorkflow = useMemo(
-    () =>
-      workflows.find((item) => item.id === preferredWorkflowId) ||
-      workflows[0] ||
-      null,
+    () => getAgentWorkflowById(preferredWorkflowId) || null,
     [preferredWorkflowId, workflows],
   );
+  const workflowReadonly = isReadonlyAgentWorkflow(selectedWorkflow);
+  const canEditWorkflow = Boolean(selectedWorkflow) && !workflowReadonly;
 
   // 描述：
   //
@@ -641,6 +645,9 @@ export function WorkflowCanvasPage() {
 
   const onConnect = useCallback(
     (connection: Connection) => {
+      if (!canEditWorkflow) {
+        return;
+      }
       if (!connection.source || !connection.target) {
         return;
       }
@@ -666,7 +673,7 @@ export function WorkflowCanvasPage() {
         );
       });
     },
-    [setEdges],
+    [canEditWorkflow, setEdges],
   );
 
   // 描述：
@@ -679,6 +686,9 @@ export function WorkflowCanvasPage() {
   //   - connection: 用户拖拽后的目标连接信息。
   const onReconnect = useCallback(
     (oldEdge: Edge, connection: Connection) => {
+      if (!canEditWorkflow) {
+        return;
+      }
       if (!connection.source || !connection.target) {
         return;
       }
@@ -696,10 +706,13 @@ export function WorkflowCanvasPage() {
       setSelectedEdgeId(oldEdge.id);
       setSelectedNodeId("");
     },
-    [setEdges],
+    [canEditWorkflow, setEdges],
   );
 
   const addNode = () => {
+    if (!canEditWorkflow) {
+      return;
+    }
     const nextIndex = nodes.length + 1;
     const position = resolveNewNodePosition(nodes.length);
     const nodeId = `node-${Date.now()}`;
@@ -730,6 +743,9 @@ export function WorkflowCanvasPage() {
   //
   //   - 新增技能节点，默认保留空技能位，便于后续从已安装目录中选择 skill@version。
   const addSkillNode = () => {
+    if (!canEditWorkflow) {
+      return;
+    }
     const nextIndex = nodes.length + 1;
     const position = resolveNewNodePosition(nodes.length);
     const nodeId = `skill-node-${Date.now()}`;
@@ -761,7 +777,7 @@ export function WorkflowCanvasPage() {
       Pick<CanvasNodeData, "title" | "description" | "instruction" | "nodeType" | "skillId" | "skillVersion">
     >,
   ) => {
-    if (!selectedNodeId) {
+    if (!canEditWorkflow || !selectedNodeId) {
       return;
     }
 
@@ -803,7 +819,7 @@ export function WorkflowCanvasPage() {
   //
   //   - nodeId: 待删除节点 ID。
   const deleteNodeById = (nodeId: string) => {
-    if (!nodeId) {
+    if (!canEditWorkflow || !nodeId) {
       return;
     }
     setNodes((currentNodes) =>
@@ -830,7 +846,7 @@ export function WorkflowCanvasPage() {
   //
   //   - edgeId: 待删除连线 ID。
   const deleteEdgeById = (edgeId: string) => {
-    if (!edgeId) {
+    if (!canEditWorkflow || !edgeId) {
       return;
     }
     setEdges((currentEdges) =>
@@ -864,6 +880,10 @@ export function WorkflowCanvasPage() {
   //
   //   - 应用弹窗中的工作流名称与说明到当前编辑态，持久化由自动保存机制处理。
   const confirmWorkflowEdit = () => {
+    if (workflowReadonly) {
+      closeWorkflowEditModal();
+      return;
+    }
     const trimmedName = workflowEditName.trim();
     if (!trimmedName) {
       AriMessage.warning({
@@ -882,7 +902,7 @@ export function WorkflowCanvasPage() {
   //
   //   - 删除当前工作流；默认模板不可删除，删除后刷新列表并清理当前节点/连线选中态。
   const deleteCurrentWorkflow = () => {
-    if (!selectedWorkflow?.id) {
+    if (!selectedWorkflow?.id || !canEditWorkflow) {
       return;
     }
     const deleted = deleteAgentWorkflow(selectedWorkflow.id);
@@ -904,6 +924,23 @@ export function WorkflowCanvasPage() {
     });
   };
 
+  // 描述：
+  //
+  //   - 基于当前工作流创建可编辑副本；内置模板与用户工作流都通过复制进入新的用户工作流。
+  const duplicateCurrentWorkflow = () => {
+    if (!selectedWorkflow?.id) {
+      return;
+    }
+    const copied = createAgentWorkflowFromTemplate(selectedWorkflow.id);
+    refreshWorkflows();
+    AriMessage.success({
+      content: `已复制 ${selectedWorkflow.name}`,
+      duration: 1800,
+      showClose: true,
+    });
+    navigate(`/workflows/editor?workflowId=${encodeURIComponent(copied.id)}`);
+  };
+
   const selectedNodeData = selectedNode
     ? parseCanvasNodeData(selectedNode.data)
     : null;
@@ -917,6 +954,7 @@ export function WorkflowCanvasPage() {
   const workflowInfoDescription =
     workflowDescription.trim() || selectedWorkflow?.description || "未填写说明";
   const workflowInfoVersion = selectedWorkflow?.version || 0;
+  const workflowInfoModeText = workflowReadonly ? "只读模板" : "可编辑";
   const hasPendingWorkflowChanges = useMemo(() => {
     if (!selectedWorkflow) {
       return false;
@@ -963,7 +1001,7 @@ export function WorkflowCanvasPage() {
   //
   //   - 监听画布与工作流元数据变更，按防抖策略自动保存当前工作流。
   useEffect(() => {
-    if (!selectedWorkflow || !hasPendingWorkflowChanges) {
+    if (!selectedWorkflow || !canEditWorkflow || !hasPendingWorkflowChanges) {
       return;
     }
 
@@ -990,6 +1028,7 @@ export function WorkflowCanvasPage() {
     };
   }, [
     hasPendingWorkflowChanges,
+    canEditWorkflow,
     selectedWorkflow,
     workflowDescription,
     workflowGraph,
@@ -1019,7 +1058,7 @@ export function WorkflowCanvasPage() {
   );
   const workflowContextMenuItems = useMemo(
     () =>
-      contextTarget?.id
+      canEditWorkflow && contextTarget?.id
         ? [
             {
               key: "delete",
@@ -1028,7 +1067,7 @@ export function WorkflowCanvasPage() {
             },
           ]
         : [],
-    [contextTarget?.id],
+    [canEditWorkflow, contextTarget?.id],
   );
 
   const workflowHeaderNode = (
@@ -1049,6 +1088,10 @@ export function WorkflowCanvasPage() {
             variant="h4"
             value={workflowInfoName}
           />
+          <AriTag
+            color={workflowReadonly ? "default" : "brand"}
+            label={workflowInfoModeText}
+          />
           <AriTypography
             className="desk-workflow-head-subtitle"
             variant="caption"
@@ -1062,18 +1105,26 @@ export function WorkflowCanvasPage() {
         >
           <AriButton
             type="text"
-            icon="edit"
-            aria-label="编辑工作流"
+            icon={workflowReadonly ? "folder" : "edit"}
+            aria-label={workflowReadonly ? "查看工作流" : "编辑工作流"}
             onClick={openWorkflowEditModal}
           />
           <AriButton
             type="text"
-            color="danger"
-            ghost
-            icon="delete"
-            aria-label="删除工作流"
-            onClick={deleteCurrentWorkflow}
+            icon="content_copy"
+            aria-label="复制工作流"
+            onClick={duplicateCurrentWorkflow}
           />
+          {canEditWorkflow ? (
+            <AriButton
+              type="text"
+              color="danger"
+              ghost
+              icon="delete"
+              aria-label="删除工作流"
+              onClick={deleteCurrentWorkflow}
+            />
+          ) : null}
         </AriFlex>
       </AriFlex>
     </AriContainer>
@@ -1088,329 +1139,355 @@ export function WorkflowCanvasPage() {
       {headerSlotElement
         ? createPortal(workflowHeaderNode, headerSlotElement)
         : null}
-      <AriModal
-        visible={workflowEditModalVisible}
-        title="编辑工作流"
-        onClose={closeWorkflowEditModal}
-        footer={
-          <AriFlex justify="flex-end" align="center" space={8}>
-            <AriButton label="取消" onClick={closeWorkflowEditModal} />
-            <AriButton
-              color="brand"
-              label="确定"
-              onClick={confirmWorkflowEdit}
-            />
-          </AriFlex>
-        }
-      >
-        <AriForm layout="vertical" labelAlign="left" density="compact">
-          <AriFormItem label="工作流名称" name="workflow.edit.name">
-            <AriInput
-              value={workflowEditName}
-              onChange={setWorkflowEditName}
-              placeholder="请输入工作流名称"
-            />
-          </AriFormItem>
-          <AriFormItem label="工作流说明" name="workflow.edit.description">
-            <AriInput
-              value={workflowEditDescription}
-              onChange={setWorkflowEditDescription}
-              placeholder="请输入工作流说明"
-            />
-          </AriFormItem>
-        </AriForm>
-      </AriModal>
-      <AriContainer
-        className="desk-workflow-editor-main"
-        height="100%"
-        padding={0}
-        bgColor="bg-tertiary"
-      >
-        <AriContainer
-          className="desk-workflow-editor-stage"
-          positionType="relative"
-          height="100%"
-        >
-          <AriContextMenu
-            targetRef={canvasRef}
-            open={contextMenuOpen}
-            onOpenChange={(nextOpen: boolean) => {
-              if (!nextOpen) {
-                setContextMenuOpen(false);
-              }
-            }}
-            items={workflowContextMenuItems}
-            onSelect={(key: string) => {
-              if (key !== "delete" || !contextTarget?.id) {
-                return;
-              }
-              if (contextTarget.type === "node") {
-                deleteNodeById(contextTarget.id);
-                setContextMenuOpen(false);
-                return;
-              }
-              deleteEdgeById(contextTarget.id);
-              setContextMenuOpen(false);
-            }}
-          />
-          <div
-            ref={canvasRef}
-            className="desk-workflow-reactflow-wrap desk-workflow-editor-reactflow-wrap"
-          >
-            <ReactFlow
-              nodes={renderedNodes}
-              edges={renderedEdges}
-              nodeTypes={workflowNodeTypes}
-              fitView
-              proOptions={{ hideAttribution: true }}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              onConnect={onConnect}
-              onReconnect={onReconnect}
-              reconnectRadius={reconnectRadius}
-              elementsSelectable={canvasMode === "select"}
-              nodesDraggable={canvasMode === "select"}
-              nodesConnectable={canvasMode === "select"}
-              edgesReconnectable={canvasMode === "select"}
-              selectNodesOnDrag={canvasMode === "select"}
-              selectionOnDrag={canvasMode === "select"}
-              panOnDrag={canvasMode === "pan" ? [0] : false}
-              onNodeClick={(_event, node) => {
-                if (canvasMode !== "select") {
-                  return;
-                }
-                setSelectedNodeId(node.id);
-                setSelectedEdgeId("");
-                setContextMenuOpen(false);
-              }}
-              onEdgeClick={(_event, edge) => {
-                if (canvasMode !== "select") {
-                  return;
-                }
-                setSelectedEdgeId(edge.id);
-                setSelectedNodeId("");
-                setContextMenuOpen(false);
-              }}
-              onNodeContextMenu={(event, node) => {
-                event.preventDefault();
-                event.stopPropagation();
-                setSelectedNodeId(node.id);
-                setSelectedEdgeId("");
-                patchContextTarget({
-                  type: "node",
-                  id: node.id,
-                });
-                setContextMenuOpen(true);
-              }}
-              onEdgeContextMenu={(event, edge) => {
-                event.preventDefault();
-                event.stopPropagation();
-                setSelectedEdgeId(edge.id);
-                setSelectedNodeId("");
-                patchContextTarget({
-                  type: "edge",
-                  id: edge.id,
-                });
-                setContextMenuOpen(true);
-              }}
-              onPaneContextMenu={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                patchContextTarget(null);
-                setContextMenuOpen(false);
-              }}
-              onPaneClick={() => {
-                setSelectedNodeId("");
-                setSelectedEdgeId("");
-                patchContextTarget(null);
-                setContextMenuOpen(false);
-              }}
-              className="desk-workflow-reactflow"
-              defaultEdgeOptions={{
-                markerEnd: buildWorkflowEdgeMarkerEnd(false),
-                className: "desk-workflow-flow-edge",
-              }}
-            >
-              <Background
-                variant={BackgroundVariant.Dots}
-                className="desk-workflow-reactflow-bg"
-              />
-            </ReactFlow>
-          </div>
-
-          <AriContainer
-            className="desk-workflow-editor-canvas-toolbar-float"
-            positionType="absolute"
-            hoverTransform={false}
-            showBorder
-            bgVariant="solid"
-          >
-            <AriFlex
-              className="desk-workflow-editor-canvas-toolbar"
-              align="center"
-              justify="center"
-              space={8}
-            >
-              <AriButton
-                icon="select_tool"
-                color={canvasMode === "select" ? "brand" : "default"}
-                ghost={canvasMode !== "select"}
-                shape="round"
-                onClick={() => {
-                  setCanvasMode("select");
-                }}
-              />
-              <AriButton
-                icon="hand_tool"
-                color={canvasMode === "pan" ? "brand" : "default"}
-                ghost={canvasMode !== "pan"}
-                shape="round"
-                onClick={() => {
-                  setCanvasMode("pan");
-                }}
-              />
-              <AriDivider
-                type="vertical"
-                className="desk-workflow-editor-canvas-toolbar-divider"
-              />
-              <AriButton ghost icon="add" onClick={addNode} />
-              <AriButton ghost icon="new_releases" onClick={addSkillNode} />
-            </AriFlex>
-          </AriContainer>
-
-          {/* 描述：
-           *
-           *   - 右侧属性面板仅在选中节点时显示；空白画布状态下隐藏面板，避免重复展示工作流信息。
-           */}
-          {selectedNodeData ? (
-            <AriCard
-              className="desk-workflow-editor-floating-panel"
-              positionType="absolute"
-            >
-              <AriFlex
-                className="desk-workflow-inspector-header"
-                align="center"
-                justify="space-between"
-              >
-                <AriContainer
-                  className="desk-workflow-inspector-header-main"
-                  padding={0}
-                >
-                  <AriTypography
-                    className="desk-workflow-inspector-title"
-                    variant="h4"
-                    value={selectedNodeData.title}
+      {!selectedWorkflow ? (
+        <AriContainer className="desk-settings-shell">
+          <DeskEmptyState title="未选择工作流" description="请先从工作流面板或侧边栏选择一个工作流。" />
+        </AriContainer>
+      ) : null}
+      {selectedWorkflow ? (
+        <>
+          <AriModal
+            visible={workflowEditModalVisible}
+            title={workflowReadonly ? "查看工作流" : "编辑工作流"}
+            onClose={closeWorkflowEditModal}
+            footer={
+              <AriFlex justify="flex-end" align="center" space={8}>
+                <AriButton label={workflowReadonly ? "关闭" : "取消"} onClick={closeWorkflowEditModal} />
+                {workflowReadonly ? null : (
+                  <AriButton
+                    color="brand"
+                    label="确定"
+                    onClick={confirmWorkflowEdit}
                   />
-                </AriContainer>
+                )}
+              </AriFlex>
+            }
+          >
+            <AriForm layout="vertical" labelAlign="left" density="compact">
+              <AriFormItem label="工作流名称" name="workflow.edit.name">
+                <AriInput
+                  value={workflowEditName}
+                  onChange={setWorkflowEditName}
+                  disabled={workflowReadonly}
+                  placeholder="请输入工作流名称"
+                />
+              </AriFormItem>
+              <AriFormItem label="工作流说明" name="workflow.edit.description">
+                <AriInput
+                  value={workflowEditDescription}
+                  onChange={setWorkflowEditDescription}
+                  disabled={workflowReadonly}
+                  placeholder="请输入工作流说明"
+                />
+              </AriFormItem>
+            </AriForm>
+          </AriModal>
+          <AriContainer
+            className="desk-workflow-editor-main"
+            height="100%"
+            padding={0}
+            bgColor="bg-tertiary"
+          >
+            <AriContainer
+              className="desk-workflow-editor-stage"
+              positionType="relative"
+              height="100%"
+            >
+              <AriContextMenu
+                targetRef={canvasRef}
+                open={contextMenuOpen}
+                onOpenChange={(nextOpen: boolean) => {
+                  if (!nextOpen) {
+                    setContextMenuOpen(false);
+                  }
+                }}
+                items={workflowContextMenuItems}
+                onSelect={(key: string) => {
+                  if (key !== "delete" || !contextTarget?.id) {
+                    return;
+                  }
+                  if (contextTarget.type === "node") {
+                    deleteNodeById(contextTarget.id);
+                    setContextMenuOpen(false);
+                    return;
+                  }
+                  deleteEdgeById(contextTarget.id);
+                  setContextMenuOpen(false);
+                }}
+              />
+              <div
+                ref={canvasRef}
+                className="desk-workflow-reactflow-wrap desk-workflow-editor-reactflow-wrap"
+              >
+                <ReactFlow
+                  nodes={renderedNodes}
+                  edges={renderedEdges}
+                  nodeTypes={workflowNodeTypes}
+                  fitView
+                  proOptions={{ hideAttribution: true }}
+                  onNodesChange={onNodesChange}
+                  onEdgesChange={onEdgesChange}
+                  onConnect={onConnect}
+                  onReconnect={onReconnect}
+                  reconnectRadius={reconnectRadius}
+                  elementsSelectable={canvasMode === "select"}
+                  nodesDraggable={canEditWorkflow && canvasMode === "select"}
+                  nodesConnectable={canEditWorkflow && canvasMode === "select"}
+                  edgesReconnectable={canEditWorkflow && canvasMode === "select"}
+                  selectNodesOnDrag={canEditWorkflow && canvasMode === "select"}
+                  selectionOnDrag={canEditWorkflow && canvasMode === "select"}
+                  panOnDrag={canvasMode === "pan" ? [0] : false}
+                  onNodeClick={(_event, node) => {
+                    if (canvasMode !== "select") {
+                      return;
+                    }
+                    setSelectedNodeId(node.id);
+                    setSelectedEdgeId("");
+                    setContextMenuOpen(false);
+                  }}
+                  onEdgeClick={(_event, edge) => {
+                    if (canvasMode !== "select") {
+                      return;
+                    }
+                    setSelectedEdgeId(edge.id);
+                    setSelectedNodeId("");
+                    setContextMenuOpen(false);
+                  }}
+                  onNodeContextMenu={(event, node) => {
+                    if (!canEditWorkflow) {
+                      return;
+                    }
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setSelectedNodeId(node.id);
+                    setSelectedEdgeId("");
+                    patchContextTarget({
+                      type: "node",
+                      id: node.id,
+                    });
+                    setContextMenuOpen(true);
+                  }}
+                  onEdgeContextMenu={(event, edge) => {
+                    if (!canEditWorkflow) {
+                      return;
+                    }
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setSelectedEdgeId(edge.id);
+                    setSelectedNodeId("");
+                    patchContextTarget({
+                      type: "edge",
+                      id: edge.id,
+                    });
+                    setContextMenuOpen(true);
+                  }}
+                  onPaneContextMenu={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    patchContextTarget(null);
+                    setContextMenuOpen(false);
+                  }}
+                  onPaneClick={() => {
+                    setSelectedNodeId("");
+                    setSelectedEdgeId("");
+                    patchContextTarget(null);
+                    setContextMenuOpen(false);
+                  }}
+                  className="desk-workflow-reactflow"
+                  defaultEdgeOptions={{
+                    markerEnd: buildWorkflowEdgeMarkerEnd(false),
+                    className: "desk-workflow-flow-edge",
+                  }}
+                >
+                  <Background
+                    variant={BackgroundVariant.Dots}
+                    className="desk-workflow-reactflow-bg"
+                  />
+                </ReactFlow>
+              </div>
+
+              <AriContainer
+                className="desk-workflow-editor-canvas-toolbar-float"
+                positionType="absolute"
+                hoverTransform={false}
+                showBorder
+                bgVariant="solid"
+              >
                 <AriFlex
-                  className="desk-workflow-inspector-tools"
+                  className="desk-workflow-editor-canvas-toolbar"
                   align="center"
+                  justify="center"
                   space={8}
                 >
                   <AriButton
-                    type="text"
-                    color="danger"
-                    icon="delete"
-                    ghost
-                    aria-label="删除该节点"
-                    onClick={deleteSelectedNode}
+                    icon="select_tool"
+                    color={canvasMode === "select" ? "brand" : "default"}
+                    ghost={canvasMode !== "select"}
+                    shape="round"
+                    onClick={() => {
+                      setCanvasMode("select");
+                    }}
                   />
+                  <AriButton
+                    icon="hand_tool"
+                    color={canvasMode === "pan" ? "brand" : "default"}
+                    ghost={canvasMode !== "pan"}
+                    shape="round"
+                    onClick={() => {
+                      setCanvasMode("pan");
+                    }}
+                  />
+                  <AriDivider
+                    type="vertical"
+                    className="desk-workflow-editor-canvas-toolbar-divider"
+                  />
+                  <AriButton ghost icon="add" onClick={addNode} disabled={!canEditWorkflow} />
+                  <AriButton ghost icon="new_releases" onClick={addSkillNode} disabled={!canEditWorkflow} />
                 </AriFlex>
-              </AriFlex>
+              </AriContainer>
 
-              <AriForm
-                className="desk-workflow-inspector-form"
-                layout="vertical"
-                labelAlign="left"
-                density="compact"
-                maxWidth="100%"
-              >
-                <AriFormItem label="节点名称" name="selectedNode.title">
-                  <AriInput
-                    value={selectedNodeData.title}
-                    onChange={(value: string) => patchSelectedNode({ title: value })}
-                    placeholder="请输入节点名称"
-                  />
-                </AriFormItem>
-                <AriFormItem label="节点说明" name="selectedNode.description">
-                  <AriInput
-                    value={selectedNodeData.description}
-                    onChange={(value: string) =>
-                      patchSelectedNode({ description: value })
-                    }
-                    placeholder="请输入节点说明"
-                  />
-                </AriFormItem>
-                <AriFormItem label="节点类型" name="selectedNode.type">
-                  <AriFlex className="desk-workflow-node-type-switch" align="center" space={8}>
-                    <AriButton
-                      size="sm"
-                      icon="folder"
-                      label="动作"
-                      color={selectedNodeType === "action" ? "brand" : "default"}
-                      ghost={selectedNodeType !== "action"}
-                      onClick={() => {
-                        patchSelectedNode({
-                          nodeType: "action",
-                        });
-                      }}
-                    />
-                    <AriButton
-                      size="sm"
-                      icon="new_releases"
-                      label="技能"
-                      color={selectedNodeType === "skill" ? "brand" : "default"}
-                      ghost={selectedNodeType !== "skill"}
-                      onClick={() => {
-                        patchSelectedNode({
-                          nodeType: "skill",
-                        });
-                      }}
-                    />
+              {/* 描述：
+               *
+               *   - 右侧属性面板仅在选中节点时显示；空白画布状态下隐藏面板，避免重复展示工作流信息。
+               */}
+              {selectedNodeData ? (
+                <AriCard
+                  className="desk-workflow-editor-floating-panel"
+                  positionType="absolute"
+                >
+                  <AriFlex
+                    className="desk-workflow-inspector-header"
+                    align="center"
+                    justify="space-between"
+                  >
+                    <AriContainer
+                      className="desk-workflow-inspector-header-main"
+                      padding={0}
+                    >
+                      <AriTypography
+                        className="desk-workflow-inspector-title"
+                        variant="h4"
+                        value={selectedNodeData.title}
+                      />
+                    </AriContainer>
+                    <AriFlex
+                      className="desk-workflow-inspector-tools"
+                      align="center"
+                      space={8}
+                    >
+                      <AriButton
+                        type="text"
+                        color="danger"
+                        icon="delete"
+                        ghost
+                        aria-label="删除该节点"
+                        disabled={!canEditWorkflow}
+                        onClick={deleteSelectedNode}
+                      />
+                    </AriFlex>
                   </AriFlex>
-                </AriFormItem>
-                {selectedNodeType === "skill" ? (
-                  <>
-                    <AriFormItem label="技能编码" name="selectedNode.skillId">
-                      <AriSelect
-                        value={selectedNodeData.skillId || undefined}
-                        options={skillSelectOptions}
-                        searchable
-                        allowClear
-                        placeholder="请选择技能"
-                        onChange={(value: unknown) => {
-                          const selectedSkillId = typeof value === "string"
-                            ? value
-                            : String(value || "").trim();
-                          if (!selectedSkillId) {
-                            patchSelectedNode({ skillId: "", skillVersion: "" });
-                            return;
-                          }
-                          patchSelectedNode({
-                            skillId: selectedSkillId,
-                            skillVersion: "",
-                          });
-                        }}
+
+                  <AriForm
+                    className="desk-workflow-inspector-form"
+                    layout="vertical"
+                    labelAlign="left"
+                    density="compact"
+                    maxWidth="100%"
+                  >
+                    <AriFormItem label="节点名称" name="selectedNode.title">
+                      <AriInput
+                        value={selectedNodeData.title}
+                        disabled={!canEditWorkflow}
+                        onChange={(value: string) => patchSelectedNode({ title: value })}
+                        placeholder="请输入节点名称"
                       />
                     </AriFormItem>
-                  </>
-                ) : null}
-                <AriFormItem label="指令" name="selectedNode.instruction">
-                  <AriInput.TextArea
-                    value={selectedNodeData.instruction || ""}
-                    onChange={(value: string) =>
-                      patchSelectedNode({ instruction: value })
-                    }
-                    placeholder="请输入该节点命中后的 AI 提示词"
-                    rows={3}
-                    autoSize={{ minRows: 3, maxRows: 8 }}
-                  />
-                </AriFormItem>
-              </AriForm>
-            </AriCard>
-          ) : null}
-        </AriContainer>
-      </AriContainer>
+                    <AriFormItem label="节点说明" name="selectedNode.description">
+                      <AriInput
+                        value={selectedNodeData.description}
+                        disabled={!canEditWorkflow}
+                        onChange={(value: string) =>
+                          patchSelectedNode({ description: value })
+                        }
+                        placeholder="请输入节点说明"
+                      />
+                    </AriFormItem>
+                    <AriFormItem label="节点类型" name="selectedNode.type">
+                      <AriFlex className="desk-workflow-node-type-switch" align="center" space={8}>
+                        <AriButton
+                          size="sm"
+                          icon="folder"
+                          label="动作"
+                          color={selectedNodeType === "action" ? "brand" : "default"}
+                          ghost={selectedNodeType !== "action"}
+                          disabled={!canEditWorkflow}
+                          onClick={() => {
+                            patchSelectedNode({
+                              nodeType: "action",
+                            });
+                          }}
+                        />
+                        <AriButton
+                          size="sm"
+                          icon="new_releases"
+                          label="技能"
+                          color={selectedNodeType === "skill" ? "brand" : "default"}
+                          ghost={selectedNodeType !== "skill"}
+                          disabled={!canEditWorkflow}
+                          onClick={() => {
+                            patchSelectedNode({
+                              nodeType: "skill",
+                            });
+                          }}
+                        />
+                      </AriFlex>
+                    </AriFormItem>
+                    {selectedNodeType === "skill" ? (
+                      <>
+                        <AriFormItem label="技能编码" name="selectedNode.skillId">
+                          <AriSelect
+                            value={selectedNodeData.skillId || undefined}
+                            options={skillSelectOptions}
+                            searchable
+                            allowClear
+                            disabled={!canEditWorkflow}
+                            placeholder="请选择技能"
+                            onChange={(value: unknown) => {
+                              const selectedSkillId = typeof value === "string"
+                                ? value
+                                : String(value || "").trim();
+                              if (!selectedSkillId) {
+                                patchSelectedNode({ skillId: "", skillVersion: "" });
+                                return;
+                              }
+                              patchSelectedNode({
+                                skillId: selectedSkillId,
+                                skillVersion: "",
+                              });
+                            }}
+                          />
+                        </AriFormItem>
+                      </>
+                    ) : null}
+                    <AriFormItem label="指令" name="selectedNode.instruction">
+                      <AriInput.TextArea
+                        value={selectedNodeData.instruction || ""}
+                        disabled={!canEditWorkflow}
+                        onChange={(value: string) =>
+                          patchSelectedNode({ instruction: value })
+                        }
+                        placeholder="请输入该节点命中后的 AI 提示词"
+                        rows={3}
+                        autoSize={{ minRows: 3, maxRows: 8 }}
+                      />
+                    </AriFormItem>
+                  </AriForm>
+                </AriCard>
+              ) : null}
+            </AriContainer>
+          </AriContainer>
+        </>
+      ) : null}
     </AriContainer>
   );
 }

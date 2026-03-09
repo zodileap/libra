@@ -1,4 +1,4 @@
-import type { ProjectWorkspaceProfile } from "../../shared/data";
+import type { ProjectWorkspaceCapabilityId, ProjectWorkspaceProfile } from "../../shared/data";
 import { IS_BROWSER, STORAGE_KEYS } from "../../shared/constants";
 import type { AgentEventRecord, AgentStepRecord } from "../../shared/types";
 import type { AgentSkillItem } from "../../modules/common/services";
@@ -449,6 +449,7 @@ export function buildSessionContextPrompt(
   currentPrompt: string,
   workspacePath?: string,
   projectProfile?: ProjectWorkspaceProfile | null,
+  enabledCapabilities: ProjectWorkspaceCapabilityId[] = [],
 ): string {
   const normalizedCurrentPrompt = String(currentPrompt || "").trim();
   if (!normalizedCurrentPrompt) {
@@ -458,9 +459,10 @@ export function buildSessionContextPrompt(
   // 描述：
   //
   //   - 仅在“重试继续”或当前请求明确依赖项目语义基线时注入结构化项目信息，避免首轮全量灌入。
+  const projectKnowledgeEnabled = enabledCapabilities.includes("project-knowledge");
   const shouldAttachProfileContext = isRetryOnlyPrompt(normalizedCurrentPrompt)
     || AGENT_PROFILE_ON_DEMAND_KEYWORDS.some((keyword) => normalizedCurrentPrompt.toLowerCase().includes(keyword.toLowerCase()));
-  const profileContextLines = shouldAttachProfileContext
+  const profileContextLines = projectKnowledgeEnabled && shouldAttachProfileContext
     ? buildCodeProjectProfileContextLines(projectProfile)
     : [];
   const frameworkReplacementContextLines = buildFrameworkReplacementContextLines(

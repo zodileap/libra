@@ -9,8 +9,13 @@ import {
 } from "aries_react";
 
 interface AgentStarterItem {
+  id: string;
   title: string;
   description: string;
+  icon: string;
+  actionLabel: string;
+  disabled?: boolean;
+  onAction: () => void | Promise<void>;
 }
 
 interface AgentPageProps {
@@ -45,10 +50,6 @@ export function AgentPage({
   onboardingContent,
   guideContent,
 }: AgentPageProps) {
-  if (onboardingContent) {
-    return <>{onboardingContent}</>;
-  }
-
   return (
     <AriContainer className="desk-content desk-session-content" height="100%" showBorderRadius={false}>
       <AriContainer className="desk-session-shell">
@@ -60,12 +61,25 @@ export function AgentPage({
         <AriContainer className="desk-session-thread-wrap">
           <AriContainer className="desk-thread desk-agent-starter-thread">
             {guideContent || null}
+            {onboardingContent || null}
 
             <AriContainer className="desk-two-cols">
               {starterItems.map((item) => (
-                <AriCard key={item.title}>
-                  <AriTypography variant="h4" value={item.title} />
-                  <AriTypography variant="caption" value={item.description} />
+                <AriCard key={item.id}>
+                  <AriFlex vertical align="flex-start" space={12}>
+                    <AriTypography variant="h4" value={item.title} />
+                    <AriTypography variant="caption" value={item.description} />
+                    <AriButton
+                      color="brand"
+                      ghost
+                      icon={item.icon}
+                      label={item.actionLabel}
+                      disabled={item.disabled}
+                      onClick={() => {
+                        void item.onAction();
+                      }}
+                    />
+                  </AriFlex>
                 </AriCard>
               ))}
             </AriContainer>

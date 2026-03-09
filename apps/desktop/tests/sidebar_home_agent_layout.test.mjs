@@ -31,6 +31,7 @@ test("TestHomeAndAgentSidebarShouldUseProjectFirstLayout", () => {
   assert.match(sidebarSource, /label: "技能"/);
   assert.match(sidebarSource, /label: "MCP"/);
   assert.match(sidebarSource, /icon: "account_tree"/);
+  assert.match(sidebarSource, /path: WORKFLOW_PAGE_PATH/);
   assert.match(sidebarSource, /path: SKILL_PAGE_PATH/);
   assert.match(sidebarSource, /path: MCP_PAGE_PATH/);
   assert.match(sidebarSource, /navigate\(target\.path\);/);

@@ -20,6 +20,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
+  getProjectWorkspaceCapabilityManifest,
   PROJECT_WORKSPACE_PROFILE_UPDATED_EVENT,
   getProjectWorkspaceProfile,
   getProjectWorkspaceGroupById,
@@ -28,8 +29,10 @@ import {
   getSessionRunState,
   getSessionMessages,
   removeSessionDebugArtifact,
+  resolveAgentSessionSelectedAiProvider,
   resolveAgentSessionTitle,
   resolveAgentSessionSelectedDccSoftware,
+  rememberAgentSessionSelectedAiProvider,
   rememberAgentSessionSelectedDccSoftware,
   removeSessionRunState,
   SESSION_TITLE_UPDATED_EVENT,
@@ -40,7 +43,9 @@ import {
   removeAgentSession,
   renameAgentSession,
   togglePinnedAgentSession,
+  isProjectWorkspaceCapabilityEnabled,
   type ProjectWorkspaceProfile,
+  type ProjectWorkspaceCapabilityId,
   type SessionRunMeta as PersistedSessionRunMeta,
 } from "../../shared/data";
 import { updateRuntimeSessionStatus } from "../../shared/services/backend-api";
@@ -126,6 +131,8 @@ interface SessionPageProps {
 interface SessionRouteState {
   autoPrompt?: string;
   workspaceId?: string;
+  preferredWorkflowId?: string;
+  preferredSkillIds?: string[];
 }
 
 // 描述：
@@ -1233,6 +1240,80 @@ function isInitialThinkingSegment(segment: AssistantRunSegment): boolean {
 
 // 描述：
 //
+//   - 判断运行片段是否属于“思考占位”片段；兼容旧版本恢复出来的空标题“正在思考”步骤，
+//     确保离开会话后返回时不会把占位片段当成真实执行步骤重复渲染。
+//
+// Params:
+//
+//   - segment: 运行片段。
+//
+// Returns:
+//
+//   - true: 思考占位片段。
+function isThinkingPlaceholderSegment(segment: AssistantRunSegment): boolean {
+  if (isInitialThinkingSegment(segment)) {
+    return true;
+  }
+  const normalizedStep = String(segment.step || "").trim();
+  if (normalizedStep !== "正在思考…") {
+    return false;
+  }
+  const normalizedIntro = String(segment.intro || "").trim();
+  return !normalizedIntro
+    || normalizedIntro === "执行过程"
+    || normalizedIntro === "执行片段"
+    || normalizedIntro === "执行进行中";
+}
+
+// 描述：
+//
+//   - 规范化运行片段列表，去掉历史遗留的重复思考占位；若当前仍处于纯等待阶段，
+//     则只保留一条统一的初始化思考占位，避免返回会话后出现双“正在思考”或空执行过程组。
+//
+// Params:
+//
+//   - segments: 原始运行片段列表。
+//
+// Returns:
+//
+//   - 可直接持久化与渲染的规范化片段列表。
+function normalizeAssistantRunSegments(segments: AssistantRunSegment[]): AssistantRunSegment[] {
+  const sanitizedSegments = segments
+    .filter((item) => item && typeof item.key === "string")
+    .map<AssistantRunSegment>((item) => ({
+      ...item,
+      intro: String(item.intro || "").trim(),
+      step: String(item.step || "").trim(),
+    }))
+    .filter((item) => item.intro || item.step)
+    .slice(-160);
+  if (sanitizedSegments.length === 0) {
+    return [];
+  }
+  const meaningfulSegments = sanitizedSegments.filter((item) => !isThinkingPlaceholderSegment(item));
+  if (meaningfulSegments.length > 0) {
+    return meaningfulSegments;
+  }
+  const latestThinkingSegment = [...sanitizedSegments].reverse().find((item) => isThinkingPlaceholderSegment(item));
+  if (!latestThinkingSegment) {
+    return [];
+  }
+  return [{
+    ...latestThinkingSegment,
+    intro: "",
+    step: "正在思考…",
+    status: "running",
+    data: {
+      ...(latestThinkingSegment.data && typeof latestThinkingSegment.data === "object"
+        ? latestThinkingSegment.data
+        : {}),
+      __segment_role: INITIAL_THINKING_SEGMENT_ROLE,
+    },
+  }];
+}
+
+// 描述：
+//
 //   - 构建执行流步骤详情文本；仅在存在“额外内容”时返回，避免展开后重复展示同一句话。
 //
 // Params:
@@ -1310,7 +1391,7 @@ function buildRunSegmentGroups(segments: AssistantRunSegment[]): AssistantRunSeg
     const segmentRole = typeof segmentData.__segment_role === "string" ? segmentData.__segment_role : "";
     const stepType = typeof segmentData.__step_type === "string" ? segmentData.__step_type : "";
 
-    if (segmentRole === INITIAL_THINKING_SEGMENT_ROLE) {
+    if (segmentRole === INITIAL_THINKING_SEGMENT_ROLE || isThinkingPlaceholderSegment(segment)) {
       // 描述：
       //
       //   - 初始化思考占位由统一底部指示器承载，不在分组内重复渲染步骤。
@@ -1411,7 +1492,7 @@ function buildRunSegmentGroups(segments: AssistantRunSegment[]): AssistantRunSeg
       title: group.title,
       steps: group.steps.filter((step) => String(step.text || "").trim()),
     }))
-    .filter((group) => group.title || group.steps.length > 0);
+    .filter((group) => group.steps.length > 0 || group.title !== "执行过程");
 }
 
 // 描述：根据智能体文本流事件判断当前执行阶段，用于无事件时的“心跳提示”文案。
@@ -1462,25 +1543,27 @@ function buildAssistantHeartbeatSegment(
   heartbeatCount: number,
   segmentKey: string,
 ): AssistantRunSegment {
+  const waitedSeconds = Math.max(1, Math.round(heartbeatCount * 1.2));
+  const waitSuffix = heartbeatCount > 1 ? `（已等待约 ${waitedSeconds} 秒）` : "";
   let intro = "等待执行状态回传…";
   let step = "执行仍在进行中，正在同步最新状态。";
   if (stage === "planning") {
     intro = heartbeatCount <= 1
       ? "正在解析需求并规划执行步骤…"
-      : "正在确认本次操作所需的工具链与任务顺序…";
+      : `正在确认本次操作所需的工具链与任务顺序…${waitSuffix}`;
     step = "等待模型返回可执行编排脚本。";
   } else if (stage === "bridge") {
     intro = heartbeatCount <= 1
       ? "正在检查执行环境与权限状态…"
-      : "等待工具返回环境检查结果…";
+      : `等待工具返回环境检查结果…${waitSuffix}`;
     step = "环境检查完成后将继续执行当前步骤。";
   } else if (stage === "executing") {
     intro = heartbeatCount <= 1
       ? "等待工具返回本步结果…"
-      : "持续收集工具执行回传…";
+      : `持续收集工具执行回传…${waitSuffix}`;
     step = "当前步骤仍在执行，请稍候。";
   } else if (stage === "finalizing") {
-    intro = "正在整理执行结果并生成最终总结…";
+    intro = `正在整理执行结果并生成最终总结…${waitSuffix}`;
     step = "即将输出最终结果。";
   }
 
@@ -1490,6 +1573,54 @@ function buildAssistantHeartbeatSegment(
     step,
     status: "running",
   };
+}
+
+// 描述：
+//
+//   - 将真实 heartbeat 文案补齐等待时长，避免长时间等待时主文案停留在同一句而看起来像“卡住”。
+//
+// Params:
+//
+//   - message: 后端透传的 heartbeat 文案。
+//   - heartbeatCount: 当前 heartbeat 次数。
+//
+// Returns:
+//
+//   - 追加等待时长后的展示文本。
+function buildAssistantHeartbeatDisplayText(message: string, heartbeatCount: number): string {
+  const normalizedMessage = String(message || "").trim() || "等待执行结果回传…";
+  if (normalizedMessage.includes("已等待约")) {
+    return normalizedMessage;
+  }
+  if (heartbeatCount <= 1) {
+    return normalizedMessage;
+  }
+  const waitedSeconds = Math.max(1, Math.round(heartbeatCount * 1.2));
+  return `${normalizedMessage}（已等待约 ${waitedSeconds} 秒）`;
+}
+
+// 描述：
+//
+//   - 将 planning 事件转换为主消息可读文本；命中轮次描述时优先使用模型返回的任务说明。
+//
+// Params:
+//
+//   - payload: 智能体文本流事件。
+//
+// Returns:
+//
+//   - 可直接展示的 planning 文案；无可读内容时返回空字符串。
+function resolvePlanningDisplayText(payload: AgentTextStreamEvent): string {
+  const eventMessage = String(payload.message || "").trim();
+  if (!eventMessage) {
+    return "";
+  }
+  const meta = resolvePlanningMeta(eventMessage);
+  const metaType = typeof meta?.type === "string" ? meta.type : "";
+  if (metaType === "round_description") {
+    return truncateRunText(String(meta?.text || "").trim(), 300);
+  }
+  return eventMessage.startsWith(PLANNING_META_PREFIX) ? "" : eventMessage;
 }
 
 // 描述：
@@ -1527,6 +1658,98 @@ function buildAssistantFailureSummary(rawSummary: string): { detail: string; hin
 
 // 描述：
 //
+//   - 解析运行中底部指示器文案；优先展示当前助手消息中已经拿到的真实进度文本，
+//     避免离开会话后返回只能看到泛化的“正在思考…”。
+//
+// Params:
+//
+//   - messageText: 当前助手消息文本。
+//   - runMeta: 当前助手消息绑定的运行态。
+//
+// Returns:
+//
+//   - 底部运行中指示器文案。
+function resolveRunningIndicatorText(
+  messageText: string,
+  runMeta?: AssistantRunMeta,
+): string {
+  const normalizedMessageText = String(messageText || "").trim();
+  if (normalizedMessageText && normalizedMessageText !== "正在思考…") {
+    return normalizedMessageText;
+  }
+  const normalizedSummary = String(runMeta?.summary || "").trim();
+  if (normalizedSummary && normalizedSummary !== "正在思考…") {
+    return normalizedSummary;
+  }
+  return "正在思考…";
+}
+
+// 描述：
+//
+//   - 判断运行中文案是否属于泛化占位；这些文本缺少具体进展语义，恢复会话时应优先让位给更具体的缓存消息或执行总结。
+//
+// Params:
+//
+//   - value: 待判断的运行中文案。
+//
+// Returns:
+//
+//   - true: 属于泛化占位文案。
+function isGenericRunningIndicatorText(value: string): boolean {
+  const normalizedValue = String(value || "").trim();
+  if (!normalizedValue) {
+    return true;
+  }
+  return normalizedValue === "正在思考…"
+    || normalizedValue === "正在准备执行..."
+    || normalizedValue === "正在生成执行结果…"
+    || normalizedValue === "正在整理输出..."
+    || normalizedValue === "智能体正在思考…";
+}
+
+// 描述：
+//
+//   - 在恢复执行中会话时，优先使用已持久化的真实助手文本；若缓存里只有泛化占位，再回退到运行总结或最后步骤。
+//
+// Params:
+//
+//   - messages: 当前会话的已持久化消息列表。
+//   - messageId: 当前运行中的助手消息 ID。
+//   - runMeta: 当前运行态。
+//
+// Returns:
+//
+//   - 恢复后应展示的助手消息文本。
+function resolveRecoveredAssistantMessageText(
+  messages: MessageItem[],
+  messageId: string,
+  runMeta: AssistantRunMeta | undefined,
+): string {
+  const normalizedMessageId = String(messageId || "").trim();
+  const storedMessageText = normalizedMessageId
+    ? String(
+      messages.find((item) => item.role === "assistant" && String(item.id || "").trim() === normalizedMessageId)?.text || "",
+    ).trim()
+    : "";
+  const summaryText = String(runMeta?.summary || "").trim();
+  const lastStepText = String(runMeta?.segments.slice(-1)[0]?.step || "").trim();
+  if (summaryText && (!storedMessageText || isGenericRunningIndicatorText(storedMessageText))) {
+    return summaryText;
+  }
+  if (storedMessageText) {
+    return storedMessageText;
+  }
+  if (summaryText) {
+    return summaryText;
+  }
+  if (lastStepText) {
+    return lastStepText;
+  }
+  return "等待工具返回本步结果…";
+}
+
+// 描述：
+//
 //   - 判断失败文本是否属于“Gemini Provider 未实现”场景，用于重试时自动回退到 Codex。
 //
 // Params:
@@ -1557,9 +1780,8 @@ function isGeminiProviderNotImplementedError(raw: string): boolean {
 //   - 页面可用的运行态。
 function normalizePersistedRunMeta(input: PersistedSessionRunMeta): AssistantRunMeta {
   const segments = Array.isArray(input.segments)
-    ? input.segments
-      .filter((item) => item && typeof item.key === "string")
-      .map<AssistantRunSegment>((item) => ({
+    ? normalizeAssistantRunSegments(
+      input.segments.map<AssistantRunSegment>((item) => ({
         key: String(item.key),
         intro: String(item.intro || "").trim(),
         step: String(item.step || "").trim(),
@@ -1577,9 +1799,8 @@ function normalizePersistedRunMeta(input: PersistedSessionRunMeta): AssistantRun
           ? (item.data as Record<string, unknown>)
           : undefined,
         detail: typeof item.detail === "string" ? item.detail : undefined,
-      }))
-      .filter((item) => item.intro || item.step)
-      .slice(-160)
+      })),
+    )
     : [];
   return {
     status: input.status === "failed" ? "failed" : input.status === "finished" ? "finished" : "running",
@@ -1603,6 +1824,12 @@ export function SessionPage({
   const location = useLocation();
   const routeState = (location.state || {}) as SessionRouteState;
   const routeAutoPrompt = String(routeState.autoPrompt || "").trim();
+  const routePreferredWorkflowId = String(routeState.preferredWorkflowId || "").trim();
+  const routePreferredSkillIds = Array.isArray(routeState.preferredSkillIds)
+    ? routeState.preferredSkillIds
+      .map((item) => String(item || "").trim())
+      .filter((item) => item.length > 0)
+    : [];
   const [input, setInput] = useState("");
   const [status, setStatus] = useState("");
   const [sandboxMetrics, setSandboxMetrics] = useState<AgentSandboxMetrics | null>(null);
@@ -1774,17 +2001,19 @@ export function SessionPage({
       ),
     [aiKeys],
   );
-  const [selectedProvider, setSelectedProvider] = useState<string>("");
+  const [selectedProvider, setSelectedProvider] = useState<string>(
+    () => resolveAgentSessionSelectedAiProvider(sessionId),
+  );
   // 描述：解析当前选中的 Provider，未命中时回退到列表首项。
   const selectedAi = useMemo(
     () => availableAiKeys.find((item) => item.provider === selectedProvider) || availableAiKeys[0] || null,
     [availableAiKeys, selectedProvider],
   );
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string>(
-    () => readSelectedWorkflowId(AGENT_WORKFLOW_SELECTED_KEY),
+    () => routePreferredWorkflowId || readSelectedWorkflowId(AGENT_WORKFLOW_SELECTED_KEY),
   );
   const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>(
-    () => readSelectedSkillIds(AGENT_SKILL_SELECTED_KEY),
+    () => routePreferredSkillIds.length > 0 ? routePreferredSkillIds : readSelectedSkillIds(AGENT_SKILL_SELECTED_KEY),
   );
   const [selectedDccSoftware, setSelectedDccSoftware] = useState<string>(
     () => resolveAgentSessionSelectedDccSoftware(sessionId),
@@ -1881,6 +2110,8 @@ export function SessionPage({
   const agentLlmResponseRawRef = useRef("");
   const autoPromptDispatchedRef = useRef(false);
   const assistantRunMetaMapRef = useRef<Record<string, AssistantRunMeta>>({});
+  const messagesRef = useRef<MessageItem[]>([]);
+  const sendingRef = useRef(false);
   const sessionApprovedToolNameSetRef = useRef<Set<string>>(new Set());
 
   // 描述：停止当前会话流式渲染调度，避免会话切换后残留异步刷新。
@@ -2089,7 +2320,7 @@ export function SessionPage({
         ...prev,
         [messageId]: {
           ...current,
-          segments: [...normalizedSegments, segment].slice(-160),
+          segments: normalizeAssistantRunSegments([...normalizedSegments, segment]),
         },
       };
     });
@@ -2101,6 +2332,20 @@ export function SessionPage({
   useEffect(() => {
     assistantRunMetaMapRef.current = assistantRunMetaMap;
   }, [assistantRunMetaMap]);
+
+  // 描述：
+  //
+  //   - 同步消息 ref，供页面切走时立即刷盘，避免节流持久化尚未触发就丢失最新进度文案。
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  // 描述：
+  //
+  //   - 同步发送态 ref，供页面卸载或会话切换时持久化当前运行状态。
+  useEffect(() => {
+    sendingRef.current = sending;
+  }, [sending]);
 
   // 描述：
   //
@@ -2381,11 +2626,7 @@ export function SessionPage({
         || "";
       if (recoveredMessageId) {
         const recoveredMeta = normalizedRunMetaMap[recoveredMessageId];
-        const recoveredText = String(
-          recoveredMeta?.summary
-          || recoveredMeta?.segments.slice(-1)[0]?.step
-          || "等待工具返回本步结果…",
-        ).trim();
+        const recoveredText = resolveRecoveredAssistantMessageText(nextMessages, recoveredMessageId, recoveredMeta);
         nextMessages = upsertAssistantMessageById(nextMessages, recoveredMessageId, recoveredText);
         streamMessageIdRef.current = recoveredMessageId;
         streamDisplayedTextRef.current = recoveredText;
@@ -2412,6 +2653,43 @@ export function SessionPage({
     clearDebugSnapshotTimer();
     clearAssistantRunHeartbeatTimer();
   }, []);
+
+  // 描述：
+  //
+  //   - 页面切走或会话切换时立即将最新消息和运行态刷入本地缓存，保证切到其他页面再回来时仍能看到离开前的真实进度文本。
+  useEffect(() => {
+    return () => {
+      if (!sessionId || !messagesHydrated || hydratedSessionKey !== sessionStorageKey) {
+        return;
+      }
+      upsertSessionMessages({
+        agentKey: normalizedAgentKey,
+        sessionId,
+        messages: messagesRef.current,
+      });
+      const normalizedSessionApprovedToolNames = Array.from(new Set(
+        Array.from(sessionApprovedToolNameSetRef.current.values())
+          .map((toolName) => normalizeApprovalToolName(toolName))
+          .filter((toolName) => Boolean(toolName)),
+      ));
+      if (
+        Object.keys(assistantRunMetaMapRef.current).length === 0
+        && normalizedSessionApprovedToolNames.length === 0
+      ) {
+        removeSessionRunState(normalizedAgentKey, sessionId);
+        return;
+      }
+      upsertSessionRunState({
+        agentKey: normalizedAgentKey,
+        sessionId,
+        activeMessageId: String(streamMessageIdRef.current || "").trim(),
+        sending: sendingRef.current,
+        runMetaMap: assistantRunMetaMapRef.current,
+        sessionApprovedToolNames: normalizedSessionApprovedToolNames,
+        updatedAt: Date.now(),
+      });
+    };
+  }, [hydratedSessionKey, messagesHydrated, normalizedAgentKey, sessionId, sessionStorageKey]);
 
   useEffect(() => {
     if (!sessionId || !messagesHydrated || hydratedSessionKey !== sessionStorageKey) {
@@ -2610,15 +2888,30 @@ export function SessionPage({
     );
   }, []);
 
+  // 描述：在切换会话时恢复线程级 AI Provider 绑定，避免 AI Key 页调整默认顺序后回写已存在话题。
+  useEffect(() => {
+    setSelectedProvider(resolveAgentSessionSelectedAiProvider(sessionId));
+  }, [sessionId]);
+
+  // 描述：仅在当前会话尚未绑定 Provider 或绑定项失效时回退到首个可用 Provider；一旦完成回退即写回会话元数据，冻结该话题后续默认值。
   useEffect(() => {
     if (availableAiKeys.length === 0) {
       setSelectedProvider("");
+      if (sessionId) {
+        rememberAgentSessionSelectedAiProvider(sessionId, "");
+      }
       return;
     }
-    if (!availableAiKeys.some((item) => item.provider === selectedProvider)) {
-      setSelectedProvider(availableAiKeys[0].provider);
+    const normalizedProvider = String(selectedProvider || "").trim();
+    if (normalizedProvider && availableAiKeys.some((item) => item.provider === normalizedProvider)) {
+      return;
     }
-  }, [availableAiKeys, selectedProvider]);
+    const nextProvider = String(availableAiKeys[0]?.provider || "").trim();
+    setSelectedProvider(nextProvider);
+    if (sessionId && nextProvider) {
+      rememberAgentSessionSelectedAiProvider(sessionId, nextProvider);
+    }
+  }, [availableAiKeys, selectedProvider, sessionId]);
 
   // 描述：加载“已发现技能”列表，供会话中的“工作流/技能”弹窗选择器使用。
   useEffect(() => {
@@ -2770,6 +3063,22 @@ export function SessionPage({
         if (!agentStreamTextBufferRef.current.trim()) {
           setStreamingAssistantTarget("正在整理输出...");
         }
+        return;
+      }
+      if (payload.kind === STREAM_KINDS.PLANNING) {
+        const planningText = resolvePlanningDisplayText(payload);
+        if (planningText) {
+          setStreamingAssistantTarget(planningText);
+        }
+        return;
+      }
+      if (payload.kind === STREAM_KINDS.HEARTBEAT) {
+        assistantRunHeartbeatCountRef.current += 1;
+        const heartbeatText = buildAssistantHeartbeatDisplayText(
+          String(payload.message || "").trim(),
+          assistantRunHeartbeatCountRef.current,
+        );
+        setStreamingAssistantTarget(heartbeatText);
         return;
       }
       if (payload.kind === STREAM_KINDS.FINISHED) {
@@ -3397,6 +3706,9 @@ export function SessionPage({
       && availableAiKeys.some((item) => item.provider === "codex" && item.enabled)
     ) {
       setSelectedProvider("codex");
+      if (sessionId) {
+        rememberAgentSessionSelectedAiProvider(sessionId, "codex");
+      }
       setStatus("检测到 Gemini 暂不可用，已切换到 Codex 重试");
     } else {
       setStatus("正在重试本轮执行...");
@@ -3526,6 +3838,9 @@ export function SessionPage({
       return;
     }
     setSelectedProvider(nextProvider);
+    if (sessionId) {
+      rememberAgentSessionSelectedAiProvider(sessionId, nextProvider);
+    }
   };
 
   // 描述：根据审批结果更新本地运行片段状态，确保授权卡片在用户操作后即时收敛。
@@ -4834,7 +5149,8 @@ const handleConfirmWorkflowSkillModal = () => {
                 : null;
               const runSegmentsForRender: AssistantRunSegment[] = runMeta
                 ? (() => {
-                  const normalizedSegments = runMeta.segments
+                  const normalizedRenderSegments = normalizeAssistantRunSegments(runMeta.segments);
+                  const normalizedSegments = normalizedRenderSegments
                     .map((segment) => {
                       const intro = isInitialThinkingSegment(segment)
                         ? ""
@@ -4873,6 +5189,7 @@ const handleConfirmWorkflowSkillModal = () => {
                   (segment) => segment.status === "running" && isApprovalPendingSegment(segment),
                 );
               const runSegmentGroups = buildRunSegmentGroups(runSegmentsForRender);
+              const runningIndicatorText = resolveRunningIndicatorText(message.text, runMeta);
               const renderRunSegment = (segment: AssistantRunSegmentStep, segmentKeyPrefix = "") => {
                 const segmentDomKey = `${segmentKeyPrefix}${segment.key}`;
                 const detailKey = `${messageKey}:${segmentDomKey}`;
@@ -4914,7 +5231,7 @@ const handleConfirmWorkflowSkillModal = () => {
                           <AriTypography
                             className="desk-run-step desk-run-step-running"
                             variant="caption"
-                            value="正在思考…"
+                            value={runningIndicatorText}
                           />
                         </AriContainer>
                       ) : null}
@@ -5281,7 +5598,7 @@ const handleConfirmWorkflowSkillModal = () => {
                   disabled={sending}
                 />
                 <AriSelect
-                  className="desk-prompt-toolbar-select"
+                  className="desk-prompt-toolbar-select desk-prompt-toolbar-select-provider"
                   value={selectedAi?.provider || undefined}
                   options={aiSelectOptions}
                   placeholder="选择 AI"
@@ -5290,7 +5607,7 @@ const handleConfirmWorkflowSkillModal = () => {
                   disabled={availableAiKeys.length === 0}
                 />
                 <AriSelect
-                  className="desk-prompt-toolbar-select"
+                  className="desk-prompt-toolbar-select desk-prompt-toolbar-select-strategy"
                   value="workflow_skill"
                   options={workflowSkillSelectOptions}
                   bordered={false}

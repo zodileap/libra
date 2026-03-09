@@ -2,12 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   AriButton,
-  AriCard,
   AriContainer,
   AriFlex,
   AriIcon,
   AriMessage,
   AriModal,
+  AriTooltip,
   AriTypography,
 } from "aries_react";
 import type { AgentSkillItem, SkillOverview } from "../services";
@@ -18,7 +18,14 @@ import {
   removeAgentSkill,
 } from "../services";
 import { useDesktopHeaderSlot } from "../../../widgets/app-header/header-slot-context";
-import { DeskEmptyState, DeskSectionTitle } from "../../../widgets/settings-primitives";
+import {
+  DeskOverviewDetailRow,
+  DeskOverviewDetailsModal,
+  DeskEmptyState,
+  DeskOverviewCard,
+  DeskPageHeader,
+  DeskSectionTitle,
+} from "../../../widgets/settings-primitives";
 
 // 描述：
 //
@@ -31,49 +38,55 @@ const DEFAULT_SKILL_OVERVIEW: SkillOverview = {
 
 // 描述：
 //
-//   - 渲染技能卡片，统一展示标准技能包的名称、描述、来源和目录路径。
+//   - 渲染技能卡片，统一展示技能名称、摘要说明与管理动作。
 //
 // Params:
 //
 //   - skill: 当前技能。
 //   - busy: 当前卡片是否处于操作中。
-//   - onRemove: 点击移除后的回调。
+//   - onManage: 点击管理后的回调。
+//   - onAdd: 点击添加后的回调。
 function SkillCard({
   skill,
   busy,
-  onRemove,
+  onManage,
+  onAdd,
 }: {
   skill: AgentSkillItem;
   busy: boolean;
-  onRemove?: (skill: AgentSkillItem) => void;
+  onManage: (skill: AgentSkillItem) => void;
+  onAdd?: (skill: AgentSkillItem) => void;
 }) {
-  const sourceLabel = skill.source === "builtin" ? "应用内置" : "外部技能";
+  const registered = skill.source !== "builtin";
   return (
-    <AriCard className="desk-skill-card">
-      <AriFlex className="desk-skill-card-main" align="center" justify="space-between" space={12}>
-        <AriFlex className="desk-skill-card-info" align="center" space={12}>
-          <AriContainer className="desk-skill-card-icon-wrap" padding={0}>
-            <AriIcon name={skill.source === "builtin" ? "inventory_2" : "folder_open"} />
-          </AriContainer>
-          <AriContainer padding={0}>
-            <AriTypography variant="h4" value={skill.name} />
-            <AriTypography variant="caption" value={sourceLabel} />
-            <AriTypography variant="caption" value={skill.description || "未填写技能描述"} />
-            <AriTypography variant="caption" value={skill.rootPath} />
-          </AriContainer>
-        </AriFlex>
-        {skill.removable && onRemove ? (
-          <AriButton
-            color="danger"
-            ghost
-            icon="delete"
-            label="移除"
-            disabled={busy}
-            onClick={() => onRemove(skill)}
-          />
-        ) : null}
-      </AriFlex>
-    </AriCard>
+    <DeskOverviewCard
+      icon={<AriIcon name="new_releases" />}
+      title={skill.name}
+      description={skill.description || "未填写技能描述"}
+      actions={(
+        <>
+          <AriTooltip content="管理" position="top" minWidth={0} matchTriggerWidth={false}>
+            <AriButton
+              type="text"
+              icon="settings"
+              aria-label="管理技能"
+              disabled={busy}
+              onClick={() => onManage(skill)}
+            />
+          </AriTooltip>
+          {!registered && onAdd ? (
+            <AriButton
+              type="text"
+              color="brand"
+              icon="add"
+              aria-label="添加技能"
+              disabled={busy}
+              onClick={() => onAdd(skill)}
+            />
+          ) : null}
+        </>
+      )}
+    />
   );
 }
 
@@ -85,6 +98,7 @@ export function SkillsPage() {
   const [overview, setOverview] = useState<SkillOverview>(DEFAULT_SKILL_OVERVIEW);
   const [loading, setLoading] = useState(true);
   const [busySkillId, setBusySkillId] = useState("");
+  const [managingSkill, setManagingSkill] = useState<AgentSkillItem | null>(null);
   const [removingSkill, setRemovingSkill] = useState<AgentSkillItem | null>(null);
 
   // 描述：
@@ -158,6 +172,31 @@ export function SkillsPage() {
 
   // 描述：
   //
+  //   - 将内置技能复制到用户技能目录，完成“未注册 -> 已注册”的添加动作。
+  const handleAddBuiltinSkill = useCallback(async (skill: AgentSkillItem) => {
+    if (busySkillId) {
+      return;
+    }
+    setBusySkillId(skill.id);
+    try {
+      const installedSkill = await importAgentSkillFromPath(skill.rootPath);
+      await reloadOverview();
+      AriMessage.success({
+        content: `已添加 ${installedSkill.name}`,
+        duration: 1800,
+      });
+    } catch (_err) {
+      AriMessage.error({
+        content: "添加技能失败，请稍后重试。",
+        duration: 2200,
+      });
+    } finally {
+      setBusySkillId("");
+    }
+  }, [busySkillId, reloadOverview]);
+
+  // 描述：
+  //
   //   - 确认移除外部技能并刷新页面。
   const handleConfirmRemoveSkill = useCallback(async () => {
     if (!removingSkill) {
@@ -186,10 +225,36 @@ export function SkillsPage() {
   //
   //   - 生成标题栏内容并挂载到全局头部插槽。
   const headerNode = useMemo(() => (
-    <AriContainer className="desk-project-settings-header" padding={0} data-tauri-drag-region>
-      <AriTypography className="desk-project-settings-header-title" variant="h4" value="技能" />
-    </AriContainer>
-  ), []);
+    <DeskPageHeader
+      mode="slot"
+      title="技能"
+      description={`已发现 ${overview.all.length} 个技能。`}
+      actions={(
+        <AriFlex align="center" space={8}>
+          <AriButton
+            ghost
+            icon="refresh"
+            label="刷新"
+            size="sm"
+            disabled={Boolean(busySkillId)}
+            onClick={() => {
+              void reloadOverview();
+            }}
+          />
+          <AriButton
+            color="brand"
+            icon="folder_open"
+            label="导入本地技能"
+            size="sm"
+            disabled={Boolean(busySkillId)}
+            onClick={() => {
+              void handleImportLocalSkill();
+            }}
+          />
+        </AriFlex>
+      )}
+    />
+  ), [busySkillId, handleImportLocalSkill, overview.all.length, reloadOverview]);
 
   if (loading) {
     return (
@@ -205,9 +270,46 @@ export function SkillsPage() {
   return (
     <AriContainer className="desk-content" showBorderRadius={false}>
       {headerSlotElement ? createPortal(headerNode, headerSlotElement) : null}
+      <DeskOverviewDetailsModal
+        visible={Boolean(managingSkill)}
+        title={managingSkill ? `${managingSkill.name} · 详情` : "技能详情"}
+        description={managingSkill?.description || "未填写技能描述"}
+        footer={managingSkill ? (
+          <AriFlex justify="flex-end" align="center" space={8}>
+            {managingSkill.source === "builtin" ? (
+              <AriButton
+                color="brand"
+                icon="add"
+                label="添加"
+                disabled={Boolean(busySkillId)}
+                onClick={() => {
+                  void handleAddBuiltinSkill(managingSkill);
+                }}
+              />
+            ) : managingSkill.removable ? (
+              <AriButton
+                color="danger"
+                icon="delete"
+                label="移除"
+                disabled={Boolean(busySkillId)}
+                onClick={() => setRemovingSkill(managingSkill)}
+              />
+            ) : null}
+            <AriButton icon="close" label="关闭" onClick={() => setManagingSkill(null)} />
+          </AriFlex>
+        ) : undefined}
+        onClose={() => setManagingSkill(null)}
+      >
+        {managingSkill ? (
+          <>
+            <DeskOverviewDetailRow label="来源" value={managingSkill.source === "builtin" ? "应用内置" : "外部技能"} />
+            <DeskOverviewDetailRow label="目录" value={managingSkill.rootPath} />
+          </>
+        ) : null}
+      </DeskOverviewDetailsModal>
       <AriModal
         visible={Boolean(removingSkill)}
-        title="移除外部技能"
+        title="移除技能"
         onClose={() => setRemovingSkill(null)}
         footer={(
           <AriFlex justify="flex-end" align="center" space={8}>
@@ -222,52 +324,31 @@ export function SkillsPage() {
         />
       </AriModal>
       <AriContainer className="desk-settings-shell desk-skills-shell">
-        <AriFlex align="center" justify="space-between" space={12}>
-          <AriTypography variant="caption" value={`已发现 ${overview.all.length} 个技能`} />
-          <AriFlex align="center" space={8}>
-            <AriButton
-              ghost
-              icon="refresh"
-              label="刷新"
-              disabled={Boolean(busySkillId)}
-              onClick={() => {
-                void reloadOverview();
-              }}
-            />
-            <AriButton
-              color="brand"
-              icon="folder_open"
-              label="导入本地技能"
-              disabled={Boolean(busySkillId)}
-              onClick={() => {
-                void handleImportLocalSkill();
-              }}
-            />
-          </AriFlex>
-        </AriFlex>
-
-        <DeskSectionTitle title="应用内置" />
-        {overview.builtin.length === 0 ? (
-          <DeskEmptyState title="暂无内置技能" description="当前应用未发现内置 Agent Skills。" />
+        <DeskSectionTitle title="已注册" />
+        {overview.external.length === 0 ? (
+          <DeskEmptyState title="暂无已注册技能" description="可导入本地技能，或从下方未注册技能中添加。" />
         ) : (
           <AriContainer className="desk-skill-grid">
-            {overview.builtin.map((item) => (
-              <SkillCard key={item.id} skill={item} busy={busySkillId === item.id} />
+            {overview.external.map((item) => (
+              <SkillCard key={item.id} skill={item} busy={busySkillId === item.id} onManage={setManagingSkill} />
             ))}
           </AriContainer>
         )}
 
-        <DeskSectionTitle title="外部技能" />
-        {overview.external.length === 0 ? (
-          <DeskEmptyState title="暂无外部技能" description="可导入本地标准技能包，或从共享技能目录自动发现。" />
+        <DeskSectionTitle title="未注册" />
+        {overview.builtin.length === 0 ? (
+          <DeskEmptyState title="暂无未注册技能" description="当前应用未发现可添加的内置技能。" />
         ) : (
           <AriContainer className="desk-skill-grid">
-            {overview.external.map((item) => (
+            {overview.builtin.map((item) => (
               <SkillCard
                 key={item.id}
                 skill={item}
                 busy={busySkillId === item.id}
-                onRemove={setRemovingSkill}
+                onManage={setManagingSkill}
+                onAdd={(target) => {
+                  void handleAddBuiltinSkill(target);
+                }}
               />
             ))}
           </AriContainer>

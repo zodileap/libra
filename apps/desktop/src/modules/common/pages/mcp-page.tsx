@@ -3,7 +3,6 @@ import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   AriButton,
-  AriCard,
   AriContainer,
   AriFlex,
   AriForm,
@@ -14,7 +13,7 @@ import {
   AriModal,
   AriSelect,
   AriSwitch,
-  AriTag,
+  AriTooltip,
   AriTypography,
 } from "aries_react";
 import type {
@@ -41,7 +40,14 @@ import {
 } from "../../../shared/services/dcc-runtime";
 import { getProjectWorkspaceGroupById, listProjectWorkspaceGroups } from "../../../shared/data";
 import { useDesktopHeaderSlot } from "../../../widgets/app-header/header-slot-context";
-import { DeskEmptyState, DeskSectionTitle } from "../../../widgets/settings-primitives";
+import {
+  DeskOverviewDetailRow,
+  DeskOverviewDetailsModal,
+  DeskEmptyState,
+  DeskOverviewCard,
+  DeskPageHeader,
+  DeskSectionTitle,
+} from "../../../widgets/settings-primitives";
 
 // 描述：
 //
@@ -403,236 +409,67 @@ function renderScopeLabel(scope: McpScope): string {
 
 // 描述：
 //
-//   - 渲染已注册 MCP 卡片，统一承载启用、编辑、校验和删除交互。
+//   - 渲染已注册 MCP 卡片，统一承载管理入口，详细动作进入管理弹窗处理。
 function RegisteredMcpCard({
   item,
   busy,
-  apifoxRuntimeStatus,
-  dccRuntimeStatus,
-  onToggleEnabled,
-  onEdit,
-  onValidate,
-  onRemove,
+  onManage,
 }: {
   item: McpRegistrationItem;
   busy: boolean;
-  apifoxRuntimeStatus: ApifoxRuntimeStatus | null;
-  dccRuntimeStatus?: DccRuntimeStatus;
-  onToggleEnabled: (item: McpRegistrationItem, enabled: boolean) => void;
-  onEdit: (item: McpRegistrationItem) => void;
-  onValidate: (item: McpRegistrationItem) => void;
-  onRemove: (item: McpRegistrationItem) => void;
+  onManage: (item: McpRegistrationItem) => void;
 }) {
   return (
-    <AriCard className="desk-skill-card">
-      <AriFlex className="desk-skill-card-main" align="center" justify="space-between" space={12}>
-        <AriFlex className="desk-skill-card-info" align="center" space={12}>
-          <AriContainer className="desk-skill-card-icon-wrap" padding={0}>
-            <AriIcon name={item.transport === "http" ? "language" : "terminal"} />
-          </AriContainer>
-          <AriContainer padding={0}>
-            <AriFlex align="center" space={8}>
-              <AriTypography variant="h4" value={item.name} />
-              <AriTag bordered size="sm" color="var(--z-color-text-brand)">
-                {renderTransportLabel(item.transport)}
-              </AriTag>
-              <AriTag bordered size="sm">
-                {renderDomainLabel(item.domain)}
-              </AriTag>
-              <AriTag bordered size="sm">
-                {renderScopeLabel(item.scope)}
-              </AriTag>
-              {item.domain === "dcc" && item.software ? (
-                <AriTag bordered size="sm">
-                  {renderSoftwareLabel(item.software)}
-                </AriTag>
-              ) : null}
-              {!item.enabled ? <AriTag bordered size="sm">已停用</AriTag> : null}
-            </AriFlex>
-            <AriTypography variant="caption" value={item.description || "未填写 MCP 描述"} />
-            {item.domain === "dcc" ? (
-              <AriTypography
-                variant="caption"
-                value={`能力：${item.capabilities.length > 0 ? item.capabilities.join("、") : "未声明"}；优先级：${item.priority}`}
-              />
-            ) : null}
-            {item.officialProvider ? (
-              <AriTypography variant="caption" value={`提供方：${item.officialProvider}`} />
-            ) : null}
-            {item.transport === "stdio" ? (
-              <AriTypography
-                variant="caption"
-                value={item.runtimeKind === "apifox_runtime"
-                  ? `Runtime：${apifoxRuntimeStatus?.installed ? "已安装" : "未安装"}`
-                  : item.runtimeKind === "dcc_bridge"
-                    ? `Runtime：${dccRuntimeStatus?.available ? "已就绪" : "未就绪"}${dccRuntimeStatus?.resolvedPath ? `（${dccRuntimeStatus.resolvedPath}）` : ""}`
-                  : `命令：${item.command || "未填写"}`}
-              />
-            ) : (
-              <AriTypography variant="caption" value={`地址：${item.url || "未填写"}`} />
-            )}
-            {item.runtimeKind === "dcc_bridge" ? (
-              <AriTypography
-                variant="caption"
-                value={renderDccRuntimeAutoPrepareLabel(dccRuntimeStatus)}
-              />
-            ) : null}
-            {item.runtimeKind === "dcc_bridge" && renderDccRuntimeEnvRequirementLabel(dccRuntimeStatus) ? (
-              <AriTypography
-                variant="caption"
-                value={renderDccRuntimeEnvRequirementLabel(dccRuntimeStatus)}
-              />
-            ) : null}
-            {item.docsUrl ? <AriTypography variant="caption" value={`文档：${item.docsUrl}`} /> : null}
-          </AriContainer>
-        </AriFlex>
-        <AriFlex align="center" space={8}>
-          <AriSwitch
-            checked={item.enabled}
-            disabled={busy}
-            onChange={(checked: boolean) => onToggleEnabled(item, checked)}
-          />
-          <AriButton ghost icon="check_circle" label="校验" disabled={busy} onClick={() => onValidate(item)} />
-          <AriButton ghost icon="edit" label="编辑" disabled={busy} onClick={() => onEdit(item)} />
-          {item.removable ? (
-            <AriButton color="danger" ghost icon="delete" label="移除" disabled={busy} onClick={() => onRemove(item)} />
-          ) : null}
-        </AriFlex>
-      </AriFlex>
-    </AriCard>
+    <DeskOverviewCard
+      icon={<AriIcon name="hub" />}
+      title={item.name}
+      description={item.description || "未填写 MCP 描述"}
+      actions={(
+        <AriTooltip content="管理" position="top" minWidth={0} matchTriggerWidth={false}>
+          <AriButton type="text" icon="settings" aria-label="管理 MCP" disabled={busy} onClick={() => onManage(item)} />
+        </AriTooltip>
+      )}
+    />
   );
 }
 
 // 描述：
 //
-//   - 渲染 MCP 模板卡片，统一承载“从模板新增”和 Apifox Runtime 安装操作。
+//   - 渲染 MCP 模板卡片，统一承载“查看模板详情”和“从模板新增”动作。
 function McpTemplateCard({
   item,
   busy,
   alreadyRegistered,
-  apifoxRuntimeStatus,
-  dccRuntimeStatus,
-  runtimeBusy,
+  onManage,
   onCreate,
-  onInstallApifoxRuntime,
-  onUninstallApifoxRuntime,
-  onPrepareDccRuntime,
 }: {
   item: McpTemplateItem;
   busy: boolean;
   alreadyRegistered: boolean;
-  apifoxRuntimeStatus: ApifoxRuntimeStatus | null;
-  dccRuntimeStatus?: DccRuntimeStatus;
-  runtimeBusy: boolean;
+  onManage: (item: McpTemplateItem) => void;
   onCreate: (item: McpTemplateItem) => void;
-  onInstallApifoxRuntime: () => void;
-  onUninstallApifoxRuntime: () => void;
-  onPrepareDccRuntime: (item: McpTemplateItem) => void;
 }) {
-  const isApifoxTemplate = item.runtimeKind === "apifox_runtime";
-  const isDccRuntimeTemplate = item.runtimeKind === "dcc_bridge";
-  const runtimeInstalled = Boolean(apifoxRuntimeStatus?.installed);
   return (
-    <AriCard className="desk-skill-card">
-      <AriFlex className="desk-skill-card-main" align="center" justify="space-between" space={12}>
-        <AriFlex className="desk-skill-card-info" align="center" space={12}>
-          <AriContainer className="desk-skill-card-icon-wrap" padding={0}>
-            <AriIcon name={item.transport === "http" ? "language" : "inventory_2"} />
-          </AriContainer>
-          <AriContainer padding={0}>
-            <AriFlex align="center" space={8}>
-              <AriTypography variant="h4" value={item.name} />
-              <AriTag bordered size="sm" color="var(--z-color-text-brand)">
-                {renderTransportLabel(item.transport)}
-              </AriTag>
-              <AriTag bordered size="sm">
-                {renderDomainLabel(item.domain)}
-              </AriTag>
-              {item.domain === "dcc" && item.software ? (
-                <AriTag bordered size="sm">
-                  {renderSoftwareLabel(item.software)}
-                </AriTag>
-              ) : null}
-            </AriFlex>
-            <AriTypography variant="caption" value={item.description || "未填写模板描述"} />
-            {item.domain === "dcc" ? (
-              <AriTypography
-                variant="caption"
-                value={`能力：${item.capabilities.length > 0 ? item.capabilities.join("、") : "未声明"}；优先级：${item.priority}`}
-              />
-            ) : null}
-            {item.officialProvider ? (
-              <AriTypography variant="caption" value={`提供方：${item.officialProvider}`} />
-            ) : null}
-            {isApifoxTemplate ? (
-              <AriTypography
-                variant="caption"
-                value={`Runtime：${runtimeInstalled ? "已安装" : "未安装"}${apifoxRuntimeStatus?.version ? `（${apifoxRuntimeStatus.version}）` : ""}`}
-              />
-            ) : isDccRuntimeTemplate ? (
-              <AriTypography
-                variant="caption"
-                value={`Runtime：${dccRuntimeStatus?.available ? "已就绪" : "未就绪"}${dccRuntimeStatus?.resolvedPath ? `（${dccRuntimeStatus.resolvedPath}）` : ""}`}
-              />
-            ) : item.transport === "http" ? (
-              <AriTypography variant="caption" value={`示例地址：${item.url || "无"}`} />
-            ) : (
-              <AriTypography variant="caption" value="按需填写命令、参数和环境变量。" />
-            )}
-            {isDccRuntimeTemplate ? (
-              <AriTypography
-                variant="caption"
-                value={renderDccRuntimeAutoPrepareLabel(dccRuntimeStatus)}
-              />
-            ) : null}
-            {isDccRuntimeTemplate && renderDccRuntimeEnvRequirementLabel(dccRuntimeStatus) ? (
-              <AriTypography
-                variant="caption"
-                value={renderDccRuntimeEnvRequirementLabel(dccRuntimeStatus)}
-              />
-            ) : null}
-            {item.docsUrl ? <AriTypography variant="caption" value={`文档：${item.docsUrl}`} /> : null}
-          </AriContainer>
-        </AriFlex>
-        <AriFlex align="center" space={8}>
-          {isApifoxTemplate ? (
-            runtimeInstalled ? (
-              <AriButton
-                ghost
-                icon="delete"
-                label="卸载 Runtime"
-                disabled={runtimeBusy}
-                onClick={onUninstallApifoxRuntime}
-              />
-            ) : (
-              <AriButton
-                ghost
-                icon="download"
-                label="安装 Runtime"
-                disabled={runtimeBusy}
-                onClick={onInstallApifoxRuntime}
-              />
-            )
-          ) : null}
-          {isDccRuntimeTemplate ? (
-            <AriButton
-              ghost
-              icon={dccRuntimeStatus?.available ? "check_circle" : "build"}
-              label={dccRuntimeStatus?.available ? "重新校验" : "准备 Runtime"}
-              disabled={runtimeBusy}
-              onClick={() => onPrepareDccRuntime(item)}
-            />
-          ) : null}
+    <DeskOverviewCard
+      icon={<AriIcon name="hub" />}
+      title={item.name}
+      description={item.description || "未填写模板描述"}
+      actions={(
+        <>
+          <AriTooltip content="管理" position="top" minWidth={0} matchTriggerWidth={false}>
+            <AriButton type="text" icon="settings" aria-label="管理模板" disabled={busy} onClick={() => onManage(item)} />
+          </AriTooltip>
           <AriButton
-            color="brand"
+            type="text"
+            color={alreadyRegistered ? "default" : "brand"}
             icon="add"
-            label={alreadyRegistered ? "已注册" : "新增"}
+            aria-label={alreadyRegistered ? "模板已添加" : "添加 MCP"}
             disabled={busy || alreadyRegistered}
             onClick={() => onCreate(item)}
           />
-        </AriFlex>
-      </AriFlex>
-    </AriCard>
+        </>
+      )}
+    />
   );
 }
 
@@ -655,6 +492,7 @@ export function McpPage() {
   const [capabilitiesText, setCapabilitiesText] = useState("");
   const [envText, setEnvText] = useState("");
   const [headersText, setHeadersText] = useState("");
+  const [managingTemplateItem, setManagingTemplateItem] = useState<McpTemplateItem | null>(null);
   const [removingItem, setRemovingItem] = useState<McpRegistrationItem | null>(null);
   const workspaceGroups = useMemo(() => listProjectWorkspaceGroups(), []);
   const workspaceId = useMemo(
@@ -817,32 +655,6 @@ export function McpPage() {
 
   // 描述：
   //
-  //   - 更新已注册 MCP 的启用状态，保持启停动作与编辑动作共用同一保存链路。
-  const handleToggleEnabled = useCallback(async (item: McpRegistrationItem, enabled: boolean) => {
-    setBusyActionId(item.id);
-    try {
-      await saveMcpRegistration({
-        ...buildDraftFromRegistration(item),
-        enabled,
-      }, mcpRegistryContext);
-      await reloadOverview();
-      AriMessage.success({
-        content: enabled ? `已启用 ${item.name}` : `已停用 ${item.name}`,
-        duration: 1800,
-      });
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err || "").trim();
-      AriMessage.error({
-        content: reason || "更新 MCP 状态失败，请稍后重试。",
-        duration: 2200,
-      });
-    } finally {
-      setBusyActionId("");
-    }
-  }, [reloadOverview]);
-
-  // 描述：
-  //
   //   - 执行 MCP 基础环境校验，并将结果映射为用户友好消息。
   const handleValidateMcp = useCallback(async (item: McpRegistrationItem) => {
     setBusyActionId(item.id);
@@ -888,6 +700,10 @@ export function McpPage() {
         content: `已移除 ${removingItem.name}`,
         duration: 1800,
       });
+      if (editingDraft.id === removingItem.id) {
+        setEditorVisible(false);
+        setEditingDraft(DEFAULT_MCP_DRAFT);
+      }
       setRemovingItem(null);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err || "").trim();
@@ -986,15 +802,6 @@ export function McpPage() {
 
   // 描述：
   //
-  //   - 生成标题栏内容并挂载到全局头部 slot，保持 Desktop 页面头部一致性。
-  const headerNode = useMemo(() => (
-    <AriContainer className="desk-project-settings-header" padding={0} data-tauri-drag-region>
-      <AriTypography className="desk-project-settings-header-title" variant="h4" value="MCP" />
-    </AriContainer>
-  ), []);
-
-  // 描述：
-  //
   //   - 切换 MCP 页面绑定的项目上下文；当选中具体项目时，页面会展示该项目覆盖 user 级后的最终注册结果。
   const handleWorkspaceSelectionChange = useCallback((value: unknown) => {
     const nextWorkspaceId = String(value || "").trim();
@@ -1013,6 +820,60 @@ export function McpPage() {
     );
   }, [location.pathname, location.search, navigate]);
 
+  // 描述：
+  //
+  //   - 生成标题栏内容并挂载到全局头部 slot，保持 Desktop 页面头部一致性。
+  const headerNode = useMemo(() => (
+    <DeskPageHeader
+      mode="slot"
+      title="MCP"
+      description={activeProjectWorkspace
+        ? `已注册 ${overview.registered.length} 个；当前项目：${activeProjectWorkspace.name || activeProjectWorkspace.path}`
+        : `已注册 ${overview.registered.length} 个；当前显示全局 user 级 MCP。`}
+      actions={(
+        <AriFlex align="center" space={8}>
+          <AriSelect
+            value={workspaceId}
+            options={workspaceOptions}
+            onChange={handleWorkspaceSelectionChange}
+          />
+          <AriButton
+            ghost
+            icon="refresh"
+            label="刷新"
+            size="sm"
+            disabled={Boolean(busyActionId) || runtimeBusy}
+            onClick={() => {
+              void reloadOverview();
+            }}
+          />
+          <AriButton
+            color="brand"
+            icon="add"
+            label="新增 MCP"
+            size="sm"
+            disabled={Boolean(busyActionId) || runtimeBusy}
+            onClick={() => openEditor({
+              ...DEFAULT_MCP_DRAFT,
+              scope: activeWorkspacePath ? "workspace" : "user",
+            })}
+          />
+        </AriFlex>
+      )}
+    />
+  ), [
+    activeProjectWorkspace,
+    activeWorkspacePath,
+    busyActionId,
+    handleWorkspaceSelectionChange,
+    openEditor,
+    overview.registered.length,
+    reloadOverview,
+    runtimeBusy,
+    workspaceId,
+    workspaceOptions,
+  ]);
+
   if (loading) {
     return (
       <AriContainer className="desk-content" showBorderRadius={false}>
@@ -1027,6 +888,96 @@ export function McpPage() {
   return (
     <AriContainer className="desk-content" showBorderRadius={false}>
       {headerSlotElement ? createPortal(headerNode, headerSlotElement) : null}
+      <DeskOverviewDetailsModal
+        visible={Boolean(managingTemplateItem)}
+        title={managingTemplateItem ? `${managingTemplateItem.name} · 详情` : "模板详情"}
+        description={managingTemplateItem?.description || "未填写模板描述"}
+        footer={managingTemplateItem ? (
+          <AriFlex justify="flex-end" align="center" space={8}>
+            {managingTemplateItem.runtimeKind === "apifox_runtime" ? (
+              apifoxRuntimeStatus?.installed ? (
+                <AriButton
+                  icon="delete"
+                  label="卸载 Runtime"
+                  disabled={runtimeBusy}
+                  onClick={() => {
+                    void handleUninstallApifoxRuntime();
+                  }}
+                />
+              ) : (
+                <AriButton
+                  icon="download"
+                  label="安装 Runtime"
+                  disabled={runtimeBusy}
+                  onClick={() => {
+                    void handleInstallApifoxRuntime();
+                  }}
+                />
+              )
+            ) : null}
+            {managingTemplateItem.runtimeKind === "dcc_bridge" ? (
+              <AriButton
+                icon={dccRuntimeStatusMap[managingTemplateItem.software]?.available ? "check_circle" : "build"}
+                label={dccRuntimeStatusMap[managingTemplateItem.software]?.available ? "校验 Runtime" : "准备 Runtime"}
+                disabled={runtimeBusy}
+                onClick={() => {
+                  void handlePrepareDccRuntime(managingTemplateItem);
+                }}
+              />
+            ) : null}
+            <AriButton
+              color="brand"
+              icon="add"
+              label="添加"
+              disabled={Boolean(busyActionId) || registeredTemplateIds.has(managingTemplateItem.id)}
+              onClick={() => {
+                openEditor({
+                  ...buildDraftFromTemplate(managingTemplateItem),
+                  scope: activeWorkspacePath ? "workspace" : "user",
+                });
+              }}
+            />
+            <AriButton icon="close" label="关闭" onClick={() => setManagingTemplateItem(null)} />
+          </AriFlex>
+        ) : undefined}
+        onClose={() => setManagingTemplateItem(null)}
+      >
+        {managingTemplateItem ? (
+          <>
+            <DeskOverviewDetailRow label="传输" value={renderTransportLabel(managingTemplateItem.transport)} />
+            <DeskOverviewDetailRow label="领域" value={renderDomainLabel(managingTemplateItem.domain)} />
+            {managingTemplateItem.domain === "dcc" && managingTemplateItem.software ? (
+              <DeskOverviewDetailRow label="软件" value={renderSoftwareLabel(managingTemplateItem.software)} />
+            ) : null}
+            {managingTemplateItem.officialProvider ? (
+              <DeskOverviewDetailRow label="提供方" value={managingTemplateItem.officialProvider} />
+            ) : null}
+            {managingTemplateItem.domain === "dcc" ? (
+              <DeskOverviewDetailRow
+                label="能力"
+                value={`${managingTemplateItem.capabilities.length > 0 ? managingTemplateItem.capabilities.join("、") : "未声明"}；优先级：${managingTemplateItem.priority}`}
+              />
+            ) : null}
+            <DeskOverviewDetailRow
+              label="接入"
+              value={managingTemplateItem.runtimeKind === "apifox_runtime"
+                ? `Runtime：${apifoxRuntimeStatus?.installed ? "已安装" : "未安装"}${apifoxRuntimeStatus?.version ? `（${apifoxRuntimeStatus.version}）` : ""}`
+                : managingTemplateItem.runtimeKind === "dcc_bridge"
+                  ? `Runtime：${dccRuntimeStatusMap[managingTemplateItem.software]?.available ? "已就绪" : "未就绪"}${dccRuntimeStatusMap[managingTemplateItem.software]?.resolvedPath ? `（${dccRuntimeStatusMap[managingTemplateItem.software]?.resolvedPath}）` : ""}`
+                  : managingTemplateItem.transport === "http"
+                    ? `示例地址：${managingTemplateItem.url || "无"}`
+                    : "按需填写命令、参数和环境变量。"}
+            />
+            {managingTemplateItem.runtimeKind === "dcc_bridge" ? (
+              <DeskOverviewDetailRow label="Runtime" value={renderDccRuntimeAutoPrepareLabel(dccRuntimeStatusMap[managingTemplateItem.software])} />
+            ) : null}
+            {managingTemplateItem.runtimeKind === "dcc_bridge" && renderDccRuntimeEnvRequirementLabel(dccRuntimeStatusMap[managingTemplateItem.software]) ? (
+              <DeskOverviewDetailRow label="环境要求" value={renderDccRuntimeEnvRequirementLabel(dccRuntimeStatusMap[managingTemplateItem.software]) || ""} />
+            ) : null}
+            {managingTemplateItem.docsUrl ? <DeskOverviewDetailRow label="文档" value={managingTemplateItem.docsUrl} /> : null}
+          </>
+        ) : null}
+      </DeskOverviewDetailsModal>
       <AriModal
         visible={editorVisible}
         title={editingDraft.id ? "编辑 MCP" : "新增 MCP"}
@@ -1034,6 +985,35 @@ export function McpPage() {
         footer={(
           <AriFlex justify="flex-end" align="center" space={8}>
             <AriButton label="取消" onClick={() => setEditorVisible(false)} />
+            {editingDraft.id ? (
+              <AriButton
+                icon="check_circle"
+                label="校验"
+                disabled={Boolean(busyActionId)}
+                onClick={() => {
+                  const target = overview.registered.find((item) => item.id === editingDraft.id);
+                  if (!target) {
+                    return;
+                  }
+                  void handleValidateMcp(target);
+                }}
+              />
+            ) : null}
+            {editingDraft.id && overview.registered.some((item) => item.id === editingDraft.id && item.removable) ? (
+              <AriButton
+                color="danger"
+                icon="delete"
+                label="移除"
+                disabled={Boolean(busyActionId)}
+                onClick={() => {
+                  const target = overview.registered.find((item) => item.id === editingDraft.id);
+                  if (!target) {
+                    return;
+                  }
+                  setRemovingItem(target);
+                }}
+              />
+            ) : null}
             <AriButton color="brand" icon="save" label="保存" onClick={handleSaveDraft} />
           </AriFlex>
         )}
@@ -1144,6 +1124,12 @@ export function McpPage() {
                 const nextScope = String(value || "user") === "workspace" ? "workspace" : "user";
                 setEditingDraft((current) => ({ ...current, scope: nextScope }));
               }}
+            />
+          </AriFormItem>
+          <AriFormItem label="启用" name="mcp.editor.enabled">
+            <AriSwitch
+              checked={editingDraft.enabled !== false}
+              onChange={(checked: boolean) => setEditingDraft((current) => ({ ...current, enabled: checked }))}
             />
           </AriFormItem>
           {editingDraft.transport === "stdio" ? (
@@ -1267,47 +1253,9 @@ export function McpPage() {
         />
       </AriModal>
       <AriContainer className="desk-settings-shell desk-skills-shell">
-        <AriFlex align="center" justify="space-between" space={12}>
-          <AriContainer padding={0}>
-            <AriTypography variant="caption" value={`已注册 ${overview.registered.length} 个 MCP`} />
-            <AriTypography
-              variant="caption"
-              value={activeProjectWorkspace
-                ? `当前项目：${activeProjectWorkspace.name || activeProjectWorkspace.path}；workspace 级配置会覆盖同名 user 级 MCP。`
-                : "当前显示全局 user 级 MCP；选择项目后可查看和维护 workspace 级覆盖配置。"}
-            />
-          </AriContainer>
-          <AriFlex align="center" space={8}>
-            <AriSelect
-              value={workspaceId}
-              options={workspaceOptions}
-              onChange={handleWorkspaceSelectionChange}
-            />
-            <AriButton
-              ghost
-              icon="refresh"
-              label="刷新"
-              disabled={Boolean(busyActionId) || runtimeBusy}
-              onClick={() => {
-                void reloadOverview();
-              }}
-            />
-            <AriButton
-              color="brand"
-              icon="add"
-              label="新增 MCP"
-              disabled={Boolean(busyActionId) || runtimeBusy}
-              onClick={() => openEditor({
-                ...DEFAULT_MCP_DRAFT,
-                scope: activeWorkspacePath ? "workspace" : "user",
-              })}
-            />
-          </AriFlex>
-        </AriFlex>
-
         <DeskSectionTitle title="已注册" />
         {overview.registered.length === 0 ? (
-          <DeskEmptyState title="暂无 MCP" description="可从推荐模板新增，或直接创建自定义 MCP。" />
+          <DeskEmptyState title="暂无已注册 MCP" description="可从下方未注册模板新增，或直接创建自定义 MCP。" />
         ) : (
           <AriContainer className="desk-skill-grid">
             {overview.registered.map((item) => (
@@ -1315,48 +1263,28 @@ export function McpPage() {
                 key={item.id}
                 item={item}
                 busy={busyActionId === item.id || runtimeBusy}
-                apifoxRuntimeStatus={apifoxRuntimeStatus}
-                dccRuntimeStatus={dccRuntimeStatusMap[item.software]}
-                onToggleEnabled={(target, enabled) => {
-                  void handleToggleEnabled(target, enabled);
-                }}
-                onEdit={(target) => openEditor(buildDraftFromRegistration(target))}
-                onValidate={(target) => {
-                  void handleValidateMcp(target);
-                }}
-                onRemove={(target) => setRemovingItem(target)}
+                onManage={(target) => openEditor(buildDraftFromRegistration(target))}
               />
             ))}
           </AriContainer>
         )}
 
-        <DeskSectionTitle title="推荐模板" />
+        <DeskSectionTitle title="未注册" />
         {overview.templates.length === 0 ? (
-          <DeskEmptyState title="暂无模板" description="当前应用未提供内置 MCP 模板。" />
+          <DeskEmptyState title="暂无未注册 MCP" description="当前应用未提供可直接添加的内置模板。" />
         ) : (
           <AriContainer className="desk-skill-grid">
             {overview.templates.map((item) => (
               <McpTemplateCard
                 key={item.id}
                 item={item}
-                busy={Boolean(busyActionId)}
+                busy={Boolean(busyActionId) || runtimeBusy}
                 alreadyRegistered={registeredTemplateIds.has(item.id)}
-                apifoxRuntimeStatus={apifoxRuntimeStatus}
-                dccRuntimeStatus={dccRuntimeStatusMap[item.software]}
-                runtimeBusy={runtimeBusy}
+                onManage={setManagingTemplateItem}
                 onCreate={(target) => openEditor({
                   ...buildDraftFromTemplate(target),
                   scope: activeWorkspacePath ? "workspace" : "user",
                 })}
-                onInstallApifoxRuntime={() => {
-                  void handleInstallApifoxRuntime();
-                }}
-                onUninstallApifoxRuntime={() => {
-                  void handleUninstallApifoxRuntime();
-                }}
-                onPrepareDccRuntime={(target) => {
-                  void handlePrepareDccRuntime(target);
-                }}
               />
             ))}
           </AriContainer>

@@ -59,9 +59,13 @@ test("TestWorkflowStorageShouldSupportAgentWorkflowCrud", () => {
   //
   //   - 工作流存储层应支持统一智能体工作流列表、创建、保存、删除和 Prompt 拼接。
   assert.match(source, /listAgentWorkflows/);
+  assert.match(source, /listAgentWorkflowOverview/);
+  assert.match(source, /createAgentWorkflow\(\)/);
   assert.match(source, /createAgentWorkflowFromTemplate/);
   assert.match(source, /saveAgentWorkflow/);
   assert.match(source, /deleteAgentWorkflow/);
+  assert.match(source, /isReadonlyAgentWorkflow/);
+  assert.match(source, /getAgentWorkflowById/);
   assert.match(source, /buildAgentWorkflowPrompt/);
 });
 
@@ -71,10 +75,11 @@ test("TestWorkflowStorageShouldNormalizeDefaultAgentWorkflowGraph", () => {
   // 描述：
   //
   //   - 默认智能体工作流模板在列表构建阶段必须归一化图结构，并统一使用当前工作流存储键。
-  assert.match(source, /const merged: AgentWorkflowDefinition\[\] = DEFAULT_AGENT_WORKFLOWS\.map/);
+  assert.match(source, /const templates = DEFAULT_AGENT_WORKFLOWS\.map/);
+  assert.match(source, /const registered = readSavedAgentWorkflows\(\)\s*\.filter/);
   assert.match(source, /window\.localStorage\.getItem\(STORAGE_KEYS\.AGENT_WORKFLOWS\)/);
   assert.match(source, /function normalizeAgentWorkflowId\(/);
-  assert.match(source, /normalizeAgentWorkflow\(\{ \.\.\.item \}\)/);
+  assert.match(source, /normalizeAgentWorkflow\(\{ \.\.\.item, source: "builtin" \}\)/);
 });
 
 test("TestRouterShouldExposeAgentSettingsRoute", () => {
@@ -87,8 +92,11 @@ test("TestRouterShouldExposeAgentSettingsRoute", () => {
   assert.match(source, /path="settings\/agent"/);
   assert.match(source, /path="home"/);
   assert.match(source, /CommonWorkflowsPageLazy/);
+  assert.match(source, /CommonWorkflowEditorPageLazy/);
   assert.match(source, /WORKFLOW_PAGE_PATH/);
+  assert.match(source, /WORKFLOW_EDITOR_PAGE_PATH/);
   assert.match(source, /path=\{WORKFLOW_PAGE_PATH\.slice\(1\)\}/);
+  assert.match(source, /path=\{WORKFLOW_EDITOR_PAGE_PATH\.slice\(1\)\}/);
   assert.doesNotMatch(source, /LegacyWorkflowRedirect/);
 });
 
@@ -130,12 +138,15 @@ test("TestAgentPageShouldUseUnifiedComposeLayoutAndAutoPromptNavigation", () => 
   //   - 智能体首页应使用统一输入布局；入口页负责创建会话并通过统一会话路径下发首条消息。
   assert.match(source, /desk-session-shell/);
   assert.match(source, /desk-prompt-card desk-session-prompt-card/);
-  assert.match(source, /if \(onboardingContent\) \{/);
   assert.match(source, /onStartConversation\(\)/);
   assert.match(agentHomeSource, /navigate\(`\$\{resolveAgentSessionPath\(session\.id\)\}\$\{search\}`,/);
-  assert.match(agentHomeSource, /state:\s*\{\s*autoPrompt:\s*normalizedPrompt,/);
+  assert.match(agentHomeSource, /autoPrompt:\s*usingQuickStartPreset \? "" : normalizedPrompt,/);
   assert.match(agentHomeSource, /if \(!selectedWorkspace\) \{/);
   assert.match(agentHomeSource, /bindProjectSessionWorkspace\(session\.id, selectedWorkspace\.id\);/);
+  assert.match(agentHomeSource, /preferredWorkflowId: normalizedWorkflowId \|\| undefined/);
+  assert.match(agentHomeSource, /preferredSkillIds: normalizedSkillIds\.length > 0 \? normalizedSkillIds : undefined/);
+  assert.match(source, /icon=\{item\.icon\}/);
+  assert.match(source, /label=\{item\.actionLabel\}/);
 });
 
 test("TestAgentShouldShowStandaloneWorkspaceOnboardingWhenNoWorkspace", () => {
@@ -146,7 +157,7 @@ test("TestAgentShouldShowStandaloneWorkspaceOnboardingWhenNoWorkspace", () => {
   //
   //   - 单智能体在未选择目录时应渲染独立引导页（中间卡片），不展示常规标题/快捷卡片/对话框布局。
   assert.match(source, /const onboardingContent = !selectedWorkspace \? \(/);
-  assert.match(source, /className=\"desk-content desk-project-workspace-onboarding\"/);
+  assert.match(source, /className=\"desk-project-workspace-onboarding\"/);
   assert.match(source, /className=\"desk-project-workspace-onboarding-card\"/);
   assert.match(source, /value=\"选择项目\"/);
   assert.match(source, /label=\{gitCloneLoading \? "开启中\.\.\." : "开启"\}/);
@@ -162,6 +173,9 @@ test("TestAgentShouldShowStandaloneWorkspaceOnboardingWhenNoWorkspace", () => {
   assert.match(source, /title=\"未检测到 Git\"/);
   assert.match(source, /label=\"确认并前往下载\"/);
   assert.match(source, /<AriInput\s+variant=\"borderless\"/s);
+  assert.match(source, /const forceWorkspacePickerMode = useMemo/);
+  assert.match(source, /getLastUsedProjectWorkspaceId\(\)/);
+  assert.match(source, /setSearchParams\(new URLSearchParams\(\{ mode: "projects" \}\), \{ replace: true \}\);/);
   assert.match(styleSource, /\.desk-project-workspace-onboarding/);
   assert.match(styleSource, /\.desk-project-workspace-onboarding-card/);
 });
@@ -219,6 +233,8 @@ test("TestWorkflowCanvasPageShouldUseReactFlowAndSingleNodeEditing", () => {
   assert.match(source, /type: "node"/);
   assert.match(source, /deleteSelectedNode/);
   assert.match(source, /patchSelectedNode/);
+  assert.match(source, /const workflowReadonly = isReadonlyAgentWorkflow\(selectedWorkflow\);/);
+  assert.match(source, /const canEditWorkflow = Boolean\(selectedWorkflow\) && !workflowReadonly;/);
   assert.match(source, /\{selectedNodeData \? \(/);
   assert.match(source, /className="desk-workflow-editor-floating-panel"/);
   assert.match(source, /onPaneClick=\{\(\) => \{/);
@@ -226,20 +242,59 @@ test("TestWorkflowCanvasPageShouldUseReactFlowAndSingleNodeEditing", () => {
 
 test("TestWorkflowPagesShouldUseListLayoutInSettings", () => {
   const codeSource = readDesktopSource("src/modules/agent/pages/agent-settings-page.tsx");
+  const overviewSource = readDesktopSource("src/modules/common/pages/workflows-page.tsx");
   const canvasSource = readDesktopSource("src/widgets/workflow/page.tsx");
   const sidebarSource = readDesktopSource("src/sidebar/index.tsx");
   const primitivesSource = readDesktopSource("src/widgets/settings-primitives.tsx");
+  const styleSource = readDesktopSource("src/styles.css");
+  const workflowHeaderMatches = overviewSource.match(/<DeskPageHeader/g) || [];
 
   // 描述：
   //
-  //   - 设置页应采用通用设置面板布局；画布页应专注右侧画布与悬浮属性面板，工作流列表放到全局侧边栏。
+  //   - 设置页应采用通用设置面板布局；工作流总览页承载“已注册 / 未注册”，画布页专注右侧画布与悬浮属性面板。
   //   - 工作流链路页面应优先使用 aries_react 布局组件，避免原生 div。
   assert.match(codeSource, /desk-settings-panel/);
   assert.doesNotMatch(codeSource, /desk-workflow-list-card/);
+  assert.equal(workflowHeaderMatches.length, 1);
+  assert.match(overviewSource, /DeskPageHeader/);
+  assert.match(overviewSource, /DeskOverviewCard/);
+  assert.match(overviewSource, /icon=\{<AriIcon name="account_tree" \/>\}/);
+  assert.doesNotMatch(overviewSource, /DeskOverviewDetailsModal/);
+  assert.doesNotMatch(overviewSource, /DeskOverviewDetailRow/);
+  assert.match(overviewSource, /mode="slot"/);
+  assert.match(overviewSource, /DeskSectionTitle title="已注册"/);
+  assert.match(overviewSource, /DeskSectionTitle title="未注册"/);
+  assert.match(overviewSource, /label="新增工作流"/);
+  assert.match(overviewSource, /content="管理"/);
+  assert.match(overviewSource, /aria-label="管理工作流"/);
+  assert.match(overviewSource, /aria-label=\{readonly \? "添加工作流" : "复制工作流"\}/);
+  assert.doesNotMatch(overviewSource, /aria-label=\{readonly \? "查看工作流" : "编辑工作流"\}/);
+  assert.doesNotMatch(overviewSource, /aria-label="删除工作流"/);
   assert.match(canvasSource, /desk-workflow-editor-main/);
   assert.doesNotMatch(canvasSource, /desk-workflow-editor-sidebar/);
   assert.match(canvasSource, /desk-workflow-editor-floating-panel/);
   assert.match(sidebarSource, /function WorkflowsSidebar/);
+  assert.match(styleSource, /\.desk-workflow-grid \{\s*display: grid;\s*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);\s*gap: var\(--z-inset\);\s*align-items: start;/s);
+  assert.match(styleSource, /\.desk-overview-card-title-bar/);
+  assert.match(styleSource, /\.desk-overview-card-content \{[\s\S]*display: flex;[\s\S]*flex-direction: column;[\s\S]*justify-content: flex-start;/);
+  assert.match(styleSource, /\.desk-overview-card-description/);
+  assert.match(styleSource, /\.desk-overview-card-actions/);
+  assert.match(styleSource, /\.desk-overview-card-actions-inner/);
+  assert.match(styleSource, /\.desk-overview-details-body/);
+  assert.match(styleSource, /\.desk-overview-detail-row/);
+  assert.match(styleSource, /\.desk-page-header-actions-inner/);
+  assert.match(primitivesSource, /className="desk-overview-card-title-bar"[\s\S]*justify="space-between"/);
+  assert.match(primitivesSource, /className="desk-overview-details-body"/);
+  assert.match(primitivesSource, /className="desk-overview-detail-row"/);
+  assert.match(primitivesSource, /description\?: string;/);
+  assert.match(primitivesSource, /className="desk-overview-card-actions-inner"/);
+  assert.match(primitivesSource, /className="desk-page-header-actions-inner"/);
+  assert.match(primitivesSource, /function flattenFlexChildren\(content: ReactNode\): ReactNode\[]/);
+  assert.match(primitivesSource, /Children\.toArray\(content\)\.flatMap/);
+  assert.match(primitivesSource, /isValidElement\(child\) && child\.type === Fragment/);
+  assert.match(primitivesSource, /Children\.toArray\(child\.props\.children\)/);
+  assert.match(primitivesSource, /flattenFlexChildren\(actions\)/);
+  assert.match(primitivesSource, /className="desk-overview-card-main"[\s\S]*align="center"/);
   assert.doesNotMatch(codeSource, /<div[\s>]/);
   assert.doesNotMatch(primitivesSource, /<div[\s>]/);
 });
@@ -266,22 +321,29 @@ test("TestUnifiedAgentCommandsShouldBeCanonical", () => {
 
 test("TestWorkflowCanvasSidebarAndFloatingActionsShouldMatchUxRules", () => {
   const sidebarSource = readDesktopSource("src/sidebar/index.tsx");
+  const overviewSource = readDesktopSource("src/modules/common/pages/workflows-page.tsx");
   const canvasSource = readDesktopSource("src/widgets/workflow/page.tsx");
 
   // 描述：
   //
-  //   - 工作流页应通过全局侧边栏承载“返回 + 新增 + 菜单删除确认”交互，画布页不再内嵌工作流列表。
-  assert.match(sidebarSource, /if \(pathname\.includes\("\/workflows"\)\) return "workflow";/);
+  //   - 工作流链路应拆成“总览页 + 编辑页”；总览页保留 Home 侧边栏，进入查看/编辑页后才切换到工作流侧边栏。
+  assert.match(sidebarSource, /if \(pathname\.startsWith\(WORKFLOW_EDITOR_PAGE_PATH\)\) return "workflow";/);
+  assert.doesNotMatch(sidebarSource, /if \(pathname\.includes\("\/workflows"\)\) return "workflow";/);
   assert.match(sidebarSource, /function WorkflowsSidebar/);
   assert.match(sidebarSource, /label="返回"/);
   assert.match(sidebarSource, /label="新增"/);
   assert.match(sidebarSource, /onBack=\{\(\) => navigate\("\/home"\)\}/);
+  assert.match(sidebarSource, /const isWorkflowEditorPage = location\.pathname\.startsWith\(WORKFLOW_EDITOR_PAGE_PATH\);/);
+  assert.match(sidebarSource, /listAgentWorkflowOverview\(\)/);
+  assert.match(sidebarSource, /workflowOverview\.all/);
+  assert.match(sidebarSource, /label: "已注册", isGroup: true/);
+  assert.match(sidebarSource, /label: "未注册", isGroup: true/);
   assert.match(sidebarSource, /if \(pendingDeleteWorkflowId !== workflowId\) \{\s*setPendingDeleteWorkflowId\(workflowId\);\s*return;\s*\}/s);
-  assert.match(sidebarSource, /label=\{pendingDeleteWorkflowId === item\.key \? "确定" : undefined\}/);
-  assert.match(sidebarSource, /showActionsOnHover: pendingDeleteWorkflowId !== item\.key/);
+  assert.match(sidebarSource, /label=\{pendingDeleteWorkflowId === item\.id \? "确定" : undefined\}/);
+  assert.match(sidebarSource, /showActionsOnHover: pendingDeleteWorkflowId !== item\.id/);
   assert.doesNotMatch(sidebarSource, /setPendingDeleteWorkflowId\(\(current\) => \(current === item\.key \? "" : current\)\);/);
+  assert.match(overviewSource, /aria-label=\{readonly \? "添加工作流" : "复制工作流"\}/);
   assert.match(canvasSource, /className="desk-workflow-editor-floating-panel"/);
-  assert.doesNotMatch(canvasSource, /label="新增工作流"/);
   assert.doesNotMatch(canvasSource, /desk-workflow-editor-sidebar/);
 });
 

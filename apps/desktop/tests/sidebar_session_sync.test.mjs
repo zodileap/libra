@@ -70,6 +70,36 @@ test("TestSidebarShouldSyncWorkspaceTreeWhenWorkspaceGroupsUpdated", () => {
   assert.match(sessionSource, /window\.removeEventListener\(\s*PROJECT_WORKSPACE_PROFILE_UPDATED_EVENT,\s*onProjectWorkspaceProfileUpdated as EventListener,\s*\);/s);
 });
 
+test("TestSidebarShouldPersistBackgroundSessionProgressText", () => {
+  const sidebarSource = readDesktopSource("src/sidebar/index.tsx");
+
+  // 描述：
+  //
+  //   - 侧边栏后台监听应使用最新路由 ref 判断当前是否仍处于该会话，避免切页后继续命中旧闭包而跳过持久化。
+  assert.match(sidebarSource, /const activePathnameRef = useRef\(location\.pathname\);/);
+  assert.match(sidebarSource, /const activeSelectedSessionKeyRef = useRef\(selectedSessionKey\);/);
+  assert.match(sidebarSource, /activePathnameRef\.current = location\.pathname;/);
+  assert.match(sidebarSource, /activeSelectedSessionKeyRef\.current = selectedSessionKey;/);
+  assert.match(sidebarSource, /const isActiveSessionPage = activePathnameRef\.current\.includes\("\/session\/"\)\s*&&\s*activeSelectedSessionKeyRef\.current === sessionId;/);
+
+  // 描述：
+  //
+  //   - 离开会话页后，后台流事件应同步写入助手消息文本，而不是只写 run state。
+  assert.match(sidebarSource, /getSessionMessages/);
+  assert.match(sidebarSource, /upsertSessionMessages/);
+  assert.match(sidebarSource, /function upsertSidebarAssistantMessageById\(/);
+  assert.match(sidebarSource, /function resolveSidebarAssistantMessageText\(/);
+  assert.match(sidebarSource, /heartbeatCount: number/);
+  assert.match(sidebarSource, /if \(payload\.kind === STREAM_KINDS\.PLANNING && text\.startsWith\("__libra_planning__:"\)\)/);
+  assert.match(sidebarSource, /const meta = JSON\.parse\(text\.slice\("__libra_planning__:"\.length\)\.trim\(\)\)/);
+  assert.match(sidebarSource, /if \(payload\.kind === STREAM_KINDS\.HEARTBEAT\) \{/);
+  assert.match(sidebarSource, /const waitedSeconds = Math\.max\(1, Math\.round\(heartbeatCount \* 1\.2\)\);/);
+  assert.match(sidebarSource, /const heartbeatCount = nextMeta\.segments\.filter\(\(item\) => \{/);
+  assert.match(sidebarSource, /const storedMessages = getSessionMessages\("agent", sessionId\);/);
+  assert.match(sidebarSource, /const nextMessageText = resolveSidebarAssistantMessageText\(\s*payload,\s*currentMessageText,\s*nextMeta\.summary,\s*heartbeatCount,\s*\);/s);
+  assert.match(sidebarSource, /upsertSessionMessages\(\{\s*agentKey: "agent",\s*sessionId,\s*messages: upsertSidebarAssistantMessageById\(storedMessages, activeMessageId, nextMessageText\),\s*\}\);/s);
+});
+
 test("TestRemoveWorkspaceShouldAlsoRemoveBoundSessions", () => {
   const dataSource = readDesktopSource("src/shared/data.ts");
 

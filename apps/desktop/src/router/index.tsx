@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AriContainer, AriTypography } from "aries_react";
 import {
   CommonAiKeyPageLazy,
+  CommonWorkflowEditorPageLazy,
   CommonLoginPageLazy,
   CommonMcpPageLazy,
   CommonSkillsPageLazy,
@@ -20,6 +21,7 @@ import {
   SETTINGS_MODULE_KEY,
   SettingsGeneralPageLazy,
   WORKFLOW_PAGE_PATH,
+  WORKFLOW_EDITOR_PAGE_PATH,
 } from "../modules/common/routes";
 import {
   AGENT_MODULE_KEY,
@@ -279,10 +281,16 @@ export function DesktopRouter({ auth }: { auth: AuthState }) {
           ) : null}
 
           {routeAccess.isModuleEnabled(WORKFLOW_MODULE_KEY) ? (
-            <Route
-              path={WORKFLOW_PAGE_PATH.slice(1)}
-              element={withRouteLoading(<CommonWorkflowsPageLazy />)}
-            />
+            <>
+              <Route
+                path={WORKFLOW_PAGE_PATH.slice(1)}
+                element={withRouteLoading(<CommonWorkflowsPageLazy />)}
+              />
+              <Route
+                path={WORKFLOW_EDITOR_PAGE_PATH.slice(1)}
+                element={withRouteLoading(<CommonWorkflowEditorPageLazy />)}
+              />
+            </>
           ) : null}
 
           {routeAccess.isModuleEnabled(SETTINGS_MODULE_KEY) ? (

@@ -91,7 +91,7 @@ export function DesktopAppHeader({
         </AriContainer>
         <AriContainer
           className="desk-app-header-slot"
-          padding={{ left: "var(--z-inset-sm)", right: "var(--z-inset-sm)" }}
+          padding={{ left: "var(--z-inset-sm)", right: "var(--z-inset-sm)", top: 0, bottom: 0 }}
           data-tauri-drag-region
         >
           <AriFlex

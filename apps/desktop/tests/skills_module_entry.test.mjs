@@ -88,14 +88,25 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
 
   // 描述：
   //
-  //   - 技能页应展示“应用内置/外部技能”分区，并支持导入本地技能与移除外部技能。
-  assert.match(skillsPageSource, /DeskSectionTitle title="应用内置"/);
-  assert.match(skillsPageSource, /DeskSectionTitle title="外部技能"/);
+  //   - 技能页应展示“已注册/未注册”分区，并将标题、说明和操作统一挂到标题栏 slot。
+  assert.match(skillsPageSource, /DeskSectionTitle title="已注册"/);
+  assert.match(skillsPageSource, /DeskSectionTitle title="未注册"/);
+  assert.match(skillsPageSource, /DeskPageHeader/);
+  assert.match(skillsPageSource, /DeskOverviewCard/);
+  assert.match(skillsPageSource, /icon=\{<AriIcon name="new_releases" \/>\}/);
+  assert.match(skillsPageSource, /DeskOverviewDetailsModal/);
+  assert.match(skillsPageSource, /DeskOverviewDetailRow/);
+  assert.match(skillsPageSource, /mode="slot"/);
   assert.match(skillsPageSource, /label="导入本地技能"/);
-  assert.match(skillsPageSource, /title="移除外部技能"/);
+  assert.match(skillsPageSource, /title="移除技能"/);
+  assert.match(skillsPageSource, /type="text"/);
+  assert.match(skillsPageSource, /content="管理"/);
+  assert.match(skillsPageSource, /aria-label="管理技能"/);
+  assert.match(skillsPageSource, /aria-label="添加技能"/);
   assert.match(skillsPageSource, /pickLocalAgentSkillFolder/);
   assert.match(skillsPageSource, /importAgentSkillFromPath/);
   assert.match(skillsPageSource, /removeAgentSkill/);
+  assert.match(skillsPageSource, /已添加/);
   assert.match(skillsPageSource, /createPortal\(headerNode, headerSlotElement\)/);
 
   // 描述：
@@ -162,8 +173,13 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   //
   //   - 样式层仍应复用现有技能卡片布局类，不额外引入静态 catalog 特有结构。
   assert.match(styleSource, /\.desk-skills-shell/);
-  assert.match(styleSource, /\.desk-skill-grid/);
-  assert.match(styleSource, /\.desk-skill-card/);
+  assert.match(styleSource, /\.desk-skill-grid \{[\s\S]*align-items: start;/);
+  assert.match(styleSource, /\.desk-overview-card/);
+  assert.match(styleSource, /\.desk-overview-card-content/);
+  assert.match(styleSource, /\.desk-overview-card-title/);
+  assert.match(styleSource, /\.desk-overview-card-description/);
+  assert.match(styleSource, /\.desk-overview-details-body/);
+  assert.match(styleSource, /\.desk-overview-detail-row/);
 });
 
 test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
@@ -177,9 +193,15 @@ test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
 
   // 描述：
   //
-  //   - MCP 页应包含“已注册/推荐模板”分区，并提供新增、编辑、校验和 Runtime 管理入口。
+  //   - MCP 页应包含“已注册/未注册”分区，并将标题、说明和操作统一挂到标题栏 slot。
   assert.match(mcpPageSource, /DeskSectionTitle title="已注册"/);
-  assert.match(mcpPageSource, /DeskSectionTitle title="推荐模板"/);
+  assert.match(mcpPageSource, /DeskSectionTitle title="未注册"/);
+  assert.match(mcpPageSource, /DeskPageHeader/);
+  assert.match(mcpPageSource, /DeskOverviewCard/);
+  assert.match(mcpPageSource, /icon=\{<AriIcon name="hub" \/>\}/);
+  assert.match(mcpPageSource, /DeskOverviewDetailsModal/);
+  assert.match(mcpPageSource, /DeskOverviewDetailRow/);
+  assert.match(mcpPageSource, /mode="slot"/);
   assert.match(mcpPageSource, /listMcpOverview/);
   assert.match(mcpPageSource, /saveMcpRegistration/);
   assert.match(mcpPageSource, /validateMcpRegistration/);
@@ -188,7 +210,6 @@ test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
   assert.match(mcpPageSource, /uninstallApifoxMcpRuntime/);
   assert.match(mcpPageSource, /prepareDccRuntime/);
   assert.match(mcpPageSource, /buildDccRuntimeStatusMap/);
-  assert.match(mcpPageSource, /label=\{dccRuntimeStatus\?\.available \? "重新校验" : "准备 Runtime"\}/);
   assert.match(mcpPageSource, /renderDccRuntimeAutoPrepareLabel/);
   assert.match(mcpPageSource, /renderDccRuntimeEnvRequirementLabel/);
   assert.match(mcpPageSource, /环境变量：MAYA_BIN/);
@@ -196,12 +217,20 @@ test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
   assert.match(mcpPageSource, /label=\"新增 MCP\"/);
   assert.match(mcpPageSource, /createPortal\(headerNode, headerSlotElement\)/);
   assert.match(mcpPageSource, /安装 Runtime/);
-  assert.match(mcpPageSource, /文档：/);
+  assert.match(mcpPageSource, /label="文档"/);
+  assert.match(mcpPageSource, /type="text"/);
+  assert.match(mcpPageSource, /content="管理"/);
+  assert.match(mcpPageSource, /aria-label="管理 MCP"/);
+  assert.match(mcpPageSource, /aria-label="管理模板"/);
+  assert.match(mcpPageSource, /label="安装 Runtime"/);
+  assert.match(mcpPageSource, /label="卸载 Runtime"/);
+  assert.match(mcpPageSource, /label=\{dccRuntimeStatusMap\[managingTemplateItem\.software\]\?\.available \? "校验 Runtime" : "准备 Runtime"\}/);
+  assert.match(mcpPageSource, /aria-label=\{alreadyRegistered \? "模板已添加" : "添加 MCP"\}/);
   assert.match(mcpPageSource, /value=\{workspaceId\}/);
   assert.match(mcpPageSource, /label: "全局（User）"/);
   assert.match(mcpPageSource, /label="作用域"/);
-  assert.match(mcpPageSource, /workspace 级配置会覆盖同名 user 级 MCP/);
-  assert.match(mcpPageSource, /renderScopeLabel\(item\.scope\)/);
+  assert.match(mcpPageSource, /当前显示全局 user 级 MCP|当前项目：/);
+  assert.match(mcpPageSource, /buildDraftFromRegistration/);
 
   // 描述：
   //

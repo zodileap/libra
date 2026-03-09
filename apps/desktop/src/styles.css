@@ -434,6 +434,7 @@ body {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--z-inset);
+  align-items: start;
 }
 
 .desk-admin-summary-grid {
@@ -467,22 +468,19 @@ body {
   width: 100%;
 }
 
-.desk-skill-card {
+.desk-overview-card {
   border-radius: var(--z-border-radius-lg);
   min-height: calc(var(--z-inset) * 5.5);
+  border: var(--desk-border-width) solid var(--desk-workflow-card-border);
+  background: var(--desk-container-bg);
 }
 
-.desk-skill-card-main {
+.desk-overview-card-main {
   min-height: calc(var(--z-inset) * 5.5);
   padding: var(--z-inset);
 }
 
-.desk-skill-card-info {
-  min-width: 0;
-  flex: 1;
-}
-
-.desk-skill-card-icon-wrap {
+.desk-overview-card-icon-wrap {
   width: calc(var(--z-inset) * 2);
   height: calc(var(--z-inset) * 2);
   border-radius: var(--z-border-radius);
@@ -494,11 +492,97 @@ body {
   flex-shrink: 0;
 }
 
+.desk-overview-card-content {
+  min-width: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: var(--z-inset-xs);
+}
+
+.desk-overview-card-title-bar {
+  min-width: 0;
+}
+
+.desk-overview-card-title-main {
+  min-width: 0;
+}
+
+.desk-overview-card-title-wrap {
+  min-width: 0;
+}
+
+.desk-overview-card-title {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desk-overview-card-description {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.desk-overview-card-actions {
+  flex-shrink: 0;
+}
+
+.desk-overview-card-actions-inner {
+  flex-wrap: nowrap;
+}
+
+.desk-overview-details-body {
+  display: grid;
+  gap: var(--z-inset);
+}
+
+.desk-overview-details-description {
+  color: var(--desk-workflow-muted-text);
+}
+
+.desk-overview-detail-row {
+  display: grid;
+  gap: var(--z-inset-xs);
+}
+
+.desk-overview-detail-label {
+  color: var(--desk-workflow-muted-text);
+}
+
+.desk-overview-detail-value,
+.desk-overview-detail-value-wrap {
+  min-width: 0;
+}
+
+.desk-overview-detail-value {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .desk-page-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--z-inset);
+}
+
+.desk-page-header.is-slot {
+  width: 100%;
+  min-height: 100%;
+  align-items: center;
+  gap: var(--z-inset-sm);
 }
 
 .desk-page-header-main {
@@ -507,8 +591,46 @@ body {
   gap: var(--z-inset-sm);
 }
 
+.desk-page-header-title {
+  min-width: 0;
+}
+
+.desk-page-header-description {
+  color: var(--desk-workflow-muted-text);
+}
+
+.desk-page-header-title-line {
+  min-width: 0;
+}
+
+.desk-page-header.is-slot .desk-page-header-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.desk-page-header.is-slot .desk-page-header-title-line {
+  flex-wrap: nowrap;
+}
+
+.desk-page-header.is-slot .desk-page-header-description {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .desk-page-header-actions {
+  min-width: 0;
   flex-shrink: 0;
+}
+
+.desk-page-header.is-slot .desk-page-header-actions {
+  display: flex;
+  align-items: center;
+}
+
+.desk-page-header-actions-inner {
+  flex-wrap: nowrap;
 }
 
 .desk-project-settings-header {
@@ -906,6 +1028,13 @@ body {
   margin-top: var(--z-inset-sm);
 }
 
+.desk-workflow-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--z-inset);
+  align-items: start;
+}
+
 .desk-workflow-node-type-switch {
   flex-wrap: wrap;
 }
@@ -1184,12 +1313,24 @@ body {
 
 .desk-prompt-toolbar-left {
   min-width: 0;
-  flex-wrap: wrap;
+  flex: 1;
+  flex-wrap: nowrap;
 }
 
 .desk-prompt-toolbar-select {
-  min-width: calc(var(--z-inset) * 9.5);
+  flex-shrink: 0;
+  min-width: calc(var(--z-inset) * 11);
   max-width: calc(var(--z-inset) * 14);
+}
+
+.desk-prompt-toolbar-select-provider {
+  min-width: calc(var(--z-inset) * 11);
+  max-width: calc(var(--z-inset) * 14);
+}
+
+.desk-prompt-toolbar-select-strategy {
+  min-width: calc(var(--z-inset) * 18);
+  max-width: calc(var(--z-inset) * 22);
 }
 
 .desk-prompt-icon-btn {
@@ -1905,6 +2046,10 @@ body {
   }
 
   .desk-skill-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .desk-workflow-grid {
     grid-template-columns: 1fr;
   }
 

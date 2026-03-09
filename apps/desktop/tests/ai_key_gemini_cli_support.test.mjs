@@ -24,6 +24,7 @@ test("TestAiKeyShouldSupportGeminiCliProvider", () => {
   const aiKeyPageSource = readDesktopSource("src/modules/common/pages/ai-key-page.tsx");
   const appSource = readDesktopSource("src/app.tsx");
   const sessionSource = readDesktopSource("src/widgets/session/page.tsx");
+  const dataSource = readDesktopSource("src/shared/data.ts");
   const tauriSource = readDesktopSource("src-tauri/src/main.rs");
 
   // 描述：
@@ -47,6 +48,13 @@ test("TestAiKeyShouldSupportGeminiCliProvider", () => {
   assert.match(appSource, /item\.provider === "gemini-cli" && item\.enabled/);
   assert.match(appSource, /invoke<GeminiCliHealthResponse>\("check_gemini_cli_health", \{\}\)/);
   assert.match(sessionSource, /if \(provider === "codex" \|\| provider === "gemini-cli"\) \{\s*return item\.enabled;\s*\}/s);
+  assert.match(dataSource, /selectedAiProviderBySessionId: Record<string, string>;/);
+  assert.match(dataSource, /export function resolveAgentSessionSelectedAiProvider\(sessionId: string\): string \{/);
+  assert.match(dataSource, /export function rememberAgentSessionSelectedAiProvider\(sessionId: string, provider: string\) \{/);
+  assert.match(sessionSource, /const \[selectedProvider, setSelectedProvider\] = useState<string>\(\s*\(\) => resolveAgentSessionSelectedAiProvider\(sessionId\),\s*\)/s);
+  assert.match(sessionSource, /setSelectedProvider\(resolveAgentSessionSelectedAiProvider\(sessionId\)\);/);
+  assert.match(sessionSource, /rememberAgentSessionSelectedAiProvider\(sessionId, nextProvider\);/);
+  assert.match(sessionSource, /if \(normalizedProvider && availableAiKeys\.some\(\(item\) => item\.provider === normalizedProvider\)\) \{\s*return;\s*\}/s);
 
   // 描述：
   //

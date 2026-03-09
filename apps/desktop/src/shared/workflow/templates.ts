@@ -8,6 +8,11 @@ export const DEFAULT_AGENT_WORKFLOWS: AgentWorkflowDefinition[] = [
     version: 1,
     shared: false,
     agentKey: "agent",
+    optionalCapabilities: [
+      "project-knowledge",
+      "dependency-policy",
+      "toolchain-integration",
+    ],
     promptPrefix:
       "你正在执行“完整项目开发（结构化信息）”工作流：必须先输出结构化项目信息（业务语义、交互契约、界面信息架构、前端实现架构、工程约束），再按步骤实现并补齐测试。",
     graph: {
@@ -127,6 +132,11 @@ export const DEFAULT_AGENT_WORKFLOWS: AgentWorkflowDefinition[] = [
     version: 1,
     shared: false,
     agentKey: "agent",
+    optionalCapabilities: [
+      "project-knowledge",
+      "dependency-policy",
+      "toolchain-integration",
+    ],
     promptPrefix:
       "你正在执行“前端项目-1（Skill 编排）”工作流：优先遵循技能链路完成需求分析、设计、实现、测试与报告交付。",
     graph: {

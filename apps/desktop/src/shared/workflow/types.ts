@@ -1,4 +1,5 @@
 import type { AgentKey } from "../types";
+import type { ProjectWorkspaceCapabilityId } from "../data";
 
 // 描述:
 //
@@ -94,5 +95,18 @@ export interface AgentWorkflowDefinition {
   shared: boolean;
   agentKey: AgentKey;
   promptPrefix: string;
+  requiredCapabilities?: ProjectWorkspaceCapabilityId[];
+  optionalCapabilities?: ProjectWorkspaceCapabilityId[];
+  source?: "builtin" | "user";
+  templateId?: string;
   graph?: WorkflowGraph;
+}
+
+// 描述:
+//
+//   - 定义工作流总览结构，按“已注册工作流 / 内置模板”分组输出，供工作流面板和侧边栏复用。
+export interface AgentWorkflowOverview {
+  registered: AgentWorkflowDefinition[];
+  templates: AgentWorkflowDefinition[];
+  all: AgentWorkflowDefinition[];
 }

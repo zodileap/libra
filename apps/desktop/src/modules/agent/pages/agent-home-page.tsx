@@ -13,6 +13,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   AGENTS,
   bindProjectSessionWorkspace,
+  getLastUsedProjectWorkspaceId,
   getProjectWorkspaceProfile,
   saveProjectWorkspaceProfile,
   type ProjectWorkspaceGroup,
@@ -71,6 +72,21 @@ interface ProjectWorkspaceProfileSeedResponse {
   directory_summary: string[];
   module_candidates: string[];
 }
+
+// 描述：
+//
+//   - 定义首页快速入口预设结构；用于把“写代码 / 建模”快速映射到内置工作流或技能。
+interface AgentQuickStartPreset {
+  id: string;
+  title: string;
+  description: string;
+  icon: string;
+  workflowId?: string;
+  skillIds?: string[];
+}
+
+const QUICK_START_CODE_WORKFLOW_ID = "wf-agent-full-delivery-v1";
+const QUICK_START_MODELING_SKILL_ID = "dcc-modeling";
 
 // 描述:
 //
@@ -220,14 +236,25 @@ export function AgentHomePage(props: AgentHomePageProps) {
     () => searchParams.get("workspaceId")?.trim() || "",
     [searchParams],
   );
+  const forceWorkspacePickerMode = useMemo(
+    () => searchParams.get("mode")?.trim() === "projects",
+    [searchParams],
+  );
 
   // 描述：根据目录 ID 解析当前选中的目录分组实体。
   const selectedWorkspace = useMemo(() => {
-    if (!selectedWorkspaceIdFromQuery) {
+    if (forceWorkspacePickerMode) {
       return null;
     }
-    return workspaceGroups.find((item) => item.id === selectedWorkspaceIdFromQuery) || null;
-  }, [selectedWorkspaceIdFromQuery, workspaceGroups]);
+    const fallbackWorkspaceId = selectedWorkspaceIdFromQuery
+      || getLastUsedProjectWorkspaceId()
+      || workspaceGroups[0]?.id
+      || "";
+    if (!fallbackWorkspaceId) {
+      return null;
+    }
+    return workspaceGroups.find((item) => item.id === fallbackWorkspaceId) || null;
+  }, [forceWorkspacePickerMode, selectedWorkspaceIdFromQuery, workspaceGroups]);
 
   // 描述：当目录选择变化时，持久化最近使用目录，便于下次进入默认定位。
   useEffect(() => {
@@ -255,7 +282,7 @@ export function AgentHomePage(props: AgentHomePageProps) {
   // 描述：回到项目选择页，保持“选择项目”和“开始会话”两个页面职责分离。
   const handleOpenWorkspaceSelectionPage = () => {
     setStatus("");
-    setSearchParams(new URLSearchParams(), { replace: true });
+    setSearchParams(new URLSearchParams({ mode: "projects" }), { replace: true });
   };
 
   // 描述：进入当前项目的设置页，支持在主内容区直接维护结构化项目信息。
@@ -359,10 +386,22 @@ export function AgentHomePage(props: AgentHomePageProps) {
     }
   };
 
-  // 描述：创建后端会话并自动发送首条消息，保持“发送后进入会话”的连续体验。
-  const handleStartConversation = async () => {
+  // 描述：创建后端会话并按当前预设进入会话；支持普通提问，也支持首页快速入口直接注入工作流/技能。
+  //
+  // Params:
+  //
+  //   - options: 可选启动预设。
+  const handleStartConversation = async (options?: {
+    workflowId?: string;
+    skillIds?: string[];
+  }) => {
     const normalizedPrompt = prompt.trim();
-    if (!normalizedPrompt) {
+    const normalizedSkillIds = Array.isArray(options?.skillIds)
+      ? options?.skillIds.map((item) => String(item || "").trim()).filter((item) => item.length > 0)
+      : [];
+    const normalizedWorkflowId = String(options?.workflowId || "").trim();
+    const usingQuickStartPreset = normalizedWorkflowId.length > 0 || normalizedSkillIds.length > 0;
+    if (!usingQuickStartPreset && !normalizedPrompt) {
       setStatus("请先输入需求再开始对话。");
       return;
     }
@@ -390,11 +429,15 @@ export function AgentHomePage(props: AgentHomePageProps) {
       const search = `?workspaceId=${encodeURIComponent(selectedWorkspace.id)}`;
       navigate(`${resolveAgentSessionPath(session.id)}${search}`, {
         state: {
-          autoPrompt: normalizedPrompt,
+          autoPrompt: usingQuickStartPreset ? "" : normalizedPrompt,
           workspaceId: selectedWorkspace.id,
+          preferredWorkflowId: normalizedWorkflowId || undefined,
+          preferredSkillIds: normalizedSkillIds.length > 0 ? normalizedSkillIds : undefined,
         },
       });
-      setPrompt("");
+      if (!usingQuickStartPreset) {
+        setPrompt("");
+      }
       setStatus("");
     } catch (err) {
       const msg = err instanceof Error ? err.message : "创建会话失败";
@@ -404,25 +447,51 @@ export function AgentHomePage(props: AgentHomePageProps) {
     }
   };
 
-  // 描述：定义智能体入口页的默认引导卡片文案。
-  const starterItems = [
-    {
-      title: "快速开始",
-      description: "在当前目录中重构某个模块，并补上单元测试。",
-    },
-    {
-      title: "上下文约束",
-      description: "告诉智能体文件路径、框架约束和输出目标，结果会更稳定。",
-    },
-  ];
+  // 描述：定义首页两个快速入口，分别对应默认代码工作流和内置建模技能。
+  const starterItems = useMemo<{
+    id: string;
+    title: string;
+    description: string;
+    icon: string;
+    actionLabel: string;
+    disabled?: boolean;
+    onAction: () => void;
+  }[]>(() => {
+    const presets: AgentQuickStartPreset[] = [
+      {
+        id: "quick-code",
+        title: "写代码",
+        description: "直接按默认代码工作流开始一个新的开发话题。",
+        icon: "edit",
+        workflowId: QUICK_START_CODE_WORKFLOW_ID,
+      },
+      {
+        id: "quick-modeling",
+        title: "建模",
+        description: "直接按内置建模技能开始一个新的 DCC 话题。",
+        icon: "new_releases",
+        skillIds: [QUICK_START_MODELING_SKILL_ID],
+      },
+    ];
+    return presets.map((item) => ({
+      id: item.id,
+      title: item.title,
+      description: item.description,
+      icon: item.icon,
+      actionLabel: "快速开始",
+      disabled: !selectedWorkspace,
+      onAction: () => {
+        void handleStartConversation({
+          workflowId: item.workflowId,
+          skillIds: item.skillIds,
+        });
+      },
+    }));
+  }, [selectedWorkspace]);
 
   // 描述：当未选中项目目录时展示项目接入引导内容。
   const onboardingContent = !selectedWorkspace ? (
-    <AriContainer
-      className="desk-content desk-project-workspace-onboarding"
-      height="100%"
-      showBorderRadius={false}
-    >
+    <AriContainer className="desk-project-workspace-onboarding" padding={0}>
       <AriCard className="desk-project-workspace-onboarding-card">
         <AriTypography variant="h4" value="选择项目" />
 

@@ -1,8 +1,13 @@
 import { DEFAULT_AGENT_WORKFLOWS } from "./templates";
 import { AGENT_TOOLSET_LINES, normalizeAgentSkillId } from "./prompt-guidance";
 import { IS_BROWSER, STORAGE_KEYS } from "../constants";
+import {
+  getProjectWorkspaceCapabilityManifest,
+  type ProjectWorkspaceCapabilityId,
+} from "../data";
 import type {
   AgentWorkflowDefinition,
+  AgentWorkflowOverview,
   WorkflowGraph,
   WorkflowGraphEdge,
   WorkflowGraphEdgeType,
@@ -256,11 +261,26 @@ function buildAgentFallbackGraph(workflow: AgentWorkflowDefinition): WorkflowGra
 //
 //   - 规范化后的统一智能体工作流。
 function normalizeAgentWorkflow(workflow: AgentWorkflowDefinition): AgentWorkflowDefinition {
+  const normalizeCapabilityIds = (capabilityIds: ProjectWorkspaceCapabilityId[] | undefined) => {
+    const normalized = (capabilityIds || [])
+      .map((item) => String(item || "").trim())
+      .filter((item): item is ProjectWorkspaceCapabilityId => Boolean(getProjectWorkspaceCapabilityManifest(item)));
+    return normalized.filter((item, index) => normalized.indexOf(item) === index);
+  };
+  const normalizedSource = DEFAULT_AGENT_WORKFLOW_ID_SET.has(String(workflow.id || "").trim())
+    ? "builtin"
+    : workflow.source === "builtin"
+      ? "builtin"
+      : "user";
   const normalizedWorkflow: AgentWorkflowDefinition = {
     ...workflow,
     id: normalizeAgentWorkflowId(String(workflow.id || "").trim()),
     agentKey: "agent",
     promptPrefix: String(workflow.promptPrefix || "").trim(),
+    requiredCapabilities: normalizeCapabilityIds(workflow.requiredCapabilities),
+    optionalCapabilities: normalizeCapabilityIds(workflow.optionalCapabilities),
+    source: normalizedSource,
+    templateId: String(workflow.templateId || "").trim() || undefined,
     graph: normalizeWorkflowGraph(workflow.graph),
   };
   if (!normalizedWorkflow.graph) {
@@ -310,25 +330,67 @@ function writeSavedAgentWorkflows(workflows: AgentWorkflowDefinition[]) {
 
 // 描述：
 //
-//   - 返回当前可用智能体工作流列表，包含默认模板与本地自定义覆盖项。
+//   - 返回当前工作流总览，按“用户已注册 / 应用内置模板”拆分，避免编辑页与总览页混用同一数据语义。
+//
+// Returns:
+//
+//   - 0: 工作流总览结构。
+export function listAgentWorkflowOverview(): AgentWorkflowOverview {
+  const templates = DEFAULT_AGENT_WORKFLOWS.map((item) =>
+    normalizeAgentWorkflow({ ...item, source: "builtin" }),
+  );
+  const registered = readSavedAgentWorkflows()
+    .filter((item) => item.source === "user");
+  return {
+    registered,
+    templates,
+    all: [...registered, ...templates],
+  };
+}
+
+// 描述：
+//
+//   - 返回当前可用智能体工作流列表，统一合并“用户已注册 + 内置模板”，供会话执行策略选择使用。
 //
 // Returns:
 //
 //   - 已归一化的工作流列表。
 export function listAgentWorkflows(): AgentWorkflowDefinition[] {
-  const saved = readSavedAgentWorkflows();
-  const merged: AgentWorkflowDefinition[] = DEFAULT_AGENT_WORKFLOWS.map((item) =>
-    normalizeAgentWorkflow({ ...item }),
-  );
-  for (const workflow of saved) {
-    const index = merged.findIndex((item) => item.id === workflow.id);
-    if (index >= 0) {
-      merged[index] = normalizeAgentWorkflow({ ...workflow });
-    } else {
-      merged.push(normalizeAgentWorkflow({ ...workflow }));
-    }
+  return listAgentWorkflowOverview().all;
+}
+
+// 描述：
+//
+//   - 按工作流 ID 读取单个工作流定义，统一支持用户工作流和内置模板。
+//
+// Params:
+//
+//   - workflowId: 工作流 ID。
+//
+// Returns:
+//
+//   - 0: 命中时返回工作流；未命中返回 null。
+export function getAgentWorkflowById(workflowId: string): AgentWorkflowDefinition | null {
+  const normalizedWorkflowId = normalizeAgentWorkflowId(String(workflowId || "").trim());
+  if (!normalizedWorkflowId) {
+    return null;
   }
-  return merged;
+  return listAgentWorkflows().find((item) => item.id === normalizedWorkflowId) || null;
+}
+
+// 描述：
+//
+//   - 判断工作流是否为只读模板；当前仅用户自建工作流允许保存与删除。
+//
+// Params:
+//
+//   - workflow: 当前工作流。
+//
+// Returns:
+//
+//   - true: 只读。
+export function isReadonlyAgentWorkflow(workflow: AgentWorkflowDefinition | null | undefined): boolean {
+  return String(workflow?.source || "").trim() !== "user";
 }
 
 // 描述：
@@ -345,8 +407,11 @@ export function listAgentWorkflows(): AgentWorkflowDefinition[] {
 export function saveAgentWorkflow(
   workflow: AgentWorkflowDefinition,
 ): AgentWorkflowDefinition {
-  const normalizedWorkflow = normalizeAgentWorkflow(workflow);
-  const all = listAgentWorkflows();
+  const normalizedWorkflow = normalizeAgentWorkflow({
+    ...workflow,
+    source: "user",
+  });
+  const all = readSavedAgentWorkflows();
   const next = all.map((item) => (
     item.id === normalizedWorkflow.id
       ? normalizedWorkflow
@@ -383,8 +448,34 @@ export function createAgentWorkflowFromTemplate(
     version: source.version + 1,
     shared: false,
     agentKey: "agent",
+    source: "user",
+    templateId: source.source === "builtin"
+      ? source.id
+      : String(source.templateId || source.id).trim() || undefined,
   };
   saveAgentWorkflow(nextWorkflow);
+  return nextWorkflow;
+}
+
+// 描述：
+//
+//   - 创建空白用户工作流，并自动注入兜底图结构，供工作流总览和侧边栏“新增”动作复用。
+//
+// Returns:
+//
+//   - 0: 新建后的用户工作流。
+export function createAgentWorkflow(): AgentWorkflowDefinition {
+  const nextWorkflow = saveAgentWorkflow({
+    id: `wf-agent-custom-${Date.now()}`,
+    name: "未命名工作流",
+    description: "请输入工作流说明",
+    version: 1,
+    shared: false,
+    agentKey: "agent",
+    promptPrefix: "",
+    source: "user",
+    graph: undefined,
+  });
   return nextWorkflow;
 }
 
@@ -405,7 +496,7 @@ export function deleteAgentWorkflow(workflowId: string): boolean {
   if (!normalizedWorkflowId || DEFAULT_AGENT_WORKFLOW_ID_SET.has(normalizedWorkflowId)) {
     return false;
   }
-  const all = listAgentWorkflows();
+  const all = readSavedAgentWorkflows();
   if (!all.some((item) => item.id === normalizedWorkflowId)) {
     return false;
   }
@@ -449,6 +540,16 @@ export function buildAgentWorkflowPrompt(
       return "";
     })
     .filter((line) => line.length > 0);
+  const capabilityLines = [
+    ...((workflow?.requiredCapabilities || []).map((item) => {
+      const manifest = getProjectWorkspaceCapabilityManifest(item);
+      return manifest ? `- 必需能力：${manifest.title}（${manifest.id}）` : "";
+    })),
+    ...((workflow?.optionalCapabilities || []).map((item) => {
+      const manifest = getProjectWorkspaceCapabilityManifest(item);
+      return manifest ? `- 可选能力：${manifest.title}（${manifest.id}）` : "";
+    })),
+  ].filter((line) => line.length > 0);
   const toolsetBlock = ["", ...AGENT_TOOLSET_LINES];
   if (!prefix) {
     if (skillChainLines.length === 0) {
@@ -462,6 +563,7 @@ export function buildAgentWorkflowPrompt(
     return [
       "【技能链路】",
       ...skillChainLines,
+      ...(capabilityLines.length > 0 ? ["", "【项目能力声明】", ...capabilityLines] : []),
       ...toolsetBlock,
       "",
       "【用户需求】",
@@ -471,10 +573,14 @@ export function buildAgentWorkflowPrompt(
   const skillChainBlock = skillChainLines.length > 0
     ? ["", "【技能链路】", ...skillChainLines]
     : [];
+  const capabilityBlock = capabilityLines.length > 0
+    ? ["", "【项目能力声明】", ...capabilityLines]
+    : [];
   return [
     `【工作流：${workflow?.name || "智能体工作流"}】`,
     prefix,
     ...skillChainBlock,
+    ...capabilityBlock,
     ...toolsetBlock,
     "",
     "【用户需求】",

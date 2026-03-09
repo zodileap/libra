@@ -29,6 +29,10 @@ export const MCP_PAGE_PATH = "/mcps" as const;
 export const WORKFLOW_PAGE_PATH = "/workflows" as const;
 // 描述:
 //
+//   - 工作流编辑页路由路径。
+export const WORKFLOW_EDITOR_PAGE_PATH = "/workflows/editor" as const;
+// 描述:
+//
 //   - 设置概览页路由路径。
 export const SETTINGS_OVERVIEW_PATH = "/settings/overview" as const;
 // 描述:
@@ -100,6 +104,12 @@ export const CommonWorkflowsPageLazy = lazy(async () => {
   return { default: module.WorkflowsPage };
 });
 
+// 描述：通用模块中的工作流编辑页懒加载入口，仅承载单个工作流的编辑/查看能力。
+export const CommonWorkflowEditorPageLazy = lazy(async () => {
+  const module = await import("./pages/workflow-editor-page");
+  return { default: module.WorkflowEditorPage };
+});
+
 // 描述：构建统一工作流编辑页地址，仅保留 workflowId，旧 workflowType 查询参数由调用方兼容透传。
 //
 // Params:
@@ -115,7 +125,7 @@ export function resolveWorkflowEditorPath(workflowId: string): string {
     params.set("workflowId", workflowId);
   }
   const query = params.toString();
-  return query ? `${WORKFLOW_PAGE_PATH}?${query}` : WORKFLOW_PAGE_PATH;
+  return query ? `${WORKFLOW_EDITOR_PAGE_PATH}?${query}` : WORKFLOW_EDITOR_PAGE_PATH;
 }
 
 // 描述:

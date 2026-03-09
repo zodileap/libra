@@ -121,6 +121,7 @@ interface SessionMeta {
   renamedTitles: Record<string, string>;
   pinnedIds: string[];
   removedIds: string[];
+  selectedAiProviderBySessionId: Record<string, string>;
   selectedDccSoftwareBySessionId: Record<string, string>;
 }
 
@@ -131,6 +132,7 @@ export interface AgentSessionMetaSnapshot {
   renamedTitles: Record<string, string>;
   pinnedIds: string[];
   removedIds: string[];
+  selectedAiProviderBySessionId: Record<string, string>;
   selectedDccSoftwareBySessionId: Record<string, string>;
 }
 
@@ -246,9 +248,66 @@ export interface ProjectWorkspaceGroup {
   id: string;
   path: string;
   name: string;
+  enabledCapabilities: ProjectWorkspaceCapabilityId[];
   dependencyRules: string[];
   updatedAt: string;
 }
+
+// 描述：
+//
+//   - 定义项目能力类型，区分知识、策略与外部接入三类项目级扩展能力。
+export type ProjectWorkspaceCapabilityKind = "knowledge" | "policy" | "integration";
+
+// 描述：
+//
+//   - 定义项目能力 ID，统一作为项目设置、工作流声明与会话上下文注入的能力键。
+export type ProjectWorkspaceCapabilityId =
+  | "project-knowledge"
+  | "dependency-policy"
+  | "toolchain-integration";
+
+// 描述：
+//
+//   - 定义项目能力清单项，描述能力类型、展示文案与项目内承担的职责。
+export interface ProjectWorkspaceCapabilityManifest {
+  id: ProjectWorkspaceCapabilityId;
+  kind: ProjectWorkspaceCapabilityKind;
+  title: string;
+  description: string;
+}
+
+// 描述：
+//
+//   - 定义工作区能力绑定结构，表示某个项目是否启用了指定能力。
+export interface WorkspaceCapabilityBinding {
+  workspaceId: string;
+  capabilityId: ProjectWorkspaceCapabilityId;
+  enabled: boolean;
+}
+
+// 描述：
+//
+//   - 项目能力注册表；项目设置页、工作流能力声明与会话注入均基于这份内置清单工作。
+const PROJECT_WORKSPACE_CAPABILITY_MANIFESTS: ProjectWorkspaceCapabilityManifest[] = [
+  {
+    id: "project-knowledge",
+    kind: "knowledge",
+    title: "项目知识",
+    description: "维护结构化项目信息，并在工作流需要时注入项目语义基线。",
+  },
+  {
+    id: "dependency-policy",
+    kind: "policy",
+    title: "依赖策略",
+    description: "维护依赖规范，并在发送前或生成后执行依赖合规检查。",
+  },
+  {
+    id: "toolchain-integration",
+    kind: "integration",
+    title: "工具接入",
+    description: "维护项目级 MCP 与 DCC Runtime 接入状态，供技能与工作流读取。",
+  },
+];
 
 // 描述:
 //
@@ -414,6 +473,7 @@ function readSessionMeta(): SessionMeta {
       renamedTitles: {},
       pinnedIds: [],
       removedIds: [],
+      selectedAiProviderBySessionId: {},
       selectedDccSoftwareBySessionId: {},
     };
   }
@@ -424,6 +484,7 @@ function readSessionMeta(): SessionMeta {
       renamedTitles: {},
       pinnedIds: [],
       removedIds: [],
+      selectedAiProviderBySessionId: {},
       selectedDccSoftwareBySessionId: {},
     };
   }
@@ -434,6 +495,12 @@ function readSessionMeta(): SessionMeta {
       renamedTitles: parsed?.renamedTitles || {},
       pinnedIds: Array.isArray(parsed?.pinnedIds) ? parsed.pinnedIds : [],
       removedIds: Array.isArray(parsed?.removedIds) ? parsed.removedIds : [],
+      selectedAiProviderBySessionId:
+        parsed?.selectedAiProviderBySessionId
+        && typeof parsed.selectedAiProviderBySessionId === "object"
+        && !Array.isArray(parsed.selectedAiProviderBySessionId)
+          ? parsed.selectedAiProviderBySessionId
+          : {},
       selectedDccSoftwareBySessionId:
         parsed?.selectedDccSoftwareBySessionId
         && typeof parsed.selectedDccSoftwareBySessionId === "object"
@@ -446,6 +513,7 @@ function readSessionMeta(): SessionMeta {
       renamedTitles: {},
       pinnedIds: [],
       removedIds: [],
+      selectedAiProviderBySessionId: {},
       selectedDccSoftwareBySessionId: {},
     };
   }
@@ -791,6 +859,117 @@ function normalizeWorkspaceDependencyRules(rules: unknown): string[] {
     .map((item) => String(item || "").trim())
     .filter((item) => Boolean(item));
   return normalized.filter((item, index) => normalized.indexOf(item) === index);
+}
+
+// 描述：规范化项目能力 ID 列表，统一去除空值、非法值与重复项，保持清单顺序稳定。
+//
+// Params:
+//
+//   - capabilityIds: 原始项目能力 ID 列表。
+//
+// Returns:
+//
+//   - 规范化后的项目能力 ID 列表。
+function normalizeProjectWorkspaceCapabilityIds(capabilityIds: unknown): ProjectWorkspaceCapabilityId[] {
+  if (!Array.isArray(capabilityIds)) {
+    return [];
+  }
+  const supportedIds = new Set(PROJECT_WORKSPACE_CAPABILITY_MANIFESTS.map((item) => item.id));
+  const normalized = capabilityIds
+    .map((item) => String(item || "").trim())
+    .filter((item): item is ProjectWorkspaceCapabilityId => supportedIds.has(item as ProjectWorkspaceCapabilityId));
+  return normalized.filter((item, index) => normalized.indexOf(item) === index);
+}
+
+// 描述：为旧版项目目录分组推断默认项目能力，兼容未显式持久化 enabledCapabilities 的历史数据。
+//
+// Params:
+//
+//   - source: 目录分组原始对象。
+//
+// Returns:
+//
+//   - 推断后的项目能力 ID 列表。
+function inferLegacyProjectWorkspaceCapabilityIds(source: Record<string, unknown>): ProjectWorkspaceCapabilityId[] {
+  const next: ProjectWorkspaceCapabilityId[] = ["project-knowledge"];
+  if (normalizeWorkspaceDependencyRules(source.dependencyRules).length > 0) {
+    next.push("dependency-policy");
+  }
+  return next;
+}
+
+// 描述：
+//
+//   - 列出项目能力注册表，供项目设置页、工作流编辑器和会话执行链统一消费。
+//
+// Returns:
+//
+//   - 项目能力清单。
+export function listProjectWorkspaceCapabilityManifests(): ProjectWorkspaceCapabilityManifest[] {
+  return PROJECT_WORKSPACE_CAPABILITY_MANIFESTS.map((item) => ({ ...item }));
+}
+
+// 描述：
+//
+//   - 根据能力 ID 读取项目能力清单项；未命中时返回 null。
+//
+// Params:
+//
+//   - capabilityId: 项目能力 ID。
+//
+// Returns:
+//
+//   - 项目能力清单项。
+export function getProjectWorkspaceCapabilityManifest(
+  capabilityId: string,
+): ProjectWorkspaceCapabilityManifest | null {
+  const normalizedCapabilityId = String(capabilityId || "").trim();
+  return PROJECT_WORKSPACE_CAPABILITY_MANIFESTS.find((item) => item.id === normalizedCapabilityId) || null;
+}
+
+// 描述：
+//
+//   - 判断指定项目是否启用了某个项目能力。
+//
+// Params:
+//
+//   - workspace: 项目目录分组。
+//   - capabilityId: 项目能力 ID。
+//
+// Returns:
+//
+//   - true 表示已启用。
+export function isProjectWorkspaceCapabilityEnabled(
+  workspace: ProjectWorkspaceGroup | null | undefined,
+  capabilityId: ProjectWorkspaceCapabilityId,
+): boolean {
+  if (!workspace) {
+    return false;
+  }
+  return normalizeProjectWorkspaceCapabilityIds(workspace.enabledCapabilities).includes(capabilityId);
+}
+
+// 描述：
+//
+//   - 将工作区的能力启用状态转换为扁平绑定列表，便于项目设置页与工作流校验复用。
+//
+// Params:
+//
+//   - workspace: 项目目录分组。
+//
+// Returns:
+//
+//   - 工作区能力绑定列表。
+export function resolveWorkspaceCapabilityBindings(
+  workspace: ProjectWorkspaceGroup | null | undefined,
+): WorkspaceCapabilityBinding[] {
+  const workspaceId = String(workspace?.id || "").trim();
+  const enabledSet = new Set(normalizeProjectWorkspaceCapabilityIds(workspace?.enabledCapabilities));
+  return PROJECT_WORKSPACE_CAPABILITY_MANIFESTS.map((manifest) => ({
+    workspaceId,
+    capabilityId: manifest.id,
+    enabled: enabledSet.has(manifest.id),
+  }));
 }
 
 // 描述:
@@ -1518,13 +1697,19 @@ function readProjectWorkspaceGroups(): ProjectWorkspaceGroup[] {
     }
     return parsed
       .filter((item) => item?.id && item?.path)
-      .map((item) => ({
-        id: String(item.id),
-        path: normalizeWorkspacePath(String(item.path)),
-        name: String(item.name || "").trim() || resolveWorkspaceNameFromPath(String(item.path)),
-        dependencyRules: normalizeWorkspaceDependencyRules(item.dependencyRules),
-        updatedAt: String(item.updatedAt || ""),
-      }))
+      .map((item) => {
+        const normalizedCapabilities = normalizeProjectWorkspaceCapabilityIds(item.enabledCapabilities);
+        return {
+          id: String(item.id),
+          path: normalizeWorkspacePath(String(item.path)),
+          name: String(item.name || "").trim() || resolveWorkspaceNameFromPath(String(item.path)),
+          enabledCapabilities: normalizedCapabilities.length > 0
+            ? normalizedCapabilities
+            : inferLegacyProjectWorkspaceCapabilityIds(item as Record<string, unknown>),
+          dependencyRules: normalizeWorkspaceDependencyRules(item.dependencyRules),
+          updatedAt: String(item.updatedAt || ""),
+        };
+      })
       .filter((item) => Boolean(item.path));
   } catch (_err) {
     return [];
@@ -1702,6 +1887,45 @@ export function isAgentSessionPinned(sessionId: string): boolean {
   return readSessionMeta().pinnedIds.includes(sessionId);
 }
 
+// 描述：读取指定会话当前绑定的 AI Provider 标识，确保默认 Provider 调整不会反向污染已存在话题。
+//
+// Params:
+//
+//   - sessionId: 会话 ID。
+//
+// Returns:
+//
+//   - 已绑定的 Provider；未绑定时返回空字符串。
+export function resolveAgentSessionSelectedAiProvider(sessionId: string): string {
+  return String(readSessionMeta().selectedAiProviderBySessionId[sessionId] || "").trim();
+}
+
+// 描述：记录指定会话当前选择的 AI Provider；空值会清理旧绑定，便于在 Provider 失效后回退默认逻辑。
+//
+// Params:
+//
+//   - sessionId: 会话 ID。
+//   - provider: Provider 标识。
+export function rememberAgentSessionSelectedAiProvider(sessionId: string, provider: string) {
+  const meta = readSessionMeta();
+  const normalizedProvider = String(provider || "").trim();
+  if (!normalizedProvider) {
+    delete meta.selectedAiProviderBySessionId[sessionId];
+  } else {
+    meta.selectedAiProviderBySessionId[sessionId] = normalizedProvider;
+  }
+  writeSessionMeta(meta);
+}
+
+// 描述：清理指定会话绑定的 AI Provider，供移除会话或手动重置时复用。
+//
+// Params:
+//
+//   - sessionId: 会话 ID。
+export function clearAgentSessionSelectedAiProvider(sessionId: string) {
+  rememberAgentSessionSelectedAiProvider(sessionId, "");
+}
+
 // 描述：读取指定会话当前绑定的 DCC 软件标识，供建模 Skill 在多软件场景下保持线程级一致性。
 //
 // Params:
@@ -1755,6 +1979,7 @@ export function removeAgentSession(agentKey: AgentKey, sessionId: string) {
   }
   meta.pinnedIds = meta.pinnedIds.filter((id) => id !== sessionId);
   delete meta.renamedTitles[sessionId];
+  delete meta.selectedAiProviderBySessionId[sessionId];
   delete meta.selectedDccSoftwareBySessionId[sessionId];
   writeSessionMeta(meta);
 
@@ -2198,6 +2423,7 @@ export function upsertProjectWorkspaceGroup(path: string): ProjectWorkspaceGroup
       ...hit,
       path: normalizedPath,
       name: hit.name || resolveWorkspaceNameFromPath(normalizedPath),
+      enabledCapabilities: normalizeProjectWorkspaceCapabilityIds(hit.enabledCapabilities),
       dependencyRules: normalizeWorkspaceDependencyRules(hit.dependencyRules),
       updatedAt: now,
     };
@@ -2219,6 +2445,7 @@ export function upsertProjectWorkspaceGroup(path: string): ProjectWorkspaceGroup
     id: `workspace-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     path: normalizedPath,
     name: resolveWorkspaceNameFromPath(normalizedPath),
+    enabledCapabilities: [],
     dependencyRules: [],
     updatedAt: now,
   };
@@ -2281,6 +2508,7 @@ export function updateProjectWorkspaceGroupSettings(
   settings: {
     name: string;
     dependencyRules: string[];
+    enabledCapabilities?: ProjectWorkspaceCapabilityId[];
   },
 ): boolean {
   if (!workspaceId) {
@@ -2292,18 +2520,22 @@ export function updateProjectWorkspaceGroupSettings(
     return false;
   }
 
-  const normalizedRules = normalizeWorkspaceDependencyRules(settings.dependencyRules);
   const groups = readProjectWorkspaceGroups();
   const hit = groups.find((item) => item.id === workspaceId);
   if (!hit) {
     return false;
   }
+  const normalizedRules = normalizeWorkspaceDependencyRules(settings.dependencyRules);
+  const nextEnabledCapabilities = settings.enabledCapabilities
+    ? normalizeProjectWorkspaceCapabilityIds(settings.enabledCapabilities)
+    : normalizeProjectWorkspaceCapabilityIds(hit.enabledCapabilities);
 
   writeProjectWorkspaceGroups(
     groups.map((item) => (item.id === workspaceId
       ? {
         ...item,
         name: trimmedName,
+        enabledCapabilities: nextEnabledCapabilities,
         dependencyRules: normalizedRules,
         updatedAt: new Date().toISOString(),
       }
@@ -2317,10 +2549,12 @@ export function updateProjectWorkspaceGroupSettings(
       workspaceId,
       {
         frontendCodeStructure: {
-          implementationConstraints: [
-            ...normalizedRules.map((item) => `依赖规范：${item}`),
-            ...stableConstraints,
-          ],
+          implementationConstraints: nextEnabledCapabilities.includes("dependency-policy")
+            ? [
+              ...normalizedRules.map((item) => `依赖规范：${item}`),
+              ...stableConstraints,
+            ]
+            : stableConstraints,
         },
       },
       {
@@ -2328,7 +2562,7 @@ export function updateProjectWorkspaceGroupSettings(
         reason: "workspace_settings_sync",
       },
     );
-  } else {
+  } else if (!currentProfile) {
     bootstrapProjectWorkspaceProfile(workspaceId, {
       force: false,
       updatedBy: "workspace_settings",
@@ -2398,6 +2632,7 @@ export function bindProjectSessionWorkspace(sessionId: string, workspaceId: stri
     writeProjectWorkspaceGroups([
       {
         ...hit,
+        enabledCapabilities: normalizeProjectWorkspaceCapabilityIds(hit.enabledCapabilities),
         dependencyRules: normalizeWorkspaceDependencyRules(hit.dependencyRules),
         updatedAt: new Date().toISOString(),
       },
