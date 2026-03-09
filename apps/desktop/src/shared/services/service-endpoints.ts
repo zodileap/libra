@@ -184,7 +184,7 @@ export function buildDesktopBackendBaseUrl(
   return normalizeDesktopBackendBaseUrl(config.baseUrl, "");
 }
 
-// 描述：返回当前桌面端使用的静态更新清单地址；为空时表示应回退到后端 Runtime 更新接口或跳过更新检查。
+// 描述：返回当前桌面端使用的静态更新清单地址；为空时表示跳过桌面端自动更新检查。
 //
 // Params:
 //

@@ -3,42 +3,19 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 
-// 描述：
-//
-//   - 读取 Desktop 客户端源码文件，用于版本更新全流程回归测试。
-//
-// Params:
-//
-//   - relativePath: 基于 apps/desktop 的相对路径。
-//
-// Returns:
-//
-//   - UTF-8 文本内容。
 function readDesktopSource(relativePath) {
   const absolutePath = path.resolve(process.cwd(), relativePath);
   return fs.readFileSync(absolutePath, "utf8");
 }
 
-// 描述：
-//
-//   - 读取仓库根目录源码文件，用于跨端（Desktop + 服务端）联动回归测试。
-//
-// Params:
-//
-//   - relativePath: 基于仓库根目录的相对路径。
-//
-// Returns:
-//
-//   - UTF-8 文本内容。
 function readRepoSource(relativePath) {
   const absolutePath = path.resolve(process.cwd(), "..", "..", relativePath);
   return fs.readFileSync(absolutePath, "utf8");
 }
 
-test("TestDesktopUpdateFlowShouldConnectApiDownloadAndInstall", () => {
+test("TestDesktopUpdateFlowShouldUseOfficialTauriUpdater", () => {
   const appSource = readDesktopSource("src/app.tsx");
   const constantsSource = readDesktopSource("src/shared/constants.ts");
-  const backendApiSource = readDesktopSource("src/shared/services/backend-api.ts");
   const endpointSource = readDesktopSource("src/shared/services/service-endpoints.ts");
   const sidebarSource = readDesktopSource("src/sidebar/index.tsx");
   const userMenuSource = readDesktopSource("src/sidebar/widgets/user-hover-menu.tsx");
@@ -47,52 +24,22 @@ test("TestDesktopUpdateFlowShouldConnectApiDownloadAndInstall", () => {
   const layoutSource = readDesktopSource("src/shell/layout.tsx");
   const tauriSource = readDesktopSource("src-tauri/src/main.rs");
   const tauriCargoSource = readDesktopSource("src-tauri/Cargo.toml");
+  const tauriConfigSource = readDesktopSource("src-tauri/tauri.conf.json");
+  const updaterPubkeySource = readDesktopSource("src-tauri/updater/public.key");
   const rootPackageSource = readRepoSource("package.json");
-  const runtimeApiSource = readRepoSource("services/internal/runtime/api/workflow.go");
-  const runtimeApiServerSource = readRepoSource("services/internal/runtime/api/server.go");
-  const runtimeServiceSource = readRepoSource("services/internal/runtime/service/workflow_service.go");
-  const runtimeSpecsSource = readRepoSource("services/internal/runtime/specs/workflow.go");
 
-  // 描述：
-  //
-  //   - 前端应声明更新命令常量，并通过 App 层串联“静态清单优先，Runtime 回退，再执行下载->安装”流程。
-  assert.match(constantsSource, /GET_DESKTOP_RUNTIME_INFO/);
-  assert.match(constantsSource, /START_DESKTOP_UPDATE_DOWNLOAD/);
+  assert.match(constantsSource, /CHECK_DESKTOP_UPDATE/);
   assert.match(constantsSource, /GET_DESKTOP_UPDATE_STATE/);
-  assert.match(constantsSource, /INSTALL_DOWNLOADED_DESKTOP_UPDATE/);
-  assert.match(appSource, /requestDesktopUpdateCheck/);
-  assert.match(appSource, /checkDesktopUpdateFromManifest/);
   assert.match(appSource, /buildDesktopUpdateManifestUrl/);
   assert.match(appSource, /const desktopUpdateManifestUrl = buildDesktopUpdateManifestUrl\(backendConfig\);/);
-  assert.match(appSource, /const checkDesktopUpdate = useCallback/);
-  assert.match(appSource, /if \(desktopUpdateManifestUrl\) \{/);
-  assert.match(appSource, /if \(!backendEnabled\) \{\s*throw manifestErr;\s*\}/s);
+  assert.match(appSource, /COMMANDS\.CHECK_DESKTOP_UPDATE/);
+  assert.match(appSource, /if \(!desktopUpdateManifestUrl\) \{/);
   assert.match(appSource, /message: t\("未配置可用更新源"\),/);
-  assert.match(appSource, /COMMANDS\.START_DESKTOP_UPDATE_DOWNLOAD/);
-  assert.match(appSource, /COMMANDS\.INSTALL_DOWNLOADED_DESKTOP_UPDATE/);
-  assert.match(appSource, /desktopUpdateState/);
-  assert.match(appSource, /checkDesktopUpdate,/);
-  assert.match(appSource, /installDesktopUpdate,/);
-  assert.match(appSource, /window\.setInterval\(\(\) => \{\s*void syncDesktopUpdateState\(\)\.then\(\(nextState\) => \{/s);
-  assert.match(appSource, /\(\!backendEnabled && !desktopUpdateManifestUrl\) \|\| !user/);
-
-  // 描述：
-  //
-  //   - API 层应同时支持静态 manifest 检查与 runtime workflow 接口检查。
-  assert.match(backendApiSource, /export interface DesktopUpdateCheckResult/);
-  assert.match(backendApiSource, /interface DesktopStaticUpdateManifest/);
-  assert.match(backendApiSource, /requestDesktopUpdateManifest/);
-  assert.match(backendApiSource, /buildDesktopUpdateManifestTarget/);
-  assert.match(backendApiSource, /compareSemverVersion/);
-  assert.match(backendApiSource, /export async function checkDesktopUpdateFromManifest\(/);
-  assert.match(backendApiSource, /manifest\.platforms\?\.\[target\]/);
-  assert.match(backendApiSource, /export async function checkDesktopUpdate\(/);
-  assert.match(backendApiSource, /\/workflow\/v1\/desktop-update\/check/);
+  assert.match(appSource, /nextState\.status === "downloading" \|\| nextState\.status === "installing"/);
+  assert.match(appSource, /发现新版本时将自动下载并安装，完成后自动重启应用。/);
+  assert.match(appSource, /!desktopUpdateManifestUrl \|\| !user/);
   assert.match(endpointSource, /export function buildDesktopUpdateManifestUrl\(/);
 
-  // 描述：
-  //
-  //   - 路由与布局层应透传更新状态，标题栏左侧常驻展示更新入口，并按状态切换检查/安装动作。
   assert.match(routerTypesSource, /desktopUpdateState: DesktopUpdateState;/);
   assert.match(layoutSource, /desktopUpdateState: DesktopUpdateState;/);
   assert.match(layoutSource, /onCheckDesktopUpdate: \(\) => Promise<void>;/);
@@ -105,36 +52,19 @@ test("TestDesktopUpdateFlowShouldConnectApiDownloadAndInstall", () => {
   assert.match(appHeaderSource, /t\("检查更新"\)/);
   assert.match(appHeaderSource, /await onCheckDesktopUpdate\(\);/);
   assert.match(appHeaderSource, /icon="system_update_alt"/);
-  assert.match(appHeaderSource, /await onInstallDesktopUpdate\(\);/);
 
-  // 描述：
-  //
-  //   - Tauri 后端应实现更新状态管理、后台下载和安装命令，并在 invoke_handler 注册。
-  assert.match(tauriSource, /struct DesktopUpdateDownloadRequest/);
-  assert.match(tauriSource, /fn start_desktop_update_download\(/);
-  assert.match(tauriSource, /fn get_desktop_update_state\(/);
-  assert.match(tauriSource, /fn install_downloaded_desktop_update\(/);
-  assert.match(tauriSource, /fn get_desktop_runtime_info\(/);
-  assert.match(tauriSource, /download_desktop_update_package/);
-  assert.match(tauriSource, /open_downloaded_update_installer/);
-  assert.match(tauriSource, /start_desktop_update_download,/);
-  assert.match(tauriSource, /install_downloaded_desktop_update,/);
-  assert.match(tauriCargoSource, /reqwest/);
-  assert.match(tauriCargoSource, /sha2/);
+  assert.match(tauriSource, /use tauri_plugin_updater::UpdaterExt;/);
+  assert.match(tauriSource, /const EMBEDDED_UPDATER_PUBKEY: &str = include_str!\("\.\.\/updater\/public\.key"\);/);
+  assert.match(tauriSource, /fn resolve_embedded_updater_pubkey\(\) -> Option<String>/);
+  assert.match(tauriSource, /async fn check_desktop_update\(/);
+  assert.match(tauriSource, /updater_builder\(\)/);
+  assert.match(tauriSource, /\.download_and_install\(/);
+  assert.match(tauriSource, /app_handle\.restart\(\);/);
+  assert.match(tauriSource, /check_desktop_update,/);
+  assert.match(tauriSource, /tauri_plugin_updater::Builder::new\(\)\.build\(\)/);
+  assert.match(tauriCargoSource, /tauri-plugin-updater/);
+  assert.match(tauriConfigSource, /"createUpdaterArtifacts": true/);
+  assert.match(updaterPubkeySource, /REPLACE_WITH_TAURI_UPDATER_PUBLIC_KEY/);
 
-  // 描述：
-  //
-  //   - Runtime 服务端应提供桌面更新检查接口，支持版本与平台参数。
-  assert.match(runtimeSpecsSource, /type WorkflowDesktopUpdateCheckReq struct/);
-  assert.match(runtimeSpecsSource, /type WorkflowDesktopUpdateCheckResp struct/);
-  assert.match(runtimeApiServerSource, /\/workflow\/v1\/desktop-update\/check/);
-  assert.match(runtimeApiSource, /func \(s \*Server\) handleDesktopUpdateCheck/);
-  assert.match(runtimeServiceSource, /func \(s \*WorkflowService\) CheckDesktopUpdate/);
-  assert.match(runtimeServiceSource, /compareSemverVersion/);
-  assert.match(runtimeServiceSource, /resolveDesktopUpdateDownloadURL/);
-
-  // 描述：
-  //
-  //   - 根目录应提供一键打包命令入口，方便桌面端统一构建与打包。
-  assert.match(rootPackageSource, /"package:desktop": "pnpm --dir apps\/desktop package"/);
+  assert.match(rootPackageSource, /"release:desktop": "bash scripts\/package-desktop-release\.sh"/);
 });

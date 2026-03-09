@@ -44,6 +44,7 @@ use std::time::Duration;
 use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tauri::Emitter;
 use tauri::Manager;
+use tauri_plugin_updater::UpdaterExt;
 
 // ── Tauri 事件名常量 ──────────────────────────────────────────────────
 //
@@ -54,6 +55,7 @@ const EVENT_AGENT_TEXT_STREAM: &str = "agent:text_stream";
 
 /// 描述：智能体后台日志事件名。
 const EVENT_AGENT_LOG: &str = "agent:log";
+const EMBEDDED_UPDATER_PUBKEY: &str = include_str!("../updater/public.key");
 
 #[derive(Serialize, Clone)]
 struct DesktopRuntimeInfoResponse {
@@ -112,6 +114,15 @@ fn desktop_update_state_store() -> &'static Mutex<DesktopUpdateState> {
     })
 }
 
+/// 描述：读取编译进应用的 updater 公钥；若仍是占位内容，则表示构建主机尚未注入真实公钥。
+fn resolve_embedded_updater_pubkey() -> Option<String> {
+    let value = EMBEDDED_UPDATER_PUBKEY.trim();
+    if value.is_empty() || value == "REPLACE_WITH_TAURI_UPDATER_PUBLIC_KEY" {
+        return None;
+    }
+    Some(value.to_string())
+}
+
 /// 描述：将内部桌面更新状态转换为前端可消费结构。
 fn snapshot_desktop_update_state() -> DesktopUpdateStateResponse {
     let fallback = DesktopUpdateState {
@@ -142,6 +153,11 @@ fn set_desktop_update_state(mutator: impl FnOnce(&mut DesktopUpdateState)) {
     if let Ok(mut guard) = desktop_update_state_store().lock() {
         mutator(&mut guard);
     }
+}
+
+/// 描述：将 updater 检查/安装错误归一化为用户可读文案，避免直接暴露底层错误细节。
+fn build_desktop_update_error_message(error: impl std::fmt::Display) -> String {
+    format!("更新失败：{}", error)
 }
 
 /// 描述：标记会话为“用户主动取消”，供执行线程在错误归一阶段识别。
@@ -3397,6 +3413,144 @@ fn resolve_update_file_extension(download_url: &str) -> String {
     "bin".to_string()
 }
 
+/// 描述：基于官方 Tauri updater 检查静态更新清单；命中新版时自动下载、安装并在 macOS/Linux 上重启应用。
+#[tauri::command]
+async fn check_desktop_update(
+    app: tauri::AppHandle,
+    manifest_url: String,
+) -> Result<DesktopUpdateStateResponse, String> {
+    let normalized_url = manifest_url.trim().to_string();
+    if normalized_url.is_empty() {
+        set_desktop_update_state(|state| {
+            state.status = "idle".to_string();
+            state.target_version.clear();
+            state.progress = 0.0;
+            state.message = "未配置可用更新源".to_string();
+            state.download_path = None;
+        });
+        return Ok(snapshot_desktop_update_state());
+    }
+
+    let Some(pubkey) = resolve_embedded_updater_pubkey() else {
+        set_desktop_update_state(|state| {
+            state.status = "failed".to_string();
+            state.target_version.clear();
+            state.progress = 0.0;
+            state.message = "未配置更新签名公钥，请先在构建主机运行发布脚本。".to_string();
+            state.download_path = None;
+        });
+        return Ok(snapshot_desktop_update_state());
+    };
+
+    let current_state = snapshot_desktop_update_state();
+    if current_state.status == "checking"
+        || current_state.status == "downloading"
+        || current_state.status == "installing"
+    {
+        return Ok(current_state);
+    }
+
+    set_desktop_update_state(|state| {
+        state.status = "checking".to_string();
+        state.progress = 0.0;
+        state.target_version.clear();
+        state.message = "正在检查更新...".to_string();
+        state.download_path = None;
+    });
+
+    let update = app
+        .updater_builder()
+        .pubkey(pubkey)
+        .endpoints(vec![normalized_url])
+        .build()
+        .map_err(build_desktop_update_error_message)?
+        .check()
+        .await
+        .map_err(build_desktop_update_error_message)?;
+
+    let Some(update) = update else {
+        set_desktop_update_state(|state| {
+            state.status = "idle".to_string();
+            state.progress = 0.0;
+            state.target_version.clear();
+            state.message = "当前已是最新版本".to_string();
+            state.download_path = None;
+        });
+        return Ok(snapshot_desktop_update_state());
+    };
+
+    let target_version = update.version.clone();
+    set_desktop_update_state(|state| {
+        state.status = "downloading".to_string();
+        state.target_version = target_version.clone();
+        state.progress = 0.0;
+        state.message = format!("发现新版本 {}，开始下载更新包。", target_version);
+        state.download_path = None;
+    });
+
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut downloaded_bytes: u64 = 0;
+        let install_result = update
+            .download_and_install(
+                |chunk_length, content_length| {
+                    downloaded_bytes += chunk_length as u64;
+                    let progress = content_length
+                        .map(|total| {
+                            if total > 0 {
+                                (downloaded_bytes as f64 / total as f64) * 100.0
+                            } else {
+                                0.0
+                            }
+                        })
+                        .unwrap_or(0.0);
+                    set_desktop_update_state(|state| {
+                        state.status = "downloading".to_string();
+                        state.progress = progress.clamp(0.0, 100.0);
+                        state.message = if let Some(total) = content_length {
+                            format!("更新下载中（{downloaded_bytes}/{total}）")
+                        } else {
+                            "更新下载中".to_string()
+                        };
+                    });
+                },
+                || {
+                    set_desktop_update_state(|state| {
+                        state.status = "installing".to_string();
+                        state.progress = 100.0;
+                        state.message = "更新下载完成，正在安装...".to_string();
+                    });
+                },
+            )
+            .await;
+
+        match install_result {
+            Ok(()) => {
+                set_desktop_update_state(|state| {
+                    state.status = "installing".to_string();
+                    state.progress = 100.0;
+                    state.message = "更新已安装，应用即将重启。".to_string();
+                    state.download_path = None;
+                });
+                #[cfg(not(target_os = "windows"))]
+                {
+                    app_handle.restart();
+                }
+            }
+            Err(error) => {
+                set_desktop_update_state(|state| {
+                    state.status = "failed".to_string();
+                    state.progress = 0.0;
+                    state.message = build_desktop_update_error_message(error);
+                    state.download_path = None;
+                });
+            }
+        }
+    });
+
+    Ok(snapshot_desktop_update_state())
+}
+
 /// 描述：构建更新包下载路径，按目标版本和下载地址生成稳定文件名。
 fn resolve_update_download_path(version: &str, download_url: &str) -> Result<PathBuf, String> {
     let updates_root = env::temp_dir().join("libra-desktop-updates");
@@ -3646,6 +3800,10 @@ fn main() {
     tauri::Builder::default()
         .setup(|app| {
             apply_main_window_effects(app.handle());
+            #[cfg(desktop)]
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())
+                .expect("failed to initialize updater plugin");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -3675,6 +3833,7 @@ fn main() {
             inspect_project_workspace_profile_seed,
             approve_agent_action,
             get_desktop_runtime_info,
+            check_desktop_update,
             start_desktop_update_download,
             get_desktop_update_state,
             install_downloaded_desktop_update,

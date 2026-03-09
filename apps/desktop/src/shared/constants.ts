@@ -50,6 +50,7 @@ export const COMMANDS = {
   INSTALL_APIFOX_MCP_RUNTIME: "install_apifox_mcp_runtime",
   UNINSTALL_APIFOX_MCP_RUNTIME: "uninstall_apifox_mcp_runtime",
   GET_DESKTOP_RUNTIME_INFO: "get_desktop_runtime_info",
+  CHECK_DESKTOP_UPDATE: "check_desktop_update",
   START_DESKTOP_UPDATE_DOWNLOAD: "start_desktop_update_download",
   GET_DESKTOP_UPDATE_STATE: "get_desktop_update_state",
   INSTALL_DOWNLOADED_DESKTOP_UPDATE: "install_downloaded_desktop_update",

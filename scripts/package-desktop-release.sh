@@ -5,50 +5,37 @@ ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 DESKTOP_DIR="$ROOT_DIR/apps/desktop"
 TAURI_DIR="$DESKTOP_DIR/src-tauri"
 BUNDLE_DIR="$TAURI_DIR/target/release/bundle"
+RELEASES_DIR="$ROOT_DIR/releases"
+PUBLIC_KEY_DEST="$TAURI_DIR/updater/public.key"
+PRIVATE_KEY_PATH="${TAURI_UPDATER_PRIVATE_KEY_PATH:-$HOME/.tauri/libra-desktop-updater.key}"
+PUBLIC_KEY_PATH="${PRIVATE_KEY_PATH}.pub"
 
-COPY_TO_ROOT=""
-TARGET_VERSION=""
-SYNC_ONLY=0
-declare -a TAURI_BUILD_ARGS=()
-
-# 描述：
-#
-#   - 输出脚本帮助信息，说明版本同步、打包与产物复制的参数语义。
 usage() {
   cat <<'EOF'
 Usage:
-  ./scripts/package-desktop-release.sh [--version <x.y.z>] [--sync-only] [--copy-to <downloads-root>] [-- <extra tauri build args>]
+  ./scripts/package-desktop-release.sh <x.y.z>
 
 Description:
-  Sync Libra Desktop version files and optionally build release bundles with `tauri build`.
+  1. Sync Libra Desktop version files to the requested release version
+  2. Generate or reuse the official Tauri updater signing key
+  3. Sync the updater public key into src-tauri/updater/public.key
+  4. Run `tauri build` to produce:
+     - full install bundles (for example .dmg)
+     - updater artifacts (for example .app.tar.gz + .sig)
+  5. Stage upload-ready folders under:
+     releases/<version>/<platform>/
 
-  When `--version` is provided, the script will update these files before validation:
-    - package.json
-    - apps/desktop/package.json
-    - apps/desktop/src-tauri/tauri.conf.json
-    - apps/desktop/src-tauri/Cargo.toml
-
-  If `--copy-to` is provided, bundled artifacts will be copied to:
-    <downloads-root>/<version>/
-
-  The script does not generate or upload latest.json.
+Notes:
+  - This script does not upload files
+  - This script does not generate latest.json
+  - Upload the staged platform folder to your update server manually after packaging
 
 Examples:
-  ./scripts/package-desktop-release.sh
-  ./scripts/package-desktop-release.sh --version 0.1.1
-  ./scripts/package-desktop-release.sh --version 0.1.1 --sync-only
-  ./scripts/package-desktop-release.sh --version 0.1.1 --copy-to /tmp/libra-updates/downloads
-  ./scripts/package-desktop-release.sh -- --bundles app
+  ./scripts/package-desktop-release.sh 0.1.1
+  pnpm run release:desktop -- 0.1.1
 EOF
 }
 
-# 描述：
-#
-#   - 校验命令是否存在，避免脚本执行到中途才因为缺少依赖失败。
-#
-# Params:
-#
-#   - command_name: 需要检查的命令名。
 require_command() {
   local command_name="$1"
   if ! command -v "$command_name" >/dev/null 2>&1; then
@@ -57,13 +44,6 @@ require_command() {
   fi
 }
 
-# 描述：
-#
-#   - 校验版本号格式是否符合三段式规范，避免把非法版本写入发布文件。
-#
-# Params:
-#
-#   - version: 目标版本号。
 assert_release_version() {
   local version="$1"
   if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -72,30 +52,11 @@ assert_release_version() {
   fi
 }
 
-# 描述：
-#
-#   - 从 package.json 中读取 version 字段。
-#
-# Params:
-#
-#   - file_path: package.json 文件路径。
-#
-# Returns:
-#
-#   - version 字段内容。
 read_package_version() {
   local file_path="$1"
   node -e 'const pkg = require(process.argv[1]); process.stdout.write(String(pkg.version || ""));' "$file_path"
 }
 
-# 描述：
-#
-#   - 将 package.json 的 version 字段更新为指定版本并保留 JSON 缩进。
-#
-# Params:
-#
-#   - file_path: package.json 文件路径。
-#   - version: 目标版本号。
 write_package_version() {
   local file_path="$1"
   local version="$2"
@@ -109,30 +70,11 @@ write_package_version() {
   ' "$file_path" "$version"
 }
 
-# 描述：
-#
-#   - 从 tauri.conf.json 中读取 version 字段。
-#
-# Params:
-#
-#   - file_path: tauri.conf.json 文件路径。
-#
-# Returns:
-#
-#   - version 字段内容。
 read_tauri_version() {
   local file_path="$1"
   node -e 'const fs = require("fs"); const conf = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(String(conf.version || ""));' "$file_path"
 }
 
-# 描述：
-#
-#   - 将 tauri.conf.json 的 version 字段更新为指定版本。
-#
-# Params:
-#
-#   - file_path: tauri.conf.json 文件路径。
-#   - version: 目标版本号。
 write_tauri_version() {
   local file_path="$1"
   local version="$2"
@@ -146,17 +88,6 @@ write_tauri_version() {
   ' "$file_path" "$version"
 }
 
-# 描述：
-#
-#   - 从 Cargo.toml 的 [package] 段读取 version 字段，避免误读依赖版本。
-#
-# Params:
-#
-#   - file_path: Cargo.toml 文件路径。
-#
-# Returns:
-#
-#   - [package] 段 version 内容。
 read_cargo_version() {
   local file_path="$1"
   node -e '
@@ -184,14 +115,6 @@ read_cargo_version() {
   ' "$file_path"
 }
 
-# 描述：
-#
-#   - 更新 Cargo.toml 的 [package] 段 version 字段，并保留其余配置内容不变。
-#
-# Params:
-#
-#   - file_path: Cargo.toml 文件路径。
-#   - version: 目标版本号。
 write_cargo_version() {
   local file_path="$1"
   local version="$2"
@@ -226,13 +149,6 @@ write_cargo_version() {
   ' "$file_path" "$version"
 }
 
-# 描述：
-#
-#   - 将桌面端相关版本文件统一写入指定版本号，避免手工逐个同步。
-#
-# Params:
-#
-#   - version: 目标版本号。
 sync_desktop_versions() {
   local version="$1"
   write_package_version "$ROOT_DIR/package.json" "$version"
@@ -241,13 +157,6 @@ sync_desktop_versions() {
   write_cargo_version "$TAURI_DIR/Cargo.toml" "$version"
 }
 
-# 描述：
-#
-#   - 读取并校验 Desktop 发布所需的几个版本文件是否一致；一致时返回统一版本号。
-#
-# Returns:
-#
-#   - 对齐后的 Desktop 版本号。
 require_aligned_desktop_version() {
   local root_version desktop_version tauri_version cargo_version
 
@@ -268,8 +177,6 @@ desktop version mismatch detected:
   apps/desktop/package:   $desktop_version
   tauri.conf.json:        $tauri_version
   src-tauri/Cargo.toml:   $cargo_version
-
-Please align the Desktop version before packaging, or rerun with --version <x.y.z>.
 EOF
     exit 1
   fi
@@ -277,166 +184,174 @@ EOF
   printf '%s' "$root_version"
 }
 
-# 描述：
-#
-#   - 收集 Tauri bundle 目录下的安装包与目录产物，供控制台展示和复制逻辑复用。
-#
-# Params:
-#
-#   - bundle_dir: Tauri bundle 输出目录。
-#   - output_ref: 以 nameref 形式接收产物路径列表的数组变量名。
-collect_bundle_artifacts() {
-  local bundle_dir="$1"
-  local -n output_ref="$2"
+ensure_tauri_cli() {
+  if ! pnpm --dir "$DESKTOP_DIR" exec tauri --help >/dev/null 2>&1; then
+    cat >&2 <<EOF
+tauri CLI was not found in apps/desktop.
 
+Before packaging on the build host, run:
+  cd $ROOT_DIR
+  pnpm install
+EOF
+    exit 1
+  fi
+}
+
+ensure_updater_signing_key() {
+  mkdir -p "$(dirname "$PRIVATE_KEY_PATH")"
+  if [[ -f "$PRIVATE_KEY_PATH" && -f "$PUBLIC_KEY_PATH" ]]; then
+    return 0
+  fi
+
+  echo "Generating Tauri updater signing key at $PRIVATE_KEY_PATH"
+  pnpm --dir "$DESKTOP_DIR" exec tauri signer generate --ci -w "$PRIVATE_KEY_PATH"
+
+  if [[ ! -f "$PRIVATE_KEY_PATH" || ! -f "$PUBLIC_KEY_PATH" ]]; then
+    echo "failed to generate updater signing key pair" >&2
+    exit 1
+  fi
+}
+
+sync_updater_public_key() {
+  if [[ ! -f "$PUBLIC_KEY_PATH" ]]; then
+    echo "missing updater public key: $PUBLIC_KEY_PATH" >&2
+    exit 1
+  fi
+
+  mkdir -p "$(dirname "$PUBLIC_KEY_DEST")"
+  cp "$PUBLIC_KEY_PATH" "$PUBLIC_KEY_DEST"
+}
+
+is_release_artifact() {
+  local artifact_name
+  artifact_name="$(basename "$1")"
+  case "$artifact_name" in
+    *.dmg|*.pkg|*.app.tar.gz|*.sig|*.exe|*.msi|*.AppImage|*.appimage|*.deb|*.rpm|*.zip)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+platform_dir_for_artifact() {
+  local artifact_path="$1"
+  local normalized_path
+  normalized_path="${artifact_path#$BUNDLE_DIR/}"
+
+  case "$normalized_path" in
+    dmg/*|macos/*|app/*)
+      printf '%s' "macos"
+      ;;
+    nsis/*|msi/*)
+      printf '%s' "windows"
+      ;;
+    appimage/*|deb/*|rpm/*)
+      printf '%s' "linux"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+collect_release_artifacts() {
+  local -n output_ref="$1"
   output_ref=()
-  if [[ ! -d "$bundle_dir" ]]; then
+  if [[ ! -d "$BUNDLE_DIR" ]]; then
     return 0
   fi
 
   while IFS= read -r -d '' artifact_path; do
-    output_ref+=("$artifact_path")
-  done < <(find "$bundle_dir" -mindepth 2 -maxdepth 2 \( -type f -o -type d \) -print0)
+    if is_release_artifact "$artifact_path"; then
+      output_ref+=("$artifact_path")
+    fi
+  done < <(find "$BUNDLE_DIR" -mindepth 2 -maxdepth 2 \( -type f -o -type d \) -print0)
 }
 
-# 描述：
-#
-#   - 解析命令行参数，统一处理版本同步、仅同步与打包扩展参数。
-#
-# Params:
-#
-#   - "$@": 传入脚本的完整参数。
-parse_args() {
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --version)
-        if [[ $# -lt 2 ]]; then
-          echo "missing value for --version" >&2
-          usage >&2
-          exit 1
-        fi
-        TARGET_VERSION="$2"
-        shift 2
-        ;;
-      --sync-only)
-        SYNC_ONLY=1
-        shift
-        ;;
-      --copy-to)
-        if [[ $# -lt 2 ]]; then
-          echo "missing value for --copy-to" >&2
-          usage >&2
-          exit 1
-        fi
-        COPY_TO_ROOT="$2"
-        shift 2
-        ;;
-      --help|-h)
-        usage
-        exit 0
-        ;;
-      --)
-        shift
-        TAURI_BUILD_ARGS=("$@")
-        break
-        ;;
-      *)
-        echo "unknown option: $1" >&2
-        usage >&2
-        exit 1
-        ;;
-    esac
+stage_release_artifacts() {
+  local version="$1"
+  shift
+  local artifacts=("$@")
+  local release_root="$RELEASES_DIR/$version"
+
+  rm -rf "$release_root"
+  mkdir -p "$release_root"
+
+  for artifact_path in "${artifacts[@]}"; do
+    local platform_dir
+    local artifact_name
+    platform_dir="$(platform_dir_for_artifact "$artifact_path" || true)"
+    if [[ -z "$platform_dir" ]]; then
+      continue
+    fi
+    artifact_name="$(basename "$artifact_path")"
+    mkdir -p "$release_root/$platform_dir"
+    cp -R "$artifact_path" "$release_root/$platform_dir/$artifact_name"
   done
 }
 
-# 描述：
-#
-#   - 校验参数组合是否合法，避免仅同步模式下仍传入构建相关参数造成歧义。
-validate_args() {
-  if [[ "$SYNC_ONLY" == "1" && -n "$COPY_TO_ROOT" ]]; then
-    echo "--copy-to cannot be used with --sync-only" >&2
-    exit 1
-  fi
-  if [[ "$SYNC_ONLY" == "1" && ${#TAURI_BUILD_ARGS[@]} -gt 0 ]]; then
-    echo "extra tauri build args cannot be used with --sync-only" >&2
-    exit 1
-  fi
-}
-
-# 描述：
-#
-#   - 执行脚本主流程：按需同步版本，校验版本一致性，并在非仅同步模式下完成打包与产物复制。
-#
-# Params:
-#
-#   - "$@": 传入脚本的完整参数。
 main() {
-  parse_args "$@"
-  validate_args
+  if [[ $# -ne 1 || "$1" == "--help" || "$1" == "-h" ]]; then
+    usage
+    [[ $# -eq 1 ]] && exit 0
+    [[ $# -eq 0 ]] && exit 1
+    exit 1
+  fi
+
+  local target_version="$1"
+  local aligned_version
+  local -a artifacts
 
   require_command node
-
-  if [[ -n "$TARGET_VERSION" ]]; then
-    assert_release_version "$TARGET_VERSION"
-    sync_desktop_versions "$TARGET_VERSION"
-    echo "Synced Desktop version to $TARGET_VERSION"
-  fi
-
-  local version
-  version="$(require_aligned_desktop_version)"
-
-  if [[ "$SYNC_ONLY" == "1" ]]; then
-    echo "Version sync completed. Skipped packaging."
-    return 0
-  fi
-
   require_command pnpm
+  assert_release_version "$target_version"
+  ensure_tauri_cli
 
-  echo "Packaging Libra Desktop $version"
-  echo "Desktop workspace: $DESKTOP_DIR"
+  sync_desktop_versions "$target_version"
+  aligned_version="$(require_aligned_desktop_version)"
+  ensure_updater_signing_key
+  sync_updater_public_key
 
-  local -a build_cmd
-  build_cmd=(pnpm --dir "$DESKTOP_DIR" exec tauri build)
-  if [[ ${#TAURI_BUILD_ARGS[@]} -gt 0 ]]; then
-    build_cmd+=("${TAURI_BUILD_ARGS[@]}")
-  fi
+  export TAURI_SIGNING_PRIVATE_KEY="$PRIVATE_KEY_PATH"
+  export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
 
-  "${build_cmd[@]}"
+  echo "Packaging Libra Desktop $aligned_version"
+  echo "Updater private key: $PRIVATE_KEY_PATH"
+  echo "Updater public key:  $PUBLIC_KEY_PATH"
+  echo "Embedded pubkey:     $PUBLIC_KEY_DEST"
 
-  local -a artifact_paths
-  collect_bundle_artifacts "$BUNDLE_DIR" artifact_paths
+  pnpm --dir "$DESKTOP_DIR" exec tauri build
 
-  if [[ ${#artifact_paths[@]} -eq 0 ]]; then
-    echo "no bundled artifacts found under $BUNDLE_DIR" >&2
+  collect_release_artifacts artifacts
+  if [[ ${#artifacts[@]} -eq 0 ]]; then
+    echo "no release artifacts found under $BUNDLE_DIR" >&2
     exit 1
   fi
 
+  stage_release_artifacts "$aligned_version" "${artifacts[@]}"
+
   echo
-  echo "Bundled artifacts:"
-  local artifact_path artifact_label
-  for artifact_path in "${artifact_paths[@]}"; do
-    artifact_label="${artifact_path#$BUNDLE_DIR/}"
-    echo "  - $artifact_label"
+  echo "Release artifacts:"
+  for artifact_path in "${artifacts[@]}"; do
+    echo "  - ${artifact_path#$BUNDLE_DIR/}"
   done
 
-  if [[ -n "$COPY_TO_ROOT" ]]; then
-    local target_dir
-    target_dir="$COPY_TO_ROOT/$version"
-    mkdir -p "$target_dir"
-    for artifact_path in "${artifact_paths[@]}"; do
-      cp -R "$artifact_path" "$target_dir/"
-    done
-    echo
-    echo "Copied packaged artifacts to: $target_dir"
-  fi
+  echo
+  echo "Staged upload folders:"
+  for platform_dir in macos windows linux; do
+    if [[ -d "$RELEASES_DIR/$aligned_version/$platform_dir" ]]; then
+      echo "  - $RELEASES_DIR/$aligned_version/$platform_dir"
+    fi
+  done
 
   echo
   echo "Next:"
-  echo "  1. Upload packaged files to the server downloads directory for version $version."
-  echo "  2. Update the server-side latest.json manually."
-  echo "  3. Keep latest.json and uploaded filenames consistent."
+  echo "  1. Copy the needed platform folder to your server downloads/$aligned_version/ directory."
+  echo "  2. For first-time macOS downloads, use files under macos/ ending in .dmg."
+  echo "  3. For updater, use files under macos/ ending in .app.tar.gz and .sig."
+  echo "  4. Update latest.json on the server manually."
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  main "$@"
-fi
+main "$@"

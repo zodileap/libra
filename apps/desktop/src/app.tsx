@@ -5,8 +5,6 @@ import { HashRouter } from "react-router-dom";
 import { DesktopRouter } from "./router";
 import { SetupRequiredPage } from "./modules/common/pages/setup-required-page";
 import {
-	checkDesktopUpdate as requestDesktopUpdateCheck,
-	checkDesktopUpdateFromManifest,
 	clearAuthToken,
 	getSetupStatus,
 	getAuthToken,
@@ -82,15 +80,6 @@ interface GeminiCliHealthResponse {
 	minimum_version: string;
 	bin_path: string;
 	message: string;
-}
-
-// 描述：
-//
-//   - 定义桌面端运行时信息结构，用于更新检查请求参数组装。
-interface DesktopRuntimeInfoResponse {
-	current_version: string;
-	platform: string;
-	arch: string;
 }
 
 // 描述：
@@ -847,131 +836,68 @@ export default function App() {
 		}
 	}, []);
 
-	// 描述：检查桌面端更新；命中新版时自动后台下载。
-	const checkDesktopUpdate = useCallback(async () => {
-		if (checkingDesktopUpdateRef.current) {
-			return;
-		}
-		checkingDesktopUpdateRef.current = true;
-		try {
-			const runtimeInfo = await invoke<DesktopRuntimeInfoResponse>(COMMANDS.GET_DESKTOP_RUNTIME_INFO, {});
-			setDesktopUpdateState((prev) => ({
-				...prev,
-				status: "checking",
-				currentVersion: runtimeInfo.current_version,
-				message: t("正在检查更新..."),
-			}));
-
-			let update: Awaited<ReturnType<typeof requestDesktopUpdateCheck>>;
-			if (desktopUpdateManifestUrl) {
-				try {
-					update = await checkDesktopUpdateFromManifest({
-						manifestUrl: desktopUpdateManifestUrl,
-						platform: runtimeInfo.platform,
-						arch: runtimeInfo.arch,
-						currentVersion: runtimeInfo.current_version,
+		// 描述：检查桌面端更新；命中新版后交由官方 updater 自动下载、安装并重启应用。
+		const checkDesktopUpdate = useCallback(async () => {
+			if (checkingDesktopUpdateRef.current) {
+				return;
+			}
+			checkingDesktopUpdateRef.current = true;
+			try {
+				if (!desktopUpdateManifestUrl) {
+					stopDesktopUpdatePolling();
+					setDesktopUpdateState({
+						status: "idle",
+						currentVersion: desktopUpdateState.currentVersion,
+						targetVersion: "",
+						progress: 0,
+						message: t("未配置可用更新源"),
+						downloadPath: "",
 					});
-				} catch (manifestErr) {
-					if (!backendEnabled) {
-						throw manifestErr;
-					}
-					update = await requestDesktopUpdateCheck({
-						platform: runtimeInfo.platform,
-						arch: runtimeInfo.arch,
-						currentVersion: runtimeInfo.current_version,
-						channel: "stable",
-					});
+					return;
 				}
-			} else if (backendEnabled) {
-				update = await requestDesktopUpdateCheck({
-					platform: runtimeInfo.platform,
-					arch: runtimeInfo.arch,
-					currentVersion: runtimeInfo.current_version,
-					channel: "stable",
-				});
-			} else {
-				stopDesktopUpdatePolling();
-				setDesktopUpdateState({
-					status: "idle",
-					currentVersion: runtimeInfo.current_version,
-					targetVersion: "",
-					progress: 0,
-					message: t("未配置可用更新源"),
-					downloadPath: "",
-				});
-				return;
-			}
 
-			if (!update.hasUpdate || !update.downloadUrl) {
+				const payload = await invoke<DesktopUpdateStateResponse>(
+					COMMANDS.CHECK_DESKTOP_UPDATE,
+					{ manifestUrl: desktopUpdateManifestUrl },
+				);
+				const nextState = mapDesktopUpdateStateResponse(payload);
+				setDesktopUpdateState(nextState);
+				if (nextState.status === "downloading" || nextState.status === "installing") {
+					stopDesktopUpdatePolling();
+					desktopUpdatePollTimerRef.current = window.setInterval(() => {
+						void syncDesktopUpdateState().then((polledState) => {
+							if (polledState.status !== "downloading" && polledState.status !== "installing") {
+								stopDesktopUpdatePolling();
+							}
+						});
+					}, 2000);
+					return;
+				}
 				stopDesktopUpdatePolling();
-				setDesktopUpdateState({
-					status: "idle",
-					currentVersion: runtimeInfo.current_version,
-					targetVersion: update.latestVersion || "",
-					progress: 0,
-					message: update.latestVersion
-						? t("当前已是最新版本")
-						: t("未配置可用更新源"),
-					downloadPath: "",
+			} catch (err) {
+				stopDesktopUpdatePolling();
+				setDesktopUpdateState((prev) => ({
+					...prev,
+					status: "failed",
+					message: t("更新检查失败，请稍后重试。"),
+				}));
+				AriMessage.warning({
+					content: t("更新检查失败，请稍后重试。"),
+					duration: 2800,
 				});
-				return;
+				console.warn("check desktop update failed:", err);
+			} finally {
+				checkingDesktopUpdateRef.current = false;
 			}
+		}, [desktopUpdateManifestUrl, desktopUpdateState.currentVersion, stopDesktopUpdatePolling, syncDesktopUpdateState, t]);
 
-			const downloadState = await invoke<DesktopUpdateStateResponse>(
-				COMMANDS.START_DESKTOP_UPDATE_DOWNLOAD,
-				{
-					request: {
-						version: update.latestVersion,
-						downloadUrl: update.downloadUrl,
-						checksumSha256: update.checksumSha256 || "",
-					},
-				},
-			);
-			setDesktopUpdateState(mapDesktopUpdateStateResponse(downloadState));
-			stopDesktopUpdatePolling();
-			desktopUpdatePollTimerRef.current = window.setInterval(() => {
-				void syncDesktopUpdateState().then((nextState) => {
-					if (nextState.status !== "downloading") {
-						stopDesktopUpdatePolling();
-					}
-				});
-			}, 2000);
-		} catch (err) {
-			stopDesktopUpdatePolling();
-			setDesktopUpdateState((prev) => ({
-				...prev,
-				status: "failed",
-				message: t("更新检查失败，请稍后重试。"),
-			}));
-			AriMessage.warning({
-				content: t("更新检查失败，请稍后重试。"),
+		// 描述：保留安装更新入口；官方 updater 方案下更新已在“检查更新”里自动完成，因此这里只保留兼容提示。
+		const installDesktopUpdate = useCallback(async () => {
+			AriMessage.success({
+				content: t("发现新版本时将自动下载并安装，完成后自动重启应用。"),
 				duration: 2800,
 			});
-			console.warn("check desktop update failed:", err);
-		} finally {
-			checkingDesktopUpdateRef.current = false;
-		}
-	}, [backendEnabled, desktopUpdateManifestUrl, stopDesktopUpdatePolling, syncDesktopUpdateState, t]);
-
-	// 描述：触发桌面端安装更新（打开系统安装器）。
-	const installDesktopUpdate = useCallback(async () => {
-		try {
-			const payload = await invoke<DesktopUpdateStateResponse>(
-				COMMANDS.INSTALL_DOWNLOADED_DESKTOP_UPDATE,
-				{},
-			);
-			setDesktopUpdateState(mapDesktopUpdateStateResponse(payload));
-			AriMessage.success({
-				content: payload.message || t("已启动更新安装器，请按系统提示完成更新。"),
-				duration: 3200,
-			});
-		} catch (_err) {
-			AriMessage.warning({
-				content: t("启动安装失败，请重新下载更新包后重试。"),
-				duration: 3000,
-			});
-		}
-	}, [t]);
+		}, [t]);
 
 	// 描述：打开 Web 初始化页，便于用户在未安装状态下直接进入浏览器完成 setup。
 	const openDesktopSetupUrl = useCallback(async () => {
@@ -985,19 +911,19 @@ export default function App() {
 		}
 	}, [desktopSetupGate.setupUrl, t]);
 
-	useEffect(() => {
-		if ((!backendEnabled && !desktopUpdateManifestUrl) || !user) {
-			stopDesktopUpdatePolling();
-			return;
-		}
-		void checkDesktopUpdate();
-		const timer = window.setInterval(() => {
+		useEffect(() => {
+			if (!desktopUpdateManifestUrl || !user) {
+				stopDesktopUpdatePolling();
+				return;
+			}
 			void checkDesktopUpdate();
-		}, 30 * 60 * 1000);
-		return () => {
-			window.clearInterval(timer);
-		};
-	}, [backendEnabled, desktopUpdateManifestUrl, user, checkDesktopUpdate, stopDesktopUpdatePolling]);
+			const timer = window.setInterval(() => {
+				void checkDesktopUpdate();
+			}, 30 * 60 * 1000);
+			return () => {
+				window.clearInterval(timer);
+			};
+		}, [desktopUpdateManifestUrl, user, checkDesktopUpdate, stopDesktopUpdatePolling]);
 
 	useEffect(() => {
 		return () => {
@@ -1037,7 +963,7 @@ export default function App() {
 			},
 			logout: async () => {
 				if (!backendEnabled) {
-					AriMessage.info({
+					AriMessage.warning({
 						content: t("当前为本地模式，可在设置中接入后端服务。"),
 						duration: 2400,
 					});

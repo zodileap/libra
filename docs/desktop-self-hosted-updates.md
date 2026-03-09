@@ -2,12 +2,10 @@
 
 ## 目标
 
-Libra Desktop 当前支持通过静态 `latest.json` 读取桌面端更新元数据。
+Libra Desktop 当前按 Tauri 官方 updater 标准读取静态 `latest.json`。
 
 - 默认官方更新源：`https://open.zodileap.com/libra/updates/latest.json`
 - 用户可以在 `Settings > General > Update Manifest URL` 中改成自己的私有 HTTPS 地址
-- 如果未填写静态更新源，但已经接入统一后端，则会回退到现有 Runtime 的 `/workflow/v1/desktop-update/check`
-
 这意味着：开源用户不需要先写一个专门的更新后端，只用站点目录 + Nginx 静态托管，就能搭一个可用的私有更新源。
 
 ## 推荐目录结构
@@ -21,6 +19,7 @@ Libra Desktop 当前支持通过静态 `latest.json` 读取桌面端更新元数
         ├── libra-desktop-setup.exe.sig
         ├── libra-desktop.msi
         ├── libra-desktop.msi.sig
+        ├── libra-desktop.dmg
         ├── libra-desktop.app.tar.gz
         ├── libra-desktop.app.tar.gz.sig
         ├── libra-desktop.AppImage
@@ -33,15 +32,18 @@ Libra Desktop 当前支持通过静态 `latest.json` 读取桌面端更新元数
 - 安装包按 `downloads/{version}` 归档
 - `latest.json` 使用 `no-cache`
 - 安装包目录使用 `immutable + 长缓存`
+- `.dmg` 给首次下载安装
+- `.app.tar.gz + .sig` 给 macOS 热更新
 
 ## latest.json 最小示例
 
-下面这个格式兼容 Tauri 静态 JSON 的核心字段，Libra Desktop 当前会读取：
+下面这个格式按 Tauri 静态 JSON 的核心字段组织：
 
 - `version`
 - `notes`
 - `pub_date`
 - `platforms[target].url`
+- `platforms[target].signature`
 
 ```json
 {
@@ -67,8 +69,8 @@ Libra Desktop 当前支持通过静态 `latest.json` 读取桌面端更新元数
 
 说明：
 
-- `signature` 当前文档保留 Tauri 官方静态更新字段，便于后续对齐正式 updater 链路
-- Libra Desktop 当前开源版会直接读取 `url` 作为下载地址
+- `signature` 必须填入 `.sig` 文件内容本身，不是签名文件 URL
+- macOS 热更新 URL 应指向 `.app.tar.gz`，不要指向 `.dmg`
 - 若当前平台缺少对应 `platforms[target]`，桌面端会把它视为“未配置可用更新源”
 
 ## Nginx 建议
@@ -98,20 +100,17 @@ location /libra-updates/downloads/ {
 仓库内置了一个只负责打包的脚本：
 
 ```bash
-pnpm run release:desktop
-```
-
-或者直接：
-
-```bash
-./scripts/package-desktop-release.sh --copy-to /path/to/libra-updates/downloads
+pnpm run release:desktop -- 0.1.1
 ```
 
 它会：
 
 - 校验 Desktop 版本号是否一致
+- 生成或复用官方 signer key
+- 将公钥注入应用源码
 - 执行 `tauri build`
-- 可选把构建产物复制到 `downloads/<version>/`
+- 产出完整安装包和 updater 热更新产物
+- 自动整理成 `releases/<version>/<platform>/` 上传目录
 
 它不会：
 
@@ -123,14 +122,16 @@ pnpm run release:desktop
 
 1. 在 `source` 中更新 Desktop 版本
 2. 在构建主机执行打包脚本
-3. 上传生成好的安装包到服务器 `downloads/<version>/`
-4. 手工更新服务器上的 `latest.json`
+3. 将 `releases/<version>/macos/` 整个目录复制到服务器 `downloads/<version>/` 下
+4. 其中 `.dmg` 供首次下载安装，`.app.tar.gz + .sig` 供 App 内热更新
+5. 手工更新服务器上的 `latest.json`
 
 ## Libra Desktop 当前行为
 
 - 优先读取 `Update Manifest URL`
-- 如果该地址读取失败，且用户已启用统一后端，则回退到 Runtime 更新接口
-- 如果既没有静态更新源，也没有统一后端更新接口，则提示“未配置可用更新源”
+- 命中新版本后，会调用官方 updater 自动下载并安装
+- 安装完成后，应用会自动重启
+- 如果没有静态更新源，则提示“未配置可用更新源”
 
 ## 对开源用户的建议
 

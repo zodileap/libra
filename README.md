@@ -107,26 +107,29 @@ Desktop 的行为是：
 如果你在专门的构建主机上打包 Desktop，可直接运行：
 
 ```bash
-pnpm run release:desktop
-```
-
-如果你希望构建完成后顺手把产物整理到某个 `downloads` 根目录下：
-
-```bash
-./scripts/package-desktop-release.sh --copy-to /path/to/libra-updates/downloads
+pnpm run release:desktop -- 0.1.1
 ```
 
 脚本会：
 
-- 校验 `package.json`、`apps/desktop/package.json`、`tauri.conf.json`、`Cargo.toml` 的 Desktop 版本号是否一致
-- 执行 `tauri build`
-- 可选复制产物到 `downloads/<version>/`
+- 把 `package.json`、`apps/desktop/package.json`、`tauri.conf.json`、`Cargo.toml` 同步到目标版本
+- 生成或复用官方 Tauri updater 签名密钥
+- 将公钥写入 `apps/desktop/src-tauri/updater/public.key`
+- 执行正式 `tauri build`
+- 产出完整安装包和 updater 热更新产物
+- 自动整理成 `releases/<version>/<platform>/` 上传目录
 
 约束：
 
 - 这个脚本不会生成 `latest.json`
 - 这个脚本不会上传服务器文件
-- 服务器上的 `latest.json` 仍需要手工维护或由服务器侧流程维护
+- 服务器上的 `latest.json` 仍需要手工维护
+
+macOS 发布建议：
+
+- 首次下载安装：发布 `.dmg`
+- App 内热更新：发布 `.app.tar.gz` 和对应 `.sig`
+- 实际上传时，直接把 `releases/<version>/macos/` 整个目录复制到服务器 `downloads/<version>/` 下即可
 
 ## 常用命令
 

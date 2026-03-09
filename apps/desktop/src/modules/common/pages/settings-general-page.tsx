@@ -220,7 +220,7 @@ export function SettingsGeneralPage({
 
           <DeskSettingsRow
             title={t("Update Manifest URL")}
-            description={t("默认使用官方静态 latest.json；你也可以改成自己私有部署的 HTTPS 地址。留空时：若已接入后端则回退到 Runtime 更新接口；未接入后端则不检查更新。")}
+            description={t("默认使用官方静态 latest.json；你也可以改成自己私有部署的 HTTPS 地址。留空时将不检查桌面端更新。")}
           >
             <AriInput
               value={backendDraft.updateManifestUrl}

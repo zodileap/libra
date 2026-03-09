@@ -18,4 +18,5 @@ Desktop 主入口（Tauri，macOS/Windows）。
 
 - Desktop 默认静态更新源：`https://open.zodileap.com/libra/updates/latest.json`
 - 用户可在 `Settings > General > Update Manifest URL` 中改成自己的私有 HTTPS 更新源
+- 官方 updater 热更新需要签名产物；macOS 应发布 `.app.tar.gz + .sig`，`.dmg` 仅用于首次下载安装
 - 私有自托管说明见 [../docs/desktop-self-hosted-updates.md](../docs/desktop-self-hosted-updates.md)
