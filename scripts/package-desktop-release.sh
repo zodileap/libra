@@ -220,6 +220,21 @@ sync_updater_public_key() {
 
   mkdir -p "$(dirname "$PUBLIC_KEY_DEST")"
   cp "$PUBLIC_KEY_PATH" "$PUBLIC_KEY_DEST"
+
+  node -e '
+    const fs = require("fs");
+    const tauriConfigPath = process.argv[1];
+    const pubkeyPath = process.argv[2];
+    const pubkey = fs.readFileSync(pubkeyPath, "utf8").trim();
+    const config = JSON.parse(fs.readFileSync(tauriConfigPath, "utf8"));
+    config.plugins ||= {};
+    config.plugins.updater ||= {};
+    config.plugins.updater.pubkey = pubkey;
+    if (!Array.isArray(config.plugins.updater.endpoints) || config.plugins.updater.endpoints.length === 0) {
+      config.plugins.updater.endpoints = ["https://open.zodileap.com/libra/updates/latest.json"];
+    }
+    fs.writeFileSync(tauriConfigPath, `${JSON.stringify(config, null, 2)}\n`);
+  ' "$TAURI_DIR/tauri.conf.json" "$PUBLIC_KEY_PATH"
 }
 
 is_release_artifact() {

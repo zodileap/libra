@@ -64,6 +64,10 @@ test("TestDesktopUpdateFlowShouldUseOfficialTauriUpdater", () => {
   assert.match(tauriSource, /tauri_plugin_updater::Builder::new\(\)\.build\(\)/);
   assert.match(tauriCargoSource, /tauri-plugin-updater/);
   assert.match(tauriConfigSource, /"createUpdaterArtifacts": true/);
+  assert.match(tauriConfigSource, /"plugins": \{/);
+  assert.match(tauriConfigSource, /"updater": \{/);
+  assert.match(tauriConfigSource, /"pubkey": "REPLACE_WITH_TAURI_UPDATER_PUBLIC_KEY"/);
+  assert.match(tauriConfigSource, /"endpoints": \[/);
   assert.match(updaterPubkeySource, /REPLACE_WITH_TAURI_UPDATER_PUBLIC_KEY/);
 
   assert.match(rootPackageSource, /"release:desktop": "bash scripts\/package-desktop-release\.sh"/);
