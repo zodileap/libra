@@ -3458,10 +3458,14 @@ async fn check_desktop_update(
         state.download_path = None;
     });
 
+    let manifest_endpoint = reqwest::Url::parse(&normalized_url)
+        .map_err(build_desktop_update_error_message)?;
+
     let update = app
         .updater_builder()
         .pubkey(pubkey)
-        .endpoints(vec![normalized_url])
+        .endpoints(vec![manifest_endpoint])
+        .map_err(build_desktop_update_error_message)?
         .build()
         .map_err(build_desktop_update_error_message)?
         .check()

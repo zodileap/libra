@@ -322,6 +322,7 @@ main() {
   echo "Updater public key:  $PUBLIC_KEY_PATH"
   echo "Embedded pubkey:     $PUBLIC_KEY_DEST"
 
+  rm -rf "$BUNDLE_DIR"
   pnpm --dir "$DESKTOP_DIR" exec tauri build
 
   collect_release_artifacts artifacts
