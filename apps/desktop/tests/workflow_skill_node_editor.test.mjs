@@ -36,7 +36,7 @@ test("TestWorkflowSkillNodeShouldBeSupportedInTypesStorageAndEditor", () => {
   //   - 存储层应能识别并持久化 skill 节点类型，并在统一工作流提示词中附加技能链路信息。
   assert.match(storageSource, /raw === "skill"/);
   assert.match(storageSource, /node\.type === "skill"/);
-  assert.match(storageSource, /"【技能链路】"/);
+  assert.match(storageSource, /translateDesktopText\("【技能链路】"\)/);
   assert.match(storageSource, /normalizeAgentSkillId/);
 
   // 描述：
@@ -46,41 +46,47 @@ test("TestWorkflowSkillNodeShouldBeSupportedInTypesStorageAndEditor", () => {
   assert.match(editorSource, /skillId: string;/);
   assert.match(editorSource, /skillVersion: string;/);
   assert.match(editorSource, /const addSkillNode = \(\) => \{/);
-  assert.match(editorSource, /<AriButton ghost icon="new_releases" onClick=\{addSkillNode\} \/>/);
+  assert.match(editorSource, /<AriButton[\s\S]*icon="new_releases"[\s\S]*onClick=\{addSkillNode\}[\s\S]*disabled=\{!canEditWorkflow\}[\s\S]*\/>/);
   assert.match(editorSource, /listAgentSkills/);
-  assert.match(editorSource, /label="节点类型"/);
-  assert.match(editorSource, /label="技能编码"/);
+  assert.match(editorSource, /label=\{t\("节点类型"\)\}/);
+  assert.match(editorSource, /label=\{t\("技能编码"\)\}/);
   assert.match(editorSource, /<AriSelect/);
   assert.match(editorSource, /buildSkillSelectOptions/);
+  assert.match(editorSource, /listProjectWorkspaceCapabilityManifests/);
+  assert.match(editorSource, /label=\{t\("必需项目能力"\)\}/);
+  assert.match(editorSource, /label=\{t\("可选项目能力"\)\}/);
+  assert.match(editorSource, /toggleWorkflowEditCapability/);
   assert.doesNotMatch(editorSource, /label="技能版本"/);
   assert.doesNotMatch(editorSource, /buildSkillVersionOptions/);
 });
 
 test("TestFrontendWorkflowShouldUseAgentSkillNames", () => {
   const templateSource = readDesktopSource("src/shared/workflow/templates.ts");
+  const storageSource = readDesktopSource("src/shared/workflow/storage.ts");
 
   // 描述：
   //
-  //   - “前端项目-1”默认工作流应升级为 Agent Skill 编排链路，包含需求分析/数据库设计/接口代码/报告等技能节点。
-  assert.match(templateSource, /name: "前端项目-1（Skill 编排）"/);
-  assert.match(templateSource, /title: "需求分析 Skill"/);
-  assert.match(templateSource, /title: "数据库设计 Skill"/);
-  assert.match(templateSource, /title: "接口代码 Skill"/);
-  assert.match(templateSource, /title: "报告 Skill"/);
+  //   - 默认工作流应只保留“前端项目开发”，并继续复用关键技能节点完成前端交付链路。
+  assert.match(templateSource, /name: translateDesktopText\("前端项目开发"\)/);
   assert.match(templateSource, /skillId: "requirements-analyst"/);
-  assert.match(templateSource, /skillId: "db-designer"/);
-  assert.match(templateSource, /skillId: "api-codegen"/);
-  assert.match(templateSource, /skillId: "report-builder"/);
   assert.match(templateSource, /id: "wf-agent-full-delivery-v1"/);
-  assert.match(templateSource, /name: "完整项目开发（结构化信息）"/);
-  assert.match(templateSource, /title: "理解项目需求"/);
-  assert.match(templateSource, /title: "构建交互契约"/);
-  assert.match(templateSource, /title: "构建 API 与 Mock"/);
-  assert.match(templateSource, /title: "设计前端框架"/);
-  assert.match(templateSource, /title: "实现页面布局"/);
-  assert.match(templateSource, /title: "项目测试"/);
+  assert.match(templateSource, /title: translateDesktopText\("需求分析"\)/);
+  assert.match(templateSource, /title: translateDesktopText\("接口建模"\)/);
+  assert.match(templateSource, /title: translateDesktopText\("前端架构"\)/);
+  assert.match(templateSource, /title: translateDesktopText\("页面实现"\)/);
+  assert.match(templateSource, /title: translateDesktopText\("测试交付"\)/);
   assert.match(templateSource, /apifox-mcp-server@latest/);
   assert.match(templateSource, /skillId: "apifox-model-designer"/);
   assert.match(templateSource, /skillId: "frontend-architect"/);
   assert.match(templateSource, /skillId: "frontend-page-builder"/);
+  assert.doesNotMatch(templateSource, /name: "完整项目开发（结构化信息）"/);
+  assert.doesNotMatch(templateSource, /name: "前端项目-1（Skill 编排）"/);
+  assert.doesNotMatch(templateSource, /name: "前端项目-2"/);
+  assert.doesNotMatch(templateSource, /name: "后端项目"/);
+
+  // 描述：
+  //
+  //   - 已从内置模板添加到注册列表的工作流，不应继续停留在“未注册”模板区。
+  assert.match(storageSource, /const registeredTemplateIdSet = new Set/);
+  assert.match(storageSource, /\.filter\(\(item\) => !registeredTemplateIdSet\.has\(item\.id\)\)/);
 });

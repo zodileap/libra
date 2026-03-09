@@ -36,9 +36,9 @@ test("TestWorkspaceProfileSeedShouldBeInvokedAfterWorkspaceCreate", () => {
   assert.doesNotMatch(agentHomeSource, /frontend_stacks/);
   assert.doesNotMatch(agentHomeSource, /backend_stacks/);
   assert.doesNotMatch(agentHomeSource, /database_stacks/);
-  assert.match(agentHomeSource, /!item\.startsWith\("语言："\)/);
-  assert.match(agentHomeSource, /!item\.startsWith\("包管理器："\)/);
-  assert.match(agentHomeSource, /!item\.startsWith\("构建工具："\)/);
+  assert.match(agentHomeSource, /!item\.startsWith\(t\("语言："\)\)/);
+  assert.match(agentHomeSource, /!item\.startsWith\(t\("包管理器："\)\)/);
+  assert.match(agentHomeSource, /!item\.startsWith\(t\("构建工具："\)\)/);
   assert.match(agentHomeSource, /expectedRevision: profileCurrent\.revision/);
   assert.match(agentHomeSource, /updatedBy: "workspace_seed_bootstrap"/);
   assert.match(agentHomeSource, /reason: "workspace_seed_bootstrap"/);

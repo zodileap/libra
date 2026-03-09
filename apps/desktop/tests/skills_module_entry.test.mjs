@@ -210,8 +210,8 @@ test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
   // 描述：
   //
   //   - MCP 页应包含“已注册/未注册”分区，并将标题、说明和操作统一挂到标题栏 slot。
-  assert.match(mcpPageSource, /DeskSectionTitle title="已注册"/);
-  assert.match(mcpPageSource, /DeskSectionTitle title="未注册"/);
+  assert.match(mcpPageSource, /DeskSectionTitle title=\{t\("已注册"\)\}/);
+  assert.match(mcpPageSource, /DeskSectionTitle title=\{t\("未注册"\)\}/);
   assert.match(mcpPageSource, /DeskPageHeader/);
   assert.match(mcpPageSource, /DeskOverviewCard/);
   assert.match(mcpPageSource, /icon=\{<AriIcon name="hub" \/>\}/);
@@ -230,23 +230,24 @@ test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
   assert.match(mcpPageSource, /renderDccRuntimeEnvRequirementLabel/);
   assert.match(mcpPageSource, /环境变量：MAYA_BIN/);
   assert.match(mcpPageSource, /环境变量：C4D_BIN/);
-  assert.match(mcpPageSource, /label=\"新增 MCP\"/);
+  assert.match(mcpPageSource, /label=\{t\("新增 MCP"\)\}/);
   assert.match(mcpPageSource, /createPortal\(headerNode, headerSlotElement\)/);
-  assert.match(mcpPageSource, /安装 Runtime/);
-  assert.match(mcpPageSource, /label="文档"/);
+  assert.match(mcpPageSource, /t\("安装 Runtime"\)/);
+  assert.match(mcpPageSource, /label=\{t\("文档"\)\}/);
   assert.match(mcpPageSource, /type="text"/);
-  assert.match(mcpPageSource, /content="管理"/);
-  assert.match(mcpPageSource, /aria-label="管理 MCP"/);
+  assert.match(mcpPageSource, /content=\{t\("管理"\)\}/);
+  assert.match(mcpPageSource, /aria-label=\{t\("管理 MCP"\)\}/);
   assert.doesNotMatch(mcpPageSource, /label="刷新"/);
-  assert.match(mcpPageSource, /aria-label="管理模板"/);
-  assert.match(mcpPageSource, /label="安装 Runtime"/);
-  assert.match(mcpPageSource, /label="卸载 Runtime"/);
-  assert.match(mcpPageSource, /label=\{dccRuntimeStatusMap\[managingTemplateItem\.software\]\?\.available \? "校验 Runtime" : "准备 Runtime"\}/);
-  assert.match(mcpPageSource, /aria-label=\{alreadyRegistered \? "模板已添加" : "添加 MCP"\}/);
+  assert.match(mcpPageSource, /aria-label=\{t\("管理模板"\)\}/);
+  assert.match(mcpPageSource, /label=\{t\("安装 Runtime"\)\}/);
+  assert.match(mcpPageSource, /label=\{t\("卸载 Runtime"\)\}/);
+  assert.match(mcpPageSource, /label=\{dccRuntimeStatusMap\[managingTemplateItem\.software\]\?\.available \? t\("校验 Runtime"\) : t\("准备 Runtime"\)\}/);
+  assert.match(mcpPageSource, /aria-label=\{alreadyRegistered \? t\("模板已添加"\) : t\("添加 MCP"\)\}/);
   assert.match(mcpPageSource, /value=\{workspaceId\}/);
-  assert.match(mcpPageSource, /label: "全局（User）"/);
-  assert.match(mcpPageSource, /label="作用域"/);
-  assert.match(mcpPageSource, /当前显示全局 user 级 MCP|当前项目：/);
+  assert.match(mcpPageSource, /label: t\("全局（User）"\)/);
+  assert.match(mcpPageSource, /label=\{t\("作用域"\)\}/);
+  assert.match(mcpPageSource, /t\("已注册 \{\{count\}\} 个；当前项目：\{\{name\}\}"/);
+  assert.match(mcpPageSource, /t\("已注册 \{\{count\}\} 个；当前显示全局 user 级 MCP。"/);
   assert.match(mcpPageSource, /buildDraftFromRegistration/);
 
   // 描述：

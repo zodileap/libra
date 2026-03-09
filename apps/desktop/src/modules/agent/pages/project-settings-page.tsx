@@ -1,21 +1,24 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { AriButton, AriContainer, AriFlex, AriInput, AriTag, AriTypography } from "aries_react";
+import { AriButton, AriContainer, AriFlex, AriInput, AriModal, AriTag, AriTypography } from "aries_react";
 import {
   bootstrapProjectWorkspaceProfile,
   PROJECT_WORKSPACE_GROUPS_UPDATED_EVENT,
   PROJECT_WORKSPACE_PROFILE_UPDATED_EVENT,
   getProjectWorkspaceGroupById,
   getProjectWorkspaceProfile,
+  listProjectWorkspaceCapabilityManifests,
   saveProjectWorkspaceProfile,
   updateProjectWorkspaceGroupSettings,
+  type ProjectWorkspaceCapabilityId,
   type ProjectWorkspaceKnowledgeSection,
   type ProjectWorkspaceProfile,
 } from "../../../shared/data";
 import { MCP_PAGE_PATH } from "../../common/routes";
 import { type McpOverview, listMcpOverview } from "../../common/services/mcps";
 import { type DccRuntimeStatus, checkDccRuntimeStatus, normalizeInvokeError } from "../../../shared/services/dcc-runtime";
+import { translateDesktopText, useDesktopI18n } from "../../../shared/i18n";
 import { useDesktopHeaderSlot } from "../../../widgets/app-header/header-slot-context";
 import { DeskEmptyState, DeskSectionTitle, DeskSettingsRow, DeskStatusText } from "../../../widgets/settings-primitives";
 
@@ -145,7 +148,7 @@ function buildDccSoftwareLabel(software: string): string {
   if (normalized === "c4d") {
     return "C4D";
   }
-  return normalized || "未命名软件";
+  return normalized || translateDesktopText("未命名软件");
 }
 
 // 描述：
@@ -185,12 +188,20 @@ function collectProjectDccSoftware(overview: McpOverview): string[] {
 //
 //   - 面向项目设置页的摘要文案。
 function buildDccRuntimeRequirementSummary(status: DccRuntimeStatus): string {
-  const modeLabel = status.supportsAutoPrepare ? "支持自动准备" : "需手动准备";
+  const modeLabel = status.supportsAutoPrepare
+    ? translateDesktopText("支持自动准备")
+    : translateDesktopText("需手动准备");
   const envLabel = status.requiredEnvKeys.length > 0
-    ? `环境变量 ${status.requiredEnvKeys.join(" / ")}`
-    : "无需额外环境变量";
-  const stateLabel = status.available ? "已连通" : "未就绪";
-  return `${stateLabel}，${modeLabel}，${envLabel}`;
+    ? translateDesktopText("环境变量 {{keys}}", { keys: status.requiredEnvKeys.join(" / ") })
+    : translateDesktopText("无需额外环境变量");
+  const stateLabel = status.available
+    ? translateDesktopText("已连通")
+    : translateDesktopText("未就绪");
+  return translateDesktopText("{{state}}，{{mode}}，{{env}}", {
+    state: stateLabel,
+    mode: modeLabel,
+    env: envLabel,
+  });
 }
 
 // 描述：
@@ -416,7 +427,7 @@ function normalizeDraftKnowledgeSections(
         .map((facetItem, index) => {
           const facet = (facetItem || {}) as { key?: string; label?: string; entries?: string[] };
           const facetKey = String(facet.key || "").trim() || `facet_${index + 1}`;
-          const facetLabel = String(facet.label || "").trim() || `字段 ${index + 1}`;
+          const facetLabel = String(facet.label || "").trim() || translateDesktopText("字段 {{index}}", { index: index + 1 });
           return {
             key: facetKey,
             label: facetLabel,
@@ -478,7 +489,7 @@ function parseProjectProfileDraftFromJson(
     return {
       ok: false,
       draft: baseDraft,
-      message: "JSON 内容为空，请输入有效的结构化信息。",
+      message: translateDesktopText("JSON 内容为空，请输入有效的结构化信息。"),
     };
   }
   try {
@@ -488,7 +499,7 @@ function parseProjectProfileDraftFromJson(
       return {
         ok: false,
         draft: baseDraft,
-        message: "JSON 顶层必须是对象结构。",
+        message: translateDesktopText("JSON 顶层必须是对象结构。"),
       };
     }
     const baseSections = cloneProjectKnowledgeSections(baseDraft.knowledgeSections);
@@ -508,24 +519,27 @@ function parseProjectProfileDraftFromJson(
       message: "",
     };
   } catch (err) {
-    const reason = err instanceof Error ? err.message : "JSON 解析失败";
+    const reason = err instanceof Error ? err.message : translateDesktopText("JSON 解析失败");
     return {
       ok: false,
       draft: baseDraft,
-      message: `JSON 解析失败：${reason}`,
+      message: translateDesktopText("JSON 解析失败：{{reason}}", { reason }),
     };
   }
 }
 
 // 描述：
 //
-//   - 渲染项目设置页面，承载项目名称、依赖规范与结构化项目信息维护。
+//   - 渲染项目设置页面，承载基础信息与项目能力的动态配置面板。
 export function ProjectSettingsPage() {
   const navigate = useNavigate();
+  const { t } = useDesktopI18n();
   const [searchParams] = useSearchParams();
   const headerSlotElement = useDesktopHeaderSlot();
   const [name, setName] = useState("");
+  const [enabledCapabilities, setEnabledCapabilities] = useState<ProjectWorkspaceCapabilityId[]>([]);
   const [dependencyRules, setDependencyRules] = useState<string[]>([]);
+  const [capabilityModalVisible, setCapabilityModalVisible] = useState(false);
   const [workspaceReloadVersion, setWorkspaceReloadVersion] = useState(0);
   const [projectProfileDraft, setProjectProfileDraft] = useState<ProjectProfileDraft>(createEmptyProjectProfileDraft);
   const [projectProfileEditMode, setProjectProfileEditMode] = useState<"form" | "json">("form");
@@ -555,10 +569,25 @@ export function ProjectSettingsPage() {
     }
     return getProjectWorkspaceGroupById(workspaceId);
   }, [workspaceId, workspaceReloadVersion]);
+  // 描述：
+  //
+  //   - 基于当前项目启用状态拆分项目能力清单，便于设置页只渲染已启用能力与弹窗候选项。
+  const capabilityManifests = useMemo(() => listProjectWorkspaceCapabilityManifests(), []);
+  const enabledCapabilityManifests = useMemo(
+    () => capabilityManifests.filter((item) => enabledCapabilities.includes(item.id)),
+    [capabilityManifests, enabledCapabilities],
+  );
+  const disabledCapabilityManifests = useMemo(
+    () => capabilityManifests.filter((item) => !enabledCapabilities.includes(item.id)),
+    [capabilityManifests, enabledCapabilities],
+  );
+  const projectKnowledgeEnabled = enabledCapabilities.includes("project-knowledge");
+  const dependencyPolicyEnabled = enabledCapabilities.includes("dependency-policy");
+  const toolchainIntegrationEnabled = enabledCapabilities.includes("toolchain-integration");
 
   // 描述：
   //
-  //   - 监听目录分组更新事件，确保多话题并行修改项目名称/依赖规范时设置页可见最新值。
+  //   - 监听目录分组更新事件，确保多话题并行修改项目名称、能力绑定或依赖策略时设置页可见最新值。
   useEffect(() => {
     if (!workspaceId) {
       return;
@@ -578,15 +607,17 @@ export function ProjectSettingsPage() {
   useEffect(() => {
     skipAutoSaveRef.current = true;
     setName(workspace?.name || "");
+    setEnabledCapabilities((workspace?.enabledCapabilities || []) as ProjectWorkspaceCapabilityId[]);
     setDependencyRules(workspace?.dependencyRules || []);
-  }, [workspace?.id, workspace?.name, workspace?.dependencyRules]);
+    setCapabilityPickerVisible(false);
+  }, [workspace?.dependencyRules, workspace?.enabledCapabilities, workspace?.id, workspace?.name]);
 
   // 描述：
   //
   //   - 当目标项目切换时加载（或初始化）结构化项目信息草稿。
   useEffect(() => {
     skipProfileAutoSaveRef.current = true;
-    if (!workspaceId || !workspace) {
+    if (!workspaceId || !workspace || !projectKnowledgeEnabled) {
       profileRevisionRef.current = 0;
       setProjectProfileDraft(createEmptyProjectProfileDraft());
       setProjectProfileEditMode("form");
@@ -608,8 +639,12 @@ export function ProjectSettingsPage() {
     setProjectProfileJsonDraft(toProjectProfileDraftJson(nextDraft));
     setProjectProfileJsonDirty(false);
     setProjectProfileJsonStatus("");
-    setProfileSyncStatus(profile ? `结构化信息已加载（v${profile.revision}）` : "结构化信息初始化失败");
-  }, [workspaceId, workspace]);
+    setProfileSyncStatus(
+      profile
+        ? t("结构化信息已加载（v{{revision}}）", { revision: profile.revision })
+        : t("结构化信息初始化失败"),
+    );
+  }, [projectKnowledgeEnabled, workspaceId, workspace]);
 
   // 描述：
   //
@@ -636,6 +671,7 @@ export function ProjectSettingsPage() {
     const timer = window.setTimeout(() => {
       updateProjectWorkspaceGroupSettings(workspaceId, {
         name,
+        enabledCapabilities,
         dependencyRules,
       });
     }, 220);
@@ -643,13 +679,13 @@ export function ProjectSettingsPage() {
     return () => {
       window.clearTimeout(timer);
     };
-  }, [workspaceId, workspace, name, dependencyRules]);
+  }, [dependencyRules, enabledCapabilities, name, workspace, workspaceId]);
 
   // 描述：
   //
   //   - 监听结构化信息草稿变更并自动保存，支持 revision 冲突检测与回放同步。
   useEffect(() => {
-    if (!workspaceId || !workspace) {
+    if (!workspaceId || !workspace || !projectKnowledgeEnabled) {
       return;
     }
     if (skipProfileAutoSaveRef.current) {
@@ -672,7 +708,7 @@ export function ProjectSettingsPage() {
       );
       if (saveResult.ok && saveResult.profile) {
         profileRevisionRef.current = saveResult.profile.revision;
-        setProfileSyncStatus(`结构化信息已保存（v${saveResult.profile.revision}）`);
+        setProfileSyncStatus(t("结构化信息已保存（v{{revision}}）", { revision: saveResult.profile.revision }));
         return;
       }
       if (saveResult.conflict && saveResult.profile) {
@@ -680,7 +716,7 @@ export function ProjectSettingsPage() {
         profileRevisionRef.current = saveResult.profile.revision;
         setProjectProfileDraft(toProjectProfileDraft(saveResult.profile));
         setProjectProfileJsonDirty(false);
-        setProjectProfileJsonStatus("检测到其他会话更新，JSON 已刷新为最新版本。");
+        setProjectProfileJsonStatus(t("检测到其他会话更新，JSON 已刷新为最新版本。"));
       }
       setProfileSyncStatus(saveResult.message);
     }, 320);
@@ -688,13 +724,13 @@ export function ProjectSettingsPage() {
     return () => {
       window.clearTimeout(timer);
     };
-  }, [workspaceId, workspace, projectProfileDraft]);
+  }, [projectKnowledgeEnabled, projectProfileDraft, workspace, workspaceId]);
 
   // 描述：
   //
   //   - 读取当前项目的 workspace 级 MCP 配置，并补充 DCC Runtime 摘要，避免用户必须跳转到 MCP 页面才能判断当前项目缺失的运行时环境。
   useEffect(() => {
-    if (!workspaceId || !workspace?.path) {
+    if (!workspaceId || !workspace?.path || !toolchainIntegrationEnabled) {
       setProjectMcpOverview(createEmptyMcpOverview());
       setProjectMcpStatus("");
       setProjectDccRuntimeStatusMap({});
@@ -702,7 +738,7 @@ export function ProjectSettingsPage() {
     }
     let disposed = false;
     const loadProjectMcpState = async () => {
-      setProjectMcpStatus("正在检查当前项目的 MCP 与 DCC Runtime...");
+      setProjectMcpStatus(t("正在检查当前项目的 MCP 与 DCC Runtime..."));
       try {
         const overview = await listMcpOverview({ workspaceRoot: workspace.path });
         if (disposed) {
@@ -727,8 +763,8 @@ export function ProjectSettingsPage() {
         const enabledDccCount = overview.registered.filter((item) => item.domain === "dcc" && item.enabled).length;
         setProjectMcpStatus(
           enabledDccCount > 0
-            ? `当前项目已启用 ${enabledDccCount} 个 DCC MCP。`
-            : "当前项目尚未启用 DCC MCP，可先在项目 MCP 中选择软件。",
+            ? t("当前项目已启用 {{count}} 个 DCC MCP。", { count: enabledDccCount })
+            : t("当前项目尚未启用 DCC MCP，可先在项目 MCP 中选择软件。"),
         );
       } catch (err) {
         if (disposed) {
@@ -736,14 +772,14 @@ export function ProjectSettingsPage() {
         }
         setProjectMcpOverview(createEmptyMcpOverview());
         setProjectDccRuntimeStatusMap({});
-        setProjectMcpStatus(`项目 MCP 读取失败：${normalizeInvokeError(err)}`);
+        setProjectMcpStatus(t("项目 MCP 读取失败：{{reason}}", { reason: normalizeInvokeError(err) }));
       }
     };
     void loadProjectMcpState();
     return () => {
       disposed = true;
     };
-  }, [workspaceId, workspace?.path]);
+  }, [toolchainIntegrationEnabled, workspaceId, workspace?.path]);
 
   // 描述：
   //
@@ -767,7 +803,7 @@ export function ProjectSettingsPage() {
       setProjectProfileDraft(toProjectProfileDraft(latest));
       setProjectProfileJsonDirty(false);
       setProjectProfileJsonStatus("");
-      setProfileSyncStatus(`结构化信息已同步（v${latest.revision}）`);
+      setProfileSyncStatus(t("结构化信息已同步（v{{revision}}）", { revision: latest.revision }));
     };
 
     window.addEventListener(PROJECT_WORKSPACE_PROFILE_UPDATED_EVENT, onProfileUpdated as EventListener);
@@ -823,16 +859,16 @@ export function ProjectSettingsPage() {
       return "UserResponse: id, name, role";
     }
     if (sectionKey === PROJECT_PROFILE_SECTION_KEYS.interactionContracts && facetKey === "mockCases") {
-      return "/users/list 成功/空数据/鉴权失败";
+      return t("/users/list 成功/空数据/鉴权失败");
     }
     if (sectionKey === PROJECT_PROFILE_SECTION_KEYS.uiInformationArchitecture && facetKey === "pages") {
-      return "用户管理页 / 用户详情页";
+      return t("用户管理页 / 用户详情页");
     }
     if (sectionKey === PROJECT_PROFILE_SECTION_KEYS.uiInformationArchitecture && facetKey === "navigation") {
-      return "侧边栏：仪表盘 / 用户管理 / 系统设置";
+      return t("侧边栏：仪表盘 / 用户管理 / 系统设置");
     }
     if (sectionKey === PROJECT_PROFILE_SECTION_KEYS.uiInformationArchitecture && facetKey === "pageElements") {
-      return "用户管理页：筛选栏 / 数据表格 / 分页器";
+      return t("用户管理页：筛选栏 / 数据表格 / 分页器");
     }
     if (sectionKey === PROJECT_PROFILE_SECTION_KEYS.frontendImplementationArchitecture && facetKey === "directories") {
       return "src/modules/user / src/components/common";
@@ -841,18 +877,18 @@ export function ProjectSettingsPage() {
       sectionKey === PROJECT_PROFILE_SECTION_KEYS.frontendImplementationArchitecture
       && facetKey === "moduleBoundaries"
     ) {
-      return "页面层只编排，不直接写请求细节";
+      return t("页面层只编排，不直接写请求细节");
     }
     if (
       sectionKey === PROJECT_PROFILE_SECTION_KEYS.frontendImplementationArchitecture
       && facetKey === "implementationConstraints"
     ) {
-      return "路由定义统一维护在 src/routes.ts";
+      return t("路由定义统一维护在 src/routes.ts");
     }
     if (sectionKey === PROJECT_PROFILE_SECTION_KEYS.engineeringGuardrails && facetKey === "codingConventions") {
-      return "新增功能必须补充单测";
+      return t("新增功能必须补充单测");
     }
-    return "请输入结构化条目";
+    return t("请输入结构化条目");
   };
 
   // 描述：
@@ -860,7 +896,7 @@ export function ProjectSettingsPage() {
   //   - 基于 section+facet key 生成行标题，确保新分类口径保持统一且可读。
   const buildFacetRowTitle = (sectionTitle: string, facetLabel: string): string => {
     if (!sectionTitle) {
-      return facetLabel || "分类条目";
+      return facetLabel || t("分类条目");
     }
     if (!facetLabel) {
       return sectionTitle;
@@ -882,7 +918,7 @@ export function ProjectSettingsPage() {
       reason: "project_settings_regenerate",
     });
     if (!nextProfile) {
-      setProfileSyncStatus("结构化信息重建失败，请稍后重试。");
+      setProfileSyncStatus(t("结构化信息重建失败，请稍后重试。"));
       setRegeneratingProfile(false);
       return;
     }
@@ -891,7 +927,7 @@ export function ProjectSettingsPage() {
     setProjectProfileDraft(toProjectProfileDraft(nextProfile));
     setProjectProfileJsonDirty(false);
     setProjectProfileJsonStatus("");
-    setProfileSyncStatus(`结构化信息已重建（v${nextProfile.revision}）`);
+    setProfileSyncStatus(t("结构化信息已重建（v{{revision}}）", { revision: nextProfile.revision }));
     setRegeneratingProfile(false);
   };
 
@@ -926,7 +962,7 @@ export function ProjectSettingsPage() {
     setProjectProfileDraft(parseResult.draft);
     setProjectProfileJsonDraft(toProjectProfileDraftJson(parseResult.draft));
     setProjectProfileJsonDirty(false);
-    setProjectProfileJsonStatus("JSON 已应用，结构化信息将自动保存。");
+    setProjectProfileJsonStatus(t("JSON 已应用，结构化信息将自动保存。"));
   };
 
   // 描述：
@@ -935,10 +971,10 @@ export function ProjectSettingsPage() {
   const handleResetProjectProfileJson = () => {
     setProjectProfileJsonDraft(toProjectProfileDraftJson(projectProfileDraft));
     setProjectProfileJsonDirty(false);
-    setProjectProfileJsonStatus("已恢复为当前结构化草稿。");
+    setProjectProfileJsonStatus(t("已恢复为当前结构化草稿。"));
   };
 
-  const projectTitle = String(name || workspace?.name || "").trim() || "未命名项目";
+  const projectTitle = String(name || workspace?.name || "").trim() || t("未命名项目");
 
   // 描述：
   //
@@ -978,6 +1014,48 @@ export function ProjectSettingsPage() {
     navigate(`${MCP_PAGE_PATH}?workspaceId=${encodeURIComponent(workspaceId)}`);
   };
 
+  // 描述：
+  //
+  //   - 启用指定项目能力；能力启用后对应配置面板会立即显示，并通过既有自动保存链路落盘。
+  //
+  // Params:
+  //
+  //   - capabilityId: 目标项目能力 ID。
+  const handleEnableCapability = (capabilityId: ProjectWorkspaceCapabilityId) => {
+    setEnabledCapabilities((current) => {
+      if (current.includes(capabilityId)) {
+        return current;
+      }
+      return [...current, capabilityId];
+    });
+    setCapabilityModalVisible(false);
+  };
+
+  // 描述：
+  //
+  //   - 打开项目能力选择弹窗，仅在仍有可添加能力时展示候选清单。
+  const handleOpenCapabilityModal = () => {
+    setCapabilityModalVisible(true);
+  };
+
+  // 描述：
+  //
+  //   - 关闭项目能力选择弹窗。
+  const handleCloseCapabilityModal = () => {
+    setCapabilityModalVisible(false);
+  };
+
+  // 描述：
+  //
+  //   - 移除指定项目能力；移除后仅隐藏该能力配置面板，不主动删除已持久化的历史数据。
+  //
+  // Params:
+  //
+  //   - capabilityId: 目标项目能力 ID。
+  const handleDisableCapability = (capabilityId: ProjectWorkspaceCapabilityId) => {
+    setEnabledCapabilities((current) => current.filter((item) => item !== capabilityId));
+  };
+
   const projectHeaderNode = (
     <AriFlex
       className="desk-project-settings-header"
@@ -996,7 +1074,7 @@ export function ProjectSettingsPage() {
         <AriButton
           type="default"
           icon="hub"
-          label="项目 MCP"
+          label={t("项目 MCP")}
           size="sm"
           onClick={handleOpenWorkspaceMcpPage}
         />
@@ -1010,8 +1088,8 @@ export function ProjectSettingsPage() {
         {headerSlotElement ? createPortal(projectHeaderNode, headerSlotElement) : null}
         <AriContainer className="desk-settings-shell">
           <DeskEmptyState
-            title="未选择项目"
-            description="请先在侧边栏中选择一个项目，再进入项目设置。"
+            title={t("未选择项目")}
+            description={t("请先在侧边栏中选择一个项目，再进入项目设置。")}
           />
         </AriContainer>
       </AriContainer>
@@ -1022,14 +1100,14 @@ export function ProjectSettingsPage() {
     <AriContainer className="desk-content" showBorderRadius={false}>
       {headerSlotElement ? createPortal(projectHeaderNode, headerSlotElement) : null}
       <AriContainer className="desk-settings-shell">
-        <DeskSectionTitle title="基础信息" />
+        <DeskSectionTitle title={t("基础信息")} />
         <AriContainer className="desk-settings-panel">
           <AriContainer className="desk-project-settings-form" padding={0}>
-            <DeskSettingsRow title="项目名称">
+            <DeskSettingsRow title={t("项目名称")}>
               <AriInput
                 value={name}
                 onChange={setName}
-                placeholder="请输入项目名称"
+                placeholder={t("请输入项目名称")}
                 maxLength={80}
                 minWidth={280}
               />
@@ -1037,115 +1115,220 @@ export function ProjectSettingsPage() {
           </AriContainer>
         </AriContainer>
 
-        <DeskSectionTitle title="依赖规范" />
+        <AriFlex align="center" justify="space-between" space={12} padding={0}>
+          <DeskSectionTitle title={t("项目能力")} />
+          <AriButton
+            type="default"
+            icon="add"
+            label={t("添加项目能力")}
+            size="sm"
+            onClick={handleOpenCapabilityModal}
+          />
+        </AriFlex>
         <AriContainer className="desk-settings-panel">
           <AriContainer className="desk-project-settings-form" padding={0}>
-            <AriContainer padding={0}>
-              <AriInput.TextList
-                value={dependencyRules}
-                onChange={setDependencyRules}
-                itemPlaceholder="node:react@19.1.0"
-                addText="新增规范"
-                allowDrag={false}
-                allowEmpty={false}
-                minWidth={360}
-              />
-            </AriContainer>
-          </AriContainer>
-        </AriContainer>
-
-        <DeskSectionTitle title="DCC / MCP" />
-        <AriContainer className="desk-settings-panel">
-          <AriContainer className="desk-project-settings-form" padding={0}>
-            <DeskSettingsRow
-              title="项目级配置"
-              description="workspace 级配置会覆盖同名 user 级 MCP。"
-            >
-              <AriButton
-                type="default"
-                icon="hub"
-                label="打开项目 MCP"
-                size="sm"
-                onClick={handleOpenWorkspaceMcpPage}
-              />
-            </DeskSettingsRow>
-
-            <DeskSettingsRow title="已启用建模软件">
-              <AriFlex align="center" justify="flex-start" space={8}>
-                {enabledDccRegistrations.length > 0 ? enabledDccRegistrations.map((item) => (
+            {enabledCapabilityManifests.length > 0 ? enabledCapabilityManifests.map((item) => (
+              <DeskSettingsRow
+                key={`${item.id}:enabled`}
+                title={item.title}
+                description={item.description}
+              >
+                <AriFlex align="center" justify="flex-end" space={8} padding={0}>
                   <AriTag
-                    key={`${item.scope}:${item.id}`}
                     bordered
                     size="sm"
                     color="var(--z-color-text-brand)"
                   >
-                    {buildDccSoftwareLabel(item.software)}
+                    {item.kind}
                   </AriTag>
-                )) : (
-                  <AriTypography variant="caption" value="当前项目尚未启用 DCC MCP。" />
-                )}
-              </AriFlex>
-            </DeskSettingsRow>
-
-            <DeskSettingsRow title="可接入软件">
-              <AriFlex align="center" justify="flex-start" space={8}>
-                {dccTemplateItems.length > 0 ? dccTemplateItems.map((item) => (
-                  <AriTag key={item.id} bordered size="sm">
-                    {buildDccSoftwareLabel(item.software)}
-                  </AriTag>
-                )) : (
-                  <AriTypography variant="caption" value="当前没有可用的 DCC 模板。" />
-                )}
-              </AriFlex>
-            </DeskSettingsRow>
-
-            <DeskSettingsRow title="Runtime 要求">
-              <AriContainer padding={0}>
-                {projectDccRuntimeSoftware.length > 0 ? projectDccRuntimeSoftware.map((software) => {
-                  const runtimeStatus = projectDccRuntimeStatusMap[software];
-                  const value = runtimeStatus
-                    ? `${buildDccSoftwareLabel(software)}：${buildDccRuntimeRequirementSummary(runtimeStatus)}`
-                    : `${buildDccSoftwareLabel(software)}：正在读取 Runtime 状态...`;
-                  return (
-                    <AriTypography
-                      key={software}
-                      variant="caption"
-                      value={value}
-                    />
-                  );
-                }) : (
-                  <AriTypography variant="caption" value="当前没有需要检查的 DCC Runtime。" />
-                )}
-              </AriContainer>
-            </DeskSettingsRow>
-
-            <DeskSettingsRow title="接入文档">
-              <AriContainer padding={0}>
-                {dccTemplateItems.length > 0 ? dccTemplateItems.map((item) => (
-                  <AriTypography
-                    key={`${item.id}:docs`}
-                    variant="caption"
-                    value={`${buildDccSoftwareLabel(item.software)}：${item.docsUrl || "未提供接入文档。"}`}
+                  <AriButton
+                    type="default"
+                    icon="delete"
+                    label={t("移除")}
+                    size="sm"
+                    onClick={() => {
+                      handleDisableCapability(item.id);
+                    }}
                   />
-                )) : (
-                  <AriTypography variant="caption" value="当前没有可显示的接入文档。" />
-                )}
-              </AriContainer>
-            </DeskSettingsRow>
-
-            {projectMcpStatus ? <DeskStatusText value={projectMcpStatus} /> : null}
+                </AriFlex>
+              </DeskSettingsRow>
+            )) : (
+              <AriTypography variant="caption" value={t("当前项目尚未启用项目能力。")} />
+            )}
           </AriContainer>
         </AriContainer>
+        <AriModal
+          visible={capabilityModalVisible}
+          title={t("添加项目能力")}
+          onClose={handleCloseCapabilityModal}
+          footer={
+            <AriFlex align="center" justify="flex-end" space={8}>
+              <AriButton
+                type="default"
+                icon="close"
+                label={t("关闭")}
+                size="sm"
+                onClick={handleCloseCapabilityModal}
+              />
+            </AriFlex>
+          }
+        >
+          <AriContainer padding={0}>
+            <AriFlex direction="column" space={12}>
+              {disabledCapabilityManifests.length > 0 ? disabledCapabilityManifests.map((item) => (
+                <AriFlex
+                  key={`capability-modal:${item.id}`}
+                  align="center"
+                  justify="space-between"
+                  space={12}
+                  padding={0}
+                >
+                  <AriContainer padding={0}>
+                    <AriTypography variant="body" value={item.title} />
+                    <AriTypography variant="caption" value={item.description} />
+                  </AriContainer>
+                  <AriButton
+                    type="default"
+                    icon="add"
+                    label={t("启用")}
+                    size="sm"
+                    onClick={() => {
+                      handleEnableCapability(item.id);
+                    }}
+                  />
+                </AriFlex>
+              )) : (
+                <AriTypography variant="caption" value={t("当前没有可添加的项目能力。")} />
+              )}
+            </AriFlex>
+          </AriContainer>
+        </AriModal>
 
-        <DeskSectionTitle title="结构化项目信息" />
+        {dependencyPolicyEnabled ? (
+          <>
+            <DeskSectionTitle title={t("依赖策略")} />
+            <AriContainer className="desk-settings-panel">
+              <AriContainer className="desk-project-settings-form" padding={0}>
+                <AriContainer padding={0}>
+                  <AriInput.TextList
+                    value={dependencyRules}
+                    onChange={setDependencyRules}
+                    itemPlaceholder="node:react@19.1.0"
+                    addText={t("新增规范")}
+                    allowDrag={false}
+                    allowEmpty={false}
+                    minWidth={360}
+                  />
+                </AriContainer>
+              </AriContainer>
+            </AriContainer>
+          </>
+        ) : null}
+
+        {toolchainIntegrationEnabled ? (
+          <>
+            <DeskSectionTitle title={t("工具接入")} />
+            <AriContainer className="desk-settings-panel">
+              <AriContainer className="desk-project-settings-form" padding={0}>
+                <DeskSettingsRow
+                  title={t("项目级配置")}
+                  description={t("workspace 级配置会覆盖同名 user 级 MCP。")}
+                >
+                  <AriButton
+                    type="default"
+                    icon="hub"
+                    label={t("打开项目 MCP")}
+                    size="sm"
+                    onClick={handleOpenWorkspaceMcpPage}
+                  />
+                </DeskSettingsRow>
+
+                <DeskSettingsRow title={t("已启用建模软件")}>
+                  <AriFlex align="center" justify="flex-start" space={8}>
+                    {enabledDccRegistrations.length > 0 ? enabledDccRegistrations.map((item) => (
+                      <AriTag
+                        key={`${item.scope}:${item.id}`}
+                        bordered
+                        size="sm"
+                        color="var(--z-color-text-brand)"
+                      >
+                        {buildDccSoftwareLabel(item.software)}
+                      </AriTag>
+                    )) : (
+                      <AriTypography variant="caption" value={t("当前项目尚未启用 DCC MCP。")} />
+                    )}
+                  </AriFlex>
+                </DeskSettingsRow>
+
+                <DeskSettingsRow title={t("可接入软件")}>
+                  <AriFlex align="center" justify="flex-start" space={8}>
+                    {dccTemplateItems.length > 0 ? dccTemplateItems.map((item) => (
+                      <AriTag key={item.id} bordered size="sm">
+                        {buildDccSoftwareLabel(item.software)}
+                      </AriTag>
+                    )) : (
+                      <AriTypography variant="caption" value={t("当前没有可用的 DCC 模板。")} />
+                    )}
+                  </AriFlex>
+                </DeskSettingsRow>
+
+                <DeskSettingsRow title={t("Runtime 要求")}>
+                  <AriContainer padding={0}>
+                    {projectDccRuntimeSoftware.length > 0 ? projectDccRuntimeSoftware.map((software) => {
+                      const runtimeStatus = projectDccRuntimeStatusMap[software];
+                      const value = runtimeStatus
+                        ? t("{{software}}：{{summary}}", {
+                          software: buildDccSoftwareLabel(software),
+                          summary: buildDccRuntimeRequirementSummary(runtimeStatus),
+                        })
+                        : t("{{software}}：正在读取 Runtime 状态...", { software: buildDccSoftwareLabel(software) });
+                      return (
+                        <AriTypography
+                          key={software}
+                          variant="caption"
+                          value={value}
+                        />
+                      );
+                    }) : (
+                      <AriTypography variant="caption" value={t("当前没有需要检查的 DCC Runtime。")} />
+                    )}
+                  </AriContainer>
+                </DeskSettingsRow>
+
+                <DeskSettingsRow title={t("接入文档")}>
+                  <AriContainer padding={0}>
+                    {dccTemplateItems.length > 0 ? dccTemplateItems.map((item) => (
+                      <AriTypography
+                        key={`${item.id}:docs`}
+                        variant="caption"
+                        value={t("{{software}}：{{docs}}", {
+                          software: buildDccSoftwareLabel(item.software),
+                          docs: item.docsUrl || t("未提供接入文档。"),
+                        })}
+                      />
+                    )) : (
+                      <AriTypography variant="caption" value={t("当前没有可显示的接入文档。")} />
+                    )}
+                  </AriContainer>
+                </DeskSettingsRow>
+
+                {projectMcpStatus ? <DeskStatusText value={projectMcpStatus} /> : null}
+              </AriContainer>
+            </AriContainer>
+          </>
+        ) : null}
+
+        {projectKnowledgeEnabled ? (
+          <>
+            <DeskSectionTitle title={t("项目知识")} />
         <AriContainer className="desk-settings-panel">
           <AriContainer className="desk-project-settings-form" padding={0}>
-            <DeskSettingsRow title="编辑模式">
+            <DeskSettingsRow title={t("编辑模式")}>
               <AriFlex align="center" justify="flex-start" space={8}>
                 <AriButton
                   type={projectProfileEditMode === "form" ? "primary" : "default"}
                   icon="list"
-                  label="分区表单"
+                  label={t("分区表单")}
                   onClick={() => {
                     handleSwitchProjectProfileEditMode("form");
                   }}
@@ -1153,7 +1336,7 @@ export function ProjectSettingsPage() {
                 <AriButton
                   type={projectProfileEditMode === "json" ? "primary" : "default"}
                   icon="code"
-                  label="JSON 高级"
+                  label={t("JSON 高级")}
                   onClick={() => {
                     handleSwitchProjectProfileEditMode("json");
                   }}
@@ -1163,7 +1346,7 @@ export function ProjectSettingsPage() {
 
             {projectProfileEditMode === "form" ? (
               <>
-                <DeskSettingsRow title="项目摘要">
+                <DeskSettingsRow title={t("项目摘要")}>
                   <AriInput.TextArea
                     value={projectProfileDraft.summary}
                     onChange={(value: string) => {
@@ -1175,7 +1358,7 @@ export function ProjectSettingsPage() {
                     variant="borderless"
                     rows={3}
                     autoSize={{ minRows: 3, maxRows: 8 }}
-                    placeholder="描述项目目标、核心能力与边界。"
+                    placeholder={t("描述项目目标、核心能力与边界。")}
                     minWidth={360}
                   />
                 </DeskSettingsRow>
@@ -1183,7 +1366,7 @@ export function ProjectSettingsPage() {
                   <AriContainer key={section.key} padding={0}>
                     <AriTypography
                       variant="caption"
-                      value={section.description || `${section.title}：请补充该分类的关键语义。`}
+                      value={section.description || t("{{title}}：请补充该分类的关键语义。", { title: section.title })}
                     />
                     {(section.facets || []).map((facet) => (
                       <DeskSettingsRow
@@ -1196,7 +1379,7 @@ export function ProjectSettingsPage() {
                             handleUpdateKnowledgeSectionFacet(section.key, facet.key, value);
                           }}
                           itemPlaceholder={buildFacetPlaceholder(section.key, facet.key)}
-                          addText="新增"
+                          addText={t("新增")}
                           allowDrag={false}
                           minWidth={360}
                         />
@@ -1207,7 +1390,7 @@ export function ProjectSettingsPage() {
               </>
             ) : (
               <>
-                <DeskSettingsRow title="JSON（高级）">
+                <DeskSettingsRow title={t("JSON（高级）")}>
                   <AriInput.TextArea
                     value={projectProfileJsonDraft}
                     onChange={(value: string) => {
@@ -1218,46 +1401,51 @@ export function ProjectSettingsPage() {
                     variant="borderless"
                     rows={14}
                     autoSize={{ minRows: 12, maxRows: 24 }}
-                    placeholder="输入 ProjectProfile JSON，支持局部字段覆盖。"
+                    placeholder={t("输入 ProjectProfile JSON，支持局部字段覆盖。")}
                     minWidth={360}
                   />
                 </DeskSettingsRow>
-                <DeskSettingsRow title="JSON 操作">
+                <DeskSettingsRow title={t("JSON 操作")}>
                   <AriFlex align="center" justify="flex-start" space={8}>
                     <AriButton
                       color="info"
                       icon="check"
-                      label="应用 JSON"
+                      label={t("应用 JSON")}
                       onClick={handleApplyProjectProfileJson}
                     />
                     <AriButton
                       type="default"
                       icon="undo"
-                      label="恢复草稿"
+                      label={t("恢复草稿")}
                       onClick={handleResetProjectProfileJson}
                     />
                   </AriFlex>
                 </DeskSettingsRow>
                 <AriTypography
                   variant="caption"
-                  value={projectProfileJsonStatus || "提示：JSON 模式会写回同一份项目结构化信息，并自动保存。"}
+                  value={projectProfileJsonStatus || t("提示：JSON 模式会写回同一份项目结构化信息，并自动保存。")}
                 />
               </>
             )}
 
-            <DeskSettingsRow title="维护操作">
+            <DeskSettingsRow title={t("维护操作")}>
               <AriButton
                 color="info"
                 icon="refresh"
-                label={regeneratingProfile ? "重建中..." : "重新生成"}
+                label={regeneratingProfile ? t("重建中...") : t("重新生成")}
                 disabled={regeneratingProfile}
                 onClick={handleRegenerateProjectProfile}
               />
             </DeskSettingsRow>
 
-            <AriTypography variant="caption" value={profileSyncStatus || `结构化版本：v${profileRevisionRef.current || 0}`} />
+            <AriTypography
+              variant="caption"
+              value={profileSyncStatus || t("结构化版本：v{{revision}}", { revision: profileRevisionRef.current || 0 })}
+            />
           </AriContainer>
         </AriContainer>
+          </>
+        ) : null}
       </AriContainer>
     </AriContainer>
   );

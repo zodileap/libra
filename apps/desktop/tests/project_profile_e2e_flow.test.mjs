@@ -38,7 +38,7 @@ test("TestE2ELocalWorkspaceCreateShouldBootstrapProfileAndInjectSessionContext",
   assert.match(sessionSource, /const latestProjectProfile = activeWorkspace\?\.id/);
   assert.match(sessionSource, /getProjectWorkspaceProfile\(activeWorkspace\.id\)/);
   assert.match(sessionSource, /const contextualRequestPrompt = buildSessionContextPrompt\(/);
-  assert.match(sessionSource, /latestProjectProfile,\s*\)/);
+  assert.match(sessionSource, /latestProjectProfile,\s*activeWorkspaceEnabledCapabilities,\s*\)/);
 
   // 描述：
   //
@@ -84,8 +84,8 @@ test("TestE2EProfileUpdateShouldSyncAcrossSessions", () => {
   //
   //   - 项目设置页应监听并回放最新 profile，避免多话题编辑冲突。
   assert.match(settingsSource, /window\.addEventListener\(PROJECT_WORKSPACE_PROFILE_UPDATED_EVENT, onProfileUpdated as EventListener\);/);
-  assert.match(settingsSource, /setProfileSyncStatus\(`结构化信息已同步（v\$\{latest\.revision\}）`\);/);
-  assert.match(dataSource, /结构化信息已被其他会话更新，请刷新后重试。/);
+  assert.match(settingsSource, /setProfileSyncStatus\(t\("结构化信息已同步（v\{\{revision\}\}）", \{ revision: latest\.revision \}\)\);/);
+  assert.match(dataSource, /translateDesktopText\("结构化信息已被其他会话更新，请刷新后重试。"\)/);
 
   // 描述：
   //

@@ -28,7 +28,7 @@ test("TestAgentSidebarHeaderUsesCreateActionInsteadOfRefresh", () => {
   assert.match(source, /icon=\{createButtonHovered \? "note_stack_add_fill" : "note_stack_add"\}/);
   assert.match(source, /onMouseEnter=\{\(\) => \{\s*setCreateButtonHovered\(true\);\s*\}\}/s);
   assert.match(source, /onMouseLeave=\{\(\) => \{\s*setCreateButtonHovered\(false\);\s*\}\}/s);
-  assert.match(source, /label="新增"/);
+  assert.match(source, /label=\{t\("新增"\)\}/);
   assert.match(source, /const handleCreateSession = \(\) => \{/);
   assert.match(source, /navigate\(AGENT_HOME_PATH\);/);
   assert.doesNotMatch(source, /navigate\(`\/agents\/\$\{agentKey\}`\);/);
@@ -64,7 +64,7 @@ test("TestAgentSidebarDeleteActionRequiresSecondConfirm", () => {
   assert.match(source, /setSessions\(\(prev\) => prev\.filter\(\(item\) => item\.id !== sessionId\)\);/);
   assert.match(source, /await updateRuntimeSessionStatus\(user\.id, sessionId, 0\);/);
   assert.match(source, /color=\{pendingDeleteSessionId === item\.id \|\| deletingSessionId === item\.id \? "danger" : "default"\}/);
-  assert.match(source, /label=\{deletingSessionId === item\.id \? "删除中" : pendingDeleteSessionId === item\.id \? "确定" : undefined\}/);
+  assert.match(source, /label=\{deletingSessionId === item\.id \? t\("删除中"\) : pendingDeleteSessionId === item\.id \? t\("确定"\) : undefined\}/);
 });
 
 test("TestAgentSidebarHoverActionsContainPinAndDeleteOnRight", () => {
@@ -99,7 +99,7 @@ test("TestAgentSidebarContextMenuOrderIsPinRenameDelete", () => {
   assert.match(source, /items=\{contextMenuItems\}/);
   assert.match(source, /onContextMenu: \(event(?:: [^)]+)?\) => \{\s*handleOpenSessionContextMenu\(event, item\.id\);\s*\}/s);
   assert.match(source, /key: "pin",[\s\S]*key: "rename",[\s\S]*key: "delete"/);
-  assert.match(source, /label: contextTargetSession\?\.pinned \? "取消固定会话" : "固定会话"/);
+  assert.match(source, /label: contextTargetSession\?\.pinned \? t\("取消固定会话"\) : t\("固定会话"\)/);
   assert.match(source, /onOpenChange=\{\(open(?::\s*boolean)?\) => \{/);
 });
 
@@ -134,10 +134,10 @@ test("TestAgentSidebarShouldUseWorkspaceTreeAndWorkspaceActions", () => {
   assert.match(source, /onExpand=\{setProjectWorkspaceExpandedKeys\}/);
   assert.match(source, /icon="more_horiz"/);
   assert.match(source, /icon="settings"/);
-  assert.match(source, /aria-label="项目设置"/);
-  assert.match(source, /aria-label="在项目内新增话题"/);
+  assert.match(source, /aria-label=\{t\("项目设置"\)\}/);
+  assert.match(source, /aria-label=\{t\("在项目内新增话题"\)\}/);
   assert.match(source, /trigger="manual"/);
-  assert.match(source, /\{ key: "delete", label: "删除", icon: "delete", fillIcon: "delete_fill" \}/);
+  assert.match(source, /\{ key: "delete", label: t\("删除"\), icon: "delete", fillIcon: "delete_fill" \}/);
   assert.doesNotMatch(source, /\{ key: "edit", label: "编辑", icon: "edit" \}/);
 });
 
@@ -161,7 +161,7 @@ test("TestAgentSidebarTitleUsesUnifiedResolver", () => {
   //   - 侧边栏标题应与会话内容区共用统一标题解析逻辑，不再使用“旧会话分支 #id”默认拼接文案。
   assert.match(sidebarSource, /resolveAgentSessionTitle\(agentKey, item\.id\)/);
   assert.match(dataSource, /export function resolveAgentSessionTitle\(agentKey: AgentKey, sessionId\?: string \| null\): string/);
-  assert.match(dataSource, /return "会话详情";/);
+  assert.match(dataSource, /return translateDesktopText\("会话详情"\);/);
 });
 
 test("TestAgentSidebarRenameModalsShouldUseBorderlessInput", () => {
@@ -170,7 +170,7 @@ test("TestAgentSidebarRenameModalsShouldUseBorderlessInput", () => {
   // 描述:
   //
   //   - 侧边栏会话重命名对话框输入框应使用无边框样式；目录重命名弹窗已迁移为项目设置页编辑。
-  assert.match(source, /placeholder="输入新的会话标题"/);
+  assert.match(source, /placeholder=\{t\("输入新的会话标题"\)\}/);
   assert.match(source, /<AriInput\s+variant="borderless"\s+value=\{renameValue\}/s);
   assert.doesNotMatch(source, /workspaceRenameModalVisible/);
   assert.doesNotMatch(source, /placeholder="输入目录展示名称"/);

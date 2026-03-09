@@ -110,8 +110,8 @@ test("TestAgentSidebarShouldExposeUnifiedQuickActions", () => {
   //
   //   - 单智能体模式下，快捷入口仅由统一路由模块声明。
   assert.match(codeRoutesSource, /export const AGENT_SIDEBAR_QUICK_ACTIONS/);
-  assert.match(codeRoutesSource, /label: "智能体设置"/);
-  assert.match(codeRoutesSource, /label: "工作流设置"/);
+  assert.match(codeRoutesSource, /label: translateDesktopText\("智能体设置"\)/);
+  assert.match(codeRoutesSource, /label: translateDesktopText\("工作流设置"\)/);
   assert.match(codeRoutesSource, /path: AGENT_SETTINGS_PATH/);
   assert.match(codeRoutesSource, /path: AGENT_WORKFLOW_PATH/);
   assert.match(routerSource, /path="settings\/agent"/);
