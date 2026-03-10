@@ -1,3 +1,0 @@
-[submodule "apps/desktop/public/assets/icons"]
-	path = apps/desktop/public/assets/icons
-	url = gitea:yoho/icons.git
