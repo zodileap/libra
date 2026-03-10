@@ -7,13 +7,29 @@ import { execFileSync } from "node:child_process";
 
 // 描述：
 //
-//   - 读取仓库根目录中的发布脚本文本，供临时夹具复制与执行测试复用。
+//   - 读取仓库根目录中的跨平台发布脚本文本，供临时夹具复制与执行测试复用。
 //
 // Returns:
 //
 //   - 打包脚本源码文本。
 function readReleaseScriptSource() {
-  const absolutePath = path.resolve(process.cwd(), "..", "..", "scripts/package-desktop-release.sh");
+  const absolutePath = path.resolve(process.cwd(), "..", "..", "scripts/package-desktop-release.mjs");
+  return fs.readFileSync(absolutePath, "utf8");
+}
+
+// 描述：
+//
+//   - 读取仓库中的平台包装脚本文本，确保 Bash 与 Windows CMD 入口都统一委托到跨平台 Node CLI。
+//
+// Params:
+//
+//   - relativePath: 包装脚本相对仓库根目录的路径。
+//
+// Returns:
+//
+//   - 包装脚本源码文本。
+function readWrapperSource(relativePath) {
+  const absolutePath = path.resolve(process.cwd(), "..", "..", relativePath);
   return fs.readFileSync(absolutePath, "utf8");
 }
 
@@ -27,7 +43,7 @@ function readReleaseScriptSource() {
 //   - scriptPath: 临时脚本路径。
 function createReleaseFixture() {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "libra-desktop-release-"));
-  const scriptPath = path.join(rootDir, "scripts/package-desktop-release.sh");
+  const scriptPath = path.join(rootDir, "scripts/package-desktop-release.mjs");
   const rootPackagePath = path.join(rootDir, "package.json");
   const desktopPackagePath = path.join(rootDir, "apps/desktop/package.json");
   const tauriConfigPath = path.join(rootDir, "apps/desktop/src-tauri/tauri.conf.json");
@@ -95,7 +111,7 @@ test("TestDesktopReleaseScriptShouldSyncSpecifiedVersion", () => {
 
   try {
     const output = execFileSync(
-      "bash",
+      process.execPath,
       [fixture.scriptPath, "--version", "1.2.3", "--sync-only"],
       { cwd: fixture.rootDir, encoding: "utf8" },
     );
@@ -121,7 +137,7 @@ test("TestDesktopReleaseScriptShouldRejectNonTripletVersion", () => {
     let hitError = null;
     try {
       execFileSync(
-        "bash",
+        process.execPath,
         [fixture.scriptPath, "--version", "1.2", "--sync-only"],
         { cwd: fixture.rootDir, encoding: "utf8", stdio: "pipe" },
       );
@@ -137,4 +153,15 @@ test("TestDesktopReleaseScriptShouldRejectNonTripletVersion", () => {
   } finally {
     fs.rmSync(fixture.rootDir, { recursive: true, force: true });
   }
+});
+
+test("TestDesktopReleaseWrapperScriptsShouldDelegateToNodeCli", () => {
+  const shellWrapperSource = readWrapperSource("scripts/package-desktop-release.sh");
+  const windowsWrapperSource = readWrapperSource("scripts/package-desktop-release.cmd");
+
+  // 描述：
+  //
+  //   - macOS/Linux 的 Bash 入口和 Windows 的 CMD 入口都应委托给同一个跨平台 Node CLI，避免平台分叉实现。
+  assert.match(shellWrapperSource, /package-desktop-release\.mjs/);
+  assert.match(windowsWrapperSource, /package-desktop-release\.mjs/);
 });

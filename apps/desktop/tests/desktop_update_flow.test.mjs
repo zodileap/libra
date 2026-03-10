@@ -74,5 +74,5 @@ test("TestDesktopUpdateFlowShouldUseOfficialTauriUpdater", () => {
   assert.equal(tauriConfig.plugins?.updater?.pubkey, updaterPubkeySource.trim());
   assert.match(updaterPubkeySource, /\S+/);
 
-  assert.match(rootPackageSource, /"release:desktop": "bash scripts\/package-desktop-release\.sh"/);
+  assert.match(rootPackageSource, /"release:desktop": "node scripts\/package-desktop-release\.mjs"/);
 });

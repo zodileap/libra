@@ -103,6 +103,12 @@ location /libra-updates/downloads/ {
 pnpm run release:desktop -- 0.1.1
 ```
 
+如果你直接在 Windows PowerShell 或 CMD 中调用脚本，请使用：
+
+```powershell
+scripts\package-desktop-release.cmd 0.1.1
+```
+
 它会：
 
 - 校验 Desktop 版本号是否一致

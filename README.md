@@ -110,6 +110,17 @@ Desktop 的行为是：
 pnpm run release:desktop -- 0.1.1
 ```
 
+Windows 原生 shell 可直接执行：
+
+```powershell
+scripts\package-desktop-release.cmd 0.1.1
+```
+
+说明：
+
+- `pnpm run release:desktop` 现在会走跨平台 Node CLI
+- `scripts/package-desktop-release.sh` 仅保留给 Bash 环境复用
+
 脚本会：
 
 - 把 `package.json`、`apps/desktop/package.json`、`tauri.conf.json`、`Cargo.toml` 同步到目标版本
