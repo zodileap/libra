@@ -158,6 +158,59 @@ function resolvePnpmCommand() {
   return { commandName: "pnpm", commandArgs: [] };
 }
 
+function resolvePathEnvKey(env = process.env) {
+  const matched = Object.keys(env).find((key) => key.toLowerCase() === "path");
+  if (matched) {
+    return matched;
+  }
+
+  return process.platform === "win32" ? "Path" : "PATH";
+}
+
+function samePathEntry(left, right) {
+  if (process.platform === "win32") {
+    return left.toLowerCase() === right.toLowerCase();
+  }
+
+  return left === right;
+}
+
+function prependPathEntries(env, entries) {
+  const pathKey = resolvePathEnvKey(env);
+  const currentEntries = String(env[pathKey] || "")
+    .split(path.delimiter)
+    .filter(Boolean);
+  const nextEntries = [...currentEntries];
+
+  for (const entry of entries) {
+    if (!entry || !fs.existsSync(entry)) {
+      continue;
+    }
+
+    if (nextEntries.some((current) => samePathEntry(current, entry))) {
+      continue;
+    }
+
+    nextEntries.unshift(entry);
+  }
+
+  env[pathKey] = nextEntries.join(path.delimiter);
+  return env;
+}
+
+function buildCommandEnv(baseEnv = process.env) {
+  const env = { ...baseEnv };
+  const extraEntries = [];
+
+  if (process.platform === "win32") {
+    extraEntries.push(path.join(os.homedir(), ".cargo", "bin"));
+    extraEntries.push(path.join(env.APPDATA || "", "npm"));
+    extraEntries.push(path.join(env.ProgramFiles || "", "nodejs"));
+  }
+
+  return prependPathEntries(env, extraEntries);
+}
+
 // 描述：
 //
 //   - 统一执行外部命令；在需要时捕获输出，并在可恢复场景下返回失败状态而不是直接抛错。
@@ -187,9 +240,10 @@ function runCommand(commandName, args, options = {}) {
     ? { commandName, commandArgs: [] }
     : commandName;
   const commandArgs = [...resolvedCommand.commandArgs, ...args];
+  const effectiveEnv = buildCommandEnv(env);
   const result = spawnSync(resolvedCommand.commandName, commandArgs, {
     cwd,
-    env,
+    env: effectiveEnv,
     stdio: captureOutput ? ["ignore", "pipe", "pipe"] : "inherit",
     encoding: "utf8",
     shell: false,
@@ -455,6 +509,26 @@ function ensurePnpmCommand() {
   }
 }
 
+function ensureCargoCommand() {
+  const cargoCommand = process.platform === "win32" ? "cargo.exe" : "cargo";
+  const result = runCommand(cargoCommand, ["--version"], {
+    captureOutput: true,
+    allowFailure: true,
+  });
+
+  if (result.status !== 0) {
+    const cargoBinDir = path.join(os.homedir(), ".cargo", "bin");
+    process.stderr.write(`missing required command: cargo
+
+Expected Cargo under:
+  ${cargoBinDir}
+
+If Rust was just installed, restart the terminal or ensure that folder is on PATH.
+`);
+    process.exit(1);
+  }
+}
+
 // 描述：
 //
 //   - 确认构建主机上可以通过 pnpm 调用 Tauri CLI，缺少依赖时给出明确的补救命令。
@@ -678,6 +752,7 @@ function main() {
   }
 
   ensurePnpmCommand();
+  ensureCargoCommand();
   ensureTauriCli();
   ensureUpdaterSigningKey();
   syncUpdaterPublicKey();
