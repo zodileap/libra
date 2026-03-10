@@ -35,6 +35,8 @@ export function DesktopAppHeader({
   const [updateButtonLoading, setUpdateButtonLoading] = useState(false);
   // 描述：根据更新状态切换标题栏按钮行为；按钮视觉统一保持为主色文本“更新”。
   const shouldInstallDesktopUpdate = desktopUpdateState.status === "ready";
+  // 描述：仅在已有可安装更新时显示标题栏更新入口，避免常驻占位。
+  const showUpdateButton = shouldInstallDesktopUpdate;
   const updateButtonDisabled = updateButtonLoading
     || desktopUpdateState.status === "checking"
     || desktopUpdateState.status === "downloading"
@@ -77,24 +79,26 @@ export function DesktopAppHeader({
               aria-label={sidebarToggleLabel}
               onClick={onToggleSidebar}
             />
-            <AriButton
-              type="text"
-              color="primary"
-              label={updateButtonLabel}
-              disabled={updateButtonDisabled}
-              onClick={async () => {
-                setUpdateButtonLoading(true);
-                try {
-                  if (shouldInstallDesktopUpdate) {
-                    await onInstallDesktopUpdate();
-                    return;
+            {showUpdateButton ? (
+              <AriButton
+                type="text"
+                color="brand"
+                label={updateButtonLabel}
+                disabled={updateButtonDisabled}
+                onClick={async () => {
+                  setUpdateButtonLoading(true);
+                  try {
+                    if (shouldInstallDesktopUpdate) {
+                      await onInstallDesktopUpdate();
+                      return;
+                    }
+                    await onCheckDesktopUpdate();
+                  } finally {
+                    setUpdateButtonLoading(false);
                   }
-                  await onCheckDesktopUpdate();
-                } finally {
-                  setUpdateButtonLoading(false);
-                }
-              }}
-            />
+                }}
+              />
+            ) : null}
           </AriFlex>
         </AriContainer>
         <AriContainer

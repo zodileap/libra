@@ -50,9 +50,11 @@ test("TestDesktopUpdateFlowShouldUseOfficialTauriUpdater", () => {
   assert.doesNotMatch(userMenuSource, /const showUpdateButton = desktopUpdateState\.status === "ready";/);
   assert.match(appHeaderSource, /className="desk-app-header-leading-actions"/);
   assert.match(appHeaderSource, /const shouldInstallDesktopUpdate = desktopUpdateState\.status === "ready";/);
+  assert.match(appHeaderSource, /const showUpdateButton = shouldInstallDesktopUpdate;/);
   assert.match(appHeaderSource, /const updateButtonLabel = t\("更新"\);/);
-  assert.match(appHeaderSource, /await onCheckDesktopUpdate\(\);/);
-  assert.match(appHeaderSource, /color="primary"/);
+  assert.match(appHeaderSource, /\{showUpdateButton \? \(/);
+  assert.match(appHeaderSource, /await onInstallDesktopUpdate\(\);/);
+  assert.match(appHeaderSource, /color="brand"/);
   assert.doesNotMatch(appHeaderSource, /icon="system_update_alt"/);
 
   assert.match(tauriSource, /use tauri_plugin_updater::UpdaterExt;/);
