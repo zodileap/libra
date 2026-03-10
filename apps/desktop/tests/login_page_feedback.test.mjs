@@ -37,7 +37,7 @@ test("TestLoginPageShowsInlinePasswordValidationHint", () => {
   assert.match(source, /AriMessage\.warning\(\{/);
   assert.match(source, /if \(normalizedPassword\.length < 6\)/);
   assert.match(source, /密码至少需要 6 位字符/);
-  assert.match(source, /className="desk-inline-status desk-login-password-error"/);
+  assert.match(source, /className="desk-login-password-error"/);
   assert.match(source, /value=\{passwordError\}/);
   assert.match(source, /onChange=\{handlePasswordChange\}/);
 });

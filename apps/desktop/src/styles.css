@@ -82,6 +82,7 @@
   --desk-ai-key-card-actions-width: calc(var(--z-inset) * 9.5);
   --desk-ai-key-card-input-max-width: calc(var(--z-inset) * 20);
   --desk-ai-key-card-surface: color-mix(in srgb, var(--desk-container-bg) 92%, var(--z-color-bg-subtle));
+  --desk-agent-home-shell-width: calc(var(--z-inset) * 34);
   color: var(--desk-root-color);
   background: var(--desk-root-bg);
   font-synthesis: none;
@@ -467,12 +468,6 @@ body {
 .desk-inline-gap {
   height: var(--z-inset-sm);
 }
-
-.desk-inline-status {
-  display: block;
-  margin-top: var(--z-inset-sm);
-}
-
 
 .desk-settings-shell {
   width: min(100%, calc(var(--z-inset) * 68));
@@ -1543,50 +1538,42 @@ body {
   margin-top: 0;
 }
 
-.desk-agent-guide-card {
-  width: 100%;
-  border: var(--desk-border-width) solid var(--z-color-border-glass);
-  background: var(--desk-container-bg);
-}
-
-.desk-project-workspace-onboarding {
+.desk-agent-home-content {
+  padding-left: var(--z-inset);
+  padding-right: var(--z-inset);
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: var(--z-inset);
 }
 
-.desk-project-workspace-onboarding-card {
-  width: min(100%, calc(var(--z-inset) * 34));
-  border: var(--desk-border-width) solid var(--z-color-border-glass);
-  background: var(--desk-container-bg);
-}
-
-.desk-project-workspace-method-list {
-  margin-top: var(--z-inset-sm);
+.desk-agent-home-shell {
+  width: min(100%, var(--desk-agent-home-shell-width));
   display: grid;
-  gap: var(--z-inset-sm);
+  gap: var(--z-inset);
 }
 
-.desk-project-workspace-method-card {
+.desk-agent-home-source-list {
+  display: grid;
+  gap: var(--z-inset);
+}
+
+.desk-agent-home-source-card {
   border: var(--desk-border-width) solid var(--z-color-border-glass);
-  background: var(--z-color-use-bg);
+  background: color-mix(in srgb, var(--desk-container-bg) 92%, var(--z-color-use-bg));
 }
 
-.desk-project-workspace-method-row {
-  width: 100%;
-  gap: var(--z-inset-sm);
-}
-
-.desk-project-workspace-method-main {
-  flex: 1;
+.desk-agent-home-source-copy {
   min-width: 0;
   display: grid;
   gap: var(--z-inset-xs);
 }
 
-.desk-project-workspace-method-action {
-  flex-shrink: 0;
+.desk-agent-home-source-action-row {
+  margin-top: var(--z-inset);
+}
+
+.desk-agent-home-source-button {
+  width: 100%;
 }
 
 .desk-thread {
@@ -1906,13 +1893,40 @@ body {
 .desk-session-empty-state {
   width: 100%;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--z-inset-sm);
+  gap: var(--z-inset);
+}
+
+.desk-session-quick-start-heading {
+  display: grid;
+  gap: var(--z-inset-xs);
 }
 
 .desk-session-empty-card {
   border: var(--desk-border-width) solid var(--z-color-border-glass);
   background: var(--desk-container-bg);
+}
+
+.desk-session-quick-start-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--z-inset-sm);
+}
+
+.desk-session-quick-start-card {
+  min-height: var(--desk-card-min-height);
+  cursor: pointer;
+}
+
+.desk-session-quick-start-main {
+  min-width: 0;
+  display: grid;
+  gap: var(--z-inset-xs);
+}
+
+.desk-session-quick-start-card:hover,
+.desk-session-quick-start-card:focus-visible {
+  border-color: var(--z-color-border-brand);
+  background: color-mix(in srgb, var(--z-color-bg-active) 16%, var(--desk-container-bg));
 }
 
 @keyframes desk-run-step-wave {
@@ -2084,6 +2098,8 @@ body {
 }
 
 .desk-login-password-error {
+  display: block;
+  margin-top: var(--z-inset-sm);
   color: var(--z-color-danger);
 }
 
@@ -2094,6 +2110,8 @@ body {
 }
 
 .desk-status-text {
+  display: block;
+  margin-top: var(--z-inset-sm);
   color: var(--z-color-primary);
 }
 
@@ -2149,7 +2167,11 @@ body {
     grid-template-columns: 1fr;
   }
 
-  .desk-session-empty-state {
+  .desk-session-quick-start-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .desk-agent-home-source-action-row {
     grid-template-columns: 1fr;
   }
 

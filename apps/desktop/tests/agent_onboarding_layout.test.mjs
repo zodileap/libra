@@ -25,44 +25,45 @@ test("TestAgentOnboardingShouldRenderMethodCardsInVerticalOrder", () => {
 
   // 描述：
   //
-  //   - 项目接入区应展示“标题 + 两张方式卡片（本地文件夹在上，Git 仓库在下）”的结构。
-  assert.match(source, /className=\"desk-project-workspace-onboarding-card\"/);
-  assert.match(source, /<AriTypography variant=\"h4\" value=\{t\("选择项目"\)\} \/>/);
-  assert.doesNotMatch(source, /value=\"选择接入方式\"/);
-  assert.match(source, /className=\"desk-project-workspace-method-list\"/);
-  assert.match(source, /className=\"desk-project-workspace-method-card\"/);
-  assert.match(source, /className=\"desk-project-workspace-method-row\"/);
-  assert.match(source, /className=\"desk-project-workspace-method-action\"/);
-  assert.match(source, /flexItem=\{\[\{ index: 0, flex: 1, overflow: \"visible\" \}\]\}/);
-  assert.match(source, /vertical\s+justify=\"center\"\s+align=\"flex-end\"\s+className=\"desk-project-workspace-method-action\"/s);
-  assert.match(source, /<AriTypography variant=\"body\" value=\{t\("本地文件夹"\)\} \/>/);
-  assert.match(source, /label=\{folderPickLoading \? t\("打开中\.\.\."\) : t\("选择"\)\}/);
-  const infoColorMatches = source.match(/color=\"info\"/g) || [];
-  assert.equal(infoColorMatches.length >= 2, true);
-  assert.match(source, /<AriTypography variant=\"body\" value=\{t\("Git 仓库"\)\} \/>/);
-  assert.match(source, /label=\{gitCloneLoading \? t\("开启中\.\.\."\) : t\("开启"\)\}/);
-  assert.match(source, /className=\"desk-project-workspace-git-input\"/);
-  assert.match(source, /className=\"desk-project-workspace-git-input\"[\s\S]*enableHoverFocusEffect=\{false\}/);
+  //   - 新项目页应展示“标题栏 + 居中的本地来源卡片 + 满宽选择按钮”的结构。
+  assert.match(source, /title=\{t\("新项目"\)\}/);
+  assert.match(source, /className=\"desk-content desk-agent-home-content\"/);
+  assert.doesNotMatch(source, /className=\"desk-agent-home-heading\"/);
+  assert.doesNotMatch(source, /value=\{t\("选择本地文件夹"\)\}/);
+  assert.doesNotMatch(source, /选择一个本地文件夹，创建完成后会直接进入新话题。/);
+  assert.match(source, /className=\"desk-agent-home-source-list\"/);
+  assert.match(source, /className=\"desk-agent-home-source-card\"/);
+  assert.match(source, /className=\"desk-agent-home-source-copy\"/);
+  assert.match(source, /className=\"desk-agent-home-source-action-row\"/);
+  assert.match(source, /<AriTypography variant=\"h4\" value=\{t\("本地文件夹"\)\} \/>/);
+  assert.match(source, /className=\"desk-agent-home-source-button\"/);
+  assert.match(source, /label=\{folderPickLoading \? t\("打开中\.\.\."\) : sessionCreating \? t\("开启中\.\.\."\) : t\("选择本地文件夹"\)\}/);
+  assert.match(source, /void handlePickLocalFolder\(\);/);
+  assert.doesNotMatch(source, /setStatus\(t\("已取消目录选择。"\)\);/);
   assert.doesNotMatch(source, /desk-project-workspace-link-btn/);
+  assert.doesNotMatch(source, /已关联项目/);
+  assert.doesNotMatch(source, /Git 仓库/);
+  assert.doesNotMatch(source, /输入 Git 地址/);
+  assert.doesNotMatch(source, /AriModal/);
+  assert.doesNotMatch(source, /setLocalFolderPath/);
+  assert.doesNotMatch(source, /handleOpenLocalFolderProject/);
 
-  const localMethodIndex = source.indexOf("t(\"本地文件夹\")");
-  const gitMethodIndex = source.indexOf("t(\"Git 仓库\")");
-  assert.equal(localMethodIndex >= 0, true);
-  assert.equal(gitMethodIndex >= 0, true);
-  assert.equal(localMethodIndex < gitMethodIndex, true);
-
-  const gitTitleIndex = source.indexOf("t(\"Git 仓库\")");
-  const gitInputIndex = source.indexOf("className=\"desk-project-workspace-git-input\"");
-  assert.equal(gitTitleIndex >= 0, true);
-  assert.equal(gitInputIndex >= 0, true);
-  assert.equal(gitTitleIndex < gitInputIndex, true);
+  const localTitleIndex = source.indexOf("t(\"本地文件夹\")");
+  const localButtonIndex = source.indexOf("className=\"desk-agent-home-source-button\"");
+  assert.equal(localTitleIndex >= 0, true);
+  assert.equal(localButtonIndex >= 0, true);
+  assert.equal(localTitleIndex < localButtonIndex, true);
 
   // 描述：
   //
-  //   - 样式层应提供方法卡片列表和单卡的布局类，保障纵向排列可维护。
-  assert.match(styleSource, /\.desk-project-workspace-method-list/);
-  assert.match(styleSource, /\.desk-project-workspace-method-card/);
-  assert.match(styleSource, /\.desk-project-workspace-method-row/);
-  assert.match(styleSource, /\.desk-project-workspace-method-action/);
+  //   - 样式层应提供主区域居中、单列来源卡片和满宽操作按钮样式，保障结构简洁。
+  assert.match(styleSource, /--desk-agent-home-shell-width:\s*calc\(var\(--z-inset\) \* 34\);/);
+  assert.match(styleSource, /\.desk-agent-home-content\s*\{[\s\S]*display: flex;[\s\S]*align-items: center;[\s\S]*justify-content: center;[\s\S]*\}/);
+  assert.match(styleSource, /\.desk-agent-home-shell/);
+  assert.doesNotMatch(styleSource, /\.desk-agent-home-heading/);
+  assert.match(styleSource, /\.desk-agent-home-source-list/);
+  assert.match(styleSource, /\.desk-agent-home-source-card/);
+  assert.match(styleSource, /\.desk-agent-home-source-action-row/);
+  assert.match(styleSource, /\.desk-agent-home-source-button/);
   assert.doesNotMatch(styleSource, /\.desk-project-workspace-link-btn/);
 });

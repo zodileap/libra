@@ -73,6 +73,7 @@ import { ChatMarkdown } from "../chat-markdown";
 import {
   buildAgentWorkflowSkillExecutionPlan,
   buildAgentWorkflowPrompt,
+  getAgentWorkflowById,
   listAgentWorkflowOverview,
 } from "../../shared/workflow";
 import { normalizeAgentSkillId } from "../../shared/workflow/prompt-guidance";
@@ -202,6 +203,19 @@ const APPROVAL_TOOL_ARGS_PREVIEW_MAX_CHARS = 2000;
 const PLANNING_META_PREFIX = "__libra_planning__:";
 const INITIAL_THINKING_SEGMENT_ROLE = "initial_thinking";
 const DCC_MODELING_SKILL_ID = "dcc-modeling";
+const QUICK_START_CODE_WORKFLOW_ID = "wf-agent-full-delivery-v1";
+
+// 描述:
+//
+//   - 定义新会话页快速开始预设结构；点击卡片后只更新默认执行策略与输入框草稿，不直接发送。
+interface SessionQuickStartPreset {
+  id: string;
+  title: string;
+  description: string;
+  prompt: string;
+  workflowId?: string;
+  skillIds?: string[];
+}
 
 // 描述：
 //
@@ -2055,6 +2069,7 @@ export function SessionPage({
   const [draftWorkflowId, setDraftWorkflowId] = useState("");
   const [draftSkillIds, setDraftSkillIds] = useState<string[]>([]);
   const [availableSkills, setAvailableSkills] = useState<AgentSkillItem[]>([]);
+  const [availableSkillsLoaded, setAvailableSkillsLoaded] = useState(false);
   // 描述：
   //
   //   - 会话中的工作流选择器只展示“已注册”工作流，避免未注册内置模板直接出现在执行策略列表中。
@@ -2062,11 +2077,18 @@ export function SessionPage({
     () => listAgentWorkflowOverview().registered,
     [],
   );
+  // 描述：
+  //
+  //   - 缓存已注册工作流 ID 集合，供快速开始预设做严格注册校验，避免落到其他默认工作流。
+  const registeredWorkflowIdSet = useMemo(
+    () => new Set(workflows.map((item) => item.id)),
+    [workflows],
+  );
   const selectedWorkflow = useMemo<AgentWorkflowDefinition | null>(() => {
     if (selectedSkillIds.length > 0) {
       return null;
     }
-    return workflows.find((item) => item.id === selectedWorkflowId) || workflows[0] || null;
+    return getAgentWorkflowById(selectedWorkflowId) || workflows.find((item) => item.id === selectedWorkflowId) || workflows[0] || null;
   }, [workflows, selectedSkillIds.length, selectedWorkflowId]);
   const workflowMenuItems = useMemo(
     () =>
@@ -2081,6 +2103,32 @@ export function SessionPage({
   const selectedSessionSkills = useMemo(
     () => availableSkills.filter((item) => activeSelectedSkillIds.includes(item.id)),
     [activeSelectedSkillIds, availableSkills],
+  );
+  // 描述：
+  //
+  //   - 缓存已注册技能 ID 集合，供快速开始预设判断技能是否已真正安装可用。
+  const registeredSkillIdSet = useMemo(
+    () => new Set(availableSkills.map((item) => item.id)),
+    [availableSkills],
+  );
+  const sessionQuickStartPresets = useMemo<SessionQuickStartPreset[]>(
+    () => [
+      {
+        id: "quick-code",
+        title: t("前端项目开发"),
+        description: t("默认切到前端项目开发工作流，并填入代码任务草稿。"),
+        prompt: t("请先分析当前项目结构，再根据我的需求修改代码并补齐测试。"),
+        workflowId: QUICK_START_CODE_WORKFLOW_ID,
+      },
+      {
+        id: "quick-modeling",
+        title: t("建模"),
+        description: t("默认启用建模技能，并填入建模任务草稿。"),
+        prompt: t("请先确认本次建模要使用的软件、目标对象和交付格式，再开始执行。"),
+        skillIds: [DCC_MODELING_SKILL_ID],
+      },
+    ],
+    [t],
   );
   const activeUsesDccModelingSkill = useMemo(() => {
     if (selectedSessionSkills.some((item) => isDccModelingSkill(item))) {
@@ -2111,6 +2159,79 @@ export function SessionPage({
     selectedWorkflow?.name,
     selectedSessionSkills,
   ]);
+  // 描述：
+  //
+  //   - 应用快速开始预设：为当前空会话切换默认工作流/技能，并写入一段可继续编辑的输入草稿。
+  //
+  // Params:
+  //
+  //   - preset: 目标快速开始预设。
+  const handleApplyQuickStartPreset = useCallback((preset: SessionQuickStartPreset) => {
+    const nextSkillIds = Array.isArray(preset.skillIds)
+      ? preset.skillIds
+        .map((item) => String(item || "").trim())
+        .filter((item) => item.length > 0)
+      : [];
+    const nextWorkflowId = String(preset.workflowId || "").trim();
+    // 描述：
+    //
+    //   - 快速开始预设必须严格依赖自身声明的工作流或技能；缺失时只提示，不回退到其他默认策略。
+    if (nextSkillIds.length > 0) {
+      if (!availableSkillsLoaded) {
+        const message = t("技能列表加载中...");
+        AriMessage.warning({
+          content: message,
+          duration: 1800,
+        });
+        setStatus(message);
+        return;
+      }
+      const missingSkillIds = nextSkillIds.filter((item) => !registeredSkillIdSet.has(item));
+      if (missingSkillIds.length > 0) {
+        const message = t("当前未注册“{{title}}”所需技能，请先注册后再试。", { title: preset.title });
+        AriMessage.warning({
+          content: message,
+          duration: 2200,
+        });
+        setStatus(message);
+        return;
+      }
+      setSelectedSkillIds(nextSkillIds);
+      setSelectedWorkflowId("");
+    } else {
+      if (!nextWorkflowId || !registeredWorkflowIdSet.has(nextWorkflowId)) {
+        const message = t("当前未注册“{{title}}”所需工作流，请先注册后再试。", { title: preset.title });
+        AriMessage.warning({
+          content: message,
+          duration: 2200,
+        });
+        setStatus(message);
+        return;
+      }
+      setSelectedSkillIds([]);
+      setSelectedWorkflowId(nextWorkflowId);
+    }
+    setInput(preset.prompt);
+    setStatus(t("已选择“{{title}}”预设，可继续补充需求后发送。", { title: preset.title }));
+  }, [availableSkillsLoaded, registeredSkillIdSet, registeredWorkflowIdSet, t]);
+  // 描述：
+  //
+  //   - 为快速开始卡片补充键盘触发能力，确保整卡点击交互在键盘场景下也可用。
+  //
+  // Params:
+  //
+  //   - event: 卡片键盘事件。
+  //   - preset: 目标快速开始预设。
+  const handleQuickStartPresetCardKeyDown = useCallback((
+    event: ReactKeyboardEvent<HTMLElement>,
+    preset: SessionQuickStartPreset,
+  ) => {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+    event.preventDefault();
+    handleApplyQuickStartPreset(preset);
+  }, [handleApplyQuickStartPreset]);
   const workflowSkillSelectOptions = useMemo(
     () => [
       {
@@ -2971,6 +3092,11 @@ export function SessionPage({
           return;
         }
         setAvailableSkills([]);
+      } finally {
+        if (disposed) {
+          return;
+        }
+        setAvailableSkillsLoaded(true);
       }
     };
     void loadSkills();
@@ -5240,20 +5366,30 @@ const handleConfirmWorkflowSkillModal = () => {
           <AriContainer className="desk-thread">
             {messages.length === 0 ? (
               <AriContainer className="desk-session-empty-state">
-                <AriCard className="desk-session-empty-card">
+                <AriContainer className="desk-session-quick-start-heading" padding={0}>
                   <AriTypography variant="h4" value={t("快速开始")} />
-                  <AriTypography
-                    variant="caption"
-                    value={resolvedSessionUiConfig.emptyStatePrimary}
-                  />
-                </AriCard>
-                <AriCard className="desk-session-empty-card">
-                  <AriTypography variant="h4" value={t("提示")} />
-                  <AriTypography
-                    variant="caption"
-                    value={resolvedSessionUiConfig.emptyStateSecondary}
-                  />
-                </AriCard>
+                </AriContainer>
+                <AriContainer className="desk-session-quick-start-grid" padding={0}>
+                  {sessionQuickStartPresets.map((preset) => (
+                    <AriCard
+                      key={preset.id}
+                      className="desk-session-empty-card desk-session-quick-start-card"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => {
+                        handleApplyQuickStartPreset(preset);
+                      }}
+                      onKeyDown={(event) => {
+                        handleQuickStartPresetCardKeyDown(event, preset);
+                      }}
+                    >
+                      <AriContainer className="desk-session-quick-start-main" padding={0}>
+                        <AriTypography variant="h4" value={preset.title} />
+                        <AriTypography variant="caption" value={preset.description} />
+                      </AriContainer>
+                    </AriCard>
+                  ))}
+                </AriContainer>
               </AriContainer>
             ) : null}
             {messages.map((message, index) => {

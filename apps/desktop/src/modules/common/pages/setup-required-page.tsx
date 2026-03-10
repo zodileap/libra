@@ -105,7 +105,7 @@ export function SetupRequiredPage({
               placeholder="http://127.0.0.1:10001"
               onChange={setBackendBaseUrl}
             />
-            {draftError ? <AriTypography className="desk-inline-status desk-login-password-error" variant="caption" value={draftError} /> : null}
+            {draftError ? <AriTypography className="desk-login-password-error" variant="caption" value={draftError} /> : null}
           </AriContainer>
           <AriFlex className="desk-setup-required-actions" align="center" justify="flex-start" wrap space={12}>
             <AriButton

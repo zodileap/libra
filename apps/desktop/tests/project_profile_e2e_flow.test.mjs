@@ -26,11 +26,13 @@ test("TestE2ELocalWorkspaceCreateShouldBootstrapProfileAndInjectSessionContext",
 
   // 描述：
   //
-  //   - 本地目录接入后应创建/命中项目并触发 profile seed 初始化。
+  //   - 本地目录接入后应在选择完成后直接创建/命中项目、触发 profile seed 初始化，并直接进入新会话。
   assert.match(agentHomeSource, /invoke<string \| null>\("pick_local_project_folder"\)/);
   assert.match(agentHomeSource, /const created = upsertProjectWorkspaceGroup\(pathValue\);/);
-  assert.match(agentHomeSource, /setSearchParams\(new URLSearchParams\(\{ workspaceId: created\.id \}\), \{ replace: true \}\);/);
+  assert.match(agentHomeSource, /const created = handleCreateWorkspaceGroup\(selectedPath\);/);
   assert.match(agentHomeSource, /void bootstrapWorkspaceProfileSeed\(created\);/);
+  assert.match(agentHomeSource, /await handleOpenFreshSession\(created\);/);
+  assert.match(agentHomeSource, /bindProjectSessionWorkspace\(session\.id, workspace\.id\);/);
 
   // 描述：
   //
@@ -47,21 +49,20 @@ test("TestE2ELocalWorkspaceCreateShouldBootstrapProfileAndInjectSessionContext",
   assert.match(dataSource, /if \(current && !options\?\.force\) \{\s*return current;\s*\}/s);
 });
 
-test("TestE2EGitWorkspaceCreateShouldBootstrapProfileAndExposeSeedInspectCommand", () => {
+test("TestProjectWorkspaceSeedInspectCommandShouldStayConsistentAcrossDesktopAndTauri", () => {
   const agentHomeSource = readDesktopSource("src/modules/agent/pages/agent-home-page.tsx");
   const constantsSource = readDesktopSource("src/shared/constants.ts");
   const tauriSource = readDesktopSource("src-tauri/src/main.rs");
 
   // 描述：
   //
-  //   - Git 仓库接入后应克隆并复用统一创建链路，以便自动初始化 profile。
-  assert.match(agentHomeSource, /invoke<GitCloneResponse>\("clone_git_repository",/);
-  assert.match(agentHomeSource, /const created = handleCreateWorkspaceGroup\(cloned\.path\);/);
+  //   - Desktop 首页应保留统一的 profile seed 创建链路，以便本地目录接入后自动初始化 profile。
+  assert.match(agentHomeSource, /const created = handleCreateWorkspaceGroup\(selectedPath\);/);
   assert.match(agentHomeSource, /void bootstrapWorkspaceProfileSeed\(created\);/);
 
   // 描述：
   //
-  //   - 前后端应保持一致的 seed 命令声明，确保 Git 场景同样触发分析。
+  //   - 前后端应保持一致的 seed 命令声明，确保本地目录场景同样触发分析。
   assert.match(constantsSource, /INSPECT_PROJECT_WORKSPACE_PROFILE_SEED: "inspect_project_workspace_profile_seed"/);
   assert.match(tauriSource, /async fn inspect_project_workspace_profile_seed\(/);
   assert.match(tauriSource, /fn inspect_project_workspace_profile_seed_inner\(/);

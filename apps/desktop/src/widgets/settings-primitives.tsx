@@ -459,7 +459,7 @@ interface DeskStatusTextProps {
 export function DeskStatusText({ value }: DeskStatusTextProps) {
   return (
     <AriTypography
-      className="desk-inline-status desk-status-text"
+      className="desk-status-text"
       variant="caption"
       value={value}
     />

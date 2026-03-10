@@ -131,55 +131,92 @@ test("TestSessionPageShouldUseUnifiedWorkflowSelection", () => {
   assert.match(source, /const workflowPrompt = buildAgentWorkflowPrompt\(\s*selectedWorkflow,/s);
 });
 
-test("TestAgentPageShouldUseUnifiedComposeLayoutAndAutoPromptNavigation", () => {
-  const source = readDesktopSource("src/widgets/agent/page.tsx");
+test("TestAgentHomeShouldOnlyManageWorkspaceBindingAndSessionShouldProvideQuickStartCards", () => {
   const agentHomeSource = readDesktopSource("src/modules/agent/pages/agent-home-page.tsx");
+  const sessionSource = readDesktopSource("src/widgets/session/page.tsx");
 
   // 描述：
   //
-  //   - 智能体首页应使用统一输入布局；入口页负责创建会话并通过统一会话路径下发首条消息。
-  assert.match(source, /desk-session-shell/);
-  assert.match(source, /desk-prompt-card desk-session-prompt-card/);
-  assert.match(source, /onStartConversation\(\)/);
-  assert.match(agentHomeSource, /navigate\(`\$\{resolveAgentSessionPath\(session\.id\)\}\$\{search\}`,/);
-  assert.match(agentHomeSource, /autoPrompt:\s*usingQuickStartPreset \? "" : normalizedPrompt,/);
-  assert.match(agentHomeSource, /if \(!selectedWorkspace\) \{/);
-  assert.match(agentHomeSource, /bindProjectSessionWorkspace\(session\.id, selectedWorkspace\.id\);/);
-  assert.match(agentHomeSource, /preferredWorkflowId: normalizedWorkflowId \|\| undefined/);
-  assert.match(agentHomeSource, /preferredSkillIds: normalizedSkillIds\.length > 0 \? normalizedSkillIds : undefined/);
-  assert.match(source, /icon=\{item\.icon\}/);
-  assert.match(source, /label=\{item\.actionLabel\}/);
+  //   - 智能体首页应收口为“新项目”来源选择页：主区不再展示已关联项目列表或首页输入框，创建完成后直接进入新会话。
+  assert.match(agentHomeSource, /useDesktopHeaderSlot\(\)/);
+  assert.match(agentHomeSource, /title=\{t\("新项目"\)\}/);
+  assert.match(agentHomeSource, /className="desk-content desk-agent-home-content"/);
+  assert.doesNotMatch(agentHomeSource, /className="desk-agent-home-heading"/);
+  assert.match(agentHomeSource, /className="desk-agent-home-source-list"/);
+  assert.match(agentHomeSource, /className="desk-agent-home-source-card"/);
+  assert.match(agentHomeSource, /createRuntimeSession\(currentUser\.id, "agent"\)/);
+  assert.match(agentHomeSource, /bindProjectSessionWorkspace\(session\.id, workspace\.id\);/);
+  assert.match(agentHomeSource, /navigate\(`\$\{resolveAgentSessionPath\(session\.id\)\}\?workspaceId=\$\{encodeURIComponent\(workspace\.id\)\}`/);
+  assert.match(agentHomeSource, /state:\s*\{\s*workspaceId: workspace\.id,\s*\}/s);
+  assert.doesNotMatch(agentHomeSource, /<DeskSectionTitle title=\{t\("已关联项目"\)\} \/>/);
+  assert.doesNotMatch(agentHomeSource, /label=\{t\("项目信息"\)\}/);
+  assert.doesNotMatch(agentHomeSource, /AriInput\.TextArea/);
+
+  // 描述：
+  //
+  //   - 新会话页空状态应承载快速开始卡片，并在点击后只写入预设与默认策略。
+  assert.match(sessionSource, /const sessionQuickStartPresets = useMemo<SessionQuickStartPreset/);
+  assert.match(sessionSource, /handleApplyQuickStartPreset/);
+  assert.match(sessionSource, /handleQuickStartPresetCardKeyDown/);
+  assert.match(sessionSource, /title: t\("前端项目开发"\)/);
+  assert.match(sessionSource, /className="desk-session-quick-start-heading"/);
+  assert.match(sessionSource, /className="desk-session-quick-start-grid"/);
+  assert.match(sessionSource, /role="button"/);
+  assert.match(sessionSource, /tabIndex=\{0\}/);
+  assert.match(sessionSource, /onClick=\{\(\) => \{\s*handleApplyQuickStartPreset\(preset\);/s);
+  assert.match(sessionSource, /const \[availableSkillsLoaded, setAvailableSkillsLoaded\] = useState\(false\);/);
+  assert.match(sessionSource, /const registeredWorkflowIdSet = useMemo\(\s*\(\) => new Set\(workflows\.map\(\(item\) => item\.id\)\),\s*\[workflows\],\s*\)/s);
+  assert.match(sessionSource, /const registeredSkillIdSet = useMemo\(\s*\(\) => new Set\(availableSkills\.map\(\(item\) => item\.id\)\),\s*\[availableSkills\],\s*\)/s);
+  assert.match(sessionSource, /const message = t\("技能列表加载中\.\.\."\);[\s\S]*AriMessage\.warning\(\{\s*content: message,\s*duration: 1800,\s*\}\);[\s\S]*setStatus\(message\);[\s\S]*return;/s);
+  assert.match(sessionSource, /const message = t\("当前未注册“\{\{title\}\}”所需技能，请先注册后再试。", \{ title: preset\.title \}\);[\s\S]*AriMessage\.warning\(\{\s*content: message,\s*duration: 2200,\s*\}\);[\s\S]*setStatus\(message\);[\s\S]*return;/s);
+  assert.match(sessionSource, /const message = t\("当前未注册“\{\{title\}\}”所需工作流，请先注册后再试。", \{ title: preset\.title \}\);[\s\S]*AriMessage\.warning\(\{\s*content: message,\s*duration: 2200,\s*\}\);[\s\S]*setStatus\(message\);[\s\S]*return;/s);
+  assert.match(sessionSource, /setInput\(preset\.prompt\);/);
+  assert.match(sessionSource, /setSelectedSkillIds\(nextSkillIds\);/);
+  assert.doesNotMatch(sessionSource, /className="desk-session-quick-start-icon"/);
+  assert.doesNotMatch(sessionSource, /label=\{t\("使用预设"\)\}/);
+  assert.doesNotMatch(sessionSource, /title: t\("写代码"\)/);
+  assert.doesNotMatch(sessionSource, /快速开始会帮你切换默认工作流或技能，并填入一段可继续编辑的对话草稿。/);
 });
 
-test("TestAgentShouldShowStandaloneWorkspaceOnboardingWhenNoWorkspace", () => {
+test("TestAgentHomeShouldRenderProjectBindingCardsOnly", () => {
   const source = readDesktopSource("src/modules/agent/pages/agent-home-page.tsx");
   const styleSource = readDesktopSource("src/styles.css");
 
   // 描述：
   //
-  //   - 单智能体在未选择目录时应渲染独立引导页（中间卡片），不展示常规标题/快捷卡片/对话框布局。
-  assert.match(source, /const onboardingContent = !selectedWorkspace \? \(/);
-  assert.match(source, /className=\"desk-project-workspace-onboarding\"/);
-  assert.match(source, /className=\"desk-project-workspace-onboarding-card\"/);
-  assert.match(source, /value=\{t\("选择项目"\)\}/);
-  assert.match(source, /label=\{gitCloneLoading \? t\("开启中\.\.\."\) : t\("开启"\)\}/);
+  //   - 新项目页应渲染居中的本地目录卡片，不再保留单独的标题说明、Git 接入或旧的项目列表分区。
+  assert.match(source, /className=\"desk-agent-home-shell\"/);
+  assert.match(source, /className=\"desk-content desk-agent-home-content\"/);
+  assert.doesNotMatch(source, /className=\"desk-agent-home-heading\"/);
+  assert.doesNotMatch(source, /选择一个本地文件夹，创建完成后会直接进入新话题。/);
+  assert.match(source, /className=\"desk-agent-home-source-list\"/);
+  assert.match(source, /className=\"desk-agent-home-source-card\"/);
+  assert.match(source, /className=\"desk-agent-home-source-action-row\"/);
+  assert.match(source, /className=\"desk-agent-home-source-button\"/);
+  assert.match(source, /label=\{folderPickLoading \? t\("打开中\.\.\."\) : sessionCreating \? t\("开启中\.\.\."\) : t\("选择本地文件夹"\)\}/);
   assert.match(source, /invoke<string \| null>\(\"pick_local_project_folder\"\)/);
-  assert.match(source, /invoke<GitCliHealthResponse>\(\"check_git_cli_health\"\)/);
-  assert.match(source, /invoke<GitCloneResponse>\(\"clone_git_repository\"/);
   assert.match(source, /invoke<ProjectWorkspaceProfileSeedResponse>\(\s*COMMANDS\.INSPECT_PROJECT_WORKSPACE_PROFILE_SEED,/s);
   assert.match(source, /saveProjectWorkspaceProfile\(/);
   assert.match(source, /updatedBy: "workspace_seed_bootstrap"/);
   assert.match(source, /reason: "workspace_seed_bootstrap"/);
   assert.match(source, /if \(profileBefore\?\.revision && profileBefore\.revision > 1\) \{/);
-  assert.match(source, /invoke\(\"open_external_url\", \{ url: \"https:\/\/git-scm\.com\/downloads\" \}\)/);
-  assert.match(source, /title=\{t\("未检测到 Git"\)\}/);
-  assert.match(source, /label=\{t\("确认并前往下载"\)\}/);
-  assert.match(source, /<AriInput\s+variant=\"borderless\"/s);
-  assert.match(source, /const forceWorkspacePickerMode = useMemo/);
-  assert.match(source, /getLastUsedProjectWorkspaceId\(\)/);
-  assert.match(source, /setSearchParams\(new URLSearchParams\(\{ mode: "projects" \}\), \{ replace: true \}\);/);
-  assert.match(styleSource, /\.desk-project-workspace-onboarding/);
-  assert.match(styleSource, /\.desk-project-workspace-onboarding-card/);
+  assert.doesNotMatch(source, /setStatus\(t\("已取消目录选择。"\)\);/);
+  assert.match(source, /const created = handleCreateWorkspaceGroup\(selectedPath\);/);
+  assert.match(source, /await handleOpenFreshSession\(created\);/);
+  assert.doesNotMatch(source, /handleSelectWorkspaceGroup/);
+  assert.doesNotMatch(source, /setSearchParams/);
+  assert.doesNotMatch(source, /AriInput/);
+  assert.doesNotMatch(source, /setLocalFolderPath/);
+  assert.doesNotMatch(source, /handleOpenLocalFolderProject/);
+  assert.doesNotMatch(source, /Git 仓库/);
+  assert.doesNotMatch(source, /check_git_cli_health/);
+  assert.doesNotMatch(source, /clone_git_repository/);
+  assert.match(styleSource, /\.desk-agent-home-content\s*\{[\s\S]*display: flex;[\s\S]*align-items: center;[\s\S]*justify-content: center;[\s\S]*\}/);
+  assert.match(styleSource, /\.desk-agent-home-shell/);
+  assert.doesNotMatch(styleSource, /\.desk-agent-home-heading/);
+  assert.match(styleSource, /\.desk-agent-home-source-list/);
+  assert.match(styleSource, /\.desk-agent-home-source-card/);
+  assert.match(styleSource, /\.desk-agent-home-source-button/);
 });
 
 test("TestSessionPageShouldDispatchRouteAutoPromptOnce", () => {

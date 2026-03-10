@@ -1,58 +1,35 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
+import { useState } from "react";
 import {
   AriButton,
   AriCard,
   AriContainer,
-  AriFlex,
-  AriInput,
-  AriModal,
   AriTypography,
 } from "aries_react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import {
-  resolveAgentSummaries,
   bindProjectSessionWorkspace,
-  getLastUsedProjectWorkspaceId,
   getProjectWorkspaceProfile,
   saveProjectWorkspaceProfile,
-  type ProjectWorkspaceGroup,
-  listProjectWorkspaceGroups,
   setLastUsedProjectWorkspaceId,
+  type ProjectWorkspaceGroup,
   upsertProjectWorkspaceGroup,
 } from "../../../shared/data";
 import { COMMANDS } from "../../../shared/constants";
-import { PROJECT_SETTINGS_PATH, resolveAgentSessionPath } from "../routes";
 import { createRuntimeSession } from "../../../shared/services/backend-api";
-import { AgentPage } from "../../../widgets/agent/page";
-import type { LoginUser, DccMcpCapabilities } from "../../../shared/types";
+import { resolveAgentSessionPath } from "../routes";
+import { useDesktopHeaderSlot } from "../../../widgets/app-header/header-slot-context";
+import { DeskPageHeader, DeskStatusText } from "../../../widgets/settings-primitives";
+import type { DccMcpCapabilities, LoginUser } from "../../../shared/types";
 import { useDesktopI18n } from "../../../shared/i18n";
 
 // 描述:
 //
-//   - 定义智能体入口页入参。
+//   - 定义智能体新项目页入参。
 interface AgentHomePageProps {
   dccMcpCapabilities: DccMcpCapabilities;
   currentUser: LoginUser | null;
-}
-
-// 描述:
-//
-//   - 定义 Git CLI 检测接口响应结构。
-interface GitCliHealthResponse {
-  available: boolean;
-  version: string;
-  bin_path: string;
-  message: string;
-}
-
-// 描述:
-//
-//   - 定义 Git 克隆命令响应结构。
-interface GitCloneResponse {
-  path: string;
-  name: string;
-  message: string;
 }
 
 // 描述:
@@ -73,21 +50,6 @@ interface ProjectWorkspaceProfileSeedResponse {
   directory_summary: string[];
   module_candidates: string[];
 }
-
-// 描述：
-//
-//   - 定义首页快速入口预设结构；用于把“写代码 / 建模”快速映射到内置工作流或技能。
-interface AgentQuickStartPreset {
-  id: string;
-  title: string;
-  description: string;
-  icon: string;
-  workflowId?: string;
-  skillIds?: string[];
-}
-
-const QUICK_START_CODE_WORKFLOW_ID = "wf-agent-full-delivery-v1";
-const QUICK_START_MODELING_SKILL_ID = "dcc-modeling";
 
 // 描述:
 //
@@ -110,32 +72,16 @@ function normalizeUniqueStrings(value: unknown): string[] {
   return normalized.filter((item, index) => normalized.indexOf(item) === index);
 }
 
-// 描述：统一智能体入口页包装器，复用通用 agent 组件并固定为单一 agent。
+// 描述：统一智能体新项目页，只负责选择本地项目目录并在创建后直接进入新话题。
 export function AgentHomePage(props: AgentHomePageProps) {
   const navigate = useNavigate();
+  const headerSlotElement = useDesktopHeaderSlot();
   const { t } = useDesktopI18n();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [prompt, setPrompt] = useState("");
-  const [status, setStatus] = useState("");
-  const [sending, setSending] = useState(false);
-  const [gitRepoUrl, setGitRepoUrl] = useState("");
-  const [workspaceGroups, setWorkspaceGroups] = useState<ProjectWorkspaceGroup[]>([]);
-  const [gitCheckLoading, setGitCheckLoading] = useState(false);
-  const [gitCloneLoading, setGitCloneLoading] = useState(false);
-  const [folderPickLoading, setFolderPickLoading] = useState(false);
-  const [gitInstallModalVisible, setGitInstallModalVisible] = useState(false);
-  const [gitInstallMessage, setGitInstallMessage] = useState("");
   const { currentUser } = props;
-  const agentSummaries = resolveAgentSummaries();
-  const agent = useMemo(
-    () => agentSummaries.find((item) => item.key === "agent") || agentSummaries[0],
-    [agentSummaries],
-  );
-
-  // 描述：刷新项目目录分组列表，供智能体选择会话目录。
-  const refreshWorkspaceGroups = () => {
-    setWorkspaceGroups(listProjectWorkspaceGroups());
-  };
+  const [status, setStatus] = useState("");
+  const [folderPickLoading, setFolderPickLoading] = useState(false);
+  const [sessionCreating, setSessionCreating] = useState(false);
+  void props.dccMcpCapabilities;
 
   // 描述：
   //
@@ -233,44 +179,15 @@ export function AgentHomePage(props: AgentHomePageProps) {
     }
   };
 
-  useEffect(() => {
-    refreshWorkspaceGroups();
-  }, []);
-
-  // 描述：从 URL 查询参数中读取当前选中的项目目录 ID。
-  const selectedWorkspaceIdFromQuery = useMemo(
-    () => searchParams.get("workspaceId")?.trim() || "",
-    [searchParams],
-  );
-  const forceWorkspacePickerMode = useMemo(
-    () => searchParams.get("mode")?.trim() === "projects",
-    [searchParams],
-  );
-
-  // 描述：根据目录 ID 解析当前选中的目录分组实体。
-  const selectedWorkspace = useMemo(() => {
-    if (forceWorkspacePickerMode) {
-      return null;
-    }
-    const fallbackWorkspaceId = selectedWorkspaceIdFromQuery
-      || getLastUsedProjectWorkspaceId()
-      || workspaceGroups[0]?.id
-      || "";
-    if (!fallbackWorkspaceId) {
-      return null;
-    }
-    return workspaceGroups.find((item) => item.id === fallbackWorkspaceId) || null;
-  }, [forceWorkspacePickerMode, selectedWorkspaceIdFromQuery, workspaceGroups]);
-
-  // 描述：当目录选择变化时，持久化最近使用目录，便于下次进入默认定位。
-  useEffect(() => {
-    if (!selectedWorkspace?.id) {
-      return;
-    }
-    setLastUsedProjectWorkspaceId(selectedWorkspace.id);
-  }, [selectedWorkspace?.id]);
-
-  // 描述：新增项目目录分组，供智能体会话归属使用。
+  // 描述：创建项目目录分组并启动结构化初始化分析。
+  //
+  // Params:
+  //
+  //   - pathValue: 目录绝对路径。
+  //
+  // Returns:
+  //
+  //   - 命中的项目目录分组；失败时返回 null。
   const handleCreateWorkspaceGroup = (pathValue: string) => {
     const created = upsertProjectWorkspaceGroup(pathValue);
     if (!created) {
@@ -278,28 +195,48 @@ export function AgentHomePage(props: AgentHomePageProps) {
       return null;
     }
     setStatus("");
-    refreshWorkspaceGroups();
     setLastUsedProjectWorkspaceId(created.id);
-    setSearchParams(new URLSearchParams({ workspaceId: created.id }), { replace: true });
     void bootstrapWorkspaceProfileSeed(created);
     return created;
   };
 
-  // 描述：回到项目选择页，保持“选择项目”和“开始会话”两个页面职责分离。
-  const handleOpenWorkspaceSelectionPage = () => {
-    setStatus("");
-    setSearchParams(new URLSearchParams({ mode: "projects" }), { replace: true });
-  };
-
-  // 描述：进入当前项目的设置页，支持在主内容区直接维护结构化项目信息。
-  const handleOpenProjectSettingsPage = () => {
-    if (!selectedWorkspace?.id) {
+  // 描述：为新项目创建首个会话，并直接跳转到新话题页面。
+  //
+  // Params:
+  //
+  //   - workspace: 刚创建完成的项目目录分组。
+  const handleOpenFreshSession = async (workspace: ProjectWorkspaceGroup) => {
+    if (sessionCreating) {
       return;
     }
-    navigate(`${PROJECT_SETTINGS_PATH}?workspaceId=${encodeURIComponent(selectedWorkspace.id)}`);
+    if (!currentUser) {
+      setStatus(t("用户未登录，无法创建会话。"));
+      return;
+    }
+    setSessionCreating(true);
+    setStatus(t("正在创建会话..."));
+    try {
+      const session = await createRuntimeSession(currentUser.id, "agent");
+      if (!session.id) {
+        setStatus(t("创建会话失败，请稍后重试。"));
+        return;
+      }
+      bindProjectSessionWorkspace(session.id, workspace.id);
+      setLastUsedProjectWorkspaceId(workspace.id);
+      navigate(`${resolveAgentSessionPath(session.id)}?workspaceId=${encodeURIComponent(workspace.id)}`, {
+        state: {
+          workspaceId: workspace.id,
+        },
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : t("创建会话失败");
+      setStatus(message);
+    } finally {
+      setSessionCreating(false);
+    }
   };
 
-  // 描述：通过系统文件夹选择器选择本地目录，并立即创建目录分组。
+  // 描述：通过系统文件夹选择器选择本地目录，并在选择完成后立即创建项目与新会话。
   const handlePickLocalFolder = async () => {
     if (folderPickLoading) {
       return;
@@ -309,10 +246,13 @@ export function AgentHomePage(props: AgentHomePageProps) {
     try {
       const selectedPath = await invoke<string | null>("pick_local_project_folder");
       if (!selectedPath) {
-        setStatus(t("已取消目录选择。"));
         return;
       }
-      handleCreateWorkspaceGroup(selectedPath);
+      const created = handleCreateWorkspaceGroup(selectedPath);
+      if (!created) {
+        return;
+      }
+      await handleOpenFreshSession(created);
     } catch (err) {
       const message = err instanceof Error ? err.message : t("选择目录失败");
       setStatus(message);
@@ -321,333 +261,49 @@ export function AgentHomePage(props: AgentHomePageProps) {
     }
   };
 
-  // 描述：检查 Git CLI 是否可用，失败时弹出安装引导。
-  const ensureGitAvailable = async () => {
-    if (gitCheckLoading) {
-      return false;
-    }
-    setGitCheckLoading(true);
-    try {
-      const result = await invoke<GitCliHealthResponse>("check_git_cli_health");
-      if (result.available) {
-        return true;
-      }
-      setGitInstallMessage(result.message || t("未检测到可用的 Git，请先安装。\n安装后再继续使用“Git 地址创建项目”。"));
-      setGitInstallModalVisible(true);
-      return false;
-    } catch (_err) {
-      setGitInstallMessage(t("检测 Git 可用性失败。请先安装 Git 后再重试。\n安装完成后重启应用。"));
-      setGitInstallModalVisible(true);
-      return false;
-    } finally {
-      setGitCheckLoading(false);
-    }
-  };
+  const homeBusy = folderPickLoading || sessionCreating;
 
-  // 描述：通过 Git 地址克隆项目到应用目录，并注册为项目目录分组。
-  const handleCloneGitRepository = async () => {
-    const normalizedRepoUrl = gitRepoUrl.trim();
-    if (!normalizedRepoUrl) {
-      setStatus(t("请输入 Git 仓库地址。"));
-      return;
-    }
-    if (gitCloneLoading) {
-      return;
-    }
+  // 描述：构建标题栏头部内容，确保主区域页面头部统一挂载到全局标题栏插槽。
+  const headerNode = (
+    <DeskPageHeader
+      mode="slot"
+      title={t("新项目")}
+      description={t("选择一个本地文件夹，创建一个新的项目话题。")}
+    />
+  );
 
-    const available = await ensureGitAvailable();
-    if (!available) {
-      return;
-    }
+  return (
+    <AriContainer className="desk-content desk-agent-home-content" height="100%" showBorderRadius={false}>
+      {headerSlotElement ? createPortal(headerNode, headerSlotElement) : null}
 
-    setGitCloneLoading(true);
-    setStatus(t("正在克隆仓库，请稍候..."));
-    try {
-      const cloned = await invoke<GitCloneResponse>("clone_git_repository", {
-        repoUrl: normalizedRepoUrl,
-      });
-      const created = handleCreateWorkspaceGroup(cloned.path);
-      if (!created) {
-        setStatus(t("仓库已克隆，但目录创建失败：{{path}}", { path: cloned.path }));
-        return;
-      }
-      setGitRepoUrl("");
-      setStatus(cloned.message || t("已克隆项目：{{name}}", { name: cloned.name }));
-    } catch (err) {
-      const message = err instanceof Error ? err.message : t("克隆仓库失败");
-      setStatus(message);
-    } finally {
-      setGitCloneLoading(false);
-    }
-  };
+      <AriContainer className="desk-agent-home-shell" padding={0}>
+        <AriContainer className="desk-agent-home-source-list" padding={0}>
+          <AriCard className="desk-agent-home-source-card">
+            <AriContainer className="desk-agent-home-source-copy" padding={0}>
+              <AriTypography variant="h4" value={t("本地文件夹")} />
+              <AriTypography
+                variant="caption"
+                value={t("从本地目录开始，适合已经在当前机器上的仓库。")}
+              />
+            </AriContainer>
 
-  // 描述：打开 Git 官网下载页，供用户快速安装 Git。
-  const handleOpenGitDownload = async () => {
-    try {
-      await invoke("open_external_url", { url: "https://git-scm.com/downloads" });
-    } catch (_err) {
-      // 描述：忽略打开浏览器失败，保留弹窗由用户手动复制网址。
-    } finally {
-      setGitInstallModalVisible(false);
-    }
-  };
-
-  // 描述：创建后端会话并按当前预设进入会话；支持普通提问，也支持首页快速入口直接注入工作流/技能。
-  //
-  // Params:
-  //
-  //   - options: 可选启动预设。
-  const handleStartConversation = async (options?: {
-    workflowId?: string;
-    skillIds?: string[];
-  }) => {
-    const normalizedPrompt = prompt.trim();
-    const normalizedSkillIds = Array.isArray(options?.skillIds)
-      ? options?.skillIds.map((item) => String(item || "").trim()).filter((item) => item.length > 0)
-      : [];
-    const normalizedWorkflowId = String(options?.workflowId || "").trim();
-    const usingQuickStartPreset = normalizedWorkflowId.length > 0 || normalizedSkillIds.length > 0;
-    if (!usingQuickStartPreset && !normalizedPrompt) {
-      setStatus(t("请先输入需求再开始对话。"));
-      return;
-    }
-    if (!currentUser) {
-      setStatus(t("用户未登录，无法创建会话。"));
-      return;
-    }
-    if (!selectedWorkspace) {
-      setStatus(t("请先选择至少一个项目目录后再开始对话。"));
-      return;
-    }
-
-    setStatus(t("正在创建会话..."));
-    setSending(true);
-    try {
-      const session = await createRuntimeSession(currentUser.id, "agent");
-      if (!session.id) {
-        setStatus(t("创建会话失败，请稍后重试。"));
-        return;
-      }
-
-      bindProjectSessionWorkspace(session.id, selectedWorkspace.id);
-      setLastUsedProjectWorkspaceId(selectedWorkspace.id);
-
-      const search = `?workspaceId=${encodeURIComponent(selectedWorkspace.id)}`;
-      navigate(`${resolveAgentSessionPath(session.id)}${search}`, {
-        state: {
-          autoPrompt: usingQuickStartPreset ? "" : normalizedPrompt,
-          workspaceId: selectedWorkspace.id,
-          preferredWorkflowId: normalizedWorkflowId || undefined,
-          preferredSkillIds: normalizedSkillIds.length > 0 ? normalizedSkillIds : undefined,
-        },
-      });
-      if (!usingQuickStartPreset) {
-        setPrompt("");
-      }
-      setStatus("");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : t("创建会话失败");
-      setStatus(msg);
-    } finally {
-      setSending(false);
-    }
-  };
-
-  // 描述：定义首页两个快速入口，分别对应默认代码工作流和内置建模技能。
-  const starterItems = useMemo<{
-    id: string;
-    title: string;
-    description: string;
-    icon: string;
-    actionLabel: string;
-    disabled?: boolean;
-    onAction: () => void;
-  }[]>(() => {
-    const presets: AgentQuickStartPreset[] = [
-      {
-        id: "quick-code",
-        title: t("写代码"),
-        description: t("直接按默认代码工作流开始一个新的开发话题。"),
-        icon: "edit",
-        workflowId: QUICK_START_CODE_WORKFLOW_ID,
-      },
-      {
-        id: "quick-modeling",
-        title: t("建模"),
-        description: t("直接按内置建模技能开始一个新的 DCC 话题。"),
-        icon: "new_releases",
-        skillIds: [QUICK_START_MODELING_SKILL_ID],
-      },
-    ];
-    return presets.map((item) => ({
-      id: item.id,
-      title: item.title,
-      description: item.description,
-      icon: item.icon,
-      actionLabel: t("快速开始"),
-      disabled: !selectedWorkspace,
-      onAction: () => {
-        void handleStartConversation({
-          workflowId: item.workflowId,
-          skillIds: item.skillIds,
-        });
-      },
-    }));
-  }, [selectedWorkspace]);
-
-  // 描述：当未选中项目目录时展示项目接入引导内容。
-  const onboardingContent = !selectedWorkspace ? (
-    <AriContainer className="desk-project-workspace-onboarding" padding={0}>
-      <AriCard className="desk-project-workspace-onboarding-card">
-        <AriTypography variant="h4" value={t("选择项目")} />
-
-        {/* 描述：将“项目接入方式”拆分为独立卡片并纵向排列，降低首次接入认知负担。 */}
-        <AriContainer className="desk-project-workspace-method-list">
-          <AriCard className="desk-project-workspace-method-card">
-            <AriFlex
-              justify="flex-start"
-              align="center"
-              className="desk-project-workspace-method-row"
-              flexItem={[{ index: 0, flex: 1, overflow: "visible" }]}
-            >
-              <AriContainer className="desk-project-workspace-method-main">
-                <AriTypography variant="body" value={t("本地文件夹")} />
-              </AriContainer>
-              <AriFlex
-                vertical
-                justify="center"
-                align="flex-end"
-                className="desk-project-workspace-method-action"
-              >
-                <AriButton
-                  color="info"
-                  label={folderPickLoading ? t("打开中...") : t("选择")}
-                  disabled={folderPickLoading || gitCloneLoading}
-                  onClick={() => {
-                    void handlePickLocalFolder();
-                  }}
-                />
-              </AriFlex>
-            </AriFlex>
-          </AriCard>
-
-          <AriCard className="desk-project-workspace-method-card">
-            <AriFlex
-              justify="flex-start"
-              align="center"
-              className="desk-project-workspace-method-row"
-              flexItem={[{ index: 0, flex: 1, overflow: "visible" }]}
-            >
-              <AriContainer className="desk-project-workspace-method-main">
-                <AriTypography variant="body" value={t("Git 仓库")} />
-                <AriInput
-                  variant="borderless"
-                  value={gitRepoUrl}
-                  onChange={setGitRepoUrl}
-                  placeholder={t("输入 Git 地址")}
-                  className="desk-project-workspace-git-input"
-                  enableHoverFocusEffect={false}
-                />
-              </AriContainer>
-              <AriFlex
-                vertical
-                justify="center"
-                align="flex-end"
-                className="desk-project-workspace-method-action"
-              >
-                <AriButton
-                  color="info"
-                  label={gitCloneLoading ? t("开启中...") : t("开启")}
-                  disabled={gitCloneLoading || folderPickLoading}
-                  onClick={() => {
-                    void handleCloneGitRepository();
-                  }}
-                />
-              </AriFlex>
-            </AriFlex>
+            <AriContainer className="desk-agent-home-source-action-row" padding={0}>
+              <AriButton
+                className="desk-agent-home-source-button"
+                color="brand"
+                icon="folder_open"
+                label={folderPickLoading ? t("打开中...") : sessionCreating ? t("开启中...") : t("选择本地文件夹")}
+                disabled={homeBusy}
+                onClick={() => {
+                  void handlePickLocalFolder();
+                }}
+              />
+            </AriContainer>
           </AriCard>
         </AriContainer>
 
-        <AriTypography
-          className="desk-prompt-status"
-          variant="caption"
-          value={status || ""}
-        />
-      </AriCard>
-
-      <AriModal
-        visible={gitInstallModalVisible}
-        title={t("未检测到 Git")}
-        onClose={() => {
-          setGitInstallModalVisible(false);
-        }}
-        footer={
-          <AriFlex justify="flex-end" align="center" space={8}>
-            <AriButton
-              label={t("取消")}
-              onClick={() => {
-                setGitInstallModalVisible(false);
-              }}
-            />
-            <AriButton
-              color="primary"
-              label={t("确认并前往下载")}
-              onClick={() => {
-                void handleOpenGitDownload();
-              }}
-            />
-          </AriFlex>
-        }
-      >
-        <AriTypography
-          variant="body"
-          value={gitInstallMessage || t("未检测到 Git，请先安装后再继续。")}
-        />
-      </AriModal>
+        {status ? <DeskStatusText value={status} /> : null}
+      </AriContainer>
     </AriContainer>
-  ) : undefined;
-
-  // 描述：当已选中项目目录时展示当前项目信息与切换入口。
-  const guideContent = selectedWorkspace ? (
-    <AriCard className="desk-agent-guide-card">
-      <AriTypography variant="h4" value={t("当前项目")} />
-      <AriTypography variant="caption" value={selectedWorkspace.path} />
-      <AriContainer className="desk-inline-gap" />
-      <AriFlex align="center" justify="space-between" space={8}>
-        <AriTypography variant="caption" value={selectedWorkspace.name} />
-        <AriFlex align="center" space={8}>
-          <AriButton
-            type="default"
-            label={t("项目信息")}
-            icon="settings"
-            onClick={handleOpenProjectSettingsPage}
-          />
-          <AriButton
-            type="default"
-            label={t("切换项目")}
-            icon="folder"
-            onClick={handleOpenWorkspaceSelectionPage}
-          />
-        </AriFlex>
-      </AriFlex>
-    </AriCard>
-  ) : undefined;
-
-  return (
-    <AgentPage
-      title={t("智能体")}
-      description={agent.description}
-      prompt={prompt}
-      status={status}
-      sending={sending}
-      canSend={Boolean(selectedWorkspace)}
-      promptPlaceholder={t("输入代码任务，例如：重构登录模块并补上测试")}
-      agentLayerLabel="Agent"
-      starterItems={starterItems}
-      onPromptChange={setPrompt}
-      onStartConversation={handleStartConversation}
-      onboardingContent={onboardingContent}
-      guideContent={guideContent}
-    />
   );
 }

@@ -98,7 +98,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
           />
           {passwordError ? (
             <AriTypography
-              className="desk-inline-status desk-login-password-error"
+              className="desk-login-password-error"
               variant="caption"
               value={passwordError}
             />

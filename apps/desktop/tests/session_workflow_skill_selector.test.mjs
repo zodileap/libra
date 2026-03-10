@@ -45,6 +45,8 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(sessionSource, /listAgentWorkflowOverview\(\)\.registered/);
   assert.doesNotMatch(sessionSource, /listAgentWorkflows\(\)/);
   assert.match(sessionSource, /const DCC_MODELING_SKILL_ID = "dcc-modeling";/);
+  assert.match(sessionSource, /const QUICK_START_CODE_WORKFLOW_ID = "wf-agent-full-delivery-v1";/);
+  assert.match(sessionSource, /interface SessionQuickStartPreset/);
   assert.match(sessionSource, /interface PendingDccSelectionState/);
   assert.match(sessionSource, /selectionMode: "single" \| "cross";/);
   assert.match(sessionSource, /resolvedCrossDccSoftwares\?: string\[\];/);
@@ -61,10 +63,33 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(sessionSource, /const activeWorkspaceEnabledCapabilities = useMemo<ProjectWorkspaceCapabilityId\[\]>/);
   assert.match(sessionSource, /const selectedWorkflowMissingRequiredCapabilities = useMemo\(/);
   assert.match(sessionSource, /const activeUsesDccModelingSkill = useMemo\(/);
+  assert.match(sessionSource, /getAgentWorkflowById\(selectedWorkflowId\)/);
+  assert.match(sessionSource, /const sessionQuickStartPresets = useMemo<SessionQuickStartPreset/);
+  assert.match(sessionSource, /title: t\("前端项目开发"\)/);
+  assert.match(sessionSource, /handleApplyQuickStartPreset/);
+  assert.match(sessionSource, /const \[availableSkillsLoaded, setAvailableSkillsLoaded\] = useState\(false\);/);
+  assert.match(sessionSource, /setAvailableSkillsLoaded\(true\);/);
+  assert.match(sessionSource, /if \(!availableSkillsLoaded\) \{\s*const message = t\("技能列表加载中\.\.\."\);/s);
+  assert.match(sessionSource, /if \(!nextWorkflowId \|\| !registeredWorkflowIdSet\.has\(nextWorkflowId\)\) \{\s*const message = t\("当前未注册“\{\{title\}\}”所需工作流，请先注册后再试。", \{ title: preset\.title \}\);/s);
+  assert.match(sessionSource, /const missingSkillIds = nextSkillIds\.filter\(\(item\) => !registeredSkillIdSet\.has\(item\)\);/);
+  assert.match(sessionSource, /if \(missingSkillIds\.length > 0\) \{\s*const message = t\("当前未注册“\{\{title\}\}”所需技能，请先注册后再试。", \{ title: preset\.title \}\);/s);
+  assert.match(sessionSource, /setInput\(preset\.prompt\);/);
+  assert.match(sessionSource, /setStatus\(t\("已选择“\{\{title\}\}”预设，可继续补充需求后发送。", \{ title: preset\.title \}\)\);/);
 
   // 描述：
   //
-  //   - 输入区应通过 AriSelect 完成 AI 选择与“工作流/技能”触发；点击后只打开弹窗，不走默认下拉展开。
+  //   - 空会话顶部应提供快速开始卡片，输入区仍通过 AriSelect 完成 AI 选择与“工作流/技能”触发。
+  assert.match(sessionSource, /className="desk-session-quick-start-heading"/);
+  assert.match(sessionSource, /className="desk-session-quick-start-grid"/);
+  assert.match(sessionSource, /className="desk-session-empty-card desk-session-quick-start-card"/);
+  assert.match(sessionSource, /role="button"/);
+  assert.match(sessionSource, /tabIndex=\{0\}/);
+  assert.match(sessionSource, /onKeyDown=\{\(event\) => \{\s*handleQuickStartPresetCardKeyDown\(event, preset\);/s);
+  assert.doesNotMatch(sessionSource, /className="desk-session-quick-start-icon"/);
+  assert.doesNotMatch(sessionSource, /label=\{t\("使用预设"\)\}/);
+  assert.doesNotMatch(sessionSource, /title: t\("写代码"\)/);
+  assert.doesNotMatch(sessionSource, /resolvedSessionUiConfig\.emptyStatePrimary/);
+  assert.doesNotMatch(sessionSource, /resolvedSessionUiConfig\.emptyStateSecondary/);
   assert.match(sessionSource, /<AriSelect/);
   assert.match(sessionSource, /handleChangeProvider/);
   assert.match(sessionSource, /setSelectedProvider\(resolveAgentSessionSelectedAiProvider\(sessionId\)\);/);
