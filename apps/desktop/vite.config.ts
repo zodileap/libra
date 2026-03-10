@@ -2,17 +2,23 @@ import { defineConfig, loadEnv } from "vite";
 import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react-swc";
 
-// 描述：
-//
-//   - 通过配置文件相对路径解析 Desktop 源码目录，避免仓库目录改名后别名失效。
-const desktopSrcDir = fileURLToPath(new URL("./src/", import.meta.url)).replace(/\\/g, "/");
+const desktopSrcDir = normalizePath(fileURLToPath(new URL("./src/", import.meta.url)));
+const ariesReactRootDir = normalizePath(fileURLToPath(new URL("../../../client/aries_react/", import.meta.url)));
+const ariesReactNodeModulesDir = `${ariesReactRootDir}/node_modules`;
+const ariesReactDistDir = `${ariesReactRootDir}/dist`;
+
+function normalizePath(value: string) {
+  return value.replace(/\\/g, "/");
+}
 
 function patchAriesDynamicImport() {
   return {
     name: "patch-aries-react-dynamic-import",
     enforce: "pre" as const,
     transform(code: string, id: string) {
-      if (!id.includes("/client/aries_react/dist/index-") || !id.endsWith(".mjs")) {
+      const normalizedId = normalizePath(id);
+
+      if (!normalizedId.includes(`${ariesReactDistDir}/index-`) || !normalizedId.endsWith(".mjs")) {
         return null;
       }
 
@@ -26,9 +32,9 @@ function patchAriesDynamicImport() {
           target,
           "import(/* @vite-ignore */ `${FileAccess.asBrowserUri(`${e}.js`).toString(!0)}`)"
         ),
-        map: null
+        map: null,
       };
-    }
+    },
   };
 }
 
@@ -43,66 +49,63 @@ export default defineConfig(({ mode }) => {
       __DESKTOP_ENABLED_MODULES__: JSON.stringify(enabledModulesRaw),
     },
     server: {
-    host: "127.0.0.1",
-    port: 1420,
-    strictPort: true,
-    proxy: {
-      "/__api/account": {
-        target: "http://127.0.0.1:10001",
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/__api\/account/, "")
+      host: "127.0.0.1",
+      port: 1420,
+      strictPort: true,
+      proxy: {
+        "/__api/account": {
+          target: "http://127.0.0.1:10001",
+          changeOrigin: true,
+          rewrite: (requestPath) => requestPath.replace(/^\/__api\/account/, ""),
+        },
+        "/__api/runtime": {
+          target: "http://127.0.0.1:10001",
+          changeOrigin: true,
+          rewrite: (requestPath) => requestPath.replace(/^\/__api\/runtime/, ""),
+        },
       },
-      "/__api/runtime": {
-        target: "http://127.0.0.1:10001",
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/__api\/runtime/, "")
-      }
-    }
-  },
+    },
     envPrefix: ["VITE_", "TAURI_"],
     resolve: {
-    dedupe: ["react", "react-dom"],
-    alias: [
-      {
-        find: /^@\//,
-        replacement: desktopSrcDir
-      },
-      // 描述：
-      //
-      //   - 强制所有 React 入口统一指向 aries_react 所在依赖目录，避免出现多份 React 导致 Invalid hook call。
-      {
-        find: /^react$/,
-        replacement: "/Users/yoho/code/client/aries_react/node_modules/react/index.js"
-      },
-      {
-        find: /^react\/jsx-runtime$/,
-        replacement: "/Users/yoho/code/client/aries_react/node_modules/react/jsx-runtime.js"
-      },
-      {
-        find: /^react\/jsx-dev-runtime$/,
-        replacement: "/Users/yoho/code/client/aries_react/node_modules/react/jsx-dev-runtime.js"
-      },
-      {
-        find: /^react-dom$/,
-        replacement: "/Users/yoho/code/client/aries_react/node_modules/react-dom/index.js"
-      },
-      {
-        find: /^react-dom\/client$/,
-        replacement: "/Users/yoho/code/client/aries_react/node_modules/react-dom/client.js"
-      },
-      {
-        find: /^aries_react$/,
-        replacement: "/Users/yoho/code/client/aries_react/dist/index.es.js"
-      },
-      {
-        find: /^aries_react\/theme\//,
-        replacement: "/Users/yoho/code/client/aries_react/dist/theme/"
-      },
-      {
-        find: /^aries_react\/dist\//,
-        replacement: "/Users/yoho/code/client/aries_react/dist/"
-      }
-    ]
-    }
+      dedupe: ["react", "react-dom"],
+      alias: [
+        {
+          find: /^@\//,
+          replacement: desktopSrcDir,
+        },
+        {
+          find: /^react$/,
+          replacement: `${ariesReactNodeModulesDir}/react/index.js`,
+        },
+        {
+          find: /^react\/jsx-runtime$/,
+          replacement: `${ariesReactNodeModulesDir}/react/jsx-runtime.js`,
+        },
+        {
+          find: /^react\/jsx-dev-runtime$/,
+          replacement: `${ariesReactNodeModulesDir}/react/jsx-dev-runtime.js`,
+        },
+        {
+          find: /^react-dom$/,
+          replacement: `${ariesReactNodeModulesDir}/react-dom/index.js`,
+        },
+        {
+          find: /^react-dom\/client$/,
+          replacement: `${ariesReactNodeModulesDir}/react-dom/client.js`,
+        },
+        {
+          find: /^aries_react$/,
+          replacement: `${ariesReactDistDir}/index.es.js`,
+        },
+        {
+          find: /^aries_react\/theme\//,
+          replacement: `${ariesReactDistDir}/theme/`,
+        },
+        {
+          find: /^aries_react\/dist\//,
+          replacement: `${ariesReactDistDir}/`,
+        },
+      ],
+    },
   };
 });

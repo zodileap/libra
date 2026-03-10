@@ -17,32 +17,32 @@ importers:
         specifier: ^12.10.1
         version: 12.10.1(@types/react@18.3.23)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
       react:
-        specifier: link:/Users/yoho/code/client/aries_react/node_modules/react
+        specifier: link:../../../client/aries_react/node_modules/react
         version: 19.1.0
       react-dom:
-        specifier: link:/Users/yoho/code/client/aries_react/node_modules/react-dom
+        specifier: link:../../../client/aries_react/node_modules/react-dom
         version: 19.1.0(react@19.1.0)
       react-router-dom:
-        specifier: link:/Users/yoho/code/client/aries_react/node_modules/react-router-dom
+        specifier: link:../../../client/aries_react/node_modules/react-router-dom
         version: link:../../../client/aries_react/node_modules/react-router-dom
     devDependencies:
       '@tauri-apps/cli':
         specifier: ^2.10.1
         version: 2.10.1
       '@types/react':
-        specifier: link:/Users/yoho/code/client/aries_react/node_modules/@types/react
+        specifier: link:../../../client/aries_react/node_modules/@types/react
         version: 18.3.23
       '@types/react-dom':
-        specifier: link:/Users/yoho/code/client/aries_react/node_modules/@types/react-dom
+        specifier: link:../../../client/aries_react/node_modules/@types/react-dom
         version: link:../../../client/aries_react/node_modules/@types/react-dom
       '@vitejs/plugin-react-swc':
-        specifier: link:/Users/yoho/code/client/aries_react/node_modules/@vitejs/plugin-react-swc
+        specifier: link:../../../client/aries_react/node_modules/@vitejs/plugin-react-swc
         version: link:../../../client/aries_react/node_modules/@vitejs/plugin-react-swc
       typescript:
-        specifier: link:/Users/yoho/code/client/aries_react/node_modules/typescript
+        specifier: link:../../../client/aries_react/node_modules/typescript
         version: link:../../../client/aries_react/node_modules/typescript
       vite:
-        specifier: link:/Users/yoho/code/client/aries_react/node_modules/vite
+        specifier: link:../../../client/aries_react/node_modules/vite
         version: link:../../../client/aries_react/node_modules/vite
 
 packages:

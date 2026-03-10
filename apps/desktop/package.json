@@ -14,16 +14,16 @@
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
     "@xyflow/react": "^12.10.1",
-    "react": "link:/Users/yoho/code/client/aries_react/node_modules/react",
-    "react-dom": "link:/Users/yoho/code/client/aries_react/node_modules/react-dom",
-    "react-router-dom": "link:/Users/yoho/code/client/aries_react/node_modules/react-router-dom"
+    "react": "link:../../../client/aries_react/node_modules/react",
+    "react-dom": "link:../../../client/aries_react/node_modules/react-dom",
+    "react-router-dom": "link:../../../client/aries_react/node_modules/react-router-dom"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.10.1",
-    "@types/react": "link:/Users/yoho/code/client/aries_react/node_modules/@types/react",
-    "@types/react-dom": "link:/Users/yoho/code/client/aries_react/node_modules/@types/react-dom",
-    "@vitejs/plugin-react-swc": "link:/Users/yoho/code/client/aries_react/node_modules/@vitejs/plugin-react-swc",
-    "typescript": "link:/Users/yoho/code/client/aries_react/node_modules/typescript",
-    "vite": "link:/Users/yoho/code/client/aries_react/node_modules/vite"
+    "@types/react": "link:../../../client/aries_react/node_modules/@types/react",
+    "@types/react-dom": "link:../../../client/aries_react/node_modules/@types/react-dom",
+    "@vitejs/plugin-react-swc": "link:../../../client/aries_react/node_modules/@vitejs/plugin-react-swc",
+    "typescript": "link:../../../client/aries_react/node_modules/typescript",
+    "vite": "link:../../../client/aries_react/node_modules/vite"
   }
 }

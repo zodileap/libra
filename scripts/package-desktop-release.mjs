@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { execSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16,6 +16,7 @@ const RELEASES_DIR = path.join(ROOT_DIR, "releases");
 const PUBLIC_KEY_DEST = path.join(TAURI_DIR, "updater", "public.key");
 const PRIVATE_KEY_PATH = process.env.TAURI_UPDATER_PRIVATE_KEY_PATH || path.join(os.homedir(), ".tauri", "libra-desktop-updater.key");
 const PUBLIC_KEY_PATH = `${PRIVATE_KEY_PATH}.pub`;
+const PNPM_COMMAND = resolvePnpmCommand();
 
 // 描述：
 //
@@ -73,6 +74,11 @@ function parseArgs(argv) {
       process.exit(0);
     }
 
+    if (current === "--") {
+      index += 1;
+      continue;
+    }
+
     if (current === "--version") {
       if (index + 1 >= argv.length) {
         process.stderr.write("missing value for --version\n");
@@ -128,41 +134,28 @@ function assertReleaseVersion(version) {
   }
 }
 
-// 描述：
-//
-//   - 根据当前平台转义 Shell 参数，确保带空格的路径在 macOS、Linux 与 Windows shell 中都能安全执行。
-//
-// Params:
-//
-//   - value: 原始参数值。
-//
-// Returns:
-//
-//   - 适用于当前 shell 的安全字符串。
-function quoteShellArgument(value) {
-  const text = String(value);
-
-  if (process.platform === "win32") {
-    return `"${text.replace(/"/g, '""')}"`;
+function resolvePnpmCommand() {
+  const npmExecPath = String(process.env.npm_execpath || "");
+  if (npmExecPath && fs.existsSync(npmExecPath)) {
+    return { commandName: process.execPath, commandArgs: [npmExecPath] };
   }
 
-  return `'${text.replace(/'/g, `'\"'\"'`)}'`;
-}
+  if (process.platform === "win32") {
+    const candidates = [
+      path.join(process.env.APPDATA || "", "npm", "node_modules", "pnpm", "bin", "pnpm.cjs"),
+      path.join(process.env.APPDATA || "", "npm", "node_modules", "pnpm", "dist", "pnpm.cjs"),
+    ].filter(Boolean);
 
-// 描述：
-//
-//   - 将命令与参数拼成当前平台可直接执行的 shell 字符串，便于跨平台调用 `pnpm` 这类外部命令。
-//
-// Params:
-//
-//   - commandName: 命令名。
-//   - args: 参数列表。
-//
-// Returns:
-//
-//   - 可直接传给 shell 的命令字符串。
-function buildShellCommand(commandName, args) {
-  return [commandName, ...args].map((item) => quoteShellArgument(item)).join(" ");
+    for (const candidate of candidates) {
+      if (candidate && fs.existsSync(candidate)) {
+        return { commandName: process.execPath, commandArgs: [candidate] };
+      }
+    }
+
+    return { commandName: "pnpm.cmd", commandArgs: [] };
+  }
+
+  return { commandName: "pnpm", commandArgs: [] };
 }
 
 // 描述：
@@ -190,32 +183,52 @@ function runCommand(commandName, args, options = {}) {
     allowFailure = false,
     env = process.env,
   } = options;
-  const shellCommand = buildShellCommand(commandName, args);
+  const resolvedCommand = typeof commandName === "string"
+    ? { commandName, commandArgs: [] }
+    : commandName;
+  const commandArgs = [...resolvedCommand.commandArgs, ...args];
+  const result = spawnSync(resolvedCommand.commandName, commandArgs, {
+    cwd,
+    env,
+    stdio: captureOutput ? ["ignore", "pipe", "pipe"] : "inherit",
+    encoding: "utf8",
+    shell: false,
+  });
 
-  try {
-    const stdout = execSync(shellCommand, {
-      cwd,
-      env,
-      stdio: captureOutput ? ["ignore", "pipe", "pipe"] : "inherit",
-      encoding: captureOutput ? "utf8" : undefined,
-    });
-
-    return {
-      status: 0,
-      stdout: captureOutput ? String(stdout || "") : "",
-      stderr: "",
-    };
-  } catch (error) {
+  if (result.error) {
     if (!allowFailure) {
-      throw error;
+      throw result.error;
     }
 
     return {
-      status: Number(error.status || 1),
-      stdout: String(error.stdout || ""),
-      stderr: String(error.stderr || ""),
+      status: Number(result.status || 1),
+      stdout: String(result.stdout || ""),
+      stderr: String(result.stderr || result.error.message || ""),
     };
   }
+
+  if (result.status !== 0) {
+    const failure = new Error(`command failed: ${resolvedCommand.commandName}`);
+    failure.status = Number(result.status || 1);
+    failure.stdout = String(result.stdout || "");
+    failure.stderr = String(result.stderr || "");
+
+    if (!allowFailure) {
+      throw failure;
+    }
+
+    return {
+      status: failure.status,
+      stdout: failure.stdout,
+      stderr: failure.stderr,
+    };
+  }
+
+  return {
+    status: 0,
+    stdout: String(result.stdout || ""),
+    stderr: String(result.stderr || ""),
+  };
 }
 
 // 描述：
@@ -431,7 +444,7 @@ function requireAlignedDesktopVersion() {
 //
 //   - 确认当前环境已经安装 pnpm，避免后续所有构建命令都落到不准确的 “tauri CLI 缺失” 提示上。
 function ensurePnpmCommand() {
-  const result = runCommand("pnpm", ["--version"], {
+  const result = runCommand(PNPM_COMMAND, ["--version"], {
     captureOutput: true,
     allowFailure: true,
   });
@@ -446,7 +459,7 @@ function ensurePnpmCommand() {
 //
 //   - 确认构建主机上可以通过 pnpm 调用 Tauri CLI，缺少依赖时给出明确的补救命令。
 function ensureTauriCli() {
-  const result = runCommand("pnpm", ["--dir", DESKTOP_DIR, "exec", "tauri", "--help"], {
+  const result = runCommand(PNPM_COMMAND, ["--dir", DESKTOP_DIR, "exec", "tauri", "--help"], {
     captureOutput: true,
     allowFailure: true,
   });
@@ -473,7 +486,7 @@ function ensureUpdaterSigningKey() {
   }
 
   process.stdout.write(`Generating Tauri updater signing key at ${PRIVATE_KEY_PATH}\n`);
-  runCommand("pnpm", ["--dir", DESKTOP_DIR, "exec", "tauri", "signer", "generate", "--ci", "-w", PRIVATE_KEY_PATH]);
+  runCommand(PNPM_COMMAND, ["--dir", DESKTOP_DIR, "exec", "tauri", "signer", "generate", "--ci", "-w", PRIVATE_KEY_PATH]);
 
   if (!fs.existsSync(PRIVATE_KEY_PATH) || !fs.existsSync(PUBLIC_KEY_PATH)) {
     process.stderr.write("failed to generate updater signing key pair\n");
@@ -678,7 +691,7 @@ function main() {
   process.stdout.write(`Embedded pubkey:     ${PUBLIC_KEY_DEST}\n`);
 
   fs.rmSync(BUNDLE_DIR, { recursive: true, force: true });
-  runCommand("pnpm", ["--dir", DESKTOP_DIR, "exec", "tauri", "build"], {
+  runCommand(PNPM_COMMAND, ["--dir", DESKTOP_DIR, "exec", "tauri", "build"], {
     env: process.env,
   });
 
