@@ -25,6 +25,7 @@ test("TestDesktopUpdateFlowShouldUseOfficialTauriUpdater", () => {
   const tauriSource = readDesktopSource("src-tauri/src/main.rs");
   const tauriCargoSource = readDesktopSource("src-tauri/Cargo.toml");
   const tauriConfigSource = readDesktopSource("src-tauri/tauri.conf.json");
+  const tauriConfig = JSON.parse(tauriConfigSource);
   const updaterPubkeySource = readDesktopSource("src-tauri/updater/public.key");
   const rootPackageSource = readRepoSource("package.json");
 
@@ -49,9 +50,10 @@ test("TestDesktopUpdateFlowShouldUseOfficialTauriUpdater", () => {
   assert.doesNotMatch(userMenuSource, /const showUpdateButton = desktopUpdateState\.status === "ready";/);
   assert.match(appHeaderSource, /className="desk-app-header-leading-actions"/);
   assert.match(appHeaderSource, /const shouldInstallDesktopUpdate = desktopUpdateState\.status === "ready";/);
-  assert.match(appHeaderSource, /t\("检查更新"\)/);
+  assert.match(appHeaderSource, /const updateButtonLabel = t\("更新"\);/);
   assert.match(appHeaderSource, /await onCheckDesktopUpdate\(\);/);
-  assert.match(appHeaderSource, /icon="system_update_alt"/);
+  assert.match(appHeaderSource, /color="primary"/);
+  assert.doesNotMatch(appHeaderSource, /icon="system_update_alt"/);
 
   assert.match(tauriSource, /use tauri_plugin_updater::UpdaterExt;/);
   assert.match(tauriSource, /const EMBEDDED_UPDATER_PUBKEY: &str = include_str!\("\.\.\/updater\/public\.key"\);/);
@@ -66,9 +68,9 @@ test("TestDesktopUpdateFlowShouldUseOfficialTauriUpdater", () => {
   assert.match(tauriConfigSource, /"createUpdaterArtifacts": true/);
   assert.match(tauriConfigSource, /"plugins": \{/);
   assert.match(tauriConfigSource, /"updater": \{/);
-  assert.match(tauriConfigSource, /"pubkey": "REPLACE_WITH_TAURI_UPDATER_PUBLIC_KEY"/);
   assert.match(tauriConfigSource, /"endpoints": \[/);
-  assert.match(updaterPubkeySource, /REPLACE_WITH_TAURI_UPDATER_PUBLIC_KEY/);
+  assert.equal(tauriConfig.plugins?.updater?.pubkey, updaterPubkeySource.trim());
+  assert.match(updaterPubkeySource, /\S+/);
 
   assert.match(rootPackageSource, /"release:desktop": "bash scripts\/package-desktop-release\.sh"/);
 });

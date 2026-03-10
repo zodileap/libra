@@ -33,19 +33,13 @@ export function DesktopAppHeader({
   const { t } = useDesktopI18n();
   const sidebarToggleLabel = sidebarCollapsed ? t("展开侧边栏") : t("收起侧边栏");
   const [updateButtonLoading, setUpdateButtonLoading] = useState(false);
-  // 描述：根据更新状态切换标题栏按钮语义；未准备安装时统一回退为“检查更新”入口。
+  // 描述：根据更新状态切换标题栏按钮行为；按钮视觉统一保持为主色文本“更新”。
   const shouldInstallDesktopUpdate = desktopUpdateState.status === "ready";
   const updateButtonDisabled = updateButtonLoading
     || desktopUpdateState.status === "checking"
     || desktopUpdateState.status === "downloading"
     || desktopUpdateState.status === "installing";
-  const updateButtonLabel = shouldInstallDesktopUpdate
-    ? (
-      desktopUpdateState.targetVersion
-        ? t("更新 {{version}}", { version: desktopUpdateState.targetVersion })
-        : t("更新")
-    )
-    : t("检查更新");
+  const updateButtonLabel = t("更新");
 
   // 描述：同步标题栏 slot DOM 节点到布局层上下文，供页面通过 hook 复用。
   useEffect(() => {
@@ -85,8 +79,7 @@ export function DesktopAppHeader({
             />
             <AriButton
               type="text"
-              icon="system_update_alt"
-              color="brand"
+              color="primary"
               label={updateButtonLabel}
               disabled={updateButtonDisabled}
               onClick={async () => {

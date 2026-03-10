@@ -14,6 +14,7 @@ usage() {
   cat <<'EOF'
 Usage:
   ./scripts/package-desktop-release.sh <x.y.z>
+  ./scripts/package-desktop-release.sh --version <x.y.z> [--sync-only]
 
 Description:
   1. Sync Libra Desktop version files to the requested release version
@@ -32,8 +33,61 @@ Notes:
 
 Examples:
   ./scripts/package-desktop-release.sh 0.1.1
+  ./scripts/package-desktop-release.sh --version 0.1.1 --sync-only
   pnpm run release:desktop -- 0.1.1
 EOF
+}
+
+# 描述：
+#
+#   - 解析发版脚本参数，兼容旧的“单个版本号位置参数”写法，以及新的 `--version` / `--sync-only` 组合。
+#
+# Returns:
+#
+#   - 通过全局变量回填目标版本与是否仅同步版本号。
+TARGET_VERSION=""
+SYNC_ONLY="false"
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --help|-h)
+        usage
+        exit 0
+        ;;
+      --version)
+        if [[ $# -lt 2 ]]; then
+          echo "missing value for --version" >&2
+          usage >&2
+          exit 1
+        fi
+        TARGET_VERSION="$2"
+        shift 2
+        ;;
+      --sync-only)
+        SYNC_ONLY="true"
+        shift
+        ;;
+      --*)
+        echo "unknown option: $1" >&2
+        usage >&2
+        exit 1
+        ;;
+      *)
+        if [[ -n "$TARGET_VERSION" ]]; then
+          echo "unexpected extra argument: $1" >&2
+          usage >&2
+          exit 1
+        fi
+        TARGET_VERSION="$1"
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -z "$TARGET_VERSION" ]]; then
+    usage >&2
+    exit 1
+  fi
 }
 
 require_command() {
@@ -308,24 +362,27 @@ stage_release_artifacts() {
 }
 
 main() {
-  if [[ $# -ne 1 || "$1" == "--help" || "$1" == "-h" ]]; then
-    usage
-    [[ $# -eq 1 ]] && exit 0
-    [[ $# -eq 0 ]] && exit 1
-    exit 1
-  fi
+  parse_args "$@"
 
-  local target_version="$1"
+  local target_version="$TARGET_VERSION"
   local aligned_version
   local -a artifacts
 
   require_command node
-  require_command pnpm
   assert_release_version "$target_version"
-  ensure_tauri_cli
 
   sync_desktop_versions "$target_version"
   aligned_version="$(require_aligned_desktop_version)"
+
+  echo "Synced Desktop version to $aligned_version"
+
+  if [[ "$SYNC_ONLY" == "true" ]]; then
+    echo "Version sync completed. Skipped packaging."
+    exit 0
+  fi
+
+  require_command pnpm
+  ensure_tauri_cli
   ensure_updater_signing_key
   sync_updater_public_key
 

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "libra-desktop",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "identifier": "com.libra.desktop",
   "build": {
     "beforeDevCommand": "pnpm dev:ui",
@@ -44,7 +44,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "REPLACE_WITH_TAURI_UPDATER_PUBLIC_KEY",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU1NUJDMUUwMDNENjAxMTMKUldRVEFkWUQ0TUZiNVZKMEZ0UjVVcUJnTVFtNmdMMyt2ZmdzNEt6SFcxajFLL3ZnSVhXUkxwb2sK",
       "endpoints": [
         "https://open.zodileap.com/libra/updates/latest.json"
       ]

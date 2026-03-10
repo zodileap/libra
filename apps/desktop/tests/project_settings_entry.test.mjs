@@ -72,12 +72,10 @@ test("TestProjectSettingsShouldExposeRouteAndSidebarEntry", () => {
 
   // 描述:
   //
-  //   - Main 区应提供“项目信息”入口，允许不经侧边栏更多菜单直接进入项目设置。
+  //   - 新项目页不再承载项目设置入口，项目设置统一从侧边栏项目树进入。
   const agentHomeSource = readDesktopSource("src/modules/agent/pages/agent-home-page.tsx");
-  assert.match(agentHomeSource, /label=\{t\("项目信息"\)\}/);
-  assert.match(agentHomeSource, /icon="settings"/);
-  assert.match(agentHomeSource, /handleOpenProjectSettingsPage/);
-  assert.match(agentHomeSource, /navigate\(`\$\{PROJECT_SETTINGS_PATH\}\?workspaceId=\$\{encodeURIComponent\(selectedWorkspace\.id\)\}`\)/);
+  assert.doesNotMatch(agentHomeSource, /label=\{t\("项目信息"\)\}/);
+  assert.doesNotMatch(agentHomeSource, /handleOpenProjectSettingsPage/);
 });
 
 test("TestProjectSettingsPageShouldSupportProjectCapabilities", () => {
@@ -92,6 +90,7 @@ test("TestProjectSettingsPageShouldSupportProjectCapabilities", () => {
   assert.match(pageSource, /<DeskSettingsRow title=\{t\("项目名称"\)\}>/);
   assert.match(pageSource, /const \[enabledCapabilities, setEnabledCapabilities\] = useState<ProjectWorkspaceCapabilityId\[\]>\(\[\]\);/);
   assert.match(pageSource, /const \[capabilityModalVisible, setCapabilityModalVisible\] = useState\(false\);/);
+  assert.doesNotMatch(pageSource, /setCapabilityPickerVisible/);
   assert.match(pageSource, /listProjectWorkspaceCapabilityManifests\(\)/);
   assert.match(pageSource, /enabledCapabilityManifests/);
   assert.match(pageSource, /disabledCapabilityManifests/);

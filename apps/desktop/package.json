@@ -1,7 +1,7 @@
 {
   "name": "@libra/desktop",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.3",
   "type": "module",
   "scripts": {
     "dev:ui": "node ./scripts/dev-ui.mjs",
@@ -19,7 +19,7 @@
     "react-router-dom": "link:/Users/yoho/code/client/aries_react/node_modules/react-router-dom"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.0.0",
+    "@tauri-apps/cli": "^2.10.1",
     "@types/react": "link:/Users/yoho/code/client/aries_react/node_modules/@types/react",
     "@types/react-dom": "link:/Users/yoho/code/client/aries_react/node_modules/@types/react-dom",
     "@vitejs/plugin-react-swc": "link:/Users/yoho/code/client/aries_react/node_modules/@vitejs/plugin-react-swc",

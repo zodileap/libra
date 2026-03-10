@@ -13,3 +13,6 @@ apps/desktop/src-tauri/exports/
 services/*/cmd/__debug_bin*
 services/*/cmd/cmd
 services/*/log/
+releases
+services/data/
+tmp/

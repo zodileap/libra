@@ -609,7 +609,7 @@ export function ProjectSettingsPage() {
     setName(workspace?.name || "");
     setEnabledCapabilities((workspace?.enabledCapabilities || []) as ProjectWorkspaceCapabilityId[]);
     setDependencyRules(workspace?.dependencyRules || []);
-    setCapabilityPickerVisible(false);
+    setCapabilityModalVisible(false);
   }, [workspace?.dependencyRules, workspace?.enabledCapabilities, workspace?.id, workspace?.name]);
 
   // 描述：
