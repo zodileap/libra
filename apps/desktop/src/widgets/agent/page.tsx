@@ -6,7 +6,7 @@ import {
   AriFlex,
   AriInput,
   AriTypography,
-} from "aries_react";
+} from "@aries-kit/react";
 
 interface AgentStarterItem {
   id: string;

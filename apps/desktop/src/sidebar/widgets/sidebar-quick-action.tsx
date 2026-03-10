@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AriContainer } from "aries_react";
+import { AriContainer } from "@aries-kit/react";
 import { SidebarEntryContent } from "./sidebar-entry-content";
 
 // 描述:

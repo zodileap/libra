@@ -7,7 +7,7 @@ import {
   AriMenu,
   AriTooltip,
   AriTypography,
-} from "aries_react";
+} from "@aries-kit/react";
 import { useNavigate } from "react-router-dom";
 import type { RouteAccess } from "../../router/types";
 import type { DesktopUpdateState, LoginUser } from "../../shell/types";

@@ -13,7 +13,7 @@ import {
   AriModal,
   AriTooltip,
   AriTypography,
-} from "aries_react";
+} from "@aries-kit/react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   bindProjectSessionWorkspace,

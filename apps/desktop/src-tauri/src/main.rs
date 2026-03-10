@@ -1847,8 +1847,8 @@ fn inspect_project_workspace_profile_seed_inner(
         if has_dep("astro") {
             push_unique_string(&mut frontend_stacks, "astro");
         }
-        if has_dep("aries_react") {
-            push_unique_string(&mut frontend_stacks, "aries_react");
+        if has_dep("@aries-kit/react") || has_dep("aries_react") {
+            push_unique_string(&mut frontend_stacks, "@aries-kit/react");
         }
 
         if has_dep("express") {

@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { createPortal } from "react-dom";
-import { AriButton, AriContainer, AriFlex, AriInput, AriSwitch, AriTag, AriTypography } from "aries_react";
+import { AriButton, AriContainer, AriFlex, AriInput, AriSwitch, AriTag, AriTypography } from "@aries-kit/react";
 import type { AiKeyItem } from "../types";
 import {
   DeskEmptyState,

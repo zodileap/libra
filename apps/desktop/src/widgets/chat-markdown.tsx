@@ -1,5 +1,5 @@
 import { Fragment, memo, type ReactNode } from "react";
-import { AriCode, AriContainer } from "aries_react";
+import { AriCode, AriContainer } from "@aries-kit/react";
 
 // 描述:
 //

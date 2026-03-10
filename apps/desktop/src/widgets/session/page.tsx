@@ -15,7 +15,7 @@ import {
   AriSelect,
   AriTooltip,
   AriTypography,
-} from "aries_react";
+} from "@aries-kit/react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useLocation, useNavigate } from "react-router-dom";

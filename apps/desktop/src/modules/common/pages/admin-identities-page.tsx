@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { AriButton, AriCard, AriContainer, AriFlex, AriMessage, AriTypography } from "aries_react";
+import { AriButton, AriCard, AriContainer, AriFlex, AriMessage, AriTypography } from "@aries-kit/react";
 import { listAccountIdentities } from "../../../shared/services/backend-api";
 import type { ConsoleIdentityItem } from "../../../shared/types";
 import { useDesktopI18n } from "../../../shared/i18n";

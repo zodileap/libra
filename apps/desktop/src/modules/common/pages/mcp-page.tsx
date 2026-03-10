@@ -15,7 +15,7 @@ import {
   AriSwitch,
   AriTooltip,
   AriTypography,
-} from "aries_react";
+} from "@aries-kit/react";
 import type {
   McpDomain,
   McpOverview,

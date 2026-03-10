@@ -50,17 +50,17 @@ test("TestDesktopThemeOverrideShouldSetBorderRadiusToRem", () => {
 
 test("TestDesktopMainShouldLoadThemeOverrideAfterAriesStyles", () => {
   const source = readDesktopMainSource();
-  const indexTheme = source.indexOf('import "aries_react/theme/components/index.scss";');
-  const indexStyle = source.indexOf('import "aries_react/dist/assets/style.css";');
+  const indexTheme = source.indexOf('import "@aries-kit/react/theme/index.scss";');
+  const indexStyle = source.indexOf('import "@aries-kit/react/style.css";');
   const indexOverride = source.indexOf('import "./theme-overrides.css";');
 
-  assert.equal(indexTheme >= 0, true, "main.tsx 缺少 aries_react 主题组件样式引入");
-  assert.equal(indexStyle >= 0, true, "main.tsx 缺少 aries_react 编译样式引入");
+  assert.equal(indexTheme >= 0, true, "main.tsx 缺少 @aries-kit/react 主题样式引入");
+  assert.equal(indexStyle >= 0, true, "main.tsx 缺少 @aries-kit/react 编译样式引入");
   assert.equal(indexOverride >= 0, true, "main.tsx 缺少 theme-overrides.css 引入");
   assert.equal(
     indexOverride > indexTheme && indexOverride > indexStyle,
     true,
-    "theme-overrides.css 必须在 aries_react 样式之后引入，确保覆盖生效"
+    "theme-overrides.css 必须在 @aries-kit/react 样式之后引入，确保覆盖生效"
   );
 });
 

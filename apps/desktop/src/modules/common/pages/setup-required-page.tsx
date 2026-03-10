@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AriButton, AriCard, AriContainer, AriFlex, AriInput, AriTypography } from "aries_react";
+import { AriButton, AriCard, AriContainer, AriFlex, AriInput, AriTypography } from "@aries-kit/react";
 import type { DesktopBackendConfig } from "../../../shared/types";
 import { useDesktopI18n } from "../../../shared/i18n";
 

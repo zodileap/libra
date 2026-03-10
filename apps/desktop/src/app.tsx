@@ -1,5 +1,5 @@
 import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AriApp, AriMessage, setAppConfig, setColorTheme } from "aries_react";
+import { AriApp, AriMessage, setAppConfig, setColorTheme } from "@aries-kit/react";
 import { invoke } from "@tauri-apps/api/core";
 import { HashRouter } from "react-router-dom";
 import { DesktopRouter } from "./router";

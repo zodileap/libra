@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { AriButton, AriContainer, AriFlex, AriSwitch } from "aries_react";
+import { AriButton, AriContainer, AriFlex, AriSwitch } from "@aries-kit/react";
 import { DeskPageHeader, DeskSectionTitle, DeskSettingsRow, DeskStatusText } from "../../../widgets/settings-primitives";
 import { useDesktopI18n } from "../../../shared/i18n";
 

@@ -1,4 +1,4 @@
-import { AriCode, AriContainer, AriTypography } from "aries_react";
+import { AriCode, AriContainer, AriTypography } from "@aries-kit/react";
 import type { KeyboardEvent as ReactKeyboardEvent, JSX } from "react";
 import { translateDesktopText } from "../../shared/i18n";
 

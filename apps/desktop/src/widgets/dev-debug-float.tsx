@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AriButton, AriCard, AriContainer, AriMessage, AriTypography } from "aries_react";
+import { AriButton, AriCard, AriContainer, AriMessage, AriTypography } from "@aries-kit/react";
 import { useDesktopI18n } from "../shared/i18n";
 
 // 描述:

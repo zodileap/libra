@@ -32,7 +32,7 @@ import {
   AriSelect,
   AriTag,
   AriTypography,
-} from "aries_react";
+} from "@aries-kit/react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { listAgentSkills } from "../../modules/common/services";
 import type { AgentSkillItem } from "../../modules/common/services";

@@ -9,8 +9,7 @@
     "skipLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"],
-      "aries_react": ["../../../client/aries_react/src/index.ts"]
+      "@/*": ["src/*"]
     }
   },
   "include": ["src"]

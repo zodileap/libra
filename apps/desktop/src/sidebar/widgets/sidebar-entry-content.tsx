@@ -1,4 +1,4 @@
-import { AriFlex, AriIcon, AriTypography } from "aries_react";
+import { AriFlex, AriIcon, AriTypography } from "@aries-kit/react";
 
 // 描述：统一管理侧边栏入口图标的 fill 变体，避免在 JSX 中散落硬编码。
 const SIDEBAR_ICON_FILL_MAP: Record<string, string> = {

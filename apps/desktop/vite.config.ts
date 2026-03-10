@@ -3,22 +3,30 @@ import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react-swc";
 
 const desktopSrcDir = normalizePath(fileURLToPath(new URL("./src/", import.meta.url)));
-const ariesReactRootDir = normalizePath(fileURLToPath(new URL("../../../client/aries_react/", import.meta.url)));
-const ariesReactNodeModulesDir = `${ariesReactRootDir}/node_modules`;
-const ariesReactDistDir = `${ariesReactRootDir}/dist`;
+// 描述：
+//
+//   - 标记 `@aries-kit/react` 在 `node_modules` 中的路径片段，供动态导入补丁识别发布包产物。
+const ariesKitReactPackageSegment = "/@aries-kit/react/";
 
+// 描述：
+//
+//   - 统一将文件路径转换为 POSIX 斜杠，避免 Windows 和 pnpm 虚拟目录下的路径匹配失效。
 function normalizePath(value: string) {
   return value.replace(/\\/g, "/");
 }
 
+// 描述：
+//
+//   - 为 `@aries-kit/react` 产物中的动态导入补上 `@vite-ignore`，兼容 Tauri `FileAccess.asBrowserUri`
+//     生成的运行时脚本地址，避免构建期被 Vite 误改写。
 function patchAriesDynamicImport() {
   return {
-    name: "patch-aries-react-dynamic-import",
+    name: "patch-aries-kit-react-dynamic-import",
     enforce: "pre" as const,
     transform(code: string, id: string) {
       const normalizedId = normalizePath(id);
 
-      if (!normalizedId.includes(`${ariesReactDistDir}/index-`) || !normalizedId.endsWith(".mjs")) {
+      if (!normalizedId.includes(ariesKitReactPackageSegment) || !/\/index-[^/]+\.mjs$/.test(normalizedId)) {
         return null;
       }
 
@@ -67,43 +75,11 @@ export default defineConfig(({ mode }) => {
     },
     envPrefix: ["VITE_", "TAURI_"],
     resolve: {
-      dedupe: ["react", "react-dom"],
+      dedupe: ["react", "react-dom", "react-router-dom"],
       alias: [
         {
           find: /^@\//,
           replacement: desktopSrcDir,
-        },
-        {
-          find: /^react$/,
-          replacement: `${ariesReactNodeModulesDir}/react/index.js`,
-        },
-        {
-          find: /^react\/jsx-runtime$/,
-          replacement: `${ariesReactNodeModulesDir}/react/jsx-runtime.js`,
-        },
-        {
-          find: /^react\/jsx-dev-runtime$/,
-          replacement: `${ariesReactNodeModulesDir}/react/jsx-dev-runtime.js`,
-        },
-        {
-          find: /^react-dom$/,
-          replacement: `${ariesReactNodeModulesDir}/react-dom/index.js`,
-        },
-        {
-          find: /^react-dom\/client$/,
-          replacement: `${ariesReactNodeModulesDir}/react-dom/client.js`,
-        },
-        {
-          find: /^aries_react$/,
-          replacement: `${ariesReactDistDir}/index.es.js`,
-        },
-        {
-          find: /^aries_react\/theme\//,
-          replacement: `${ariesReactDistDir}/theme/`,
-        },
-        {
-          find: /^aries_react\/dist\//,
-          replacement: `${ariesReactDistDir}/`,
         },
       ],
     },

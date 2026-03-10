@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { AriButton, AriContainer, AriFlex, AriInput, AriModal, AriTag, AriTypography } from "aries_react";
+import { AriButton, AriContainer, AriFlex, AriInput, AriModal, AriTag, AriTypography } from "@aries-kit/react";
 import {
   bootstrapProjectWorkspaceProfile,
   PROJECT_WORKSPACE_GROUPS_UPDATED_EVENT,

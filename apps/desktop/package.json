@@ -12,18 +12,20 @@
     "package": "pnpm exec tauri build --bundles app"
   },
   "dependencies": {
+    "@aries-kit/react": "^0.2.6",
     "@tauri-apps/api": "^2.0.0",
     "@xyflow/react": "^12.10.1",
-    "react": "link:../../../client/aries_react/node_modules/react",
-    "react-dom": "link:../../../client/aries_react/node_modules/react-dom",
-    "react-router-dom": "link:../../../client/aries_react/node_modules/react-router-dom"
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-router-dom": "^6.30.3"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.10.1",
-    "@types/react": "link:../../../client/aries_react/node_modules/@types/react",
-    "@types/react-dom": "link:../../../client/aries_react/node_modules/@types/react-dom",
-    "@vitejs/plugin-react-swc": "link:../../../client/aries_react/node_modules/@vitejs/plugin-react-swc",
-    "typescript": "link:../../../client/aries_react/node_modules/typescript",
-    "vite": "link:../../../client/aries_react/node_modules/vite"
+    "@types/react": "^18.3.28",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react-swc": "^3.11.0",
+    "sass-embedded": "^1.97.3",
+    "typescript": "^5.9.3",
+    "vite": "^5.4.21"
   }
 }

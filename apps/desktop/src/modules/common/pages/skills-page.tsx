@@ -9,7 +9,7 @@ import {
   AriModal,
   AriTooltip,
   AriTypography,
-} from "aries_react";
+} from "@aries-kit/react";
 import type { AgentSkillItem, SkillOverview } from "../services";
 import {
   importAgentSkillFromPath,

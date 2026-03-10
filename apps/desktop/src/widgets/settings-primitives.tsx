@@ -12,7 +12,7 @@ import {
   AriFlex,
   AriModal,
   AriTypography,
-} from "aries_react";
+} from "@aries-kit/react";
 import { useDesktopI18n } from "../shared/i18n";
 
 // 描述：

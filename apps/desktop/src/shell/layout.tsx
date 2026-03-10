@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Outlet } from "react-router-dom";
-import { AriContainer } from "aries_react";
+import { AriContainer } from "@aries-kit/react";
 import { ClientSidebar } from "../sidebar";
 import type { RouteAccess } from "../router/types";
 import type { AuthAvailableAgentItem, ConsoleIdentityItem, DesktopUpdateState, LoginUser } from "./types";

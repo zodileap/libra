@@ -164,6 +164,7 @@ export const CODE_FRAMEWORK_HINT_KEYWORDS = [
   "next",
   "nuxt",
   "solid",
+  "@aries-kit/react",
   "aries_react",
   "antd",
   "ant design",

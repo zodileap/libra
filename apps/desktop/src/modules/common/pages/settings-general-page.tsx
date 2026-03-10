@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AriButton, AriContainer, AriFlex, AriInput, AriSelect, AriSwitch, AriTypography } from "aries_react";
+import { AriButton, AriContainer, AriFlex, AriInput, AriSelect, AriSwitch, AriTypography } from "@aries-kit/react";
 import type { ColorThemeMode, ConsoleIdentityItem, DesktopBackendConfig } from "../types";
 import { DeskPageHeader, DeskSectionTitle, DeskSettingsRow, DeskStatusText } from "../../../widgets/settings-primitives";
 import {

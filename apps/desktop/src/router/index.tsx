@@ -1,6 +1,6 @@
 import { Suspense, useMemo, type ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
-import { AriContainer, AriTypography } from "aries_react";
+import { AriContainer, AriTypography } from "@aries-kit/react";
 import {
   CommonAiKeyPageLazy,
   CommonWorkflowEditorPageLazy,

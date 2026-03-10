@@ -7,7 +7,7 @@ import {
   AriIcon,
   AriMessage,
   AriTooltip,
-} from "aries_react";
+} from "@aries-kit/react";
 import { useNavigate } from "react-router-dom";
 import {
   createAgentWorkflow,

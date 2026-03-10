@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
-import { AriButton, AriCard, AriContainer, AriFlex, AriTypography } from "aries_react";
+import { AriButton, AriCard, AriContainer, AriFlex, AriTypography } from "@aries-kit/react";
 import {
   listAccountIdentities,
   listManageableUsers,

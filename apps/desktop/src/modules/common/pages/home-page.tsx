@@ -1,4 +1,4 @@
-import { AriCard, AriContainer, AriFlex, AriTypography } from "aries_react";
+import { AriCard, AriContainer, AriFlex, AriTypography } from "@aries-kit/react";
 import { resolveShortcutItems } from "../../../shared/data";
 import type { AuthAvailableAgentItem } from "../../../shared/types";
 import { useDesktopI18n } from "../../../shared/i18n";
