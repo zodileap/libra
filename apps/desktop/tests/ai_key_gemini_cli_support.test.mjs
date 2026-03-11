@@ -37,30 +37,45 @@ test("TestAiKeyShouldSupportGeminiCliProvider", () => {
   // 描述：
   //
   //   - AI Key 页面应将 gemini-cli 视为本地 CLI Provider，不展示 API Key 输入框，并将标题挂到全局标题栏 slot。
+  //   - 本地 CLI Provider 额外提供主动检测按钮，页面布局改为单行横向结构。
   assert.match(aiKeyPageSource, /function isLocalCliProvider\(provider: AiKeyItem\["provider"\]\): boolean \{/);
   assert.match(aiKeyPageSource, /provider === "codex" \|\| provider === "gemini-cli"/);
-  assert.match(aiKeyPageSource, /local-cli（无需 API Key）/);
   assert.match(aiKeyPageSource, /useDesktopHeaderSlot/);
   assert.match(aiKeyPageSource, /createPortal\(headerNode, headerSlotElement\)/);
   assert.match(aiKeyPageSource, /const headerNode = useMemo\(\(\) => \(/);
   assert.match(aiKeyPageSource, /<DeskPageHeader[\s\S]*mode="slot"/);
-  assert.match(aiKeyPageSource, /function buildAiKeyCardSummary\(/);
+  assert.match(aiKeyPageSource, /interface LocalCliHealthResponse \{/);
+  assert.match(aiKeyPageSource, /function resolveCliCheckCommand\(provider: AiKeyItem\["provider"\]\): string \| null \{/);
+  assert.match(aiKeyPageSource, /function buildCliHealthFeedback\(/);
   assert.match(aiKeyPageSource, /function AiKeyProviderCard\(/);
   assert.match(aiKeyPageSource, /className="desk-ai-key-list"/);
   assert.match(aiKeyPageSource, /className="desk-ai-key-card"/);
-  assert.match(aiKeyPageSource, /AriTag/);
-  assert.match(aiKeyPageSource, /label=\{t\("默认"\)\}/);
-  assert.match(aiKeyPageSource, /label=\{t\("本地 CLI"\)\}/);
+  assert.match(aiKeyPageSource, /className=\{`desk-ai-key-card-body\$\{localCliProvider \? " is-cli" : " is-api"\}`\}[\s\S]*justify="flex-start"/);
+  assert.match(aiKeyPageSource, /className="desk-ai-key-card-actions" align="center" justify="flex-start" space=\{8\}/);
+  assert.match(aiKeyPageSource, /className="desk-ai-key-card-toggle" align="center" justify="flex-start" space=\{8\}/);
+  assert.match(aiKeyPageSource, /icon="fact_check"/);
+  assert.match(aiKeyPageSource, /label=\{checking \? t\("检测中\.\.\."\) : t\("检测"\)\}/);
+  assert.match(aiKeyPageSource, /const response = await invoke<LocalCliHealthResponse>\(command, \{\}\);/);
+  assert.match(aiKeyPageSource, /AriMessage\.success\(/);
+  assert.match(aiKeyPageSource, /AriMessage\.warning\(/);
+  assert.match(aiKeyPageSource, /AriMessage\.error\(/);
   assert.match(aiKeyPageSource, /icon="star"/);
+  assert.doesNotMatch(aiKeyPageSource, /AriTag/);
   assert.doesNotMatch(aiKeyPageSource, /DeskSettingsRow/);
   assert.match(styleSource, /\.desk-ai-key-list/);
   assert.match(styleSource, /\.desk-ai-key-card/);
   assert.match(styleSource, /\.desk-ai-key-card-body/);
+  assert.match(styleSource, /\.desk-ai-key-card-body\.is-api \.desk-ai-key-card-primary/);
+  assert.match(styleSource, /\.desk-ai-key-card-primary/);
+  assert.match(styleSource, /--desk-ai-key-card-actions-width:/);
+  assert.match(styleSource, /grid-template-columns: minmax\(0, 1fr\) var\(--desk-ai-key-card-actions-width\);/);
   assert.match(styleSource, /\.desk-ai-key-card-actions/);
-  assert.match(messagesSource, /"默认": "默认"/);
-  assert.match(messagesSource, /"默认": "Default"/);
-  assert.match(messagesSource, /"本地 CLI": "本地 CLI"/);
-  assert.match(messagesSource, /"本地 CLI": "Local CLI"/);
+  assert.match(messagesSource, /"检测": "检测"/);
+  assert.match(messagesSource, /"检测": "Check"/);
+  assert.match(messagesSource, /"检测中\.\.\.": "检测中\.\.\."/);
+  assert.match(messagesSource, /"检测中\.\.\.": "Checking\.\.\."/);
+  assert.match(messagesSource, /"未检测到可用的 \{\{providerLabel\}\}，请先安装后再重试。"/);
+  assert.match(messagesSource, /"\{\{providerLabel\}\} 检测失败，请稍后重试。"/);
 
   // 描述：
   //

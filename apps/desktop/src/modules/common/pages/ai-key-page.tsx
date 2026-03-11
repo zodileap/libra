@@ -1,6 +1,7 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { AriButton, AriContainer, AriFlex, AriInput, AriSwitch, AriTag, AriTypography } from "@aries-kit/react";
+import { AriButton, AriContainer, AriFlex, AriInput, AriMessage, AriSwitch, AriTypography } from "@aries-kit/react";
+import { invoke } from "@tauri-apps/api/core";
 import type { AiKeyItem } from "../types";
 import {
   DeskEmptyState,
@@ -19,20 +20,15 @@ interface AiKeyPageProps {
 
 // 描述:
 //
-//   - 对 AI Key 进行脱敏展示，避免在设置页面直接暴露完整密钥。
+//   - 定义本地 CLI 健康检查返回结构，供 AI Key 页面主动检测按钮复用。
 //
-// Params:
-//
-//   - raw: 原始密钥文本。
-//
-// Returns:
-//
-//   - 脱敏后的字符串。
-function maskKey(raw: string, emptyLabel: string): string {
-  const value = raw.trim();
-  if (!value) return emptyLabel;
-  if (value.length <= 8) return `${value.slice(0, 2)}***`;
-  return `${value.slice(0, 4)}...${value.slice(-4)}`;
+interface LocalCliHealthResponse {
+  available: boolean;
+  outdated: boolean;
+  version: string;
+  minimum_version: string;
+  bin_path: string;
+  message: string;
 }
 
 // 描述：
@@ -52,35 +48,73 @@ function isLocalCliProvider(provider: AiKeyItem["provider"]): boolean {
 
 // 描述：
 //
-//   - 生成 AI Key 卡片摘要文案，将 Key 与更新时间拆成更适合卡片布局的两段文本。
+//   - 根据 Provider 解析对应的本地 CLI 检测命令，便于页面侧统一触发主动校验。
 //
 // Params:
 //
-//   - item: 当前 Provider 配置。
-//   - emptyLabel: 未填写时的占位文案。
+//   - provider: Provider 标识。
+//
+// Returns:
+//
+//   - 本地 CLI 检测命令；非 CLI Provider 返回 null。
+function resolveCliCheckCommand(provider: AiKeyItem["provider"]): string | null {
+  if (provider === "codex") {
+    return "check_codex_cli_health";
+  }
+  if (provider === "gemini-cli") {
+    return "check_gemini_cli_health";
+  }
+  return null;
+}
+
+// 描述：
+//
+//   - 将本地 CLI 健康检查结果转换成页面消息提示，避免把底层返回结构直接耦合到视图层。
+//
+// Params:
+//
+//   - providerLabel: Provider 展示名称。
+//   - response: 健康检查结果。
 //   - t: 国际化翻译函数。
 //
 // Returns:
 //
-//   - keyText: Key 摘要。
-//   - updatedAtText: 更新时间摘要。
-function buildAiKeyCardSummary(
-  item: AiKeyItem,
-  emptyLabel: string,
+//   - level: 消息级别。
+//   - content: 面向用户的提示文案。
+function buildCliHealthFeedback(
+  providerLabel: string,
+  response: LocalCliHealthResponse,
   t: (key: string, vars?: Record<string, string | number>) => string,
 ): {
-  keyText: string;
-  updatedAtText: string;
+  level: "success" | "warning";
+  content: string;
 } {
-  const localCliProvider = isLocalCliProvider(item.provider);
+  const detail = response.bin_path.trim()
+    ? `\n${t("当前路径：{{path}}", { path: response.bin_path })}`
+    : "";
+  if (response.available && !response.outdated) {
+    return {
+      level: "success",
+      content: `${t("{{providerLabel}} 可用，版本 {{version}}。", {
+        providerLabel,
+        version: response.version || "-",
+      })}${detail}`,
+    };
+  }
+  if (response.available && response.version.trim()) {
+    return {
+      level: "warning",
+      content: `${t("{{providerLabel}} 版本过低，当前 {{version}}，最低要求 {{minimumVersion}}。", {
+        providerLabel,
+        version: response.version,
+        minimumVersion: response.minimum_version || "-",
+      })}${detail}`,
+    };
+  }
   return {
-    keyText: t("Key: {{key}}", {
-      key: localCliProvider
-        ? t("local-cli（无需 API Key）")
-        : maskKey(item.keyValue, emptyLabel),
-    }),
-    updatedAtText: t("更新于 {{updatedAt}}", {
-      updatedAt: item.updatedAt,
+    level: "warning",
+    content: t("未检测到可用的 {{providerLabel}}，请先安装后再重试。", {
+      providerLabel,
     }),
   };
 }
@@ -91,65 +125,43 @@ function buildAiKeyCardSummary(
 interface AiKeyProviderCardProps {
   item: AiKeyItem;
   isDefault: boolean;
+  checking: boolean;
   onToggleEnabled: (checked: boolean) => void;
   onMoveAsPrimary: () => void;
   onUpdateKeyValue: (value: string) => void;
+  onCheckCli: (() => void) | null;
 }
 
 // 描述：
 //
-//   - 渲染 AI Key Provider 专用卡片，统一承载标题标签、摘要信息、密钥输入与启停/默认操作。
+//   - 渲染 AI Key Provider 专用卡片。
+//   - 本地 CLI Provider 采用“名称 + 启停/默认/检测”单行布局。
+//   - API Provider 采用“名称 + 输入框 + 启停/默认”单行布局。
 function AiKeyProviderCard({
   item,
   isDefault,
+  checking,
   onToggleEnabled,
   onMoveAsPrimary,
   onUpdateKeyValue,
+  onCheckCli,
 }: AiKeyProviderCardProps) {
   const { t } = useDesktopI18n();
   const localCliProvider = isLocalCliProvider(item.provider);
-  const summary = buildAiKeyCardSummary(item, t("(未填写)"), t);
   return (
     <AriContainer className="desk-ai-key-card" padding={0}>
       <AriFlex
-        className="desk-ai-key-card-body"
-        align="flex-start"
-        justify="space-between"
+        className={`desk-ai-key-card-body${localCliProvider ? " is-cli" : " is-api"}`}
+        align="center"
+        justify="flex-start"
+        space={12}
       >
-        <AriContainer className="desk-ai-key-card-main" padding={0}>
-          <AriFlex className="desk-ai-key-card-title-line" align="center" space={8}>
-            <AriTypography
-              className="desk-ai-key-card-title"
-              variant="h4"
-              value={item.providerLabel}
-            />
-            {isDefault ? (
-              <AriTag
-                color="brand"
-                size="sm"
-                label={t("默认")}
-              />
-            ) : null}
-            {localCliProvider ? (
-              <AriTag
-                bordered
-                size="sm"
-                label={t("本地 CLI")}
-              />
-            ) : null}
-          </AriFlex>
-          <AriFlex className="desk-ai-key-card-meta" align="center" space={8}>
-            <AriTypography
-              className="desk-ai-key-card-meta-text"
-              variant="caption"
-              value={summary.keyText}
-            />
-            <AriTypography
-              className="desk-ai-key-card-meta-text"
-              variant="caption"
-              value={summary.updatedAtText}
-            />
-          </AriFlex>
+        <AriFlex className="desk-ai-key-card-primary" align="center" space={12}>
+          <AriTypography
+            className="desk-ai-key-card-title"
+            variant="body"
+            value={item.providerLabel}
+          />
           {!localCliProvider ? (
             <AriContainer className="desk-ai-key-card-input-wrap" padding={0}>
               <AriInput
@@ -160,36 +172,38 @@ function AiKeyProviderCard({
               />
             </AriContainer>
           ) : null}
-        </AriContainer>
-        <AriContainer className="desk-ai-key-card-actions" padding={0}>
-          <AriFlex
-            className="desk-ai-key-card-actions-stack"
-            vertical
-            align="flex-end"
-            space={8}
-          >
-            <AriFlex className="desk-ai-key-card-toggle" align="center" justify="flex-end" space={8}>
-              <AriTypography
-                className="desk-ai-key-card-meta-text"
-                variant="caption"
-                value={t("启用")}
-              />
-              <AriSwitch
-                checked={item.enabled}
-                onChange={onToggleEnabled}
-              />
-            </AriFlex>
-            {!isDefault ? (
-              <AriButton
-                type="default"
-                icon="star"
-                size="sm"
-                label={t("设为默认")}
-                onClick={onMoveAsPrimary}
-              />
-            ) : null}
+        </AriFlex>
+        <AriFlex className="desk-ai-key-card-actions" align="center" justify="flex-start" space={8}>
+          <AriFlex className="desk-ai-key-card-toggle" align="center" justify="flex-start" space={8}>
+            <AriTypography
+              className="desk-ai-key-card-meta-text"
+              variant="caption"
+              value={t("启用")}
+            />
+            <AriSwitch
+              checked={item.enabled}
+              onChange={onToggleEnabled}
+            />
           </AriFlex>
-        </AriContainer>
+          <AriButton
+            type="default"
+            icon="star"
+            size="sm"
+            label={t("设为默认")}
+            disabled={isDefault}
+            onClick={onMoveAsPrimary}
+          />
+          {localCliProvider && onCheckCli ? (
+            <AriButton
+              type="default"
+              icon="fact_check"
+              size="sm"
+              label={checking ? t("检测中...") : t("检测")}
+              disabled={checking}
+              onClick={onCheckCli}
+            />
+          ) : null}
+        </AriFlex>
       </AriFlex>
     </AriContainer>
   );
@@ -201,6 +215,7 @@ function AiKeyProviderCard({
 export function AiKeyPage({ aiKeys, onAiKeysChange }: AiKeyPageProps) {
   const { formatDateTime, t } = useDesktopI18n();
   const headerSlotElement = useDesktopHeaderSlot();
+  const [checkingProviderIds, setCheckingProviderIds] = useState<Record<string, boolean>>({});
   // 描述:
   //
   //   - 生成统一格式的更新时间文本。
@@ -249,6 +264,54 @@ export function AiKeyPage({ aiKeys, onAiKeysChange }: AiKeyPageProps) {
 
   // 描述：
   //
+  //   - 主动检测本地 CLI Provider 可用性，并通过统一消息反馈给用户。
+  //
+  // Params:
+  //
+  //   - item: 待检测的 Provider 配置。
+  const checkCliProvider = async (item: AiKeyItem) => {
+    const command = resolveCliCheckCommand(item.provider);
+    if (!command) {
+      return;
+    }
+
+    setCheckingProviderIds((current) => ({
+      ...current,
+      [item.id]: true,
+    }));
+
+    try {
+      const response = await invoke<LocalCliHealthResponse>(command, {});
+      const feedback = buildCliHealthFeedback(item.providerLabel, response, t);
+      const messageConfig = {
+        content: feedback.content,
+        duration: feedback.level === "success" ? 2200 : 5000,
+        showClose: true,
+      };
+      if (feedback.level === "success") {
+        AriMessage.success(messageConfig);
+      } else {
+        AriMessage.warning(messageConfig);
+      }
+    } catch {
+      AriMessage.error({
+        content: t("{{providerLabel}} 检测失败，请稍后重试。", {
+          providerLabel: item.providerLabel,
+        }),
+        duration: 5000,
+        showClose: true,
+      });
+    } finally {
+      setCheckingProviderIds((current) => {
+        const next = { ...current };
+        delete next[item.id];
+        return next;
+      });
+    }
+  };
+
+  // 描述：
+  //
   //   - 生成 AI Key 页面标题栏内容，并挂载到全局标题栏 slot，避免在 main 区重复渲染独立 Header。
   const headerNode = useMemo(() => (
     <DeskPageHeader
@@ -273,12 +336,16 @@ export function AiKeyPage({ aiKeys, onAiKeysChange }: AiKeyPageProps) {
             <AriContainer className="desk-ai-key-list" padding={0}>
               {aiKeys.map((item, index) => (
                 <AiKeyProviderCard
-                key={item.id}
+                  key={item.id}
                   item={item}
                   isDefault={index === 0}
+                  checking={checkingProviderIds[item.id] === true}
                   onToggleEnabled={(checked) => patchItem(item.id, { enabled: checked })}
                   onMoveAsPrimary={() => moveAsPrimary(item.id)}
                   onUpdateKeyValue={(next) => patchItem(item.id, { keyValue: next })}
+                  onCheckCli={isLocalCliProvider(item.provider) ? () => {
+                    void checkCliProvider(item);
+                  } : null}
                 />
               ))}
             </AriContainer>

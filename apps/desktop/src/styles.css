@@ -79,7 +79,7 @@
   --desk-user-menu-meta-color: color-mix(in srgb, var(--z-color-text) 68%, var(--z-color-border-glass));
   --desk-admin-card-active-border: color-mix(in srgb, var(--z-color-border-active) 62%, var(--z-color-border-glass));
   --desk-admin-card-active-shadow: var(--z-color-box-shadow);
-  --desk-ai-key-card-actions-width: calc(var(--z-inset) * 9.5);
+  --desk-ai-key-card-actions-width: calc(var(--z-inset) * 23);
   --desk-ai-key-card-input-max-width: calc(var(--z-inset) * 20);
   --desk-ai-key-card-surface: color-mix(in srgb, var(--desk-container-bg) 92%, var(--z-color-bg-subtle));
   --desk-agent-home-shell-width: calc(var(--z-inset) * 34);
@@ -733,43 +733,47 @@ body {
 .desk-ai-key-card-body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--desk-ai-key-card-actions-width);
+  align-items: center;
+  min-height: calc(var(--z-inset) * 4.5);
   gap: var(--z-inset);
   padding: var(--z-inset);
 }
 
-.desk-ai-key-card-main {
+.desk-ai-key-card-primary {
+  flex: 1 1 auto;
   min-width: 0;
-  display: grid;
-  gap: var(--z-inset-sm);
 }
 
-.desk-ai-key-card-title-line,
-.desk-ai-key-card-meta {
-  flex-wrap: wrap;
+.desk-ai-key-card-body.is-api .desk-ai-key-card-primary {
+  gap: var(--z-inset);
 }
 
 .desk-ai-key-card-title {
   min-width: 0;
+  font-weight: var(--z-font-weight-semibold, 600);
+  white-space: nowrap;
 }
 
 .desk-ai-key-card-meta-text {
   color: var(--desk-user-menu-meta-color);
+  white-space: nowrap;
 }
 
 .desk-ai-key-card-input-wrap {
-  width: min(100%, var(--desk-ai-key-card-input-max-width));
+  flex: 1 1 var(--desk-ai-key-card-input-max-width);
+  min-width: 0;
+  max-width: var(--desk-ai-key-card-input-max-width);
 }
 
 .desk-ai-key-card-actions {
-  min-width: 0;
-}
-
-.desk-ai-key-card-actions-stack {
   width: 100%;
+  flex-wrap: wrap;
+  min-width: 0;
+  row-gap: var(--z-inset-xs);
 }
 
 .desk-ai-key-card-toggle {
-  width: 100%;
+  white-space: nowrap;
 }
 
 .desk-agent-settings-note-card {
@@ -2189,18 +2193,26 @@ body {
 
   .desk-ai-key-card-body {
     grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .desk-ai-key-card-body.is-api .desk-ai-key-card-primary {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .desk-ai-key-card-input-wrap {
     width: 100%;
+    max-width: none;
   }
 
-  .desk-ai-key-card-actions-stack {
-    align-items: flex-start;
-  }
-
+  .desk-ai-key-card-actions,
   .desk-ai-key-card-toggle {
     justify-content: flex-start;
+  }
+
+  .desk-ai-key-card-actions {
+    width: 100%;
   }
 
   .desk-page-header {
