@@ -252,13 +252,16 @@ test("TestDevDebugFloatShouldUseCompactCopyFirstPanel", () => {
 
   // 描述:
   //
-  //   - Dev 调试窗口应采用精简模式，仅保留复制入口与基础提示，不再展示过程日志列表。
+  //   - Dev 调试窗口应采用极简模式，仅保留拖动手柄与复制入口，不再展示说明文案和过程日志列表。
   assert.match(source, /label=\{t\("复制会话内容"\)\}/);
   assert.match(source, /resolveCopyTargetSessionId/);
   assert.match(source, /libra:session-debug-request/);
   assert.match(source, /libra:session-copy-request/);
   assert.match(source, /libra:session-copy-result/);
-  assert.match(source, /t\("当前会话已连接，点击“复制会话内容”可导出完整排查信息。"\)/);
+  assert.match(source, /aria-label=\{t\("拖动调试窗口"\)\}/);
+  assert.match(source, /className="desk-dev-debug-drag-handle"/);
+  assert.match(source, /<AriIcon name="drag_indicator" \/>/);
+  assert.match(source, /className=\{`desk-dev-debug-float\$\{dragging \? " is-dragging" : ""\}`\}/);
   assert.doesNotMatch(source, /执行全链路（前端视角）/);
   assert.doesNotMatch(source, /Agent 日志/);
   assert.doesNotMatch(source, /Workflow 步骤/);
@@ -266,7 +269,21 @@ test("TestDevDebugFloatShouldUseCompactCopyFirstPanel", () => {
   assert.doesNotMatch(source, /消息数=/);
   assert.doesNotMatch(source, /暂无全链路记录/);
   assert.doesNotMatch(source, /暂无 session 轨迹记录/);
+  assert.doesNotMatch(source, /t\("Dev 调试窗口"\)/);
+  assert.doesNotMatch(source, /t\("展开"\)/);
+  assert.doesNotMatch(source, /t\("请先打开一个会话，再复制会话内容。"\)/);
+  assert.doesNotMatch(source, /t\("当前会话已连接，点击“复制会话内容”可导出完整排查信息。"\)/);
+  assert.doesNotMatch(source, /desk-dev-debug-body/);
+  assert.doesNotMatch(source, /AriTypography/);
+  assert.doesNotMatch(source, /unfold_more/);
+  assert.doesNotMatch(source, /unfold_less/);
   assert.match(styleSource, /\.desk-dev-debug-head-actions/);
-  assert.match(styleSource, /\.desk-dev-debug-line/);
-  assert.match(styleSource, /overflow-wrap:\s*anywhere/);
+  assert.match(styleSource, /\.desk-dev-debug-head-leading/);
+  assert.match(styleSource, /\.desk-dev-debug-drag-handle \{/);
+  assert.match(styleSource, /\.desk-dev-debug-float\.is-dragging \.desk-dev-debug-drag-handle \{/);
+  assert.match(styleSource, /\.desk-dev-debug-float,\s*\.desk-dev-debug-float \*,\s*\.desk-dev-debug-float \*::before,\s*\.desk-dev-debug-float \*::after \{[\s\S]*transition:\s*none !important;[\s\S]*animation:\s*none !important;/);
+  assert.doesNotMatch(styleSource, /\.desk-dev-debug-body/);
+  assert.doesNotMatch(styleSource, /\.desk-dev-debug-line/);
+  assert.doesNotMatch(styleSource, /\.desk-dev-debug-list/);
+  assert.doesNotMatch(styleSource, /\.desk-dev-debug-float\.collapsed/);
 });

@@ -412,22 +412,6 @@ function matchSidebarMode(pathname: string): "home" | "agent" | "settings" | "wo
   return "home";
 }
 
-// 描述:
-//
-//   - 判断统一智能体侧边栏是否需要显示返回 Home 头部；当前仅项目设置页属于真正的子页，会话页和 Home 不显示返回。
-//
-// Params:
-//
-//   - pathname: 当前路由路径。
-//
-// Returns:
-//
-//   - true: 显示返回头部。
-//   - false: 隐藏返回头部。
-function shouldShowAgentSidebarBackHeader(pathname: string): boolean {
-  return pathname.startsWith(PROJECT_SETTINGS_PATH);
-}
-
 // 描述：将 runtime 会话实体转换为前端侧边栏会话项。
 function toAgentSession(agentKey: AgentKey, entity: { id: string; last_at?: string }): AgentSession {
   const updatedAtText = toSessionUpdatedAtText(entity.last_at);
@@ -601,7 +585,6 @@ function AgentSidebar({
   selectedIdentity,
   onLogout,
   agentKey,
-  showBackHeader = true,
   routeAccess,
   desktopUpdateState,
   onCheckDesktopUpdate,
@@ -611,7 +594,6 @@ function AgentSidebar({
   selectedIdentity: ConsoleIdentityItem | null;
   onLogout: () => Promise<void>;
   agentKey: AgentKey;
-  showBackHeader?: boolean;
   routeAccess: RouteAccess;
   desktopUpdateState: DesktopUpdateState;
   onCheckDesktopUpdate: () => Promise<void>;
@@ -1939,7 +1921,6 @@ function AgentSidebar({
 
   return (
     <AriContainer className="desk-sidebar">
-      {showBackHeader ? <SidebarBackHeader onBack={() => navigate("/home")} label="Home" /> : null}
       <AriContainer className="desk-sidebar-toolbar" padding={0}>
         <AriMenu
           className="desk-sidebar-nav"
@@ -2507,7 +2488,6 @@ export function ClientSidebar({
         selectedIdentity={selectedIdentity}
         onLogout={onLogout}
         agentKey={agentKey}
-        showBackHeader={shouldShowAgentSidebarBackHeader(location.pathname)}
         routeAccess={routeAccess}
         desktopUpdateState={desktopUpdateState}
         onCheckDesktopUpdate={onCheckDesktopUpdate}
@@ -2522,7 +2502,6 @@ export function ClientSidebar({
       selectedIdentity={selectedIdentity}
       onLogout={onLogout}
       agentKey="agent"
-      showBackHeader={false}
       routeAccess={routeAccess}
       desktopUpdateState={desktopUpdateState}
       onCheckDesktopUpdate={onCheckDesktopUpdate}

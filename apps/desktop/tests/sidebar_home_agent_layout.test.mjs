@@ -39,8 +39,9 @@ test("TestHomeAndAgentSidebarShouldUseProjectFirstLayout", () => {
 
   // 描述：
   //
-  //   - 智能体侧边栏应改为“返回 + 新项目入口 + 项目标题行（新增\/排序）+ 项目会话列表”结构。
-  assert.match(sidebarSource, /<SidebarBackHeader onBack=\{\(\) => navigate\("\/home"\)\} label=\{t\("Home"\)\} \/>/);
+  //   - 智能体侧边栏应改为“新项目入口 + 项目标题行（新增\/排序）+ 项目会话列表”结构，不再渲染返回 Home 头部。
+  assert.doesNotMatch(sidebarSource, /showBackHeader/);
+  assert.doesNotMatch(sidebarSource, /\{showBackHeader \? <SidebarBackHeader onBack=\{\(\) => navigate\("\/home"\)\} label="Home" \/> : null\}/);
   assert.match(sidebarSource, /className="desk-sidebar-toolbar" padding=\{0\}/);
   assert.match(sidebarSource, /key: "create-project",[\s\S]*label: t\("新项目"\)/);
   assert.match(sidebarSource, /<AriTypography variant="caption" value=\{t\("项目"\)\} \/>/);
@@ -65,14 +66,14 @@ test("TestHomeAndAgentSidebarShouldUseProjectFirstLayout", () => {
   assert.match(styleSource, /\.desk-agent-session-header-actions/);
 });
 
-test("TestAgentSidebarBackHeaderShouldOnlyAppearOnProjectSettings", () => {
+test("TestOnlyWorkflowAndSettingsSidebarShouldKeepBackHeader", () => {
   const sidebarSource = readDesktopSource("src/sidebar/index.tsx");
 
   // 描述：
   //
-  //   - 话题页不应再显示返回 Home，只有项目设置页这类真正子页才显示返回头部。
-  assert.match(sidebarSource, /function shouldShowAgentSidebarBackHeader\(pathname: string\): boolean \{/);
-  assert.match(sidebarSource, /return pathname\.startsWith\(PROJECT_SETTINGS_PATH\);/);
-  assert.match(sidebarSource, /showBackHeader=\{shouldShowAgentSidebarBackHeader\(location\.pathname\)\}/);
-  assert.doesNotMatch(sidebarSource, /showBackHeader=\{!location\.pathname\.startsWith\(AGENT_HOME_PATH\)\}/);
+  //   - 返回头部仅保留在工作流侧边栏与设置侧边栏，项目管理与会话侧边栏都不再出现返回入口。
+  assert.match(sidebarSource, /<SidebarBackHeader\s+onBack=\{\(\) => navigate\(WORKFLOW_PAGE_PATH\)\}\s+label=\{t\("返回"\)\}/s);
+  assert.match(sidebarSource, /<SidebarBackHeader onBack=\{\(\) => navigate\("\/home"\)\} label=\{t\("Home"\)\} \/>/);
+  assert.doesNotMatch(sidebarSource, /function shouldShowAgentSidebarBackHeader\(pathname: string\): boolean \{/);
+  assert.doesNotMatch(sidebarSource, /label="Home"/);
 });

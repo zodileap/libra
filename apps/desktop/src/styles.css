@@ -98,6 +98,8 @@
   --desk-project-settings-control-compact-width: calc(var(--z-inset) * 18);
   --desk-project-settings-control-wide-width: calc(var(--z-inset) * 24);
   color: var(--desk-root-color);
+  --desk-dev-debug-float-width: calc(var(--z-inset) * 26);
+  --desk-dev-debug-float-z-index: calc(var(--z-z-index-sticky) + 10);
   background: var(--desk-root-bg);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -1499,13 +1501,21 @@ body {
   right: var(--z-inset);
   top: calc(var(--desk-app-header-height) + var(--z-inset-sm));
   bottom: auto;
-  width: min(calc(var(--z-inset) * 30), 62vw);
+  width: min(var(--desk-dev-debug-float-width), calc(100vw - calc(var(--z-inset) * 2)));
   max-width: calc(100vw - calc(var(--z-inset) * 2));
-  z-index: 9999;
+  z-index: var(--desk-dev-debug-float-z-index);
 }
 
-.desk-dev-debug-float.collapsed {
-  width: auto;
+.desk-dev-debug-float,
+.desk-dev-debug-float *,
+.desk-dev-debug-float *::before,
+.desk-dev-debug-float *::after {
+  transition: none !important;
+  animation: none !important;
+}
+
+.desk-dev-debug-float.is-dragging {
+  user-select: none;
 }
 
 .desk-dev-debug-card {
@@ -1520,37 +1530,30 @@ body {
   gap: var(--z-inset-sm);
 }
 
+.desk-dev-debug-head-leading {
+  display: flex;
+  align-items: center;
+}
+
 .desk-dev-debug-head-actions {
   display: flex;
   align-items: center;
   gap: var(--z-inset-xs);
 }
 
-.desk-dev-debug-body {
-  margin-top: var(--z-inset-sm);
-  display: grid;
-  gap: var(--z-inset-sm);
+.desk-dev-debug-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--z-inset-xs);
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: grab;
 }
 
-.desk-dev-debug-section {
-  border: var(--desk-border-width) solid var(--z-color-border-glass);
-  border-radius: var(--z-border-radius);
-  padding: var(--z-inset-sm);
-}
-
-.desk-dev-debug-list {
-  margin-top: var(--z-inset-sm);
-  max-height: calc(var(--z-inset) * 10);
-  overflow-y: auto;
-  overflow-x: hidden;
-  display: grid;
-  gap: var(--z-inset-sm);
-}
-
-.desk-dev-debug-line {
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow-wrap: anywhere;
+.desk-dev-debug-float.is-dragging .desk-dev-debug-drag-handle {
+  cursor: grabbing;
 }
 
 .desk-session-prompt-card {
@@ -2379,30 +2382,26 @@ body {
 }
 
 .desk-main,
-.desk-session-thread-wrap,
-.desk-dev-debug-list {
+.desk-session-thread-wrap {
   scrollbar-color: color-mix(in srgb, var(--z-color-primary) 40%, var(--z-color-border-glass))
     color-mix(in srgb, var(--z-color-use-bg) 60%, transparent);
   scrollbar-width: thin;
 }
 
 .desk-main::-webkit-scrollbar,
-.desk-session-thread-wrap::-webkit-scrollbar,
-.desk-dev-debug-list::-webkit-scrollbar {
+.desk-session-thread-wrap::-webkit-scrollbar {
   width: var(--desk-scrollbar-size);
   height: var(--desk-scrollbar-size);
 }
 
 .desk-main::-webkit-scrollbar-thumb,
-.desk-session-thread-wrap::-webkit-scrollbar-thumb,
-.desk-dev-debug-list::-webkit-scrollbar-thumb {
+.desk-session-thread-wrap::-webkit-scrollbar-thumb {
   border-radius: var(--z-border-radius-sm);
   background: color-mix(in srgb, var(--z-color-primary) 45%, var(--z-color-border-glass));
 }
 
 .desk-main::-webkit-scrollbar-track,
-.desk-session-thread-wrap::-webkit-scrollbar-track,
-.desk-dev-debug-list::-webkit-scrollbar-track {
+.desk-session-thread-wrap::-webkit-scrollbar-track {
   border-radius: var(--z-border-radius-sm);
   background: color-mix(in srgb, var(--z-color-use-bg) 65%, transparent);
 }
