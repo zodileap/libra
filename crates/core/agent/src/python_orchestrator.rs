@@ -78,6 +78,10 @@ pub(crate) fn run_agent_with_python_workflow(
     on_stream_event: &mut dyn FnMut(AgentStreamEvent),
 ) -> Result<AgentRunResult, ProtocolError> {
     let provider = parse_provider(&request.provider);
+    let provider_config = crate::llm::LlmProviderConfig {
+        api_key: request.provider_api_key.clone(),
+        model: request.provider_model.clone(),
+    };
     let trace_id = request.trace_id.clone();
     let max_turns = resolve_agent_max_turns();
     let llm_policy = crate::llm::LlmGatewayPolicy {
@@ -115,6 +119,7 @@ pub(crate) fn run_agent_with_python_workflow(
             &round_description_prompt,
             request.workdir.as_deref(),
             llm_policy.clone(),
+            Some(&provider_config),
             None,
             Some(&mut round_progress_observer),
         )
@@ -173,6 +178,7 @@ pub(crate) fn run_agent_with_python_workflow(
                 &prompt,
                 request.workdir.as_deref(),
                 llm_policy.clone(),
+                Some(&provider_config),
                 Some(&mut stream_observer),
                 Some(&mut codegen_progress_observer),
             )
@@ -2952,7 +2958,7 @@ def main():
         assert!(path.is_err());
     }
 
-    /// 描述：验证 Python 沙盒可实际执行脚本并返回 finish 消息。
+    /// 描述：验证 Python 沙盒中的 `list_dir(...)` 默认返回目录项数组，且可通过 `with_meta=True` 读取原始工具响应。
     #[test]
     fn should_execute_python_script_in_sandbox() {
         if resolve_python_command().is_err() {
@@ -2963,8 +2969,15 @@ def main():
         fs::write(root.join("hello.txt"), "hello").expect("seed test file");
         let script = r#"
 items = list_dir(".")
-if not isinstance(items, dict):
-    raise RuntimeError("list_dir should return dict")
+if not isinstance(items, list):
+    raise RuntimeError(f"list_dir should return entries list: {items}")
+if not any(item["name"] == "hello.txt" for item in items):
+    raise RuntimeError(f"list_dir should expose hello.txt entry: {items}")
+meta = list_dir(".", with_meta=True)
+if not isinstance(meta, dict) or not isinstance(meta.get("data"), dict):
+    raise RuntimeError(f"list_dir with_meta should return raw response: {meta}")
+if not isinstance(meta["data"].get("entries"), list):
+    raise RuntimeError(f"list_dir with_meta missing entries list: {meta}")
 finish("python sandbox ok")
 "#;
         let result = execute_python_script(
@@ -2981,6 +2994,120 @@ finish("python sandbox ok")
         )
         .expect("python script should execute successfully");
         assert_eq!(result.message, "python sandbox ok");
+    }
+
+    /// 描述：验证 `list_dir(...)` 返回的目录项既可当字符串直接拼路径，也支持 `item[\"name\"]` 访问元信息，兼容 Gemini 两类常见写法。
+    #[test]
+    fn should_support_string_and_mapping_access_for_list_dir_entries() {
+        if resolve_python_command().is_err() {
+            return;
+        }
+        let root = build_unique_test_root();
+        let api_dir = root.join("apps").join("backend-mock").join("api");
+        fs::create_dir_all(&api_dir).expect("create backend mock api dir");
+        fs::write(api_dir.join("users.ts"), "export default [];\n")
+            .expect("seed backend mock users file");
+        let script = r##"
+api_dir_files = list_dir("apps/backend-mock/api")
+if not isinstance(api_dir_files, list):
+    raise RuntimeError(f"list_dir should return list: {api_dir_files}")
+if api_dir_files[0] != "users.ts":
+    raise RuntimeError(f"list_dir first entry should be string-like name: {api_dir_files}")
+if api_dir_files[0]["name"] != "users.ts":
+    raise RuntimeError(f"list_dir entry should expose name mapping: {api_dir_files[0]}")
+sample_file = f"apps/backend-mock/api/{api_dir_files[0]}"
+if sample_file != "apps/backend-mock/api/users.ts":
+    raise RuntimeError(f"list_dir entry should support string interpolation: {sample_file}")
+finish("list_dir entry supports string and mapping access")
+"##;
+        let result = execute_python_script(
+            PythonScriptExecutionRequest {
+                user_script: script,
+                workdir: root.to_str(),
+                dcc_provider_addr: None,
+                available_mcps: &[],
+                policy: &crate::policy::AgentPolicy::default(),
+                trace_id: "test-trace".to_string(),
+                session_id: "test-session-list-dir-entry-dual-access".to_string(),
+            },
+            &mut |_| {},
+        )
+        .expect("list_dir entries should support string and mapping access");
+        assert_eq!(result.message, "list_dir entry supports string and mapping access");
+        assert!(result.actions.iter().any(|item| item == "list_dir"));
+    }
+
+    /// 描述：验证 `list_dir(...)` 默认返回目录项对象数组，避免 Gemini 脚本执行 `[d['name'] for d in list_dir(...)]` 时把响应字典迭代成字符串键名。
+    #[test]
+    fn should_return_entry_objects_for_list_dir_default_usage() {
+        if resolve_python_command().is_err() {
+            return;
+        }
+        let root = build_unique_test_root();
+        let views_dir = root.join("apps").join("web-antd").join("src").join("views");
+        fs::create_dir_all(&views_dir).expect("create views dir");
+        fs::create_dir_all(root.join("apps").join("web-antd").join("src").join("router"))
+            .expect("create router dir");
+        let script = r##"
+web_antd_src = list_dir("apps/web-antd/src")
+if not isinstance(web_antd_src, list):
+    raise RuntimeError(f"list_dir should return list: {web_antd_src}")
+names = [item["name"] for item in web_antd_src]
+if "views" not in names or "router" not in names:
+    raise RuntimeError(f"list_dir names mismatch: {names}")
+finish("list_dir default returns entry objects")
+"##;
+        let result = execute_python_script(
+            PythonScriptExecutionRequest {
+                user_script: script,
+                workdir: root.to_str(),
+                dcc_provider_addr: None,
+                available_mcps: &[],
+                policy: &crate::policy::AgentPolicy::default(),
+                trace_id: "test-trace".to_string(),
+                session_id: "test-session-list-dir-default-entry-objects".to_string(),
+            },
+            &mut |_| {},
+        )
+        .expect("list_dir default usage should execute successfully");
+        assert_eq!(result.message, "list_dir default returns entry objects");
+        assert!(result.actions.iter().any(|item| item == "list_dir"));
+    }
+
+    /// 描述：验证 `list_dir/list_directory` 在目录缺失时默认返回空数组，避免脚本把错误对象当列表继续索引时触发 `KeyError: 0`。
+    #[test]
+    fn should_return_empty_list_when_list_dir_target_is_missing() {
+        if resolve_python_command().is_err() {
+            return;
+        }
+        let root = build_unique_test_root();
+        fs::create_dir_all(&root).expect("create temp root");
+        let script = r##"
+mock_routes = list_directory("apps/backend-mock/api")
+if mock_routes != []:
+    raise RuntimeError(f"list_directory missing path should return empty list: {mock_routes}")
+
+web_antd_src = list_dir("apps/web-antd/src")
+if web_antd_src != []:
+    raise RuntimeError(f"list_dir missing path should return empty list: {web_antd_src}")
+
+finish("list_dir missing path fallback ok")
+"##;
+        let result = execute_python_script(
+            PythonScriptExecutionRequest {
+                user_script: script,
+                workdir: root.to_str(),
+                dcc_provider_addr: None,
+                available_mcps: &[],
+                policy: &crate::policy::AgentPolicy::default(),
+                trace_id: "test-trace".to_string(),
+                session_id: "test-session-list-dir-missing-path-fallback".to_string(),
+            },
+            &mut |_| {},
+        )
+        .expect("missing path list_dir fallback should execute successfully");
+        assert_eq!(result.message, "list_dir missing path fallback ok");
+        assert!(result.actions.iter().any(|item| item == "list_dir"));
     }
 
     /// 描述：验证兼容工具别名在未调用 finish 时仍可执行，并通过 stdout 自动补全结果。
@@ -3009,6 +3136,53 @@ print(f"alias items count: {len(items)}")
         )
         .expect("alias tools script should execute successfully");
         assert!(result.message.contains("自动补全结果"));
+        assert!(result.actions.iter().any(|item| item == "list_dir"));
+    }
+
+    /// 描述：验证 `list_directory(...)` 兼容别名会返回目录名称数组，避免脚本执行 `items[0]` 时把工具响应对象误当列表触发 `KeyError: 0`。
+    #[test]
+    fn should_return_entry_names_for_list_directory_alias() {
+        if resolve_python_command().is_err() {
+            return;
+        }
+        let root = build_unique_test_root();
+        let api_dir = root.join("apps").join("backend-mock").join("api");
+        fs::create_dir_all(&api_dir).expect("create backend mock api dir");
+        fs::write(api_dir.join("auth.ts"), "export default [];\n")
+            .expect("seed backend mock auth file");
+        let script = r##"
+import os
+
+backend_mock_dir = "apps/backend-mock"
+files = list_directory(backend_mock_dir)
+if not isinstance(files, list):
+    raise RuntimeError(f"list_directory should return list: {files}")
+if "api" not in files:
+    raise RuntimeError(f"list_directory should expose api folder name: {files}")
+
+routes_dir = os.path.join(backend_mock_dir, "api")
+api_files = list_directory(routes_dir)
+if not isinstance(api_files, list):
+    raise RuntimeError(f"api_files should be list: {api_files}")
+if api_files[0] != "auth.ts":
+    raise RuntimeError(f"list_directory first entry mismatch: {api_files}")
+
+finish("list_directory alias returns entry names")
+"##;
+        let result = execute_python_script(
+            PythonScriptExecutionRequest {
+                user_script: script,
+                workdir: root.to_str(),
+                dcc_provider_addr: None,
+                available_mcps: &[],
+                policy: &crate::policy::AgentPolicy::default(),
+                trace_id: "test-trace".to_string(),
+                session_id: "test-session-list-directory-alias-entry-names".to_string(),
+            },
+            &mut |_| {},
+        )
+        .expect("list_directory alias should return entry names");
+        assert_eq!(result.message, "list_directory alias returns entry names");
         assert!(result.actions.iter().any(|item| item == "list_dir"));
     }
 
@@ -3083,6 +3257,107 @@ next="进入 API 模型设计",
         assert_eq!(
             result.message,
             "STATUS: CONTINUE\nSUMMARY: 已完成需求分析\nNEXT: 进入 API 模型设计",
+        );
+        assert!(result.actions.is_empty());
+    }
+
+    /// 描述：验证 `finish(STATUS=..., SUMMARY=..., NEXT=...)` 大写关键字收尾写法可被兼容层折叠为协议文本，复现 Gemini 会话中的历史报错形态。
+    #[test]
+    fn should_support_finish_uppercase_keyword_envelope_arguments() {
+        if resolve_python_command().is_err() {
+            return;
+        }
+        let root = build_unique_test_root();
+        fs::create_dir_all(&root).expect("create temp root");
+        let script = r##"finish(
+STATUS="CONTINUE",
+SUMMARY="已完成需求分析阶段",
+NEXT="进入接口建模阶段",
+)"##;
+        let result = execute_python_script(
+            PythonScriptExecutionRequest {
+                user_script: script,
+                workdir: root.to_str(),
+                dcc_provider_addr: None,
+                available_mcps: &[],
+                policy: &crate::policy::AgentPolicy::default(),
+                trace_id: "test-trace".to_string(),
+                session_id: "test-session-finish-uppercase-keyword-envelope".to_string(),
+            },
+            &mut |_| {},
+        )
+        .expect("finish uppercase keyword envelope script should execute successfully");
+        assert_eq!(
+            result.message,
+            "STATUS: CONTINUE\nSUMMARY: 已完成需求分析阶段\nNEXT: 进入接口建模阶段",
+        );
+        assert!(result.actions.is_empty());
+    }
+
+    /// 描述：验证沙盒会在执行前修正常见的未定义变量后缀笔误，避免 `openapi_spec` 被误写成 `openapi` 时直接抛 NameError。
+    #[test]
+    fn should_repair_common_undefined_name_suffix_aliases_before_execution() {
+        if resolve_python_command().is_err() {
+            return;
+        }
+        let root = build_unique_test_root();
+        fs::create_dir_all(&root).expect("create temp root");
+        let script = r##"
+openapi_spec = {
+    "openapi": "3.0.0",
+    "info": {"title": "demo"},
+}
+version = openapi["openapi"]
+if version != "3.0.0":
+    raise RuntimeError(f"suffix alias repair failed: {version}")
+finish("undefined suffix alias repaired")
+"##;
+        let result = execute_python_script(
+            PythonScriptExecutionRequest {
+                user_script: script,
+                workdir: root.to_str(),
+                dcc_provider_addr: None,
+                available_mcps: &[],
+                policy: &crate::policy::AgentPolicy::default(),
+                trace_id: "test-trace".to_string(),
+                session_id: "test-session-undefined-suffix-alias-repair".to_string(),
+            },
+            &mut |_| {},
+        )
+        .expect("suffix alias repair script should execute successfully");
+        assert_eq!(result.message, "undefined suffix alias repaired");
+        assert!(result.actions.is_empty());
+    }
+
+    /// 描述：验证 `finish({...})` 传入状态字典时也会折叠为协议文本，兼容 Gemini 常见的对象式收尾写法。
+    #[test]
+    fn should_support_finish_mapping_envelope_argument() {
+        if resolve_python_command().is_err() {
+            return;
+        }
+        let root = build_unique_test_root();
+        fs::create_dir_all(&root).expect("create temp root");
+        let script = r##"finish({
+"STATUS": "CONTINUE",
+"SUMMARY": "已完成接口建模",
+"NEXT": "进入前端结构设计"
+})"##;
+        let result = execute_python_script(
+            PythonScriptExecutionRequest {
+                user_script: script,
+                workdir: root.to_str(),
+                dcc_provider_addr: None,
+                available_mcps: &[],
+                policy: &crate::policy::AgentPolicy::default(),
+                trace_id: "test-trace".to_string(),
+                session_id: "test-session-finish-mapping-envelope".to_string(),
+            },
+            &mut |_| {},
+        )
+        .expect("finish mapping envelope script should execute successfully");
+        assert_eq!(
+            result.message,
+            "STATUS: CONTINUE\nSUMMARY: 已完成接口建模\nNEXT: 进入前端结构设计",
         );
         assert!(result.actions.is_empty());
     }

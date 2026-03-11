@@ -28,6 +28,13 @@ pub struct LlmRunResult {
     pub usage: LlmUsage,
 }
 
+/// 描述：LLM Provider 运行时配置，统一承载 API Key、模型名等非提示词参数。
+#[derive(Debug, Clone, Default)]
+pub struct LlmProviderConfig {
+    pub api_key: Option<String>,
+    pub model: Option<String>,
+}
+
 impl LlmUsage {
     /// 描述：基于文本长度执行启发式 Token 估算（1 token 约等于 4 字符）。
     pub fn estimate(prompt: &str, completion: &str) -> Self {
@@ -51,6 +58,7 @@ pub type LlmProgressObserver<'a> = dyn FnMut(&str) + 'a;
 pub enum LlmProvider {
     CodexCli,
     Gemini,
+    Iflow,
     Unknown,
 }
 
@@ -172,6 +180,7 @@ pub fn parse_provider(raw: &str) -> LlmProvider {
     match raw.trim().to_lowercase().as_str() {
         "codex" | "codex-cli" => LlmProvider::CodexCli,
         "gemini" | "gemini-cli" => LlmProvider::Gemini,
+        "iflow" | "iflow-api" => LlmProvider::Iflow,
         _ => LlmProvider::Unknown,
     }
 }
@@ -197,6 +206,7 @@ pub fn call_model_with_stream(
         prompt,
         workdir,
         LlmGatewayPolicy::from_env(),
+        None,
         Some(on_chunk),
         None,
     )
@@ -209,7 +219,7 @@ pub fn call_model_with_policy(
     workdir: Option<&str>,
     policy: LlmGatewayPolicy,
 ) -> Result<LlmRunResult, LlmGatewayError> {
-    call_model_with_policy_and_stream(provider, prompt, workdir, policy, None, None)
+    call_model_with_policy_and_stream(provider, prompt, workdir, policy, None, None, None)
 }
 
 /// 描述：按指定策略调用模型网关，并可选输出增量文本事件。
@@ -218,6 +228,7 @@ pub(crate) fn call_model_with_policy_and_stream(
     prompt: &str,
     workdir: Option<&str>,
     policy: LlmGatewayPolicy,
+    provider_config: Option<&LlmProviderConfig>,
     on_chunk: Option<&mut LlmTextStreamObserver>,
     on_progress: Option<&mut LlmProgressObserver>,
 ) -> Result<LlmRunResult, LlmGatewayError> {
@@ -228,12 +239,20 @@ pub(crate) fn call_model_with_policy_and_stream(
         LlmProvider::Gemini => {
             providers::gemini::call_with_retry(prompt, workdir, policy, on_chunk, on_progress)
         }
+        LlmProvider::Iflow => providers::iflow::call_with_retry(
+            prompt,
+            workdir,
+            policy,
+            provider_config,
+            on_chunk,
+            on_progress,
+        ),
         LlmProvider::Unknown => Err(LlmGatewayError::new(
             provider,
             "core.agent.llm.provider_unknown",
             "unknown llm provider",
         )
-        .with_suggestion("请将 provider 设置为 codex / codex-cli 或 gemini / gemini-cli")),
+        .with_suggestion("请将 provider 设置为 codex / codex-cli、gemini / gemini-cli 或 iflow / iflow-api")),
     }
 }
 

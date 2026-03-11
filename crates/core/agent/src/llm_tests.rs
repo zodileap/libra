@@ -7,6 +7,8 @@ fn should_parse_provider() {
     assert_eq!(parse_provider(" codex-cli "), LlmProvider::CodexCli);
     assert_eq!(parse_provider("gemini"), LlmProvider::Gemini);
     assert_eq!(parse_provider(" gemini-cli "), LlmProvider::Gemini);
+    assert_eq!(parse_provider("iflow"), LlmProvider::Iflow);
+    assert_eq!(parse_provider(" iflow-api "), LlmProvider::Iflow);
     assert_eq!(parse_provider("unknown"), LlmProvider::Unknown);
 }
 

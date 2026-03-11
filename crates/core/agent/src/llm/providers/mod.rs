@@ -3,3 +3,6 @@ pub mod codex_cli;
 
 /// 描述：Gemini CLI 提供方实现，负责命令调用与错误适配。
 pub mod gemini;
+
+/// 描述：iFlow API 提供方实现，负责 OpenAI 兼容 HTTP 调用与错误适配。
+pub mod iflow;

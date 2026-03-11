@@ -32,7 +32,7 @@ test("TestAiKeyShouldSupportGeminiCliProvider", () => {
   // 描述：
   //
   //   - Provider 类型应包含 gemini-cli，确保前端状态与存储具备类型支持。
-  assert.match(sharedTypesSource, /export type AiProvider = "codex" \| "gemini" \| "gemini-cli";/);
+  assert.match(sharedTypesSource, /export type AiProvider = [^;]*"gemini-cli"[^;]*;/);
 
   // 描述：
   //

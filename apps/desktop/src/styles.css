@@ -83,6 +83,7 @@
   --desk-admin-card-active-shadow: var(--z-color-box-shadow);
   --desk-ai-key-card-actions-width: calc(var(--z-inset) * 19);
   --desk-ai-key-card-input-max-width: calc(var(--z-inset) * 20);
+  --desk-ai-key-card-model-max-width: calc(var(--z-inset) * 14);
   --desk-ai-key-card-surface: color-mix(in srgb, var(--desk-container-bg) 92%, var(--z-color-bg-subtle));
   --desk-shell-width: calc(var(--z-inset) * 76);
   --desk-shell-wide-width: calc(var(--z-inset) * 88);
@@ -97,9 +98,9 @@
   --desk-panel-surface: color-mix(in srgb, var(--desk-container-bg) 94%, var(--z-color-bg-tertiary));
   --desk-project-settings-control-compact-width: calc(var(--z-inset) * 18);
   --desk-project-settings-control-wide-width: calc(var(--z-inset) * 24);
-  color: var(--desk-root-color);
   --desk-dev-debug-float-width: calc(var(--z-inset) * 26);
   --desk-dev-debug-float-z-index: calc(var(--z-z-index-sticky) + 10);
+  color: var(--desk-root-color);
   background: var(--desk-root-bg);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -806,6 +807,17 @@ body {
   flex: 1 1 var(--desk-ai-key-card-input-max-width);
   min-width: 0;
   max-width: var(--desk-ai-key-card-input-max-width);
+}
+
+.desk-ai-key-card-input-stack {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.desk-ai-key-card-model-wrap {
+  flex: 0 1 var(--desk-ai-key-card-model-max-width);
+  min-width: 0;
+  max-width: var(--desk-ai-key-card-model-max-width);
 }
 
 .desk-ai-key-card-actions {
@@ -2460,6 +2472,17 @@ body {
   }
 
   .desk-ai-key-card-input-wrap {
+    width: 100%;
+    max-width: none;
+  }
+
+  .desk-ai-key-card-input-stack {
+    width: 100%;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .desk-ai-key-card-model-wrap {
     width: 100%;
     max-width: none;
   }

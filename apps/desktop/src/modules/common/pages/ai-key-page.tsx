@@ -49,6 +49,21 @@ function isLocalCliProvider(provider: AiKeyItem["provider"]): boolean {
 
 // 描述：
 //
+//   - 判断当前 Provider 是否需要额外填写模型名称；当前仅 iFlow API 走固定基地址 + 可配置模型名方案。
+//
+// Params:
+//
+//   - provider: Provider 标识。
+//
+// Returns:
+//
+//   - true: 需要展示模型名称输入框。
+function shouldRenderModelInput(provider: AiKeyItem["provider"]): boolean {
+  return provider === "iflow";
+}
+
+// 描述：
+//
 //   - 根据 Provider 解析对应的本地 CLI 检测命令，便于页面侧统一触发主动校验。
 //
 // Params:
@@ -130,6 +145,7 @@ interface AiKeyProviderCardProps {
   onToggleEnabled: (checked: boolean) => void;
   onMoveAsPrimary: () => void;
   onUpdateKeyValue: (value: string) => void;
+  onUpdateModelName: (value: string) => void;
   onCheckCli: (() => void) | null;
 }
 
@@ -145,10 +161,12 @@ function AiKeyProviderCard({
   onToggleEnabled,
   onMoveAsPrimary,
   onUpdateKeyValue,
+  onUpdateModelName,
   onCheckCli,
 }: AiKeyProviderCardProps) {
   const { t } = useDesktopI18n();
   const localCliProvider = isLocalCliProvider(item.provider);
+  const showModelInput = shouldRenderModelInput(item.provider);
   return (
     <AriContainer className="desk-ai-key-card" padding={0}>
       <AriFlex
@@ -164,14 +182,26 @@ function AiKeyProviderCard({
             value={item.providerLabel}
           />
           {!localCliProvider ? (
-            <AriContainer className="desk-ai-key-card-input-wrap" padding={0}>
-              <AriInput
-                className="desk-ai-key-card-input"
-                value={item.keyValue}
-                onChange={onUpdateKeyValue}
-                placeholder={t("输入 {{providerLabel}} Key", { providerLabel: item.providerLabel })}
-              />
-            </AriContainer>
+            <AriFlex className="desk-ai-key-card-input-stack" align="center" space={8}>
+              <AriContainer className="desk-ai-key-card-input-wrap" padding={0}>
+                <AriInput
+                  className="desk-ai-key-card-input"
+                  value={item.keyValue}
+                  onChange={onUpdateKeyValue}
+                  placeholder={t("输入 {{providerLabel}} Key", { providerLabel: item.providerLabel })}
+                />
+              </AriContainer>
+              {showModelInput ? (
+                <AriContainer className="desk-ai-key-card-model-wrap" padding={0}>
+                  <AriInput
+                    className="desk-ai-key-card-input"
+                    value={String(item.modelName || "")}
+                    onChange={onUpdateModelName}
+                    placeholder={t("输入 {{providerLabel}} 模型名", { providerLabel: item.providerLabel })}
+                  />
+                </AriContainer>
+              ) : null}
+            </AriFlex>
           ) : null}
         </AriFlex>
         <AriFlex className="desk-ai-key-card-actions" align="center" justify="flex-start" space={8}>
@@ -345,6 +375,7 @@ export function AiKeyPage({ aiKeys, onAiKeysChange }: AiKeyPageProps) {
                   onToggleEnabled={(checked) => patchItem(item.id, { enabled: checked })}
                   onMoveAsPrimary={() => moveAsPrimary(item.id)}
                   onUpdateKeyValue={(next) => patchItem(item.id, { keyValue: next })}
+                  onUpdateModelName={(next) => patchItem(item.id, { modelName: next })}
                   onCheckCli={isLocalCliProvider(item.provider) ? () => {
                     void checkCliProvider(item);
                   } : null}

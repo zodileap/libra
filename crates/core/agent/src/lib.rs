@@ -125,6 +125,8 @@ pub struct AgentRunRequest {
     pub session_id: String,
     pub agent_key: String,
     pub provider: String,
+    pub provider_api_key: Option<String>,
+    pub provider_model: Option<String>,
     pub prompt: String,
     pub project_name: Option<String>,
     pub model_export_enabled: bool,

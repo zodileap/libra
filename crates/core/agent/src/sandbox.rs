@@ -76,6 +76,10 @@ import json
 import sys
 import os
 import re
+import ast
+import io
+import builtins
+import tokenize
 import traceback
 
 _TOOL_CALL_PREFIX = "__AGENT_TOOL_CALL__"
@@ -100,10 +104,23 @@ def _invoke_tool(name, args):
     return {"ok": False, "error": "invalid_response"}
 
 def finish(message=None, status=None, summary=None, next=None, **kwargs):
-    resolved_message = _pick_first_non_none([message, _pop_alias(kwargs, ("text", "value", "body"))])
-    resolved_status = _pick_first_non_none([status, _pop_alias(kwargs, ("state",))])
-    resolved_summary = _pick_first_non_none([summary, _pop_alias(kwargs, ("result", "content"))])
-    resolved_next = _pick_first_non_none([next, _pop_alias(kwargs, ("next_step", "nextStep"))])
+    resolved_message = _pick_first_non_none([message, _pop_alias(kwargs, ("text", "value", "body", "TEXT", "VALUE", "BODY", "MESSAGE"))])
+    resolved_status = _pick_first_non_none([status, _pop_alias(kwargs, ("state", "STATUS", "STATE"))])
+    resolved_summary = _pick_first_non_none([summary, _pop_alias(kwargs, ("result", "content", "SUMMARY", "RESULT", "CONTENT"))])
+    resolved_next = _pick_first_non_none([next, _pop_alias(kwargs, ("next_step", "nextStep", "NEXT", "NEXT_STEP"))])
+    if isinstance(resolved_message, dict):
+        envelope = dict(resolved_message)
+        dict_status = _pop_mapping_alias(envelope, ("STATUS", "status", "state", "STATE"))
+        dict_summary = _pop_mapping_alias(envelope, ("SUMMARY", "summary", "result", "RESULT", "content", "CONTENT"))
+        dict_next = _pop_mapping_alias(envelope, ("NEXT", "next", "next_step", "nextStep", "NEXT_STEP"))
+        dict_message = _pop_mapping_alias(envelope, ("message", "MESSAGE", "text", "TEXT", "value", "body"))
+        resolved_status = _pick_first_non_none([resolved_status, dict_status])
+        resolved_summary = _pick_first_non_none([resolved_summary, dict_summary])
+        resolved_next = _pick_first_non_none([resolved_next, dict_next])
+        if dict_message is not None:
+            resolved_message = dict_message
+        elif dict_status is not None or dict_summary is not None or dict_next is not None:
+            resolved_message = None
 
     if resolved_status is not None or resolved_summary is not None or resolved_next is not None:
         lines = []
@@ -128,6 +145,31 @@ def _pick_first_non_none(values):
             return value
     return None
 
+class _DirectoryEntry(str):
+    def __new__(cls, name="", path="", is_dir=False, is_file=False):
+        resolved_name = "" if name is None else str(name)
+        value = str.__new__(cls, resolved_name)
+        value._meta = {
+            "name": resolved_name,
+            "path": "" if path is None else str(path),
+            "is_dir": bool(is_dir),
+            "is_file": bool(is_file),
+        }
+        return value
+
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            if key in self._meta:
+                return self._meta[key]
+            raise KeyError(key)
+        return str.__getitem__(self, key)
+
+    def get(self, key, default=None):
+        return self._meta.get(key, default)
+
+    def to_dict(self):
+        return dict(self._meta)
+
 def _resolve_with_alias(primary, alias_value, default=None):
     if alias_value is not None:
         return alias_value
@@ -145,10 +187,38 @@ def _pop_alias(kwargs, aliases):
                 return value
     return None
 
+def _pop_mapping_alias(mapping, aliases):
+    if not isinstance(mapping, dict):
+        return None
+    for alias in aliases:
+        if alias in mapping:
+            value = mapping.pop(alias)
+            if value is not None:
+                return value
+    return None
+
 def _require_arg(value, name):
     if value is None:
         raise TypeError(f"{name} is required")
     return value
+
+def _normalize_dir_entries(entries):
+    if not isinstance(entries, list):
+        return entries
+    normalized_entries = []
+    for entry in entries:
+        if isinstance(entry, dict):
+            normalized_entries.append(_DirectoryEntry(
+                entry.get("name"),
+                entry.get("path"),
+                entry.get("is_dir"),
+                entry.get("is_file"),
+            ))
+        elif isinstance(entry, str):
+            normalized_entries.append(_DirectoryEntry(entry))
+        else:
+            normalized_entries.append(entry)
+    return normalized_entries
 
 def run_shell(command=None, timeout_secs=None, **kwargs):
     resolved_command = _pick_first_non_none([command, _pop_alias(kwargs, ("cmd", "shell_command"))])
@@ -211,10 +281,24 @@ def write_json(path=None, data=None, **kwargs):
         },
     )
 
-def list_dir(path=".", **kwargs):
+def list_dir(path=".", with_meta=False, **kwargs):
     path_alias = _pop_alias(kwargs, ("dir_path", "file_path"))
+    include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, ("include_meta", "raw")), False))
     resolved_path = _resolve_with_alias(path, path_alias, ".")
-    return _invoke_tool("list_dir", {"path": resolved_path})
+    response = _invoke_tool("list_dir", {"path": resolved_path})
+    if include_meta:
+        return response
+    if isinstance(response, dict):
+        if response.get("ok") is False:
+            # 描述：目录探测是高频探索动作，缺失目录时优先回空列表，
+            # 让脚本能够继续创建目录/文件，而不是把错误对象误当列表触发下游 KeyError。
+            return []
+        data = response.get("data")
+        if isinstance(data, dict):
+            entries = data.get("entries")
+            if isinstance(entries, list):
+                return _normalize_dir_entries(entries)
+    return response
 
 def mkdir(path=None, **kwargs):
     resolved_path = _pick_first_non_none([path, _pop_alias(kwargs, ("dir_path", "file_path"))])
@@ -428,17 +512,34 @@ def write_file(file_path, content):
 
 def list_directory(dir_path=".", path=None):
     target_path = path if path is not None else dir_path
-    result = list_dir(target_path)
-    if isinstance(result, dict):
-        entries = result.get("entries")
-        if isinstance(entries, list):
-            names = []
-            for entry in entries:
-                if isinstance(entry, dict):
-                    name = entry.get("name")
-                    if isinstance(name, str):
-                        names.append(name)
-            return names
+    result = list_dir(target_path, with_meta=True)
+    if isinstance(result, list):
+        entries = result
+    elif isinstance(result, dict):
+        if result.get("ok") is False:
+            return []
+        # 描述：list_dir 会返回 {"ok": True, "data": {...}} 包装结构，
+        # 兼容别名需要继续下钻到 data.entries，避免把响应对象误当成目录项列表返回。
+        entries = None
+        data = result.get("data")
+        if isinstance(data, dict):
+            entries = data.get("entries")
+        if entries is None:
+            entries = result.get("entries")
+    else:
+        entries = None
+    if isinstance(entries, list):
+        names = []
+        for entry in entries:
+            if isinstance(entry, dict):
+                name = entry.get("name")
+            elif isinstance(entry, str):
+                name = str(entry)
+            else:
+                name = None
+            if isinstance(name, str):
+                names.append(name)
+        return names
     return result
 
 def _register_gemini_native_tools_alias():
@@ -488,6 +589,112 @@ def _strip_non_code_prefix(code):
             return "\n".join(lines[index:]).strip()
     return code
 
+_COMMON_UNDEFINED_NAME_SUFFIXES = (
+    "spec",
+    "data",
+    "content",
+    "payload",
+    "model",
+    "models",
+    "response",
+    "result",
+    "items",
+    "list",
+    "detail",
+    "schema",
+    "config",
+)
+
+class _PythonNameCollector(ast.NodeVisitor):
+    def __init__(self):
+        self.defined = set()
+        self.loaded = set()
+
+    def visit_Name(self, node):
+        if isinstance(node.ctx, ast.Store):
+            self.defined.add(node.id)
+        elif isinstance(node.ctx, ast.Load):
+            self.loaded.add(node.id)
+        self.generic_visit(node)
+
+    def visit_FunctionDef(self, node):
+        self.defined.add(node.name)
+        for arg in node.args.posonlyargs + node.args.args + node.args.kwonlyargs:
+            self.defined.add(arg.arg)
+        if node.args.vararg is not None:
+            self.defined.add(node.args.vararg.arg)
+        if node.args.kwarg is not None:
+            self.defined.add(node.args.kwarg.arg)
+        self.generic_visit(node)
+
+    def visit_AsyncFunctionDef(self, node):
+        self.visit_FunctionDef(node)
+
+    def visit_ClassDef(self, node):
+        self.defined.add(node.name)
+        self.generic_visit(node)
+
+    def visit_Import(self, node):
+        for alias in node.names:
+            self.defined.add(alias.asname or alias.name.split(".")[0])
+
+    def visit_ImportFrom(self, node):
+        for alias in node.names:
+            if alias.name == "*":
+                continue
+            self.defined.add(alias.asname or alias.name.split(".")[0])
+
+    def visit_ExceptHandler(self, node):
+        if isinstance(node.name, str) and node.name:
+            self.defined.add(node.name)
+        self.generic_visit(node)
+
+def _rewrite_name_tokens(code, replacements):
+    if not replacements:
+        return code
+    try:
+        token_stream = tokenize.generate_tokens(io.StringIO(code).readline)
+        rewritten = []
+        for token in token_stream:
+            if token.type == tokenize.NAME and token.string in replacements:
+                token = tokenize.TokenInfo(
+                    token.type,
+                    replacements[token.string],
+                    token.start,
+                    token.end,
+                    token.line,
+                )
+            rewritten.append(token)
+        return tokenize.untokenize(rewritten)
+    except Exception:
+        return code
+
+def _repair_common_undefined_name_suffix_aliases(code):
+    try:
+        tree = ast.parse(code)
+    except Exception:
+        return code
+
+    collector = _PythonNameCollector()
+    collector.visit(tree)
+    reserved_names = set(globals().keys()) | set(dir(builtins))
+    undefined_names = sorted(
+        name for name in collector.loaded
+        if name not in collector.defined and name not in reserved_names
+    )
+    if not undefined_names:
+        return code
+
+    replacements = {}
+    for name in undefined_names:
+        for suffix in _COMMON_UNDEFINED_NAME_SUFFIXES:
+            candidate = f"{name}_{suffix}"
+            if candidate in collector.defined:
+                replacements[name] = candidate
+                break
+
+    return _rewrite_name_tokens(code, replacements)
+
 print("SANDBOX_READY", flush=True)
 
 while True:
@@ -499,6 +706,9 @@ while True:
         code = sys.stdin.read(size)
         # 描述：双重兜底，避免 LLM 返回前置自然语言时直接触发 line 1 语法错误。
         code = _strip_non_code_prefix(code)
+        # 描述：预先修正常见的变量名后缀笔误，例如已定义 `openapi_spec` 却误写成 `openapi`，
+        # 以减少这类低级 NameError 直接打断整轮工作流。
+        code = _repair_common_undefined_name_suffix_aliases(code)
         exec(code, globals())
         print(_TURN_END_MARKER, flush=True)
     except Exception as e:
@@ -741,14 +951,29 @@ mod tests {
     fn should_support_finish_keyword_envelope_in_prelude() {
         // 描述：
         //
-        //   - 兼容层应支持 `finish(status=..., summary=..., next=...)` 关键字写法，
+        //   - 兼容层应支持 `finish(status=..., summary=..., next=...)` 以及 `finish(STATUS=..., SUMMARY=..., NEXT=...)` 关键字写法，
         //     避免模型生成结构化收尾时因签名不匹配直接抛 TypeError。
         assert!(PERSISTENT_PRELUDE
             .contains("def finish(message=None, status=None, summary=None, next=None, **kwargs):"));
+        assert!(PERSISTENT_PRELUDE.contains("(\"state\", \"STATUS\", \"STATE\")"));
+        assert!(PERSISTENT_PRELUDE.contains("(\"result\", \"content\", \"SUMMARY\", \"RESULT\", \"CONTENT\")"));
+        assert!(PERSISTENT_PRELUDE.contains("(\"next_step\", \"nextStep\", \"NEXT\", \"NEXT_STEP\")"));
         assert!(PERSISTENT_PRELUDE.contains("lines.append(f\"STATUS: {resolved_status}\")"));
         assert!(PERSISTENT_PRELUDE.contains("lines.append(f\"SUMMARY: {resolved_summary}\")"));
         assert!(PERSISTENT_PRELUDE.contains("lines.append(f\"NEXT: {resolved_next}\")"));
         assert!(PERSISTENT_PRELUDE.contains("re.match(r\"^[A-Za-z_][A-Za-z0-9_]*\\s*\\(\", text)"));
+    }
+
+    #[test]
+    fn should_repair_common_undefined_name_suffix_aliases_in_prelude() {
+        // 描述：
+        //
+        //   - 兼容层应在执行前修正常见的后缀变量名笔误，例如已定义 `openapi_spec`
+        //     却误写成 `openapi`，避免低级 NameError 直接打断整轮工作流。
+        assert!(PERSISTENT_PRELUDE.contains("def _repair_common_undefined_name_suffix_aliases(code):"));
+        assert!(PERSISTENT_PRELUDE.contains("_COMMON_UNDEFINED_NAME_SUFFIXES = ("));
+        assert!(PERSISTENT_PRELUDE.contains("candidate = f\"{name}_{suffix}\""));
+        assert!(PERSISTENT_PRELUDE.contains("code = _repair_common_undefined_name_suffix_aliases(code)"));
     }
 
     #[test]

@@ -3939,6 +3939,12 @@ export function SessionPage({
           agentKey: normalizedAgentKey,
           sessionId,
           provider,
+          providerApiKey: provider === "codex" || provider === "gemini-cli"
+            ? undefined
+            : String(selectedAi?.keyValue || "").trim() || undefined,
+          providerModel: provider === "iflow"
+            ? String(selectedAi?.modelName || "").trim() || undefined
+            : undefined,
           prompt: agentPrompt,
           traceId: stageTraceId,
           projectName: title,

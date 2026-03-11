@@ -7,6 +7,8 @@ fn build_base_request() -> AgentRunRequest {
         session_id: "test-session".to_string(),
         agent_key: "agent".to_string(),
         provider: "unknown".to_string(),
+        provider_api_key: None,
+        provider_model: None,
         prompt: "hello".to_string(),
         project_name: None,
         model_export_enabled: false,

@@ -83,7 +83,7 @@ export interface DccMcpCapabilities {
 // 描述:
 //
 //   - 定义 AI 服务提供商枚举。
-export type AiProvider = "codex" | "gemini" | "gemini-cli";
+export type AiProvider = "codex" | "gemini" | "gemini-cli" | "iflow";
 
 // 描述:
 //
@@ -93,6 +93,7 @@ export interface AiKeyItem {
   provider: AiProvider;
   providerLabel: string;
   keyValue: string;
+  modelName?: string;
   enabled: boolean;
   updatedAt: string;
 }
