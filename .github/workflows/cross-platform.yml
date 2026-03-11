@@ -1,0 +1,74 @@
+name: cross-platform
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  core-agent:
+    name: core-agent (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 校验 core-agent 编译
+        run: cargo check --manifest-path crates/Cargo.toml -p libra_agent_core
+
+      - name: 校验平台命令解析测试
+        run: cargo test --manifest-path crates/Cargo.toml -p libra_agent_core platform::tests:: -- --test-threads=1
+
+      - name: 校验 Shell 选择测试
+        run: cargo test --manifest-path crates/Cargo.toml -p libra_agent_core tools::shell::tests:: -- --test-threads=1
+
+      - name: 校验全文检索兜底测试
+        run: cargo test --manifest-path crates/Cargo.toml -p libra_agent_core should_search_files_with_recursive_fallback -- --test-threads=1
+
+  desktop:
+    name: desktop (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - windows-latest
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.0.0
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 校验桌面单元测试
+        run: pnpm --dir apps/desktop test:unit
+
+      - name: 校验桌面端 Rust 编译
+        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml

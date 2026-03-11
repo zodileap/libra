@@ -51,7 +51,14 @@ import type {
   LoginUser,
 } from "@/shell/types";
 import type { AgentTextStreamEvent } from "../shared/types";
-import { EVENT_AGENT_TEXT_STREAM, IS_BROWSER, isCancelErrorCode, STREAM_KINDS } from "../shared/constants";
+import {
+  AGENT_WORKFLOWS_UPDATED_EVENT,
+  EVENT_AGENT_TEXT_STREAM,
+  IS_BROWSER,
+  isCancelErrorCode,
+  STREAM_KINDS,
+  type AgentWorkflowsUpdatedEventDetail,
+} from "../shared/constants";
 import {
   createAgentWorkflow,
   deleteAgentWorkflow,
@@ -632,6 +639,7 @@ function AgentSidebar({
   const [sessionMenuRenderVersion, setSessionMenuRenderVersion] = useState(0);
   const missingSessionSyncAttemptsRef = useRef<Record<string, number>>({});
   const suppressNextSessionSelectIdRef = useRef("");
+  const workspaceActionPointerGuardRef = useRef("");
 
   const isProjectAgent = agentKey === "agent";
   const selectedSessionKey = location.pathname.includes("/session/")
@@ -703,6 +711,74 @@ function AgentSidebar({
       return "";
     }
     return key.slice("workspace:".length).trim();
+  };
+
+  // 描述：为项目级 hover 动作生成唯一防重键，避免鼠标按下与 click 双阶段重复执行同一动作。
+  //
+  // Params:
+  //
+  //   - workspaceId: 项目 ID。
+  //   - actionKey: 动作标识。
+  //
+  // Returns:
+  //
+  //   - 当前动作的唯一键。
+  const buildWorkspaceActionGuardKey = (workspaceId: string, actionKey: string) => `${workspaceId}:${actionKey}`;
+
+  // 描述：统一拦截项目级 hover 动作事件，避免 AriMenu 父项在动作按钮按下时抢占交互。
+  //
+  // Params:
+  //
+  //   - event: 按钮事件对象。
+  const stopWorkspaceActionEvent = (event: MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  // 描述：在鼠标按下阶段提前执行项目 hover 动作，规避激活态项目项在 click 前丢失 hover 导致按钮失效。
+  //
+  // Params:
+  //
+  //   - event: 鼠标按下事件。
+  //   - workspaceId: 项目 ID。
+  //   - actionKey: 动作标识。
+  //   - action: 实际要执行的动作。
+  const handleWorkspaceActionMouseDown = (
+    event: MouseEvent<HTMLButtonElement>,
+    workspaceId: string,
+    actionKey: string,
+    action: () => void,
+  ) => {
+    if (event.button !== 0) {
+      return;
+    }
+    stopWorkspaceActionEvent(event);
+    workspaceActionPointerGuardRef.current = buildWorkspaceActionGuardKey(workspaceId, actionKey);
+    action();
+  };
+
+  // 描述：为键盘 click 保留兜底执行，同时跳过已经在鼠标按下阶段触发过的同一项目动作。
+  //
+  // Params:
+  //
+  //   - event: click 事件。
+  //   - workspaceId: 项目 ID。
+  //   - actionKey: 动作标识。
+  //   - action: 实际要执行的动作。
+  const handleWorkspaceActionClick = (
+    event: MouseEvent<HTMLButtonElement>,
+    workspaceId: string,
+    actionKey: string,
+    action: () => void,
+  ) => {
+    stopWorkspaceActionEvent(event);
+    const guardKey = buildWorkspaceActionGuardKey(workspaceId, actionKey);
+    if (event.detail > 0 && workspaceActionPointerGuardRef.current === guardKey) {
+      workspaceActionPointerGuardRef.current = "";
+      return;
+    }
+    workspaceActionPointerGuardRef.current = "";
+    action();
   };
 
   // 描述：刷新项目目录分组缓存，并同步默认展开状态。
@@ -1415,10 +1491,15 @@ function AgentSidebar({
               icon="more_horiz"
               aria-label={t("项目更多操作")}
               data-workspace-action-trigger="true"
+              onMouseDown={(event: MouseEvent<HTMLButtonElement>) => {
+                handleWorkspaceActionMouseDown(event, group.workspace.id, "more", () => {
+                  setOpenWorkspaceActionMenuId((current) => (current === group.workspace.id ? "" : group.workspace.id));
+                });
+              }}
               onClick={(event: MouseEvent<HTMLButtonElement>) => {
-                event.preventDefault();
-                event.stopPropagation();
-                setOpenWorkspaceActionMenuId((current) => (current === group.workspace.id ? "" : group.workspace.id));
+                handleWorkspaceActionClick(event, group.workspace.id, "more", () => {
+                  setOpenWorkspaceActionMenuId((current) => (current === group.workspace.id ? "" : group.workspace.id));
+                });
               }}
             />
           </AriTooltip>
@@ -1428,11 +1509,17 @@ function AgentSidebar({
             ghost
             icon="settings"
             aria-label={t("项目设置")}
+            onMouseDown={(event: MouseEvent<HTMLButtonElement>) => {
+              handleWorkspaceActionMouseDown(event, group.workspace.id, "manage", () => {
+                setOpenWorkspaceActionMenuId("");
+                openWorkspaceSettingsPage(group.workspace.id);
+              });
+            }}
             onClick={(event: MouseEvent<HTMLButtonElement>) => {
-              event.preventDefault();
-              event.stopPropagation();
-              setOpenWorkspaceActionMenuId("");
-              openWorkspaceSettingsPage(group.workspace.id);
+              handleWorkspaceActionClick(event, group.workspace.id, "manage", () => {
+                setOpenWorkspaceActionMenuId("");
+                openWorkspaceSettingsPage(group.workspace.id);
+              });
             }}
           />
           <AriButton
@@ -1442,11 +1529,17 @@ function AgentSidebar({
             icon="edit"
             aria-label={t("在项目内新增话题")}
             disabled={creatingWorkspaceSessionId === group.workspace.id}
+            onMouseDown={(event: MouseEvent<HTMLButtonElement>) => {
+              handleWorkspaceActionMouseDown(event, group.workspace.id, "create-session", () => {
+                setOpenWorkspaceActionMenuId("");
+                void handleCreateSessionInWorkspace(group.workspace.id);
+              });
+            }}
             onClick={(event: MouseEvent<HTMLButtonElement>) => {
-              event.preventDefault();
-              event.stopPropagation();
-              setOpenWorkspaceActionMenuId("");
-              void handleCreateSessionInWorkspace(group.workspace.id);
+              handleWorkspaceActionClick(event, group.workspace.id, "create-session", () => {
+                setOpenWorkspaceActionMenuId("");
+                void handleCreateSessionInWorkspace(group.workspace.id);
+              });
             }}
           />
         </AriFlex>
@@ -1580,6 +1673,7 @@ function AgentSidebar({
     setHoveredPinSessionId("");
     setHoveredDeleteSessionId("");
     setHoveredContextMenuActionKey("");
+    workspaceActionPointerGuardRef.current = "";
     suppressNextSessionSelectIdRef.current = "";
   }, [location.pathname]);
 
@@ -2031,10 +2125,16 @@ function WorkflowsSidebar({
   const navigate = useNavigate();
   const location = useLocation();
   const [workflowVersion, setWorkflowVersion] = useState(0);
+  const [workflowMenuRenderVersion, setWorkflowMenuRenderVersion] = useState(0);
   const [pendingDeleteWorkflowId, setPendingDeleteWorkflowId] = useState("");
   const [hoveredDeleteWorkflowId, setHoveredDeleteWorkflowId] = useState("");
   const [createButtonHovered, setCreateButtonHovered] = useState(false);
   const isWorkflowEditorPage = location.pathname.startsWith(WORKFLOW_EDITOR_PAGE_PATH);
+
+  // 描述：强制重建工作流菜单组件实例，解决删除后 AriMenu 结构缓存未及时刷新的问题。
+  const reloadWorkflowSidebarMenu = () => {
+    setWorkflowMenuRenderVersion((value) => value + 1);
+  };
 
   // 描述：解析当前路由中的 workflowId，用于高亮当前菜单项。
   const selectedWorkflowIdFromQuery = useMemo(() => {
@@ -2081,10 +2181,27 @@ function WorkflowsSidebar({
     setHoveredDeleteWorkflowId("");
   }, [location.pathname, location.search]);
 
+  // 描述：订阅工作流注册表更新事件，统一同步侧边栏名称、分组和增删后的菜单结构。
+  useEffect(() => {
+    if (!IS_BROWSER) {
+      return undefined;
+    }
+    const handleAgentWorkflowsUpdated = (event: Event) => {
+      const customEvent = event as CustomEvent<AgentWorkflowsUpdatedEventDetail>;
+      setWorkflowVersion((value) => value + 1);
+      if (customEvent.detail?.reason === "create" || customEvent.detail?.reason === "delete") {
+        reloadWorkflowSidebarMenu();
+      }
+    };
+    window.addEventListener(AGENT_WORKFLOWS_UPDATED_EVENT, handleAgentWorkflowsUpdated as EventListener);
+    return () => {
+      window.removeEventListener(AGENT_WORKFLOWS_UPDATED_EVENT, handleAgentWorkflowsUpdated as EventListener);
+    };
+  }, []);
+
   // 描述：新增空白工作流，并自动切换到新建项继续编辑。
   const handleCreateWorkflow = () => {
     const created = createAgentWorkflow();
-    setWorkflowVersion((value) => value + 1);
     setPendingDeleteWorkflowId("");
     navigateToWorkflowPage(created.id);
   };
@@ -2119,7 +2236,6 @@ function WorkflowsSidebar({
       return;
     }
 
-    setWorkflowVersion((value) => value + 1);
     setPendingDeleteWorkflowId("");
 
     if (selectedWorkflow?.key === workflowId) {
@@ -2145,7 +2261,7 @@ function WorkflowsSidebar({
             size="sm"
             type={pendingDeleteWorkflowId === item.id ? "default" : "text"}
             ghost={pendingDeleteWorkflowId !== item.id}
-            color={pendingDeleteWorkflowId === item.id ? "danger" : "default"}
+            color="default"
             icon={
               pendingDeleteWorkflowId === item.id
                 ? undefined
@@ -2237,6 +2353,7 @@ function WorkflowsSidebar({
 
       <AriContainer className="desk-history-menu">
         <AriMenu
+          key={`workflow-menu-${workflowMenuRenderVersion}`}
           className="desk-sidebar-nav"
           items={workflowMenuItems}
           selectedKey={selectedWorkflowMenuKey}

@@ -150,10 +150,8 @@ fn ensure_blender_extension_repo(blender_bin: &str) -> Result<(), String> {
 
 /// 描述：生成 Blender Extension 安装包（zip），用于 install-file 安装。
 fn build_bridge_extension_archive() -> Result<PathBuf, String> {
-    let package_dir = env::temp_dir().join(format!(
-        "libra-bridge-extension-{}",
-        crate::now_millis()
-    ));
+    let package_dir =
+        env::temp_dir().join(format!("libra-bridge-extension-{}", crate::now_millis()));
     fs::create_dir_all(&package_dir)
         .map_err(|err| format!("create extension temp dir failed: {}", err))?;
     let archive_path = package_dir.join(BLENDER_EXTENSION_PACKAGE_NAME);
@@ -473,9 +471,7 @@ pub(crate) fn install_blender_bridge(blender_bin: Option<String>) -> Result<Stri
 /// Returns:
 ///
 ///   DccRuntimeStatusResponse: Blender Bridge 的当前运行状态。
-pub(crate) fn check_blender_bridge(
-    dcc_provider_addr: Option<String>,
-) -> DccRuntimeStatusResponse {
+pub(crate) fn check_blender_bridge(dcc_provider_addr: Option<String>) -> DccRuntimeStatusResponse {
     let resolved_path = dcc_provider_addr.clone().unwrap_or_default();
     match ping_blender_bridge(dcc_provider_addr) {
         Ok(message) => DccRuntimeStatusResponse {

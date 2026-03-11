@@ -695,7 +695,7 @@ impl AgentTool for SearchFilesTool {
                 glob.as_str(),
                 max_results,
             )?,
-            None => run_grep_search(
+            None => run_recursive_search(
                 context.sandbox_root,
                 query.as_str(),
                 glob.as_str(),
@@ -917,48 +917,114 @@ fn run_rg_search(
     Ok(matches)
 }
 
-/// 描述：在未安装 ripgrep 时回退 grep 实现，保障基础检索可用。
-fn run_grep_search(
+/// 描述：在未安装 ripgrep 时回退到纯 Rust 递归搜索，避免依赖 `grep` 等平台外部命令。
+fn run_recursive_search(
     sandbox_root: &Path,
     query: &str,
     glob: &str,
     max_results: usize,
 ) -> Result<Vec<Value>, ProtocolError> {
-    let mut command = Command::new("grep");
-    command
-        .arg("-R")
-        .arg("-n")
-        .arg("--exclude-dir")
-        .arg(".git")
-        .arg(query)
-        .arg(".");
-    if !glob.trim().is_empty() {
-        command.arg(format!("--include={}", glob));
+    let mut matches: Vec<Value> = Vec::new();
+    collect_recursive_search_matches(
+        sandbox_root,
+        sandbox_root,
+        query,
+        glob,
+        max_results,
+        0,
+        &mut matches,
+    )?;
+    Ok(matches)
+}
+
+/// 描述：递归执行文本搜索并收集结果，统一各平台在无 ripgrep 环境下的检索行为。
+fn collect_recursive_search_matches(
+    sandbox_root: &Path,
+    current: &Path,
+    query: &str,
+    glob: &str,
+    max_results: usize,
+    depth: usize,
+    matches: &mut Vec<Value>,
+) -> Result<(), ProtocolError> {
+    if matches.len() >= max_results || depth > MAX_GLOB_WALK_DEPTH {
+        return Ok(());
     }
-    command.current_dir(sandbox_root);
-    let output = command.output().map_err(|err| {
+
+    let read_dir = fs::read_dir(current).map_err(|err| {
         ProtocolError::new(
-            "core.agent.python.search_files.exec_failed",
-            format!("执行 grep 搜索失败: {}", err),
+            "core.agent.python.search_files.read_dir_failed",
+            format!("读取目录失败: {}", err),
         )
     })?;
-    if !output.status.success() && output.status.code() != Some(1) {
-        return Err(ProtocolError::new(
-            "core.agent.python.search_files.failed",
-            String::from_utf8_lossy(output.stderr.as_slice())
-                .trim()
-                .to_string(),
-        ));
+
+    for item in read_dir {
+        if matches.len() >= max_results {
+            return Ok(());
+        }
+
+        let entry = item.map_err(|err| {
+            ProtocolError::new(
+                "core.agent.python.search_files.read_entry_failed",
+                format!("读取目录项失败: {}", err),
+            )
+        })?;
+        let entry_path = entry.path();
+        let metadata = fs::symlink_metadata(&entry_path).map_err(|err| {
+            ProtocolError::new(
+                "core.agent.python.search_files.stat_failed",
+                format!("读取文件状态失败: {}", err),
+            )
+        })?;
+        let file_name = entry.file_name();
+        if file_name.to_string_lossy() == ".git" {
+            continue;
+        }
+        let is_symlink = metadata.file_type().is_symlink();
+        if metadata.is_dir() && !is_symlink {
+            collect_recursive_search_matches(
+                sandbox_root,
+                entry_path.as_path(),
+                query,
+                glob,
+                max_results,
+                depth + 1,
+                matches,
+            )?;
+            continue;
+        }
+        if !metadata.is_file() {
+            continue;
+        }
+
+        let relative = entry_path
+            .strip_prefix(sandbox_root)
+            .unwrap_or(entry_path.as_path());
+        let relative_text = relative.to_string_lossy().replace('\\', "/");
+        if !glob.trim().is_empty() && !glob_match(glob, relative_text.as_str()) {
+            continue;
+        }
+
+        let content = match fs::read_to_string(&entry_path) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        for (line_index, line) in content.lines().enumerate() {
+            if !line.contains(query) {
+                continue;
+            }
+            matches.push(json!({
+                "path": relative_text,
+                "line": line_index + 1,
+                "content": line.trim(),
+            }));
+            if matches.len() >= max_results {
+                return Ok(());
+            }
+        }
     }
-    let text = String::from_utf8_lossy(output.stdout.as_slice()).to_string();
-    let mut matches = text
-        .lines()
-        .filter_map(parse_search_line)
-        .collect::<Vec<Value>>();
-    if matches.len() > max_results {
-        matches.truncate(max_results);
-    }
-    Ok(matches)
+
+    Ok(())
 }
 
 /// 描述：解析单行 grep/rg 输出为统一结构，格式为 `path:line:content`。
@@ -1055,5 +1121,36 @@ mod tests {
         assert!(summary.diff_preview.contains("@@ -0,0 +1,2 @@"));
         assert!(summary.diff_preview.contains("+# 初始化"));
         assert!(summary.diff_preview.contains("+- 新增内容"));
+    }
+
+    /// 描述：验证在未安装 ripgrep 时，纯 Rust 递归搜索仍能返回结构化匹配结果。
+    #[test]
+    fn should_search_files_with_recursive_fallback() {
+        let root = std::env::temp_dir().join(format!(
+            "libra-agent-recursive-search-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time should be monotonic")
+                .as_millis()
+        ));
+        fs::create_dir_all(root.join("src")).expect("create search sandbox");
+        fs::write(
+            root.join("src").join("user.ts"),
+            "export const name = 'user';\nexport const role = 'admin';\n",
+        )
+        .expect("write search fixture");
+        fs::write(root.join("README.md"), "hello world\n").expect("write readme fixture");
+
+        let matches = run_recursive_search(root.as_path(), "role", "src/*.ts", 10)
+            .expect("recursive search should succeed");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].get("path").and_then(|value| value.as_str()),
+            Some("src/user.ts")
+        );
+        assert_eq!(
+            matches[0].get("line").and_then(|value| value.as_u64()),
+            Some(2)
+        );
     }
 }

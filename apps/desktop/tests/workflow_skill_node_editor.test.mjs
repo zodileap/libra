@@ -30,6 +30,8 @@ test("TestWorkflowSkillNodeShouldBeSupportedInTypesStorageAndEditor", () => {
   assert.match(typesSource, /\| "skill"/);
   assert.match(typesSource, /skillId\?: string;/);
   assert.match(typesSource, /skillVersion\?: string;/);
+  assert.doesNotMatch(typesSource, /requiredCapabilities\?:/);
+  assert.doesNotMatch(typesSource, /optionalCapabilities\?:/);
 
   // 描述：
   //
@@ -52,10 +54,10 @@ test("TestWorkflowSkillNodeShouldBeSupportedInTypesStorageAndEditor", () => {
   assert.match(editorSource, /label=\{t\("技能编码"\)\}/);
   assert.match(editorSource, /<AriSelect/);
   assert.match(editorSource, /buildSkillSelectOptions/);
-  assert.match(editorSource, /listProjectWorkspaceCapabilityManifests/);
-  assert.match(editorSource, /label=\{t\("必需项目能力"\)\}/);
-  assert.match(editorSource, /label=\{t\("可选项目能力"\)\}/);
-  assert.match(editorSource, /toggleWorkflowEditCapability/);
+  assert.doesNotMatch(editorSource, /listProjectWorkspaceCapabilityManifests/);
+  assert.doesNotMatch(editorSource, /value=\{t\("项目能力"\)\}/);
+  assert.doesNotMatch(editorSource, /className="desk-workflow-edit-capability-list"/);
+  assert.doesNotMatch(editorSource, /toggleWorkflowEditCapability/);
   assert.doesNotMatch(editorSource, /label="技能版本"/);
   assert.doesNotMatch(editorSource, /buildSkillVersionOptions/);
 });

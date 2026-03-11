@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   AriButton,
@@ -18,6 +18,7 @@ import {
 } from "../../../shared/workflow";
 import { resolveWorkflowEditorPath } from "../routes";
 import { useDesktopHeaderSlot } from "../../../widgets/app-header/header-slot-context";
+import { AGENT_WORKFLOWS_UPDATED_EVENT, IS_BROWSER } from "../../../shared/constants";
 import {
   DeskEmptyState,
   DeskOverviewCard,
@@ -104,6 +105,22 @@ export function WorkflowsPage() {
 
   // 描述：
   //
+  //   - 监听工作流注册表更新事件；当编辑页或侧边栏修改了工作流后，总览页可原地刷新分区列表。
+  useEffect(() => {
+    if (!IS_BROWSER) {
+      return undefined;
+    }
+    const handleAgentWorkflowsUpdated = () => {
+      refreshWorkflowOverview();
+    };
+    window.addEventListener(AGENT_WORKFLOWS_UPDATED_EVENT, handleAgentWorkflowsUpdated as EventListener);
+    return () => {
+      window.removeEventListener(AGENT_WORKFLOWS_UPDATED_EVENT, handleAgentWorkflowsUpdated as EventListener);
+    };
+  }, [refreshWorkflowOverview]);
+
+  // 描述：
+  //
   //   - 打开工作流管理页；内置模板进入只读查看，用户工作流进入可编辑页。
   const handleManageWorkflow = useCallback((workflow: AgentWorkflowDefinition) => {
     navigate(resolveWorkflowEditorPath(workflow.id));
@@ -111,38 +128,33 @@ export function WorkflowsPage() {
 
   // 描述：
   //
-  //   - 基于当前工作流创建副本，复制后的工作流始终进入可编辑状态。
+  //   - 基于当前工作流创建副本；复制完成后停留在总览页，避免列表操作打断当前浏览上下文。
   const handleCopyWorkflow = useCallback((workflow: AgentWorkflowDefinition) => {
-    const copied = createAgentWorkflowFromTemplate(workflow.id);
-    refreshWorkflowOverview();
+    createAgentWorkflowFromTemplate(workflow.id);
     AriMessage.success({
       content: t("已复制 {{name}}", { name: workflow.name }),
       duration: 1800,
     });
-    navigate(resolveWorkflowEditorPath(copied.id));
-  }, [navigate, refreshWorkflowOverview, t]);
+  }, [t]);
 
   // 描述：
   //
   //   - 新增空白工作流并立即进入编辑页，避免用户创建后还需再次查找目标项。
   const handleCreateWorkflow = useCallback(() => {
     const created = createAgentWorkflow();
-    refreshWorkflowOverview();
     navigate(resolveWorkflowEditorPath(created.id));
-  }, [navigate, refreshWorkflowOverview]);
+  }, [navigate]);
 
   // 描述：
   //
-  //   - 从内置模板新增工作流，新增后直接进入编辑页。
+  //   - 从内置模板新增工作流；新增后停留在总览页，并保留模板原名后移入“已注册”分区。
   const handleAddWorkflow = useCallback((workflow: AgentWorkflowDefinition) => {
-    const created = createAgentWorkflowFromTemplate(workflow.id);
-    refreshWorkflowOverview();
+    createAgentWorkflowFromTemplate(workflow.id, { mode: "register" });
     AriMessage.success({
       content: t("已添加 {{name}}", { name: workflow.name }),
       duration: 1800,
     });
-    navigate(resolveWorkflowEditorPath(created.id));
-  }, [navigate, refreshWorkflowOverview, t]);
+  }, [t]);
 
   // 描述：
   //

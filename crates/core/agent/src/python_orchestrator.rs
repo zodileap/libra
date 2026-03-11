@@ -1,5 +1,6 @@
 use crate::flow::build_system_prompt;
 use crate::llm::{parse_provider, LlmUsage};
+use crate::platform::{resolve_python_command_candidates, CommandCandidate};
 use crate::sandbox::{
     BATCH_SIZE_PREFIX, FINAL_RESULT_PREFIX, SANDBOX_ERROR_PREFIX, TOOL_CALL_PREFIX, TURN_END_MARKER,
 };
@@ -12,7 +13,6 @@ use serde_json::{json, Value};
 use std::env;
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -22,6 +22,7 @@ use tracing::{info_span, warn};
 pub(crate) struct PythonScriptExecutionResult {
     pub message: String,
     pub actions: Vec<String>,
+    pub tool_facts: Vec<ToolExecutionFact>,
     pub events: Vec<ProtocolEventRecord>,
     pub assets: Vec<ProtocolAssetRecord>,
 }
@@ -42,6 +43,13 @@ struct AgentTurnRecord {
     summary: String,
     next: String,
     actions: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ToolExecutionFact {
+    name: String,
+    ok: bool,
+    summary: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,6 +223,7 @@ pub(crate) fn run_agent_with_python_workflow(
         let turn_result = parse_turn_result_envelope(
             &execution.message,
             &execution.actions,
+            execution.tool_facts.as_slice(),
             turn_index,
             max_turns,
         );
@@ -271,6 +280,15 @@ pub(crate) fn run_agent_with_python_workflow(
             data: Some(json!({
                 "turn_index": turn_index,
                 "actions": execution.actions,
+                "tool_facts": execution
+                    .tool_facts
+                    .iter()
+                    .map(|item| json!({
+                        "name": item.name,
+                        "ok": item.ok,
+                        "summary": item.summary,
+                    }))
+                    .collect::<Vec<Value>>(),
                 "turn_control": if turn_result.control == TurnControl::Done { "done" } else { "continue" },
                 "turn_summary": turn_result.summary,
                 "next": turn_result.next,
@@ -303,10 +321,10 @@ pub(crate) fn run_agent_with_python_workflow(
 
     if !completed {
         let fallback_message = if final_message.trim().is_empty() {
-            "已达到本轮最大执行次数，当前进展已保存，请继续发起下一轮。".to_string()
+            "已达到当前最大连续执行次数，当前进展已保存，请继续发起下一次执行。".to_string()
         } else {
             format!(
-                "已达到本轮最大执行次数（{} 轮），当前进展：{}",
+                "已达到当前最大连续执行次数（{} 次），当前进展：{}",
                 max_turns, final_message
             )
         };
@@ -351,12 +369,12 @@ fn build_round_description_prompt(
     format!(
         "{system_prompt}\n\
 你正在执行“多轮智能体流程”，当前为第 {turn_index} 轮（最多 {max_turns} 轮）。\n\
-本次仅输出“本轮任务描述”，禁止输出代码、列表、序号、Markdown 围栏。\n\
+本次仅输出一段面向用户的自然进展说明，禁止输出代码、列表、序号、Markdown 围栏。\n\
 输出要求：\n\
 1. 仅输出一段中文自然语言，偏口语化，面向用户可读；\n\
-2. 必须说明“本轮会做什么”与“为什么先做这一步”；\n\
+2. 必须说明接下来要处理什么，以及为什么先做这一步；\n\
 3. 长度控制在 30-120 字；\n\
-4. 不要出现 PLAN_TITLE、PLAN_STEP、STATUS、SUMMARY、NEXT 等协议词。\n\
+4. 不要出现“本轮”“第一轮”“第 N 轮”“下一轮”等轮次措辞，也不要出现 PLAN_TITLE、PLAN_STEP、STATUS、SUMMARY、NEXT 等协议词。\n\
 当前项目：{project_name_text}\n\
 历史执行摘要（最近轮次）：\n\
 {turn_context}\n\
@@ -428,36 +446,27 @@ fn build_planning_meta_message(payload: Value) -> String {
     format!("{}{}", PLANNING_META_PREFIX, payload)
 }
 
-/// 描述：为等待中的 LLM 调用拼装更可读的心跳文案，避免前端只能看到无信息量的“正在思考”。
+/// 描述：为等待中的 LLM 调用返回稳定的阶段心跳文案，避免将底层 provider 细节直接暴露给前端。
 ///
 /// Params:
 ///
 ///   - fallback: 当前阶段的高层语义描述。
-///   - progress_detail: 底层 provider 给出的等待进度细节。
+///   - progress_detail: 底层 provider 给出的等待进度细节；当前仅用于兼容签名，不再直接展示。
 ///
 /// Returns:
 ///
-///   - String: 适合直接透传给前端的心跳文案。
+///   - String: 适合直接透传给前端的阶段文案。
 fn build_llm_waiting_heartbeat_message(fallback: &str, progress_detail: &str) -> String {
-    let detail = progress_detail.trim();
-    if detail.is_empty() {
-        return fallback.trim().to_string();
-    }
-    let fallback_text = fallback.trim();
-    if fallback_text.contains(detail) {
-        return fallback_text.to_string();
-    }
-    format!("{}（{}）", fallback_text, detail)
+    let _ = progress_detail;
+    fallback.trim().to_string()
 }
 
 /// 描述：规范化“本轮任务描述”文本，兼容模型偶发返回 JSON/前后缀噪声。
 fn normalize_round_description(raw: &str, turn_index: usize) -> String {
     let source = raw.trim();
     if source.is_empty() {
-        return format!(
-            "第 {} 轮开始：我会先梳理本轮可执行入口，再推进具体改动。",
-            turn_index
-        );
+        let _ = turn_index;
+        return "我会先梳理当前可执行入口，再继续推进具体改动。".to_string();
     }
     if let Ok(parsed) = serde_json::from_str::<Value>(source) {
         if let Some(text) = parsed
@@ -484,16 +493,14 @@ fn normalize_round_description(raw: &str, turn_index: usize) -> String {
             return normalized;
         }
     }
-    format!(
-        "第 {} 轮开始：我会先梳理本轮可执行入口，再推进具体改动。",
-        turn_index
-    )
+    "我会先梳理当前可执行入口，再继续推进具体改动。".to_string()
 }
 
 /// 描述：规范化“本轮任务描述”候选文本，过滤协议/代码噪声并兜底为口语化描述句。
 fn normalize_round_description_candidate(raw: &str, turn_index: usize) -> String {
     let normalized = truncate_stream_text(raw, STREAM_TEXT_MAX_CHARS);
-    let text = normalized.trim();
+    let text = soften_round_description_text(normalized.trim());
+    let text = text.trim();
     if text.is_empty() {
         return String::new();
     }
@@ -507,19 +514,61 @@ fn normalize_round_description_candidate(raw: &str, turn_index: usize) -> String
         || lower.starts_with("def ")
         || lower.starts_with("class ")
     {
-        return format!(
-            "第 {} 轮开始：我会先梳理本轮可执行入口，再推进具体改动。",
-            turn_index
-        );
+        let _ = turn_index;
+        return "我会先梳理当前可执行入口，再继续推进具体改动。".to_string();
     }
     let sentence_like = text.contains('，') || text.contains('。') || text.contains(',');
     if text.chars().count() < 16 || !sentence_like {
         return format!(
-            "我会先围绕“{}”梳理本轮可执行项，先拿到必要上下文，再推进落地修改。",
+            "我会先围绕“{}”梳理当前要处理的内容，先补齐必要上下文，再推进落地修改。",
             text.trim_matches(|ch| ch == '"' || ch == '\'' || ch == '#' || ch == ':')
         );
     }
     text.to_string()
+}
+
+/// 描述：弱化规划文案中的“轮次感”措辞，避免前端连续阅读时频繁出现“本轮/下一轮/第 N 轮”等内部编排语言。
+fn soften_round_description_text(raw: &str) -> String {
+    let mut text = raw.trim().to_string();
+    if text.starts_with('第') {
+        if let Some(round_index) = text.find('轮') {
+            let remainder = text[round_index + '轮'.len_utf8()..].trim_start_matches(|ch: char| {
+                ch.is_whitespace()
+                    || ch == '开'
+                    || ch == '始'
+                    || ch == '：'
+                    || ch == ':'
+                    || ch == '，'
+                    || ch == ','
+            });
+            if !remainder.is_empty() {
+                text = remainder.to_string();
+            }
+        }
+    }
+    for (prefix, replacement) in [
+        ("本轮我会先", "我会先"),
+        ("本轮会先", "先"),
+        ("本轮我会", "我会"),
+        ("本轮会", "会"),
+        ("本轮先", "先"),
+        ("这一轮我会先", "我会先"),
+        ("这一轮会先", "先"),
+        ("这一轮我会", "我会"),
+        ("这一轮会", "会"),
+    ] {
+        if let Some(rest) = text.strip_prefix(prefix) {
+            text = format!("{}{}", replacement, rest);
+            break;
+        }
+    }
+    text = text
+        .replace("下一轮", "后续")
+        .replace("本轮", "")
+        .replace("这一轮", "")
+        .replace("首轮", "开始时")
+        .replace("第一轮", "开始时");
+    text.trim().to_string()
 }
 
 /// 描述：解析智能体多轮上限配置，未配置时默认 6 轮。
@@ -638,10 +687,65 @@ fn build_registered_mcp_context(available_mcps: &[AgentRegisteredMcp]) -> String
         .join("\n")
 }
 
+/// 描述：将真实工具执行结果格式化为可信摘要片段，仅保留工具名与结构化结果，避免模型自报功劳覆盖事实。
+fn format_tool_execution_fact(fact: &ToolExecutionFact) -> String {
+    let normalized_summary = truncate_stream_text(fact.summary.trim(), 160);
+    if normalized_summary.is_empty() {
+        return if fact.ok {
+            fact.name.clone()
+        } else {
+            format!("{}（失败）", fact.name)
+        };
+    }
+    if fact.ok {
+        format!("{}：{}", fact.name, normalized_summary)
+    } else {
+        format!("{}（失败）：{}", fact.name, normalized_summary)
+    }
+}
+
+/// 描述：基于真实工具执行事实生成可信总结；若缺少事实支撑，则回退为保守文案，不再直接信任模型自报结果。
+fn build_trusted_turn_summary(
+    raw_summary: &str,
+    actions: &[String],
+    tool_facts: &[ToolExecutionFact],
+) -> String {
+    if !tool_facts.is_empty() {
+        let start = tool_facts.len().saturating_sub(3);
+        let fact_text = tool_facts[start..]
+            .iter()
+            .map(format_tool_execution_fact)
+            .filter(|item| !item.trim().is_empty())
+            .collect::<Vec<String>>()
+            .join("；");
+        if fact_text.is_empty() {
+            return format!("已执行 {} 个工具动作。", actions.len());
+        }
+        return format!("已执行 {} 个工具动作：{}", actions.len(), fact_text);
+    }
+
+    if raw_summary.contains("系统自动补全 finish") {
+        if actions.is_empty() {
+            return "脚本由系统自动收尾，且未记录到可验证的工具动作。".to_string();
+        }
+        return format!("已执行 {} 个工具动作，脚本由系统自动收尾。", actions.len());
+    }
+
+    if actions.is_empty() {
+        return "未记录到可验证的工具动作，当前仅保留说明性结果。".to_string();
+    }
+
+    format!(
+        "已执行 {} 个工具动作，但未生成可复用的可信摘要。",
+        actions.len()
+    )
+}
+
 /// 描述：解析每轮执行结果中的控制信号（DONE/CONTINUE）与总结，供编排器判断是否继续下一轮。
 fn parse_turn_result_envelope(
     raw_message: &str,
     actions: &[String],
+    tool_facts: &[ToolExecutionFact],
     turn_index: usize,
     max_turns: usize,
 ) -> TurnResultEnvelope {
@@ -659,7 +763,7 @@ fn parse_turn_result_envelope(
         .find_map(|line| line.trim().strip_prefix("NEXT:").map(str::trim))
         .unwrap_or("");
     let normalized_summary = if summary_line.is_empty() {
-        normalized
+        let summary_text = normalized
             .lines()
             .filter(|line| {
                 let trimmed = line.trim();
@@ -670,28 +774,13 @@ fn parse_turn_result_envelope(
             .collect::<Vec<&str>>()
             .join("\n")
             .trim()
-            .to_string()
+            .to_string();
+        soften_round_description_text(summary_text.as_str())
     } else {
-        summary_line.to_string()
+        soften_round_description_text(summary_line)
     };
-    let summary = if normalized_summary.is_empty() {
-        "本轮已执行，等待下一步".to_string()
-    } else {
-        normalized_summary
-    };
-    let summary = if summary.contains("系统自动补全 finish") {
-        if actions.is_empty() {
-            "本轮脚本由系统自动收尾，准备继续下一轮。".to_string()
-        } else {
-            format!(
-                "本轮已执行 {} 个工具动作，脚本由系统自动收尾，准备继续下一轮。",
-                actions.len()
-            )
-        }
-    } else {
-        summary
-    };
-    let next = next_line.to_string();
+    let summary = build_trusted_turn_summary(normalized_summary.as_str(), actions, tool_facts);
+    let next = soften_round_description_text(next_line);
     let lower_message = normalized.to_lowercase();
     let has_continue_signal = status_line.eq_ignore_ascii_case("continue")
         || lower_message.contains("[continue]")
@@ -1769,12 +1858,15 @@ where
     let span = info_span!("python_sandbox_execute", trace_id = %trace_id, session_id = %session_id);
     let _enter = span.enter();
 
-    let python_bin = resolve_python_binary()?;
+    let python_command = resolve_python_command()?;
     let sandbox_root = resolve_sandbox_root(workdir)?;
 
     // 从持久化注册表中获取或创建沙盒
-    let sandbox_ref =
-        crate::sandbox::SANDBOX_REGISTRY.get_or_create(&session_id, &sandbox_root, &python_bin)?;
+    let sandbox_ref = crate::sandbox::SANDBOX_REGISTRY.get_or_create(
+        &session_id,
+        &sandbox_root,
+        &python_command,
+    )?;
     let mut sandbox = sandbox_ref
         .lock()
         .map_err(|_| ProtocolError::new("sandbox.lock_failed", "sandbox 锁获取失败"))?;
@@ -1791,6 +1883,7 @@ where
 
     let mut final_message = String::new();
     let mut actions = Vec::new();
+    let mut tool_facts: Vec<ToolExecutionFact> = Vec::new();
     let mut events = Vec::new();
     let assets = Vec::new();
     let mut plain_stdout_lines: Vec<String> = Vec::new();
@@ -1936,6 +2029,7 @@ where
                     } else {
                         &failure_summary_payload
                     };
+                    let tool_summary = summarize_tool_result(&tool_name, ok, summary_source);
                     let stream_result_data = build_tool_result_stream_data(
                         &tool_name,
                         ok,
@@ -1947,9 +2041,16 @@ where
                     on_stream_event(AgentStreamEvent::ToolCallFinished {
                         name: tool_name.clone(),
                         ok,
-                        result: summarize_tool_result(&tool_name, ok, summary_source),
+                        result: tool_summary.clone(),
                         result_data: stream_result_data,
                     });
+                    if !tool_summary.trim().is_empty() {
+                        tool_facts.push(ToolExecutionFact {
+                            name: tool_name.clone(),
+                            ok,
+                            summary: tool_summary,
+                        });
+                    }
                     events.push(ProtocolEventRecord {
                         event: if ok {
                             "tool_call_finished"
@@ -2092,6 +2193,7 @@ where
             return Ok(PythonScriptExecutionResult {
                 message: fallback_message,
                 actions,
+                tool_facts,
                 events,
                 assets,
             });
@@ -2111,6 +2213,7 @@ where
             normalized_message
         },
         actions,
+        tool_facts,
         events,
         assets,
     })
@@ -2190,9 +2293,23 @@ fn summarize_tool_result(name: &str, ok: bool, data: &Value) -> String {
             format!("读取完成，共 {} 字符", content.chars().count())
         }
         "read_json" => "读取 JSON 成功".to_string(),
-        "write_json" => {
+        "write_text" => {
+            let path = data.get("path").and_then(|v| v.as_str()).unwrap_or("");
             let bytes = data.get("bytes").and_then(|v| v.as_u64()).unwrap_or(0);
-            format!("写入 JSON 成功，共 {} 字节", bytes)
+            if path.is_empty() {
+                format!("写入文本成功，共 {} 字节", bytes)
+            } else {
+                format!("写入文本成功：{}（{} 字节）", path, bytes)
+            }
+        }
+        "write_json" => {
+            let path = data.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            let bytes = data.get("bytes").and_then(|v| v.as_u64()).unwrap_or(0);
+            if path.is_empty() {
+                format!("写入 JSON 成功，共 {} 字节", bytes)
+            } else {
+                format!("写入 JSON 成功：{}（{} 字节）", path, bytes)
+            }
         }
         "git_status" => {
             let status = data.get("status").and_then(|v| v.as_str()).unwrap_or("");
@@ -2285,6 +2402,14 @@ fn summarize_tool_result(name: &str, ok: bool, data: &Value) -> String {
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
             format!("抓取完成，共 {} 字符", chars)
+        }
+        "todo_read" => {
+            let count = data.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+            format!("已读取任务清单，共 {} 项", count)
+        }
+        "todo_write" => {
+            let count = data.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+            format!("已更新任务清单，共 {} 项", count)
         }
         _ => {
             let s = data.to_string();
@@ -2561,29 +2686,22 @@ pub(crate) fn tool_tool_search(args: &Value) -> Result<Value, ProtocolError> {
     }))
 }
 
-/// 描述：解析并返回可用 Python 解释器路径。
-pub(crate) fn resolve_python_binary() -> Result<String, ProtocolError> {
-    let mut candidates: Vec<String> = Vec::new();
-    if let Some(bin) = env::var("ZODILEAP_PYTHON_BIN")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-    {
-        candidates.push(bin);
-    }
-    candidates.push("python3".to_string());
-    candidates.push("python".to_string());
-
-    for bin in candidates {
-        let output = Command::new(bin.as_str()).arg("--version").output();
+/// 描述：解析并返回可用 Python 命令候选，兼容 Windows `py -3` 启动器。
+pub(crate) fn resolve_python_command() -> Result<CommandCandidate, ProtocolError> {
+    let candidates = resolve_python_command_candidates();
+    for candidate in candidates {
+        let mut command = candidate.build_command();
+        let output = command.arg("--version").output();
         if output.is_ok() {
-            return Ok(bin);
+            return Ok(candidate);
         }
     }
 
     Err(
         ProtocolError::new("core.agent.python.not_found", "未检测到可用 Python 解释器")
-            .with_suggestion("请安装 Python3，或设置环境变量 ZODILEAP_PYTHON_BIN。"),
+            .with_suggestion(
+                "请安装 Python3，Windows 可使用 py -3，或设置环境变量 ZODILEAP_PYTHON_BIN。",
+            ),
     )
 }
 
@@ -2837,7 +2955,7 @@ def main():
     /// 描述：验证 Python 沙盒可实际执行脚本并返回 finish 消息。
     #[test]
     fn should_execute_python_script_in_sandbox() {
-        if resolve_python_binary().is_err() {
+        if resolve_python_command().is_err() {
             return;
         }
         let root = build_unique_test_root();
@@ -2868,7 +2986,7 @@ finish("python sandbox ok")
     /// 描述：验证兼容工具别名在未调用 finish 时仍可执行，并通过 stdout 自动补全结果。
     #[test]
     fn should_support_compatibility_tool_aliases_without_finish() {
-        if resolve_python_binary().is_err() {
+        if resolve_python_command().is_err() {
             return;
         }
         let root = build_unique_test_root();
@@ -2897,7 +3015,7 @@ print(f"alias items count: {len(items)}")
     /// 描述：验证 `write_text(file_path=..., text=...)` 关键字参数写法可被兼容层正确映射，不再触发 TypeError。
     #[test]
     fn should_support_write_text_keyword_alias_arguments() {
-        if resolve_python_binary().is_err() {
+        if resolve_python_command().is_err() {
             return;
         }
         let root = build_unique_test_root();
@@ -2936,10 +3054,43 @@ finish("write_text keyword alias ok")
         assert!(result.actions.iter().any(|item| item == "write_text"));
     }
 
+    /// 描述：验证 `finish(status=..., summary=..., next=...)` 关键字收尾写法可被兼容层折叠为协议文本。
+    #[test]
+    fn should_support_finish_keyword_envelope_arguments() {
+        if resolve_python_command().is_err() {
+            return;
+        }
+        let root = build_unique_test_root();
+        fs::create_dir_all(&root).expect("create temp root");
+        let script = r##"finish(
+status="CONTINUE",
+summary="已完成需求分析",
+next="进入 API 模型设计",
+)"##;
+        let result = execute_python_script(
+            PythonScriptExecutionRequest {
+                user_script: script,
+                workdir: root.to_str(),
+                dcc_provider_addr: None,
+                available_mcps: &[],
+                policy: &crate::policy::AgentPolicy::default(),
+                trace_id: "test-trace".to_string(),
+                session_id: "test-session-finish-keyword-envelope".to_string(),
+            },
+            &mut |_| {},
+        )
+        .expect("finish keyword envelope script should execute successfully");
+        assert_eq!(
+            result.message,
+            "STATUS: CONTINUE\nSUMMARY: 已完成需求分析\nNEXT: 进入 API 模型设计",
+        );
+        assert!(result.actions.is_empty());
+    }
+
     /// 描述：验证 `todo_write("KEY", "VALUE")` 历史两参数写法可被兼容层映射，不再触发参数个数错误。
     #[test]
     fn should_support_todo_write_legacy_two_positional_arguments() {
-        if resolve_python_binary().is_err() {
+        if resolve_python_command().is_err() {
             return;
         }
         let root = build_unique_test_root();
@@ -3004,7 +3155,7 @@ finish("todo_write legacy positional alias ok")
     /// 描述：验证 todo_read 默认返回任务项列表，避免脚本直接遍历返回值时因结构误判触发类型错误。
     #[test]
     fn should_return_todo_items_list_by_default() {
-        if resolve_python_binary().is_err() {
+        if resolve_python_command().is_err() {
             return;
         }
         let root = build_unique_test_root();
@@ -3054,7 +3205,7 @@ finish("todo_read default items list ok")
     /// 描述：验证 todo_read 会为缺失 id 的历史任务项补齐默认字段，避免脚本直接 item['id'] 时触发 KeyError。
     #[test]
     fn should_normalize_todo_items_with_missing_id_in_todo_read() {
-        if resolve_python_binary().is_err() {
+        if resolve_python_command().is_err() {
             return;
         }
         let root = build_unique_test_root();
@@ -3107,7 +3258,7 @@ finish("todo_read normalize missing id ok")
     /// 描述：验证 read_text/read_json 默认返回解包后的内容，避免脚本重复手写 JSON 解包并触发类型错误。
     #[test]
     fn should_unwrap_read_text_and_read_json_payloads_by_default() {
-        if resolve_python_binary().is_err() {
+        if resolve_python_command().is_err() {
             return;
         }
         let root = build_unique_test_root();
@@ -3172,7 +3323,7 @@ finish("read_text/read_json default unwrap ok")
     /// 描述：验证当脚本既未输出 finish 结果也未执行工具调用时，会触发“源码摘要兜底”而非直接失败。
     #[test]
     fn should_fallback_when_script_has_no_result_and_no_actions() {
-        if resolve_python_binary().is_err() {
+        if resolve_python_command().is_err() {
             return;
         }
         let root = build_unique_test_root();
@@ -3198,7 +3349,7 @@ finish("read_text/read_json default unwrap ok")
     /// 描述：验证“函数定义 + __main__ 入口调用”的脚本在自动补全 finish 后可稳定返回结果，覆盖线上用户场景。
     #[test]
     fn should_execute_requirement_style_script_with_auto_finish() {
-        if resolve_python_binary().is_err() {
+        if resolve_python_command().is_err() {
             return;
         }
         let root = build_unique_test_root();
@@ -3238,7 +3389,7 @@ if __name__ == "__main__":
     /// 描述：验证脚本出现多个 finish(...) 时，优先保留模型显式返回的业务结果，避免被自动补全文案覆盖。
     #[test]
     fn should_prefer_explicit_finish_message_over_auto_finish_message() {
-        if resolve_python_binary().is_err() {
+        if resolve_python_command().is_err() {
             return;
         }
         let root = build_unique_test_root();
@@ -3276,7 +3427,7 @@ finish("执行完成（系统自动补全 finish）")
     /// 描述：验证脚本仅使用普通 print（未显式 flush）时，仍可通过 stdout 自动补全最终结果，避免误报 empty_result。
     #[test]
     fn should_capture_plain_print_stdout_without_finish_or_tools() {
-        if resolve_python_binary().is_err() {
+        if resolve_python_command().is_err() {
             return;
         }
         let root = build_unique_test_root();
@@ -3307,7 +3458,7 @@ print("api model done")
     /// 描述：验证沙盒运行时异常会返回完整 traceback，而不是仅首行标题。
     #[test]
     fn should_capture_full_traceback_for_sandbox_runtime_error() {
-        if resolve_python_binary().is_err() {
+        if resolve_python_command().is_err() {
             return;
         }
         let root = build_unique_test_root();
@@ -3777,9 +3928,20 @@ diff --git a/src/a.txt b/src/a.txt
     fn should_parse_continue_turn_result_envelope() {
         let message =
             "STATUS: CONTINUE\nSUMMARY: 已完成需求拆解并写入文档\nNEXT: 开始实现 API 接口";
-        let envelope = parse_turn_result_envelope(message, &["write_text".to_string()], 1, 6);
+        let envelope = parse_turn_result_envelope(
+            message,
+            &["write_text".to_string()],
+            &[ToolExecutionFact {
+                name: "write_text".to_string(),
+                ok: true,
+                summary: "写入文本成功：/tmp/requirements.md（128 字节）".to_string(),
+            }],
+            1,
+            6,
+        );
         assert_eq!(envelope.control, TurnControl::Continue);
-        assert_eq!(envelope.summary, "已完成需求拆解并写入文档");
+        assert!(envelope.summary.contains("已执行 1 个工具动作"));
+        assert!(envelope.summary.contains("write_text：写入文本成功"));
         assert_eq!(envelope.next, "开始实现 API 接口");
     }
 
@@ -3787,26 +3949,50 @@ diff --git a/src/a.txt b/src/a.txt
     #[test]
     fn should_default_continue_when_no_actions_and_no_status_marker() {
         let message = "已完成方案规划";
-        let envelope = parse_turn_result_envelope(message, &[], 1, 6);
+        let envelope = parse_turn_result_envelope(message, &[], &[], 1, 6);
         assert_eq!(envelope.control, TurnControl::Continue);
+        assert_eq!(
+            envelope.summary,
+            "未记录到可验证的工具动作，当前仅保留说明性结果。"
+        );
     }
 
     /// 描述：验证未显式返回 DONE/CONTINUE 且已有工具动作时，仍默认继续下一轮，避免“首轮写文档后提前结束”。
     #[test]
     fn should_continue_with_actions_when_status_marker_missing() {
         let message = "本轮已写入需求文档";
-        let envelope = parse_turn_result_envelope(message, &["write_text".to_string()], 1, 6);
+        let envelope = parse_turn_result_envelope(
+            message,
+            &["write_text".to_string()],
+            &[ToolExecutionFact {
+                name: "write_text".to_string(),
+                ok: true,
+                summary: "写入文本成功：/tmp/requirements.md（128 字节）".to_string(),
+            }],
+            1,
+            6,
+        );
         assert_eq!(envelope.control, TurnControl::Continue);
-        assert_eq!(envelope.summary, "本轮已写入需求文档");
+        assert!(envelope.summary.contains("write_text：写入文本成功"));
     }
 
     /// 描述：验证多轮结果解析可识别 STATUS: DONE，并收敛到完成态。
     #[test]
     fn should_parse_done_turn_result_envelope() {
         let message = "STATUS: DONE\nSUMMARY: 代码与测试均已完成\nNEXT: 无";
-        let envelope = parse_turn_result_envelope(message, &["apply_patch".to_string()], 3, 6);
+        let envelope = parse_turn_result_envelope(
+            message,
+            &["apply_patch".to_string()],
+            &[ToolExecutionFact {
+                name: "apply_patch".to_string(),
+                ok: true,
+                summary: "补丁应用完成，共修改 2 个文件".to_string(),
+            }],
+            3,
+            6,
+        );
         assert_eq!(envelope.control, TurnControl::Done);
-        assert_eq!(envelope.summary, "代码与测试均已完成");
+        assert!(envelope.summary.contains("apply_patch：补丁应用完成"));
         assert_eq!(envelope.next, "无");
     }
 
@@ -3831,10 +4017,33 @@ diff --git a/src/a.txt b/src/a.txt
     #[test]
     fn should_normalize_auto_finish_summary_for_turn_result() {
         let message = "执行完成（系统自动补全 finish）";
-        let envelope = parse_turn_result_envelope(message, &["write_text".to_string()], 2, 6);
+        let envelope = parse_turn_result_envelope(
+            message,
+            &["write_text".to_string()],
+            &[ToolExecutionFact {
+                name: "write_text".to_string(),
+                ok: true,
+                summary: "写入文本成功：/tmp/requirements.md（128 字节）".to_string(),
+            }],
+            2,
+            6,
+        );
         assert_eq!(envelope.control, TurnControl::Continue);
-        assert!(envelope.summary.contains("本轮已执行 1 个工具动作"));
-        assert!(envelope.summary.contains("系统自动收尾"));
+        assert!(envelope.summary.contains("已执行 1 个工具动作"));
+        assert!(envelope.summary.contains("write_text：写入文本成功"));
+    }
+
+    /// 描述：验证当模型 SUMMARY 缺少事实支撑时，会回退为保守文案，不再直接信任模型自报结果。
+    #[test]
+    fn should_fallback_to_conservative_summary_without_tool_facts() {
+        let message =
+            "STATUS: CONTINUE\nSUMMARY: 已执行写入探测并确认目录只读\nNEXT: 解除只读后继续";
+        let envelope = parse_turn_result_envelope(message, &[], &[], 2, 6);
+        assert_eq!(envelope.control, TurnControl::Continue);
+        assert_eq!(
+            envelope.summary,
+            "未记录到可验证的工具动作，当前仅保留说明性结果。"
+        );
     }
 
     /// 描述：验证多轮编排脚本提示词不再强制 PLAN 注释协议，避免前端展示固定模板化步骤。
@@ -3859,19 +4068,19 @@ diff --git a/src/a.txt b/src/a.txt
     #[test]
     fn should_build_round_description_prompt_with_natural_language_constraints() {
         let prompt = build_round_description_prompt("实现登录页面", Some("demo"), 1, 6, &[]);
-        assert!(prompt.contains("本次仅输出“本轮任务描述”"));
+        assert!(prompt.contains("本次仅输出一段面向用户的自然进展说明"));
         assert!(prompt.contains("禁止输出代码"));
+        assert!(prompt.contains("不要出现“本轮”“第一轮”“第 N 轮”“下一轮”等轮次措辞"));
     }
 
-    /// 描述：验证等待模型返回时会拼装阶段语义与底层 provider 细节，避免前端只能看到笼统占位文案。
+    /// 描述：验证等待模型返回时仅保留阶段语义，不再向前端透传底层 provider 进度细节。
     #[test]
-    fn should_build_llm_waiting_heartbeat_message_with_progress_detail() {
+    fn should_ignore_progress_detail_in_waiting_heartbeat_message() {
         let message = build_llm_waiting_heartbeat_message(
             "正在确认本次操作所需的工具链与任务顺序…",
             "Gemini CLI 已启动，正在等待首个响应分片…",
         );
-        assert!(message.contains("正在确认本次操作所需的工具链与任务顺序"));
-        assert!(message.contains("Gemini CLI 已启动"));
+        assert_eq!(message, "正在确认本次操作所需的工具链与任务顺序…");
     }
 
     /// 描述：验证等待模型返回时在 provider 没有补充细节的情况下，会回退到阶段默认文案。
@@ -3985,6 +4194,22 @@ finish("STATUS: DONE\nSUMMARY: 第二轮完成\nNEXT: 无")
         let description = normalize_round_description("需求分析与定义", 2);
         assert!(description.contains("我会先围绕"));
         assert!(description.contains("需求分析与定义"));
+        assert!(!description.contains("本轮"));
+        assert!(!description.contains("第 2 轮"));
+    }
+
+    /// 描述：验证 round 描述中的“本轮/第 N 轮”措辞会被弱化，避免前端执行流暴露内部编排语义。
+    #[test]
+    fn should_soften_round_framing_in_description_text() {
+        let description = normalize_round_description(
+            "第 2 轮开始：本轮我会先把需求拆开，后续再继续实现页面。",
+            2,
+        );
+        assert!(!description.contains("第 2 轮"));
+        assert!(!description.contains("本轮"));
+        assert!(!description.contains("下一轮"));
+        assert!(description.contains("我会先把需求拆开"));
+        assert!(description.contains("后续"));
     }
 
     /// 描述：验证工具参数预览会裁剪超长 content，避免把大文本直接推给前端流事件。

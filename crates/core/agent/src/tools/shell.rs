@@ -41,24 +41,7 @@ impl AgentTool for RunShellTool {
         let command_names = evaluate_run_shell_policy(command_text.as_str())?;
         let validated_paths =
             validate_shell_paths_in_sandbox(command_text.as_str(), context.sandbox_root)?;
-
-        #[cfg(target_os = "windows")]
-        let command = {
-            let mut cmd = Command::new("cmd");
-            cmd.arg("/C")
-                .arg(command_text.as_str())
-                .current_dir(context.sandbox_root);
-            cmd
-        };
-
-        #[cfg(not(target_os = "windows"))]
-        let command = {
-            let mut cmd = Command::new("/bin/zsh");
-            cmd.arg("-lc")
-                .arg(command_text.as_str())
-                .current_dir(context.sandbox_root);
-            cmd
-        };
+        let command = build_shell_command(command_text.as_str(), context.sandbox_root);
 
         let output = execute_command_with_timeout(command, Duration::from_secs(timeout_secs))?;
         if output.timed_out {
@@ -87,6 +70,59 @@ impl AgentTool for RunShellTool {
             "timeout_secs": timeout_secs,
         }))
     }
+}
+
+/// 描述：根据当前平台构建实际执行的 shell 命令，避免把 `/bin/zsh` 等平台特定路径硬编码为唯一路径。
+///
+/// Params:
+///
+///   - command_text: 原始 shell 文本。
+///   - sandbox_root: 命令执行目录。
+///
+/// Returns:
+///
+///   - 0: 已绑定工作目录的 `Command`。
+fn build_shell_command(command_text: &str, sandbox_root: &Path) -> Command {
+    #[cfg(target_os = "windows")]
+    {
+        let shell_program = resolve_windows_shell_program(env::var("ComSpec").ok().as_deref());
+        let mut cmd = Command::new(shell_program);
+        cmd.arg("/C").arg(command_text).current_dir(sandbox_root);
+        return cmd;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let shell_program = resolve_unix_shell_program(
+            env::var("SHELL").ok().as_deref(),
+            Path::new("/bin/sh").exists(),
+        );
+        let mut cmd = Command::new(shell_program);
+        cmd.arg("-c").arg(command_text).current_dir(sandbox_root);
+        cmd
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+/// 描述：解析 Windows shell 程序，优先使用 `ComSpec`，缺省回退到 `cmd`。
+fn resolve_windows_shell_program(comspec_env: Option<&str>) -> String {
+    comspec_env
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| "cmd".to_string())
+}
+
+#[cfg(any(not(target_os = "windows"), test))]
+/// 描述：解析 Unix shell 程序，优先使用 `SHELL`，缺省回退到 `/bin/sh` 或 `sh`。
+fn resolve_unix_shell_program(shell_env: Option<&str>, sh_exists: bool) -> String {
+    if let Some(shell) = shell_env.map(str::trim).filter(|value| !value.is_empty()) {
+        return shell.to_string();
+    }
+    if sh_exists {
+        return "/bin/sh".to_string();
+    }
+    "sh".to_string()
 }
 
 /// 描述：执行 run_shell 前的安全策略校验，支持环境变量白名单/黑名单扩展。
@@ -532,5 +568,34 @@ fn normalize_shell_command_token(token: &str) -> Option<String> {
         None
     } else {
         Some(normalized)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 描述：验证 Unix shell 解析会优先尊重 `SHELL` 环境变量，避免强依赖固定 shell 路径。
+    #[test]
+    fn should_prefer_configured_unix_shell() {
+        let shell = resolve_unix_shell_program(Some(" /usr/bin/fish "), true);
+        assert_eq!(shell, "/usr/bin/fish");
+    }
+
+    /// 描述：验证 Unix shell 缺省会优先回退到 `/bin/sh`，缺失时再使用 `sh` 命令名。
+    #[test]
+    fn should_fallback_to_posix_shell_when_env_is_missing() {
+        assert_eq!(resolve_unix_shell_program(None, true), "/bin/sh");
+        assert_eq!(resolve_unix_shell_program(None, false), "sh");
+    }
+
+    /// 描述：验证 Windows shell 解析会优先使用 `ComSpec`，缺省保持 `cmd` 兼容。
+    #[test]
+    fn should_prefer_comspec_on_windows() {
+        assert_eq!(
+            resolve_windows_shell_program(Some(" C:\\Windows\\System32\\cmd.exe ")),
+            "C:\\Windows\\System32\\cmd.exe"
+        );
+        assert_eq!(resolve_windows_shell_program(None), "cmd");
     }
 }

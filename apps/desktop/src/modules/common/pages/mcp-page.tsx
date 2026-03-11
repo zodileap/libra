@@ -994,6 +994,8 @@ export function McpPage() {
       <AriModal
         visible={editorVisible}
         title={editingDraft.id ? t("编辑 MCP") : t("新增 MCP")}
+        className="desk-mcp-editor-modal"
+        width="var(--desk-mcp-editor-modal-width)"
         onClose={() => setEditorVisible(false)}
         footer={(
           <AriFlex justify="flex-end" align="center" space={8}>
@@ -1031,7 +1033,8 @@ export function McpPage() {
           </AriFlex>
         )}
       >
-        <AriForm layout="vertical" labelAlign="left" density="compact">
+        <AriContainer className="desk-mcp-editor-form-wrap" padding={0}>
+          <AriForm className="desk-mcp-editor-form" layout="vertical" labelAlign="left" density="compact">
           <AriFormItem label={t("名称")} name="mcp.editor.name">
             <AriInput
               value={editingDraft.name || ""}
@@ -1249,7 +1252,8 @@ export function McpPage() {
               placeholder={t("可选，例如 Apifox")}
             />
           </AriFormItem>
-        </AriForm>
+          </AriForm>
+        </AriContainer>
       </AriModal>
       <AriModal
         visible={Boolean(removingItem)}

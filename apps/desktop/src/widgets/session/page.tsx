@@ -47,6 +47,7 @@ import {
   type ProjectWorkspaceProfile,
   type ProjectWorkspaceCapabilityId,
   type SessionRunMeta as PersistedSessionRunMeta,
+  type SessionWorkflowPhaseCursorSnapshot,
 } from "../../shared/data";
 import { updateRuntimeSessionStatus } from "../../shared/services/backend-api";
 import {
@@ -151,6 +152,8 @@ interface ExecutePromptOptions {
   resolvedDccSoftware?: string;
   resolvedCrossDccSoftwares?: string[];
   skipDccSelectionPrompt?: boolean;
+  workflowIdOverride?: string;
+  workflowStageIndex?: number;
 }
 
 // 描述:
@@ -173,6 +176,99 @@ interface AgentRunResponse {
 interface AgentSandboxMetrics {
   memory_bytes: number;
   uptime_secs: number;
+}
+
+// 描述：
+//
+//   - 规范化工作流阶段索引，避免分阶段执行时出现负数或越界。
+//
+// Params:
+//
+//   - stageIndex: 原始阶段索引。
+//   - totalStageCount: 总阶段数。
+//
+// Returns:
+//
+//   - 可安全使用的阶段索引。
+function clampWorkflowStageIndex(stageIndex: number | undefined, totalStageCount: number): number {
+  if (!Number.isFinite(totalStageCount) || totalStageCount <= 0) {
+    return 0;
+  }
+  const normalizedStageIndex = Number.isFinite(Number(stageIndex)) ? Math.floor(Number(stageIndex)) : 0;
+  return Math.min(Math.max(normalizedStageIndex, 0), totalStageCount - 1);
+}
+
+// 描述：
+//
+//   - 按当前技能节点裁剪工作流定义，只把当前阶段相关技能链路注入 Prompt，避免一次性塞入整条链路。
+//
+// Params:
+//
+//   - workflow: 当前工作流定义。
+//   - nodeId: 当前阶段技能节点 ID。
+//
+// Returns:
+//
+//   - 裁剪后的工作流定义；若无 nodeId 则返回原工作流。
+function scopeWorkflowDefinitionToSkillNode(
+  workflow: AgentWorkflowDefinition | null,
+  nodeId: string,
+): AgentWorkflowDefinition | null {
+  const normalizedNodeId = String(nodeId || "").trim();
+  if (!workflow || !workflow.graph || !normalizedNodeId) {
+    return workflow;
+  }
+  const scopedNodes = workflow.graph.nodes.filter((node) => node.type !== "skill" || node.id === normalizedNodeId);
+  const visibleNodeIdSet = new Set(scopedNodes.map((node) => node.id));
+  return {
+    ...workflow,
+    graph: {
+      ...workflow.graph,
+      nodes: scopedNodes,
+      edges: (workflow.graph.edges || []).filter(
+        (edge) => visibleNodeIdSet.has(edge.sourceId) && visibleNodeIdSet.has(edge.targetId),
+      ),
+    },
+  };
+}
+
+// 描述：
+//
+//   - 构建工作流阶段游标快照，供分阶段执行时恢复当前阶段和重试目标。
+//
+// Params:
+//
+//   - workflow: 当前工作流定义。
+//   - rootPrompt: 本轮用户原始需求。
+//   - currentStageIndex: 当前阶段索引。
+//   - totalStageCount: 总阶段数。
+//   - currentNodeId: 当前技能节点 ID。
+//   - currentNodeTitle: 当前技能节点标题。
+//   - currentMessageId: 当前阶段对应的助手消息 ID。
+//
+// Returns:
+//
+//   - 阶段游标快照。
+function buildWorkflowPhaseCursorSnapshot(
+  workflow: AgentWorkflowDefinition,
+  rootPrompt: string,
+  currentStageIndex: number,
+  totalStageCount: number,
+  currentNodeId: string,
+  currentNodeTitle: string,
+  currentMessageId: string,
+): SessionWorkflowPhaseCursorSnapshot {
+  return {
+    workflowId: String(workflow.id || "").trim(),
+    workflowName: String(workflow.name || "").trim(),
+    rootPrompt: String(rootPrompt || ""),
+    currentStageIndex: Math.max(0, currentStageIndex),
+    totalStageCount: Math.max(0, totalStageCount),
+    currentNodeId: String(currentNodeId || "").trim(),
+    currentNodeTitle: String(currentNodeTitle || "").trim(),
+    currentMessageId: String(currentMessageId || "").trim(),
+    updatedAt: Date.now(),
+  };
 }
 
 // 描述:
@@ -241,6 +337,13 @@ interface PendingDccSelectionState {
   softwareOptions: DccSoftwareOption[];
   selectedSoftware: string;
   selectedTargetSoftware: string;
+}
+
+// 描述：
+//
+//   - 定义流式目标文本更新选项，支持在等待态刷新时跳过逐字动画，避免重复“从头打字”。
+interface StreamingAssistantTargetOptions {
+  immediate?: boolean;
 }
 
 // 描述：
@@ -1301,6 +1404,24 @@ function isThinkingPlaceholderSegment(segment: AssistantRunSegment): boolean {
 
 // 描述：
 //
+//   - 判断运行片段是否属于“规划说明”段；该类片段在执行流里只保留最新一条，避免多次 planning 累积占满视图。
+//
+// Params:
+//
+//   - segment: 待判定片段。
+//
+// Returns:
+//
+//   - true: 规划说明段。
+function isRoundDescriptionSegment(segment: AssistantRunSegment): boolean {
+  const segmentRole = segment.data && typeof segment.data.__segment_role === "string"
+    ? segment.data.__segment_role
+    : "";
+  return segmentRole === "round_description";
+}
+
+// 描述：
+//
 //   - 规范化运行片段列表，去掉历史遗留的重复思考占位；若当前仍处于纯等待阶段，
 //     则只保留一条统一的初始化思考占位，避免返回会话后出现双“正在思考”或空执行过程组。
 //
@@ -1324,11 +1445,19 @@ function normalizeAssistantRunSegments(segments: AssistantRunSegment[]): Assista
   if (sanitizedSegments.length === 0) {
     return [];
   }
-  const meaningfulSegments = sanitizedSegments.filter((item) => !isThinkingPlaceholderSegment(item));
+  const dedupedSegments = sanitizedSegments.reduce<AssistantRunSegment[]>((accumulator, item) => {
+    if (!isRoundDescriptionSegment(item)) {
+      accumulator.push(item);
+      return accumulator;
+    }
+    const preservedSegments = accumulator.filter((entry) => !isRoundDescriptionSegment(entry));
+    return [...preservedSegments, item];
+  }, []);
+  const meaningfulSegments = dedupedSegments.filter((item) => !isThinkingPlaceholderSegment(item));
   if (meaningfulSegments.length > 0) {
     return meaningfulSegments;
   }
-  const latestThinkingSegment = [...sanitizedSegments].reverse().find((item) => isThinkingPlaceholderSegment(item));
+  const latestThinkingSegment = [...dedupedSegments].reverse().find((item) => isThinkingPlaceholderSegment(item));
   if (!latestThinkingSegment) {
     return [];
   }
@@ -1423,7 +1552,13 @@ function buildRunSegmentGroups(segments: AssistantRunSegment[]): AssistantRunSeg
   segments.forEach((segment, index) => {
     const segmentData = segment.data || {};
     const segmentRole = typeof segmentData.__segment_role === "string" ? segmentData.__segment_role : "";
+    const segmentKind = typeof segmentData.__segment_kind === "string" ? segmentData.__segment_kind : "";
     const stepType = typeof segmentData.__step_type === "string" ? segmentData.__step_type : "";
+    const normalizedIntro = String(segment.intro || "").trim();
+    const normalizedStep = String(segment.step || "").trim();
+    const looksLikeRecoveredRoundDescription = segmentKind === STREAM_KINDS.PLANNING
+      && normalizedIntro
+      && normalizedStep === translateDesktopText("正在思考…");
 
     if (segmentRole === INITIAL_THINKING_SEGMENT_ROLE || isThinkingPlaceholderSegment(segment)) {
       // 描述：
@@ -1432,8 +1567,8 @@ function buildRunSegmentGroups(segments: AssistantRunSegment[]): AssistantRunSeg
       return;
     }
 
-    if (segmentRole === "round_description") {
-      const title = String(segment.intro || "").trim();
+    if (segmentRole === "round_description" || looksLikeRecoveredRoundDescription) {
+      const title = normalizedIntro;
       if (!title) {
         return;
       }
@@ -1448,7 +1583,6 @@ function buildRunSegmentGroups(segments: AssistantRunSegment[]): AssistantRunSeg
 
     const groupIndex = ensureActiveGroup();
     const currentGroup = groups[groupIndex];
-    const normalizedStep = String(segment.step || "").trim();
     const detail = resolveRunSegmentStepDetail(segment, normalizedStep);
     if (stepType === "browse") {
       const fileDelta = Math.max(
@@ -1581,29 +1715,15 @@ function buildAssistantHeartbeatSegment(
   heartbeatCount: number,
   segmentKey: string,
 ): AssistantRunSegment {
-  const waitedSeconds = Math.max(1, Math.round(heartbeatCount * 1.2));
-  const waitSuffix = heartbeatCount > 1
-    ? translateDesktopText("（已等待约 {{seconds}} 秒）", { seconds: waitedSeconds })
-    : "";
-  let intro = translateDesktopText("等待执行状态回传…");
+  let intro = buildAssistantHeartbeatWaitingText(heartbeatCount);
   let step = translateDesktopText("执行仍在进行中，正在同步最新状态。");
   if (stage === "planning") {
-    intro = heartbeatCount <= 1
-      ? translateDesktopText("正在解析需求并规划执行步骤…")
-      : translateDesktopText("正在确认本次操作所需的工具链与任务顺序…{{suffix}}", { suffix: waitSuffix });
     step = translateDesktopText("等待模型返回可执行编排脚本。");
   } else if (stage === "bridge") {
-    intro = heartbeatCount <= 1
-      ? translateDesktopText("正在检查执行环境与权限状态…")
-      : translateDesktopText("等待工具返回环境检查结果…{{suffix}}", { suffix: waitSuffix });
     step = translateDesktopText("环境检查完成后将继续执行当前步骤。");
   } else if (stage === "executing") {
-    intro = heartbeatCount <= 1
-      ? translateDesktopText("等待工具返回本步结果…")
-      : translateDesktopText("持续收集工具执行回传…{{suffix}}", { suffix: waitSuffix });
     step = translateDesktopText("当前步骤仍在执行，请稍候。");
   } else if (stage === "finalizing") {
-    intro = translateDesktopText("正在整理执行结果并生成最终总结…{{suffix}}", { suffix: waitSuffix });
     step = translateDesktopText("即将输出最终结果。");
   }
 
@@ -1617,26 +1737,39 @@ function buildAssistantHeartbeatSegment(
 
 // 描述：
 //
+//   - 统一生成等待态文案；避免后端不同阶段的 heartbeat 把主消息刷成一长串细节描述，
+//     只保留简洁的“正在思考…”与等待时长。
+//
+// Params:
+//
+//   - heartbeatCount: 当前 heartbeat 次数。
+//
+// Returns:
+//
+//   - 用于主消息展示的等待态文本。
+function buildAssistantHeartbeatWaitingText(heartbeatCount: number): string {
+  if (heartbeatCount <= 1) {
+    return translateDesktopText("正在思考…");
+  }
+  const waitedSeconds = Math.max(1, Math.round(heartbeatCount * 1.2));
+  const waitSuffix = translateDesktopText("（已等待约 {{seconds}} 秒）", { seconds: waitedSeconds });
+  return translateDesktopText("正在思考…{{suffix}}", { suffix: waitSuffix });
+}
+
+// 描述：
+//
 //   - 将真实 heartbeat 文案补齐等待时长，避免长时间等待时主文案停留在同一句而看起来像“卡住”。
 //
 // Params:
 //
-//   - message: 后端透传的 heartbeat 文案。
+//   - _message: 后端透传的 heartbeat 文案；当前统一收口为简洁等待态，不直接展示原始细节。
 //   - heartbeatCount: 当前 heartbeat 次数。
 //
 // Returns:
 //
 //   - 追加等待时长后的展示文本。
-function buildAssistantHeartbeatDisplayText(message: string, heartbeatCount: number): string {
-  const normalizedMessage = String(message || "").trim() || translateDesktopText("等待执行结果回传…");
-  if (normalizedMessage.includes(translateDesktopText("已等待约"))) {
-    return normalizedMessage;
-  }
-  if (heartbeatCount <= 1) {
-    return normalizedMessage;
-  }
-  const waitedSeconds = Math.max(1, Math.round(heartbeatCount * 1.2));
-  return `${normalizedMessage}${translateDesktopText("（已等待约 {{seconds}} 秒）", { seconds: waitedSeconds })}`;
+function buildAssistantHeartbeatDisplayText(_message: string, heartbeatCount: number): string {
+  return buildAssistantHeartbeatWaitingText(heartbeatCount);
 }
 
 // 描述：
@@ -2027,6 +2160,7 @@ export function SessionPage({
   const [messages, setMessages] = useState<MessageItem[]>([]);
   const [assistantRunMetaMap, setAssistantRunMetaMap] = useState<Record<string, AssistantRunMeta>>({});
   const [sessionApprovedToolNames, setSessionApprovedToolNames] = useState<string[]>([]);
+  const [workflowPhaseCursor, setWorkflowPhaseCursor] = useState<SessionWorkflowPhaseCursorSnapshot | null>(null);
   const [expandedRunSegmentDetailMap, setExpandedRunSegmentDetailMap] = useState<Record<string, boolean>>({});
   const [sessionAiPromptRaw, setSessionAiPromptRaw] = useState("");
   const [sessionAiResponseRaw, setSessionAiResponseRaw] = useState("");
@@ -2242,12 +2376,6 @@ export function SessionPage({
     [workflowSkillSelectorLabel],
   );
   const activeSelectedWorkflowId = selectedWorkflow?.id || "";
-  // 描述：计算当前工作流缺失的必需项目能力；若缺失则发送前直接阻断，并提示用户到项目设置中启用。
-  const selectedWorkflowMissingRequiredCapabilities = useMemo(() => {
-    return (selectedWorkflow?.requiredCapabilities || []).filter(
-      (capabilityId) => !activeWorkspaceEnabledCapabilities.includes(capabilityId),
-    );
-  }, [activeWorkspaceEnabledCapabilities, selectedWorkflow?.requiredCapabilities]);
 
   // 描述：以下 refs 用于维护流式渲染、去重、心跳与定时器状态，避免高频更新触发重复渲染。
   const streamMessageIdRef = useRef("");
@@ -2276,6 +2404,7 @@ export function SessionPage({
   const messagesRef = useRef<MessageItem[]>([]);
   const sendingRef = useRef(false);
   const sessionApprovedToolNameSetRef = useRef<Set<string>>(new Set());
+  const workflowPhaseCursorRef = useRef<SessionWorkflowPhaseCursorSnapshot | null>(null);
 
   // 描述：停止当前会话流式渲染调度，避免会话切换后残留异步刷新。
   const stopStreamTypingTimer = () => {
@@ -2368,13 +2497,22 @@ export function SessionPage({
     streamRenderFrameRef.current = window.requestAnimationFrame(renderStreamingAssistantFrame);
   };
 
-  // 描述：设置当前流式消息目标文本，并触发逐帧渲染。
-  const setStreamingAssistantTarget = (targetText: string) => {
+  // 描述：设置当前流式消息目标文本，并按需触发逐帧渲染或立即更新。
+  const setStreamingAssistantTarget = (
+    targetText: string,
+    options?: StreamingAssistantTargetOptions,
+  ) => {
     const messageId = streamMessageIdRef.current;
     if (!messageId) {
       return;
     }
     streamLatestTextRef.current = targetText;
+    if (options?.immediate) {
+      stopStreamTypingTimer();
+      streamDisplayedTextRef.current = targetText;
+      setMessages((prev) => upsertAssistantMessageById(prev, messageId, targetText));
+      return;
+    }
     if (streamRenderPendingRef.current) {
       return;
     }
@@ -2522,6 +2660,13 @@ export function SessionPage({
     );
   }, [sessionApprovedToolNames]);
 
+  // 描述：
+  //
+  //   - 同步工作流阶段游标到 ref，供重试和运行态持久化读取最新阶段位置。
+  useEffect(() => {
+    workflowPhaseCursorRef.current = workflowPhaseCursor;
+  }, [workflowPhaseCursor]);
+
   // 描述：启动智能体执行心跳，在长时间无流式事件时持续补充用户可见进度。
   //
   // Params:
@@ -2554,7 +2699,10 @@ export function SessionPage({
         // 描述：
         //
         //   - 心跳仅用于“正在思考”提示，不再写入执行步骤，避免产生无信息价值的噪声步骤。
-        setStreamingAssistantTarget(String(heartbeatSegment.intro || "").trim() || t("智能体正在思考…"));
+        setStreamingAssistantTarget(
+          String(heartbeatSegment.intro || "").trim() || t("智能体正在思考…"),
+          { immediate: assistantRunHeartbeatCountRef.current > 1 },
+        );
         assistantRunLastActivityAtRef.current = Date.now();
       }
       assistantRunHeartbeatTimerRef.current = window.setTimeout(tick, 1200);
@@ -2716,6 +2864,8 @@ export function SessionPage({
     setDebugFlowRecords([]);
     setAssistantRunMetaMap({});
     setSessionApprovedToolNames([]);
+    workflowPhaseCursorRef.current = null;
+    setWorkflowPhaseCursor(null);
     setExpandedRunSegmentDetailMap({});
     setSessionAiPromptRaw("");
     setSessionAiResponseRaw("");
@@ -2738,7 +2888,22 @@ export function SessionPage({
         .map((toolName) => normalizeApprovalToolName(String(toolName || "")))
         .filter((toolName) => Boolean(toolName))
       : [];
+    const restoredWorkflowPhaseCursor = runSnapshot?.workflowPhaseCursor && typeof runSnapshot.workflowPhaseCursor === "object"
+      ? {
+        workflowId: String(runSnapshot.workflowPhaseCursor.workflowId || "").trim(),
+        workflowName: String(runSnapshot.workflowPhaseCursor.workflowName || "").trim(),
+        rootPrompt: String(runSnapshot.workflowPhaseCursor.rootPrompt || ""),
+        currentStageIndex: Math.max(0, Number(runSnapshot.workflowPhaseCursor.currentStageIndex || 0)),
+        totalStageCount: Math.max(0, Number(runSnapshot.workflowPhaseCursor.totalStageCount || 0)),
+        currentNodeId: String(runSnapshot.workflowPhaseCursor.currentNodeId || "").trim(),
+        currentNodeTitle: String(runSnapshot.workflowPhaseCursor.currentNodeTitle || "").trim(),
+        currentMessageId: String(runSnapshot.workflowPhaseCursor.currentMessageId || "").trim(),
+        updatedAt: Number(runSnapshot.workflowPhaseCursor.updatedAt || Date.now()),
+      }
+      : null;
     setSessionApprovedToolNames(Array.from(new Set(restoredSessionApprovedToolNames)));
+    workflowPhaseCursorRef.current = restoredWorkflowPhaseCursor;
+    setWorkflowPhaseCursor(restoredWorkflowPhaseCursor);
     let nextMessages: MessageItem[] = stored.length > 0 ? stored : [];
     if (debugArtifact) {
       setTraceRecords((debugArtifact.traceRecords || []).map((item) => ({
@@ -2839,6 +3004,7 @@ export function SessionPage({
       if (
         Object.keys(assistantRunMetaMapRef.current).length === 0
         && normalizedSessionApprovedToolNames.length === 0
+        && !workflowPhaseCursorRef.current
       ) {
         removeSessionRunState(normalizedAgentKey, sessionId);
         return;
@@ -2850,6 +3016,7 @@ export function SessionPage({
         sending: sendingRef.current,
         runMetaMap: assistantRunMetaMapRef.current,
         sessionApprovedToolNames: normalizedSessionApprovedToolNames,
+        workflowPhaseCursor: workflowPhaseCursorRef.current,
         updatedAt: Date.now(),
       });
     };
@@ -2895,7 +3062,11 @@ export function SessionPage({
         .map((toolName) => normalizeApprovalToolName(toolName))
         .filter((toolName) => Boolean(toolName)),
     ));
-    if (Object.keys(assistantRunMetaMap).length === 0 && normalizedSessionApprovedToolNames.length === 0) {
+    if (
+      Object.keys(assistantRunMetaMap).length === 0
+      && normalizedSessionApprovedToolNames.length === 0
+      && !workflowPhaseCursor
+    ) {
       removeSessionRunState(normalizedAgentKey, sessionId);
       return;
     }
@@ -2912,6 +3083,7 @@ export function SessionPage({
         sending,
         runMetaMap: assistantRunMetaMap,
         sessionApprovedToolNames: normalizedSessionApprovedToolNames,
+        workflowPhaseCursor,
         updatedAt: Date.now(),
       });
     }, persistDelay);
@@ -2927,6 +3099,7 @@ export function SessionPage({
     sessionApprovedToolNames,
     sessionId,
     sessionStorageKey,
+    workflowPhaseCursor,
   ]);
 
   // 描述：持久化会话调试资产，保证未打开 Dev 调试窗口时也能恢复 AI 原始收发与排查轨迹。
@@ -3247,7 +3420,9 @@ export function SessionPage({
           String(payload.message || "").trim(),
           assistantRunHeartbeatCountRef.current,
         );
-        setStreamingAssistantTarget(heartbeatText);
+        setStreamingAssistantTarget(heartbeatText, {
+          immediate: assistantRunHeartbeatCountRef.current > 1,
+        });
         return;
       }
       if (payload.kind === STREAM_KINDS.FINISHED) {
@@ -3499,23 +3674,13 @@ export function SessionPage({
     if (!normalizedContent || sending) return;
 
     const allowDangerousAction = Boolean(options?.allowDangerousAction);
-    const confirmationToken = options?.confirmationToken;
     const appendUserMessage = options?.appendUserMessage !== false;
-    const contextMessages = options?.contextMessages || messages;
-    const dccPreflight = await resolveDccPreflight(normalizedContent, contextMessages, options);
+    const baseContextMessages = options?.contextMessages || messages;
+    const activeWorkflow = options?.workflowIdOverride
+      ? getAgentWorkflowById(options.workflowIdOverride) || workflows.find((item) => item.id === options.workflowIdOverride) || null
+      : selectedWorkflow;
+    const dccPreflight = await resolveDccPreflight(normalizedContent, baseContextMessages, options);
     if (dccPreflight.blocked) {
-      return;
-    }
-    // 描述：工作流声明了必需项目能力但当前项目未启用时，直接阻断发送并提示用户先到项目设置启用。
-    if (selectedWorkflowMissingRequiredCapabilities.length > 0) {
-      const missingCapabilityLabels = selectedWorkflowMissingRequiredCapabilities
-        .map((item) => getProjectWorkspaceCapabilityManifest(item)?.title || item);
-      AriMessage.error(t("当前工作流缺少必需的项目能力：{{capabilities}}", {
-        capabilities: missingCapabilityLabels.join("、"),
-      }));
-      setStatus(t("当前工作流缺少必需的项目能力：{{capabilities}}。", {
-        capabilities: missingCapabilityLabels.join("、"),
-      }));
       return;
     }
 
@@ -3556,12 +3721,11 @@ export function SessionPage({
     }
 
     const provider = selectedAi?.provider || "codex";
-    const activeWorkflowName = selectedWorkflow?.name || resolvedSessionUiConfig.workflowFallbackLabel;
-    const activeWorkflowId = selectedWorkflow?.id || "";
+    const activeWorkflowName = activeWorkflow?.name || resolvedSessionUiConfig.workflowFallbackLabel;
+    const activeWorkflowId = activeWorkflow?.id || "";
     const outputDir = undefined;
-    const streamMessageId = String(options?.replaceAssistantMessageId || "").trim()
-      || `assistant-stream-${Date.now()}`;
-    const agentTraceId = `trace-${Date.now()}`;
+    const executionTraceId = `trace-${Date.now()}`;
+    let nextContextMessages = [...baseContextMessages];
     setInput("");
     setSending(true);
     setStatus(t("智能体执行中..."));
@@ -3586,98 +3750,24 @@ export function SessionPage({
       ),
     );
     if (appendUserMessage) {
-      setMessages((prev) => [
-        ...prev,
-        { id: `user-${Date.now()}`, role: "user", text: normalizedContent },
-      ]);
+      const nextUserMessage: MessageItem = {
+        id: `user-${Date.now()}`,
+        role: "user",
+        text: normalizedContent,
+      };
+      nextContextMessages = [...nextContextMessages, nextUserMessage];
+      setMessages((prev) => [...prev, nextUserMessage]);
     }
-    stopStreamTypingTimer();
-    streamMessageIdRef.current = streamMessageId;
-    streamDisplayedTextRef.current = "";
-    streamLatestTextRef.current = "";
-    activeAgentStreamTraceRef.current = agentTraceId;
-    agentStreamTextBufferRef.current = "";
-    agentStreamSeenKeysRef.current.clear();
-    const initialStreamText = "";
-    setMessages((prev) =>
-      upsertAssistantMessageById(
-        prev,
-        streamMessageId,
-        initialStreamText,
-      ));
-    streamDisplayedTextRef.current = initialStreamText;
-    streamLatestTextRef.current = initialStreamText;
-    assistantRunStatusRef.current = "running";
-    assistantRunStageRef.current = "planning";
-    assistantRunHeartbeatCountRef.current = 0;
-    assistantRunLastActivityAtRef.current = Date.now();
-    setAssistantRunMetaMap((prev) => ({
-      ...prev,
-      [streamMessageId]: {
-        status: "running",
-        startedAt: Date.now(),
-        collapsed: false,
-        summary: "",
-        segments: [
-          {
-            key: `intro-${Date.now()}`,
-            intro: "",
-            step: t("正在思考…"),
-            status: "running",
-            data: {
-              __segment_role: INITIAL_THINKING_SEGMENT_ROLE,
-            },
-          },
-        ],
-      },
-    }));
-    setStreamingAssistantTarget(t("正在准备执行..."));
-    startAssistantRunHeartbeat(streamMessageId);
 
     try {
-      const skillExecutionPlan = buildAgentWorkflowSkillExecutionPlan(selectedWorkflow, availableSkills);
+      const skillExecutionPlan = buildAgentWorkflowSkillExecutionPlan(activeWorkflow, availableSkills);
       if (skillExecutionPlan.blockingIssues.length > 0) {
         throw new Error(t("技能执行前检查未通过：{{issues}}", {
           issues: skillExecutionPlan.blockingIssues.join("；"),
         }));
       }
-      const latestProjectProfile = activeWorkspace?.id
-        ? (activeProjectProfile || getProjectWorkspaceProfile(activeWorkspace.id))
-        : null;
-      const selectedSessionSkillPrompt = buildSessionSkillPrompt(selectedSessionSkills);
-      const currentRequestPrompt = buildSessionContextPrompt(
-        messages,
-        normalizedContent,
-        undefined,
-        latestProjectProfile,
-        activeWorkspaceEnabledCapabilities,
-      );
-      const contextualRequestPrompt = buildSessionContextPrompt(
-        contextMessages,
-        normalizedContent,
-        String(activeWorkspace?.path || "").trim() || undefined,
-        latestProjectProfile,
-        activeWorkspaceEnabledCapabilities,
-      );
-      const workflowPrompt = buildAgentWorkflowPrompt(
-        selectedWorkflow,
-        contextualRequestPrompt || currentRequestPrompt,
-      );
-      const agentPrompt = skillExecutionPlan.planPrompt
-        ? `${workflowPrompt}\n\n${skillExecutionPlan.planPrompt}${selectedSessionSkillPrompt ? `\n\n${selectedSessionSkillPrompt}` : ""}${dccPreflight.promptBlock ? `\n\n${dccPreflight.promptBlock}` : ""}`
-        : `${workflowPrompt}${selectedSessionSkillPrompt ? `\n\n${selectedSessionSkillPrompt}` : ""}${dccPreflight.promptBlock ? `\n\n${dccPreflight.promptBlock}` : ""}`;
-      agentPromptRawRef.current = agentPrompt;
-      agentLlmDeltaBufferRef.current = "";
-      agentLlmResponseRawRef.current = "";
-      setSessionAiPromptRaw(agentPrompt);
-      setSessionAiResponseRaw("");
-      setSessionAiRawByMessage((prev) => ({
-        ...prev,
-        [streamMessageId]: {
-          promptRaw: agentPrompt,
-          responseRaw: "",
-        },
-      }));
+      workflowPhaseCursorRef.current = null;
+      setWorkflowPhaseCursor(null);
       appendDebugFlowRecord(
         "ui",
         "skill_plan",
@@ -3698,66 +3788,227 @@ export function SessionPage({
       );
       if (skillExecutionPlan.readyItems.length > 0) {
         appendTraceRecord({
-          traceId: agentTraceId,
+          traceId: executionTraceId,
           source: "workflow:skill_plan",
           message: t("已加载 {{count}} 个技能节点", { count: skillExecutionPlan.readyItems.length }),
         });
       }
-      const response = await invoke<AgentRunResponse>(COMMANDS.RUN_AGENT_COMMAND, {
-        agentKey: normalizedAgentKey,
-        sessionId,
-        provider,
-        prompt: agentPrompt,
-        traceId: agentTraceId,
-        projectName: title,
-        modelExportEnabled: dccMcpCapabilities.export,
-        dccProviderAddr: DEFAULT_DCC_PROVIDER_ADDR,
-        outputDir,
-        workdir: String(activeWorkspace?.path || "").trim() || undefined,
-      });
-      const responseSteps = response.steps || [];
-      setStepRecords(responseSteps);
-      setEventRecords(response.events || []);
-      const codegenRawStep = [...responseSteps]
-        .reverse()
-        .find((item) => item.code === "llm_python_codegen" && item.data && typeof item.data === "object");
-      const codegenRawData = codegenRawStep?.data || {};
-      const responsePromptRaw = String(codegenRawData.llm_prompt_raw || "").trim() || agentPrompt;
-      const responseRawText = String(codegenRawData.llm_response_raw || "").trim()
-        || String(agentLlmResponseRawRef.current || agentLlmDeltaBufferRef.current || "").trim();
-      if (responsePromptRaw || responseRawText) {
+      const totalWorkflowStageCount = skillExecutionPlan.totalReadyCount;
+      const hasWorkflowStages = totalWorkflowStageCount > 0;
+      const initialStageIndex = hasWorkflowStages
+        ? clampWorkflowStageIndex(options?.workflowStageIndex, totalWorkflowStageCount)
+        : 0;
+
+      for (
+        let currentStageIndex = hasWorkflowStages ? initialStageIndex : 0;
+        currentStageIndex < (hasWorkflowStages ? totalWorkflowStageCount : 1);
+        currentStageIndex += 1
+      ) {
+        const currentStagePlan = hasWorkflowStages
+          ? buildAgentWorkflowSkillExecutionPlan(activeWorkflow, availableSkills, { stageIndex: currentStageIndex })
+          : skillExecutionPlan;
+        const currentStageItem = currentStagePlan.activeItem;
+        const scopedWorkflow = currentStageItem
+          ? scopeWorkflowDefinitionToSkillNode(activeWorkflow, currentStageItem.nodeId)
+          : activeWorkflow;
+        const stageTraceId = `${executionTraceId}-${currentStageIndex + 1}`;
+        const streamMessageId = String(
+          (currentStageIndex === initialStageIndex ? options?.replaceAssistantMessageId : "") || "",
+        ).trim() || `assistant-stream-${Date.now()}-${currentStageIndex + 1}`;
+        const initialStreamText = "";
+
+        if (hasWorkflowStages && currentStageItem) {
+          setStatus(
+            t("正在执行阶段 {{current}}/{{total}}：{{title}}", {
+              current: currentStageIndex + 1,
+              total: totalWorkflowStageCount,
+              title: currentStageItem.nodeTitle,
+            }),
+          );
+          appendDebugFlowRecord(
+            "ui",
+            "workflow_stage",
+            t("工作流阶段"),
+            JSON.stringify(
+              {
+                workflow_id: activeWorkflowId || null,
+                workflow_name: activeWorkflowName,
+                current_stage_index: currentStageIndex + 1,
+                total_stage_count: totalWorkflowStageCount,
+                node_id: currentStageItem.nodeId,
+                node_title: currentStageItem.nodeTitle,
+                skill_id: currentStageItem.skillId,
+                skill_version: currentStageItem.skillVersion,
+              },
+              null,
+              2,
+            ),
+          );
+        }
+
+        stopStreamTypingTimer();
+        streamMessageIdRef.current = streamMessageId;
+        streamDisplayedTextRef.current = "";
+        streamLatestTextRef.current = "";
+        activeAgentStreamTraceRef.current = stageTraceId;
+        agentStreamTextBufferRef.current = "";
+        agentStreamSeenKeysRef.current.clear();
+        setMessages((prev) => upsertAssistantMessageById(prev, streamMessageId, initialStreamText));
+        nextContextMessages = upsertAssistantMessageById(nextContextMessages, streamMessageId, initialStreamText);
+        streamDisplayedTextRef.current = initialStreamText;
+        streamLatestTextRef.current = initialStreamText;
+        assistantRunStatusRef.current = "running";
+        assistantRunStageRef.current = "planning";
+        assistantRunHeartbeatCountRef.current = 0;
+        assistantRunLastActivityAtRef.current = Date.now();
+        setAssistantRunMetaMap((prev) => ({
+          ...prev,
+          [streamMessageId]: {
+            status: "running",
+            startedAt: Date.now(),
+            collapsed: false,
+            summary: "",
+            segments: [
+              {
+                key: `intro-${Date.now()}`,
+                intro: "",
+                step: t("正在思考…"),
+                status: "running",
+                data: {
+                  __segment_role: INITIAL_THINKING_SEGMENT_ROLE,
+                },
+              },
+            ],
+          },
+        }));
+        if (activeWorkflow && currentStageItem && totalWorkflowStageCount > 0) {
+          const nextWorkflowPhaseCursor = buildWorkflowPhaseCursorSnapshot(
+            activeWorkflow,
+            normalizedContent,
+            currentStageIndex,
+            totalWorkflowStageCount,
+            currentStageItem.nodeId,
+            currentStageItem.nodeTitle,
+            streamMessageId,
+          );
+          workflowPhaseCursorRef.current = nextWorkflowPhaseCursor;
+          setWorkflowPhaseCursor(nextWorkflowPhaseCursor);
+        }
+        setStreamingAssistantTarget(t("正在准备执行..."));
+        startAssistantRunHeartbeat(streamMessageId);
+
+        const latestProjectProfile = activeWorkspace?.id
+          ? (activeProjectProfile || getProjectWorkspaceProfile(activeWorkspace.id))
+          : null;
+        const selectedSessionSkillPrompt = buildSessionSkillPrompt(selectedSessionSkills);
+        const currentRequestPrompt = buildSessionContextPrompt(
+          nextContextMessages,
+          normalizedContent,
+          undefined,
+          latestProjectProfile,
+          activeWorkspaceEnabledCapabilities,
+        );
+        const contextualRequestPrompt = buildSessionContextPrompt(
+          nextContextMessages,
+          normalizedContent,
+          String(activeWorkspace?.path || "").trim() || undefined,
+          latestProjectProfile,
+          activeWorkspaceEnabledCapabilities,
+        );
+        const workflowPrompt = buildAgentWorkflowPrompt(
+          scopedWorkflow,
+          contextualRequestPrompt || currentRequestPrompt,
+        );
+        const agentPrompt = currentStagePlan.planPrompt
+          ? `${workflowPrompt}\n\n${currentStagePlan.planPrompt}${selectedSessionSkillPrompt ? `\n\n${selectedSessionSkillPrompt}` : ""}${dccPreflight.promptBlock ? `\n\n${dccPreflight.promptBlock}` : ""}`
+          : `${workflowPrompt}${selectedSessionSkillPrompt ? `\n\n${selectedSessionSkillPrompt}` : ""}${dccPreflight.promptBlock ? `\n\n${dccPreflight.promptBlock}` : ""}`;
+        agentPromptRawRef.current = agentPrompt;
+        agentLlmDeltaBufferRef.current = "";
+        agentLlmResponseRawRef.current = "";
+        setSessionAiPromptRaw(agentPrompt);
+        setSessionAiResponseRaw("");
         setSessionAiRawByMessage((prev) => ({
           ...prev,
           [streamMessageId]: {
-            promptRaw: responsePromptRaw,
-            responseRaw: responseRawText,
+            promptRaw: agentPrompt,
+            responseRaw: "",
           },
         }));
+
+        const response = await invoke<AgentRunResponse>(COMMANDS.RUN_AGENT_COMMAND, {
+          agentKey: normalizedAgentKey,
+          sessionId,
+          provider,
+          prompt: agentPrompt,
+          traceId: stageTraceId,
+          projectName: title,
+          modelExportEnabled: dccMcpCapabilities.export,
+          dccProviderAddr: DEFAULT_DCC_PROVIDER_ADDR,
+          outputDir,
+          workdir: String(activeWorkspace?.path || "").trim() || undefined,
+        });
+        const responseSteps = response.steps || [];
+        setStepRecords(responseSteps);
+        setEventRecords(response.events || []);
+        const codegenRawStep = [...responseSteps]
+          .reverse()
+          .find((item) => item.code === "llm_python_codegen" && item.data && typeof item.data === "object");
+        const codegenRawData = codegenRawStep?.data || {};
+        const responsePromptRaw = String(codegenRawData.llm_prompt_raw || "").trim() || agentPrompt;
+        const responseRawText = String(codegenRawData.llm_response_raw || "").trim()
+          || String(agentLlmResponseRawRef.current || agentLlmDeltaBufferRef.current || "").trim();
+        if (responsePromptRaw || responseRawText) {
+          setSessionAiRawByMessage((prev) => ({
+            ...prev,
+            [streamMessageId]: {
+              promptRaw: responsePromptRaw,
+              responseRaw: responseRawText,
+            },
+          }));
+        }
+        appendTraceRecord({
+          traceId: response.trace_id,
+          source: "agent:run",
+          message: hasWorkflowStages && currentStageItem
+            ? t("阶段 {{current}}/{{total}}：{{message}}", {
+              current: currentStageIndex + 1,
+              total: totalWorkflowStageCount,
+              message: response.message,
+            })
+            : response.message,
+        });
+        setUiHint(response.ui_hint ? mapProtocolUiHint(response.ui_hint) : null);
+        setPendingDangerousToken("");
+        setStreamingAssistantTarget(response.message);
+        finishAssistantRunMessage(streamMessageId, "finished", response.message);
+        nextContextMessages = upsertAssistantMessageById(nextContextMessages, streamMessageId, response.message);
+        const actionText = response.actions?.length > 0
+          ? t("动作：{{actions}}", { actions: response.actions.join(", ") })
+          : t("动作：无");
+        if (hasWorkflowStages && currentStageIndex + 1 < totalWorkflowStageCount) {
+          setStatus(
+            t("阶段 {{current}}/{{total}} 已完成，继续下一阶段…", {
+              current: currentStageIndex + 1,
+              total: totalWorkflowStageCount,
+            }),
+          );
+          continue;
+        }
+        setStatus(
+          response.exported_file
+            ? t("{{actionText}}；工作流：{{workflow}}；导出文件：{{file}}", {
+              actionText,
+              workflow: activeWorkflowName,
+              file: response.exported_file,
+            })
+            : t("{{actionText}}；工作流：{{workflow}}", {
+              actionText,
+              workflow: activeWorkflowName,
+            }),
+        );
+        workflowPhaseCursorRef.current = null;
+        setWorkflowPhaseCursor(null);
       }
-      appendTraceRecord({
-        traceId: response.trace_id,
-        source: "agent:run",
-        message: response.message,
-      });
-      setUiHint(response.ui_hint ? mapProtocolUiHint(response.ui_hint) : null);
-      setPendingDangerousToken("");
-      setStreamingAssistantTarget(response.message);
-      finishAssistantRunMessage(streamMessageId, "finished", response.message);
-      const actionText = response.actions?.length > 0
-        ? t("动作：{{actions}}", { actions: response.actions.join(", ") })
-        : t("动作：无");
-      setStatus(
-        response.exported_file
-          ? t("{{actionText}}；工作流：{{workflow}}；导出文件：{{file}}", {
-            actionText,
-            workflow: activeWorkflowName,
-            file: response.exported_file,
-          })
-          : t("{{actionText}}；工作流：{{workflow}}", {
-            actionText,
-            workflow: activeWorkflowName,
-          })
-      );
     } catch (err) {
       const detail = normalizeInvokeErrorDetail(err);
       const reason = detail.message;
@@ -3915,11 +4166,18 @@ export function SessionPage({
     } else {
       setStatus(t("正在重试本轮执行..."));
     }
-    await executePrompt(retryPrompt, {
+    const currentWorkflowPhaseCursor = workflowPhaseCursorRef.current;
+    const shouldResumeWorkflowStage = Boolean(
+      currentWorkflowPhaseCursor
+      && String(currentWorkflowPhaseCursor.currentMessageId || "").trim() === String(assistantMessage.id || "").trim(),
+    );
+    await executePrompt(shouldResumeWorkflowStage ? currentWorkflowPhaseCursor?.rootPrompt || retryPrompt : retryPrompt, {
       allowDangerousAction: false,
       appendUserMessage: false,
       replaceAssistantMessageId: String(assistantMessage.id || "").trim() || undefined,
       contextMessages: prunedRetryTail.messages,
+      workflowIdOverride: shouldResumeWorkflowStage ? currentWorkflowPhaseCursor?.workflowId : undefined,
+      workflowStageIndex: shouldResumeWorkflowStage ? currentWorkflowPhaseCursor?.currentStageIndex : undefined,
     });
   };
 
@@ -4504,10 +4762,13 @@ const handleConfirmWorkflowSkillModal = () => {
       setStatus(t("无法重试：未找到最近一条用户请求"));
       return;
     }
+    const currentWorkflowPhaseCursor = workflowPhaseCursorRef.current;
     setStatus(t("正在重试最近一轮..."));
-    await executePrompt(normalizedPrompt, {
+    await executePrompt(currentWorkflowPhaseCursor?.rootPrompt || normalizedPrompt, {
       allowDangerousAction: false,
       appendUserMessage: false,
+      workflowIdOverride: currentWorkflowPhaseCursor?.workflowId,
+      workflowStageIndex: currentWorkflowPhaseCursor?.currentStageIndex,
     });
   };
 
@@ -5367,7 +5628,7 @@ const handleConfirmWorkflowSkillModal = () => {
             {messages.length === 0 ? (
               <AriContainer className="desk-session-empty-state">
                 <AriContainer className="desk-session-quick-start-heading" padding={0}>
-                  <AriTypography variant="h4" value={t("快速开始")} />
+                  <AriTypography variant="h4" bold value={t("快速开始")} />
                 </AriContainer>
                 <AriContainer className="desk-session-quick-start-grid" padding={0}>
                   {sessionQuickStartPresets.map((preset) => (

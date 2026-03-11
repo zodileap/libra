@@ -1,8 +1,11 @@
 use crate::llm::{
-    should_emit_waiting_progress, LlmGatewayError, LlmGatewayPolicy, LlmProgressObserver,
-    LlmProvider, LlmRunResult, LlmTextStreamObserver, LlmUsage, LLM_RUNTIME_TAG,
+    should_abort_for_output_idle, should_emit_waiting_progress, LlmGatewayError, LlmGatewayPolicy,
+    LlmProgressObserver, LlmProvider, LlmRunResult, LlmTextStreamObserver, LlmUsage,
+    LLM_RUNTIME_TAG,
 };
+use crate::platform::{resolve_gemini_command_candidates, CommandCandidate};
 use crate::workflow::{run_step_with_retry, DefaultWorkflowRecoveryHook};
+use serde_json::Value;
 use std::env;
 use std::io::Read;
 use std::process::{Child, Command, Stdio};
@@ -22,6 +25,53 @@ struct GeminiOutputChunk {
     text: String,
 }
 
+#[derive(Debug, Default)]
+struct GeminiJsonlStreamParser {
+    pending: String,
+    saw_structured_event: bool,
+}
+
+impl GeminiJsonlStreamParser {
+    /// 描述：向 Gemini JSONL 解析器写入增量文本，并提取当前已经完整闭合的 assistant 文本分片。
+    fn push_chunk(&mut self, chunk: &str) -> Vec<String> {
+        self.pending.push_str(chunk);
+        self.drain_complete_lines()
+    }
+
+    /// 描述：在子进程结束后冲刷残留缓冲，避免最后一条未换行的 JSONL 事件丢失。
+    fn finish(&mut self) -> Vec<String> {
+        let tail = std::mem::take(&mut self.pending);
+        let normalized = tail.trim();
+        if normalized.is_empty() {
+            return Vec::new();
+        }
+        let (deltas, saw_structured_event) = extract_gemini_json_delta_texts_from_line(normalized);
+        if saw_structured_event {
+            self.saw_structured_event = true;
+        }
+        deltas
+    }
+
+    /// 描述：提取缓冲区中已经完整到达的 JSONL 行，只向上游回传真正的 assistant 文本增量。
+    fn drain_complete_lines(&mut self) -> Vec<String> {
+        let mut deltas: Vec<String> = Vec::new();
+        while let Some(line_end) = self.pending.find('\n') {
+            let line = self.pending[..line_end].trim().to_string();
+            self.pending.drain(..=line_end);
+            if line.is_empty() {
+                continue;
+            }
+            let (line_deltas, saw_structured_event) =
+                extract_gemini_json_delta_texts_from_line(line.as_str());
+            if saw_structured_event {
+                self.saw_structured_event = true;
+            }
+            deltas.extend(line_deltas);
+        }
+        deltas
+    }
+}
+
 /// 描述：通过工作流重试引擎执行 Gemini CLI 调用。
 pub fn call_with_retry(
     prompt: &str,
@@ -30,7 +80,7 @@ pub fn call_with_retry(
     mut on_chunk: Option<&mut LlmTextStreamObserver>,
     mut on_progress: Option<&mut LlmProgressObserver>,
 ) -> Result<LlmRunResult, LlmGatewayError> {
-    let bins = resolve_gemini_bins();
+    let bins = resolve_gemini_command_candidates();
     call_with_retry_and_bins(
         prompt,
         workdir,
@@ -49,7 +99,7 @@ fn call_with_retry_and_bins(
     policy: LlmGatewayPolicy,
     mut on_chunk: Option<&mut LlmTextStreamObserver>,
     mut on_progress: Option<&mut LlmProgressObserver>,
-    bins: &[String],
+    bins: &[CommandCandidate],
 ) -> Result<LlmRunResult, LlmGatewayError> {
     let hook = DefaultWorkflowRecoveryHook;
     let run = run_step_with_retry("llm.gemini_cli", policy.retry_policy, &hook, |attempt| {
@@ -75,7 +125,7 @@ fn call_once(
     attempt: u8,
     mut on_chunk: Option<&mut LlmTextStreamObserver>,
     mut on_progress: Option<&mut LlmProgressObserver>,
-    bins: &[String],
+    bins: &[CommandCandidate],
 ) -> Result<LlmRunResult, LlmGatewayError> {
     let provider = LlmProvider::Gemini;
     let (mut child, selected_bin) = spawn_gemini_process(prompt, workdir, bins, attempt)?;
@@ -104,22 +154,29 @@ fn call_once(
     let stderr_reader = spawn_gemini_stream_reader(stderr, GeminiOutputStreamKind::Stderr, tx);
 
     let timeout = Duration::from_secs(timeout_secs.max(1));
-    let started = Instant::now();
+    let mut last_output_at = Instant::now();
     let mut stdout_text = String::new();
+    let mut stdout_stream_text = String::new();
     let mut stderr_text = String::new();
+    let mut stdout_jsonl_parser = GeminiJsonlStreamParser::default();
     let mut last_progress_at: Option<Instant> = None;
     let mut has_received_stdout = false;
     let status = loop {
         match rx.recv_timeout(Duration::from_millis(40)) {
             Ok(chunk) => match chunk.stream {
                 GeminiOutputStreamKind::Stdout => {
+                    last_output_at = Instant::now();
                     has_received_stdout = true;
                     stdout_text.push_str(chunk.text.as_str());
-                    if let Some(callback) = on_chunk.as_deref_mut() {
-                        callback(chunk.text.as_str());
+                    for delta_text in stdout_jsonl_parser.push_chunk(chunk.text.as_str()) {
+                        stdout_stream_text.push_str(delta_text.as_str());
+                        if let Some(callback) = on_chunk.as_deref_mut() {
+                            callback(delta_text.as_str());
+                        }
                     }
                 }
                 GeminiOutputStreamKind::Stderr => {
+                    last_output_at = Instant::now();
                     stderr_text.push_str(chunk.text.as_str());
                 }
             },
@@ -129,7 +186,8 @@ fn call_once(
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {
-                if started.elapsed() >= timeout {
+                let now = Instant::now();
+                if should_abort_for_output_idle(last_output_at, now, timeout) {
                     let _ = child.kill();
                     let _ = child.wait();
                     let _ = stdout_reader.join();
@@ -138,11 +196,13 @@ fn call_once(
                         provider,
                         "core.agent.llm.timeout",
                         format!(
-                            "[{}] gemini cli timed out after {}s",
+                            "[{}] gemini cli produced no output for {}s",
                             LLM_RUNTIME_TAG, timeout_secs
                         ),
                     )
-                    .with_suggestion("缩短 prompt 或提高 ZODILEAP_LLM_TIMEOUT_SECS")
+                    .with_suggestion(
+                        "确认模型仍在持续输出，或提高 ZODILEAP_LLM_TIMEOUT_SECS（当前按无输出空闲时长判定超时）",
+                    )
                     .with_retryable(true)
                     .with_attempts(attempt));
                 }
@@ -172,13 +232,22 @@ fn call_once(
         match chunk.stream {
             GeminiOutputStreamKind::Stdout => {
                 stdout_text.push_str(chunk.text.as_str());
-                if let Some(callback) = on_chunk.as_deref_mut() {
-                    callback(chunk.text.as_str());
+                for delta_text in stdout_jsonl_parser.push_chunk(chunk.text.as_str()) {
+                    stdout_stream_text.push_str(delta_text.as_str());
+                    if let Some(callback) = on_chunk.as_deref_mut() {
+                        callback(delta_text.as_str());
+                    }
                 }
             }
             GeminiOutputStreamKind::Stderr => {
                 stderr_text.push_str(chunk.text.as_str());
             }
+        }
+    }
+    for delta_text in stdout_jsonl_parser.finish() {
+        stdout_stream_text.push_str(delta_text.as_str());
+        if let Some(callback) = on_chunk.as_deref_mut() {
+            callback(delta_text.as_str());
         }
     }
     let _ = stdout_reader.join();
@@ -198,7 +267,14 @@ fn call_once(
         );
     }
 
-    let final_message = stdout_text.trim().to_string();
+    let trimmed_stdout = stdout_text.trim();
+    let final_message = if !stdout_stream_text.trim().is_empty() {
+        stdout_stream_text.trim().to_string()
+    } else if !stdout_jsonl_parser.saw_structured_event && !trimmed_stdout.is_empty() {
+        trimmed_stdout.to_string()
+    } else {
+        String::new()
+    };
     if final_message.is_empty() {
         return Err(LlmGatewayError::new(
             provider,
@@ -252,7 +328,14 @@ fn append_gemini_prompt_args(command: &mut Command, prompt: &str) {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "-p".to_string());
-    for part in args.split_whitespace() {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    if !parts
+        .iter()
+        .any(|part| *part == "--output-format" || part.starts_with("--output-format="))
+    {
+        command.arg("--output-format").arg("stream-json");
+    }
+    for part in parts {
         command.arg(part);
     }
     command.arg(prompt);
@@ -261,21 +344,21 @@ fn append_gemini_prompt_args(command: &mut Command, prompt: &str) {
 fn spawn_gemini_process(
     prompt: &str,
     workdir: Option<&str>,
-    bins: &[String],
+    bins: &[CommandCandidate],
     attempt: u8,
 ) -> Result<(Child, String), LlmGatewayError> {
     let provider = LlmProvider::Gemini;
     let mut spawn_errors: Vec<String> = Vec::new();
     for bin in bins {
-        let mut command = Command::new(bin.as_str());
+        let mut command = bin.build_command();
         append_gemini_prompt_args(&mut command, prompt);
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
         if let Some(cwd) = workdir.map(str::trim).filter(|value| !value.is_empty()) {
             command.current_dir(cwd);
         }
         match command.spawn() {
-            Ok(child) => return Ok((child, bin.clone())),
-            Err(err) => spawn_errors.push(format!("{} => {}", bin, err)),
+            Ok(child) => return Ok((child, bin.display())),
+            Err(err) => spawn_errors.push(format!("{} => {}", bin.display(), err)),
         }
     }
 
@@ -295,22 +378,6 @@ fn spawn_gemini_process(
     .with_suggestion("确认 Gemini CLI 已安装并可执行，或通过 ZODILEAP_GEMINI_BIN 指定二进制路径")
     .with_retryable(false)
     .with_attempts(attempt))
-}
-
-fn resolve_gemini_bins() -> Vec<String> {
-    let mut bins: Vec<String> = Vec::new();
-    if let Ok(path) = env::var("ZODILEAP_GEMINI_BIN") {
-        let path = path.trim().to_string();
-        if !path.is_empty() {
-            bins.push(path);
-        }
-    }
-    bins.push("gemini".to_string());
-    bins.push("/opt/homebrew/bin/gemini".to_string());
-    if let Ok(home) = env::var("HOME") {
-        bins.push(format!("{}/Library/pnpm/gemini", home.trim()));
-    }
-    bins
 }
 
 fn build_gemini_failed_error(raw_reason: &str, bin: &str) -> LlmGatewayError {
@@ -357,6 +424,37 @@ fn is_diagnostic_line(line: &str) -> bool {
         || normalized.starts_with("session id:")
 }
 
+/// 描述：从 Gemini `stream-json` 事件中提取真正的 assistant 文本增量，忽略 init、tool 与 result 等事件。
+///
+/// Returns:
+///
+///   - 0: 当前 JSONL 行中的 assistant 文本增量列表。
+///   - 1: 当前行是否已经成功解析为结构化 JSON 事件。
+fn extract_gemini_json_delta_texts_from_line(line: &str) -> (Vec<String>, bool) {
+    let Ok(parsed) = serde_json::from_str::<Value>(line) else {
+        return (Vec::new(), false);
+    };
+    let Some(object) = parsed.as_object() else {
+        return (Vec::new(), true);
+    };
+    let event_type = object
+        .get("type")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let role = object
+        .get("role")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let content = object
+        .get("content")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    if event_type == "message" && role == "assistant" && !content.trim().is_empty() {
+        return (vec![content.to_string()], true);
+    }
+    (Vec::new(), true)
+}
+
 fn spawn_gemini_stream_reader<R>(
     mut reader: R,
     stream: GeminiOutputStreamKind,
@@ -400,7 +498,9 @@ stacktrace: omitted"#;
 
     #[test]
     fn should_fail_when_gemini_bin_is_missing() {
-        let bins = vec!["/path/to/missing-gemini-bin".to_string()];
+        let bins = vec![CommandCandidate::new(
+            "/path/to/missing-gemini-bin".to_string(),
+        )];
         let result = call_with_retry_and_bins(
             "hello",
             None,
@@ -419,5 +519,52 @@ stacktrace: omitted"#;
         let err = result.err().expect("must have error");
         assert_eq!(err.code, "core.agent.llm.gemini_spawn_failed");
         assert!(!err.retryable);
+    }
+
+    #[test]
+    fn should_report_gemini_idle_timeout_as_no_output() {
+        let error = LlmGatewayError::new(
+            LlmProvider::Gemini,
+            "core.agent.llm.timeout",
+            format!("[{}] gemini cli produced no output for {}s", LLM_RUNTIME_TAG, 300),
+        )
+        .with_suggestion(
+            "确认模型仍在持续输出，或提高 ZODILEAP_LLM_TIMEOUT_SECS（当前按无输出空闲时长判定超时）",
+        )
+        .with_retryable(true);
+        assert!(error.message.contains("produced no output for 300s"));
+        assert!(error
+            .suggestion
+            .as_deref()
+            .unwrap_or_default()
+            .contains("无输出空闲时长"));
+    }
+
+    #[test]
+    fn should_extract_assistant_delta_from_gemini_stream_json_line() {
+        let line = r#"{"type":"message","timestamp":"2026-03-11T00:00:00Z","role":"assistant","content":"hello","delta":true}"#;
+        let (deltas, saw_structured_event) = extract_gemini_json_delta_texts_from_line(line);
+        assert!(saw_structured_event);
+        assert_eq!(deltas, vec!["hello".to_string()]);
+    }
+
+    #[test]
+    fn should_ignore_non_message_gemini_stream_json_line() {
+        let line = r#"{"type":"tool_result","timestamp":"2026-03-11T00:00:00Z","tool_id":"tool-1","status":"success"}"#;
+        let (deltas, saw_structured_event) = extract_gemini_json_delta_texts_from_line(line);
+        assert!(saw_structured_event);
+        assert!(deltas.is_empty());
+    }
+
+    #[test]
+    fn should_flush_partial_gemini_jsonl_tail() {
+        let mut parser = GeminiJsonlStreamParser::default();
+        let deltas = parser.push_chunk(
+            "{\"type\":\"message\",\"timestamp\":\"2026-03-11T00:00:00Z\",\"role\":\"assistant\",\"content\":\"hello\"",
+        );
+        assert!(deltas.is_empty());
+        let deltas = parser.push_chunk("}\n");
+        assert_eq!(deltas, vec!["hello".to_string()]);
+        assert!(parser.saw_structured_event);
     }
 }

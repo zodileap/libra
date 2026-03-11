@@ -41,6 +41,11 @@ test("TestProjectSettingsShouldExposeRouteAndSidebarEntry", () => {
   assert.match(sidebarSource, /icon="edit"/);
   assert.match(sidebarSource, /\{ key: "delete", label: t\("删除"\), icon: "delete", fillIcon: "delete_fill" \}/);
   assert.doesNotMatch(sidebarSource, /\{ key: "edit", label: "编辑", icon: "edit" \}/);
+  assert.match(sidebarSource, /const workspaceActionPointerGuardRef = useRef\(""\);/);
+  assert.match(sidebarSource, /const buildWorkspaceActionGuardKey = \(workspaceId: string, actionKey: string\) => `\$\{workspaceId\}:\$\{actionKey\}`;/);
+  assert.match(sidebarSource, /const handleWorkspaceActionMouseDown = \(\s*event: MouseEvent<HTMLButtonElement>,\s*workspaceId: string,\s*actionKey: string,\s*action: \(\) => void,\s*\) => \{/s);
+  assert.match(sidebarSource, /const handleWorkspaceActionClick = \(\s*event: MouseEvent<HTMLButtonElement>,\s*workspaceId: string,\s*actionKey: string,\s*action: \(\) => void,\s*\) => \{/s);
+  assert.match(sidebarSource, /if \(event\.detail > 0 && workspaceActionPointerGuardRef\.current === guardKey\) \{/);
   assert.match(sidebarSource, /aria-label=\{t\("在项目内新增话题"\)\}/);
   assert.match(sidebarSource, /void handleCreateSessionInWorkspace\(group\.workspace\.id\);/);
   assert.match(sidebarSource, /setOpenWorkspaceActionMenuId\(""\);/);
@@ -50,6 +55,12 @@ test("TestProjectSettingsShouldExposeRouteAndSidebarEntry", () => {
   assert.match(sidebarSource, /visible=\{openWorkspaceActionMenuId === group\.workspace\.id\}/);
   assert.match(sidebarSource, /setOpenWorkspaceActionMenuId\(\(current\) => \(current === group\.workspace\.id \? "" : group\.workspace\.id\)\);/);
   assert.match(sidebarSource, /data-workspace-action-trigger="true"/);
+  assert.match(sidebarSource, /onMouseDown=\{\(event: MouseEvent<HTMLButtonElement>\) => \{\s*handleWorkspaceActionMouseDown\(event, group\.workspace\.id, "more"/s);
+  assert.match(sidebarSource, /onClick=\{\(event: MouseEvent<HTMLButtonElement>\) => \{\s*handleWorkspaceActionClick\(event, group\.workspace\.id, "more"/s);
+  assert.match(sidebarSource, /onMouseDown=\{\(event: MouseEvent<HTMLButtonElement>\) => \{\s*handleWorkspaceActionMouseDown\(event, group\.workspace\.id, "manage"/s);
+  assert.match(sidebarSource, /onClick=\{\(event: MouseEvent<HTMLButtonElement>\) => \{\s*handleWorkspaceActionClick\(event, group\.workspace\.id, "manage"/s);
+  assert.match(sidebarSource, /onMouseDown=\{\(event: MouseEvent<HTMLButtonElement>\) => \{\s*handleWorkspaceActionMouseDown\(event, group\.workspace\.id, "create-session"/s);
+  assert.match(sidebarSource, /onClick=\{\(event: MouseEvent<HTMLButtonElement>\) => \{\s*handleWorkspaceActionClick\(event, group\.workspace\.id, "create-session"/s);
   assert.match(sidebarSource, /window\.addEventListener\("mousedown", handleCloseWorkspaceActionMenu, true\);/);
   assert.match(sidebarSource, /if \(target\.closest\("\.z-tooltip"\)\) \{/);
   assert.match(sidebarSource, /pendingDeleteSessionId,/);
@@ -174,6 +185,12 @@ test("TestProjectSettingsPageShouldSupportProjectCapabilities", () => {
   assert.match(pageSource, /className="desk-project-settings-header-title"/);
   assert.match(pageSource, /addText=\{t\("新增规范"\)\}/);
   assert.match(pageSource, /enabledCapabilities,/);
+  assert.match(pageSource, /className="desk-project-settings-control desk-project-settings-control-compact"/);
+  assert.match(pageSource, /className="desk-project-settings-control desk-project-settings-control-wide"/);
+  assert.match(pageSource, /className="desk-project-settings-knowledge-section"/);
+  assert.match(pageSource, /className="desk-project-settings-knowledge-description"/);
+  assert.doesNotMatch(pageSource, /minWidth=\{280\}/);
+  assert.doesNotMatch(pageSource, /minWidth=\{360\}/);
   assert.doesNotMatch(pageSource, /label="保存"/);
   assert.doesNotMatch(pageSource, /label="返回项目"/);
   assert.doesNotMatch(pageSource, /维护项目名称与依赖限制规则。/);

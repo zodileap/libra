@@ -134,6 +134,11 @@
 - Desktop 的 UI 视觉和交互尽量与既有设计语言保持一致。
 - Desktop 必须持续保持“本地优先、后端可选”的使用模式。
 - Desktop 接入后端时，只配置一个统一后端地址，不再维护多服务端口设置。
+- `apps/desktop` 的测试分层必须区分 UI 测试与桌面端到端测试，禁止继续将两类职责混放在同一层级。
+- `apps/desktop/tests/ui/playwright`
+  - 使用 Playwright 承担 UI 测试，验证前端页面渲染、交互行为与界面回归。
+- `apps/desktop/tests/e2e/tauri-driver`
+  - 使用 `tauri-driver + webdriverio` 承担 E2E 测试，验证 Tauri 容器内的真实桌面流程与跨层集成行为。
 
 # Web 模块（已删除）
 
@@ -207,3 +212,8 @@
 - 测试代码必须遵循与生产代码相同的编码规范和注释要求。
 - 测试应涵盖正常情况、边界情况和异常情况。
 - 测试应该放在单独的文件中，不要和具体实现混在一起。
+- `apps/desktop` 的自动化测试目录固定为：
+  - `tests/ui/playwright`
+  - `tests/e2e/tauri-driver`
+- `apps/desktop/tests/ui/playwright` 只负责 UI 层验证，默认使用 Playwright，不替代真实 Tauri 容器内的端到端流程校验。
+- `apps/desktop/tests/e2e/tauri-driver` 只负责 Desktop E2E，默认使用 `tauri-driver + webdriverio`，凡是依赖 Tauri 容器、原生桥接或桌面运行时的场景都应归入这一层。

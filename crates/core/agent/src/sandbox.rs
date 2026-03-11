@@ -1,3 +1,4 @@
+use crate::platform::CommandCandidate;
 use dashmap::DashMap;
 use libra_mcp_common::ProtocolError;
 use once_cell::sync::Lazy;
@@ -5,7 +6,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Stdio};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -98,8 +99,27 @@ def _invoke_tool(name, args):
         return json.loads(line[len(_TOOL_RESULT_PREFIX):])
     return {"ok": False, "error": "invalid_response"}
 
-def finish(message):
-    payload = json.dumps({"message": str(message)})
+def finish(message=None, status=None, summary=None, next=None, **kwargs):
+    resolved_message = _pick_first_non_none([message, _pop_alias(kwargs, ("text", "value", "body"))])
+    resolved_status = _pick_first_non_none([status, _pop_alias(kwargs, ("state",))])
+    resolved_summary = _pick_first_non_none([summary, _pop_alias(kwargs, ("result", "content"))])
+    resolved_next = _pick_first_non_none([next, _pop_alias(kwargs, ("next_step", "nextStep"))])
+
+    if resolved_status is not None or resolved_summary is not None or resolved_next is not None:
+        lines = []
+        if resolved_status is not None and str(resolved_status).strip():
+            lines.append(f"STATUS: {resolved_status}")
+        if resolved_summary is not None and str(resolved_summary).strip():
+            lines.append(f"SUMMARY: {resolved_summary}")
+        if resolved_next is not None and str(resolved_next).strip():
+            lines.append(f"NEXT: {resolved_next}")
+        if resolved_message is not None and str(resolved_message).strip():
+            lines.append(str(resolved_message))
+        payload_message = "\n".join(lines)
+    else:
+        payload_message = str(_require_arg(resolved_message, "message"))
+
+    payload = json.dumps({"message": payload_message})
     print(f"{_FINAL_RESULT_PREFIX}{payload}", flush=True)
 
 def _pick_first_non_none(values):
@@ -452,6 +472,10 @@ def _is_probable_python_entry(line):
     )
     if text.startswith(prefixes):
         return True
+    # 描述：支持顶层函数调用入口（如 finish(...) / print(...) / todo_write(...)），
+    # 避免前置自然语言剥离时把首个有效语句误裁掉。
+    if re.match(r"^[A-Za-z_][A-Za-z0-9_]*\s*\(", text):
+        return True
     # 描述：支持最常见的赋值语句入口，避免前置自然语言导致整段脚本失效。
     if "=" in text and not any(op in text for op in ("==", ">=", "<=", "!=")):
         return True
@@ -486,11 +510,12 @@ impl SandboxInstance {
     pub fn start(
         session_id: &str,
         sandbox_root: &Path,
-        python_bin: &str,
+        python_command: &CommandCandidate,
     ) -> Result<Self, ProtocolError> {
         info!(session_id = %session_id, "starting persistent python sandbox");
 
-        let mut child = Command::new(python_bin)
+        let mut command = python_command.build_command();
+        let mut child = command
             .arg("-I")
             .arg("-c")
             .arg(PERSISTENT_PRELUDE)
@@ -603,7 +628,7 @@ impl SandboxRegistry {
         &self,
         session_id: &str,
         sandbox_root: &Path,
-        python_bin: &str,
+        python_command: &CommandCandidate,
     ) -> Result<Arc<Mutex<SandboxInstance>>, ProtocolError> {
         if let Some(existing) = self.instances.get(session_id) {
             return Ok(existing.value().clone());
@@ -611,7 +636,7 @@ impl SandboxRegistry {
         match self.instances.entry(session_id.to_string()) {
             dashmap::mapref::entry::Entry::Occupied(entry) => Ok(entry.get().clone()),
             dashmap::mapref::entry::Entry::Vacant(entry) => {
-                let instance = SandboxInstance::start(session_id, sandbox_root, python_bin)?;
+                let instance = SandboxInstance::start(session_id, sandbox_root, python_command)?;
                 let handle = Arc::new(Mutex::new(instance));
                 entry.insert(handle.clone());
                 Ok(handle)
@@ -710,6 +735,20 @@ mod tests {
         assert!(PERSISTENT_PRELUDE.contains("def todo_write(items=None, value=None, **kwargs):"));
         assert!(PERSISTENT_PRELUDE.contains("def _normalize_todo_items(items, value=None):"));
         assert!(PERSISTENT_PRELUDE.contains("if isinstance(items, str) and value is not None:"));
+    }
+
+    #[test]
+    fn should_support_finish_keyword_envelope_in_prelude() {
+        // 描述：
+        //
+        //   - 兼容层应支持 `finish(status=..., summary=..., next=...)` 关键字写法，
+        //     避免模型生成结构化收尾时因签名不匹配直接抛 TypeError。
+        assert!(PERSISTENT_PRELUDE
+            .contains("def finish(message=None, status=None, summary=None, next=None, **kwargs):"));
+        assert!(PERSISTENT_PRELUDE.contains("lines.append(f\"STATUS: {resolved_status}\")"));
+        assert!(PERSISTENT_PRELUDE.contains("lines.append(f\"SUMMARY: {resolved_summary}\")"));
+        assert!(PERSISTENT_PRELUDE.contains("lines.append(f\"NEXT: {resolved_next}\")"));
+        assert!(PERSISTENT_PRELUDE.contains("re.match(r\"^[A-Za-z_][A-Za-z0-9_]*\\s*\\(\", text)"));
     }
 
     #[test]

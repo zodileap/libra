@@ -21,6 +21,7 @@ function readDesktopSource(relativePath) {
 
 test("TestWorkflowCanvasShouldSupportModeSwitchAndContextDelete", () => {
   const source = readDesktopSource("src/widgets/workflow/page.tsx");
+  const styleSource = readDesktopSource("src/styles.css");
 
   // 描述：
   //
@@ -34,6 +35,11 @@ test("TestWorkflowCanvasShouldSupportModeSwitchAndContextDelete", () => {
   assert.match(source, /aria-label=\{workflowReadonly \? t\("查看工作流"\) : t\("编辑工作流"\)\}/);
   assert.match(source, /icon="content_copy"/);
   assert.match(source, /aria-label=\{t\("复制工作流"\)\}/);
+  assert.match(source, /<AriButton\s+type="text"\s+icon="delete"\s+aria-label=\{t\("删除工作流"\)\}/s);
+  assert.doesNotMatch(
+    source,
+    /<AriButton\s+type="text"\s+color="danger"\s+icon="delete"\s+aria-label=\{t\("删除工作流"\)\}/s,
+  );
   assert.doesNotMatch(source, /icon="save"/);
   assert.doesNotMatch(source, /aria-label="保存工作流"/);
   assert.doesNotMatch(source, /const saveCurrentWorkflow = \(\) =>/);
@@ -50,8 +56,20 @@ test("TestWorkflowCanvasShouldSupportModeSwitchAndContextDelete", () => {
   assert.match(source, /const duplicateCurrentWorkflow = \(\) => \{/);
   assert.match(source, /<AriModal/);
   assert.match(source, /title=\{workflowReadonly \? t\("查看工作流"\) : t\("编辑工作流"\)\}/);
+  assert.match(source, /className="desk-workflow-edit-modal"/);
+  assert.match(source, /width="var\(--desk-workflow-edit-modal-width\)"/);
+  assert.match(source, /className="desk-workflow-edit-modal-body"/);
+  assert.match(
+    source,
+    /className="desk-workflow-edit-modal-card desk-workflow-edit-modal-card-basic"/,
+  );
   assert.match(source, /label=\{t\("工作流名称"\)\}/);
   assert.match(source, /label=\{t\("工作流说明"\)\}/);
+  assert.match(source, /value=\{t\("基础信息"\)\}/);
+  assert.doesNotMatch(source, /value=\{t\("项目能力"\)\}/);
+  assert.doesNotMatch(source, /className="desk-workflow-edit-capability-list"/);
+  assert.doesNotMatch(source, /label=\{t\("必需项目能力"\)\}/);
+  assert.doesNotMatch(source, /label=\{t\("可选项目能力"\)\}/);
   assert.match(source, /deleteAgentWorkflow\(selectedWorkflow\.id\)/);
   assert.match(source, /instruction:\s*String\(source\.instruction \|\| ""\)\.trim\(\)/);
   assert.match(source, /instruction:\s*String\(node\.instruction \|\| ""\)\.trim\(\)/);
@@ -65,6 +83,15 @@ test("TestWorkflowCanvasShouldSupportModeSwitchAndContextDelete", () => {
   assert.match(source, /value=\{workflowInfoName\}/);
   assert.match(source, /value=\{t\("工作流 · \{\{description\}\} · v\{\{version\}\}", \{/);
   assert.match(source, /const WORKFLOW_NODE_TYPE = "workflowNode";/);
+  assert.match(styleSource, /\.desk-workflow-edit-modal-body/);
+  assert.match(styleSource, /\.desk-workflow-edit-modal-card/);
+  assert.match(styleSource, /--desk-workflow-edit-modal-width:/);
+  assert.match(styleSource, /\.desk-workflow-edit-modal \{/);
+  assert.match(styleSource, /\.desk-workflow-edit-modal-card-basic/);
+  assert.match(styleSource, /\.desk-workflow-edit-modal-body\s*\{[\s\S]*display:\s*grid;/s);
+  assert.doesNotMatch(styleSource, /--desk-workflow-edit-modal-info-width:/);
+  assert.doesNotMatch(styleSource, /\.desk-workflow-edit-modal-card-capabilities/);
+  assert.doesNotMatch(styleSource, /\.desk-workflow-edit-capability-list/);
   assert.match(source, /<NodeResizer/);
   assert.match(source, /isVisible=\{Boolean\(selected\)\}/);
   assert.match(source, /lineClassName="desk-workflow-node-resize-line"/);

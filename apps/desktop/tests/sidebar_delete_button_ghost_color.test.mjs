@@ -67,6 +67,14 @@ test("TestSidebarDeleteButtonsShouldUseGhostAndColor", () => {
     source,
     /ghost=\{pendingDeleteWorkflowId !== item\.id\}/,
   );
+  assert.match(
+    source,
+    /type=\{pendingDeleteWorkflowId === item\.id \? "default" : "text"\}[\s\S]*?ghost=\{pendingDeleteWorkflowId !== item\.id\}[\s\S]*?color="default"/,
+  );
+  assert.doesNotMatch(
+    source,
+    /pendingDeleteWorkflowId === item\.id \? "danger" : "default"/,
+  );
 
   // 描述:
   //
@@ -79,6 +87,9 @@ test("TestSidebarDeleteButtonsShouldUseGhostAndColor", () => {
     source,
     /showActionsOnHover: pendingDeleteWorkflowId !== item\.id/,
   );
+  assert.match(source, /const \[workflowMenuRenderVersion, setWorkflowMenuRenderVersion\] = useState\(0\);/);
+  assert.match(source, /window\.addEventListener\(AGENT_WORKFLOWS_UPDATED_EVENT, handleAgentWorkflowsUpdated as EventListener\)/);
+  assert.match(source, /key=\{`workflow-menu-\$\{workflowMenuRenderVersion\}`\}/);
 
   // 描述:
   //

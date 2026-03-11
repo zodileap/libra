@@ -18,6 +18,10 @@ use dcc_runtime::{
     check_dcc_runtime_status_inner, prepare_dcc_runtime_inner, DccRuntimeStatusResponse,
 };
 use libra_agent_core::{
+    platform::{
+        resolve_codex_command_candidates, resolve_gemini_command_candidates,
+        resolve_python_command_candidates, CommandCandidate,
+    },
     run_agent_with_protocol_error_stream, AgentRegisteredMcp, AgentRunRequest, AgentStreamEvent,
 };
 use libra_mcp_common::{
@@ -447,51 +451,13 @@ fn resolve_blender_bin(preferred: Option<String>) -> String {
     "blender".to_string()
 }
 
-fn resolve_codex_bins() -> Vec<String> {
-    let mut bins: Vec<String> = Vec::new();
-    if let Ok(path) = env::var("ZODILEAP_CODEX_BIN") {
-        let path = path.trim().to_string();
-        if !path.is_empty() {
-            bins.push(path);
-        }
-    }
-    bins.push("codex".to_string());
-    bins.push("/opt/homebrew/bin/codex".to_string());
-    if let Ok(home) = env::var("HOME") {
-        bins.push(
-            Path::new(&home)
-                .join("Library")
-                .join("pnpm")
-                .join("codex")
-                .to_string_lossy()
-                .to_string(),
-        );
-    }
-    bins
+fn resolve_codex_bins() -> Vec<CommandCandidate> {
+    resolve_codex_command_candidates()
 }
 
 /// 描述：解析可用于执行 Gemini CLI 命令的候选二进制路径列表。
-fn resolve_gemini_bins() -> Vec<String> {
-    let mut bins: Vec<String> = Vec::new();
-    if let Ok(path) = env::var("ZODILEAP_GEMINI_BIN") {
-        let path = path.trim().to_string();
-        if !path.is_empty() {
-            bins.push(path);
-        }
-    }
-    bins.push("gemini".to_string());
-    bins.push("/opt/homebrew/bin/gemini".to_string());
-    if let Ok(home) = env::var("HOME") {
-        bins.push(
-            Path::new(&home)
-                .join("Library")
-                .join("pnpm")
-                .join("gemini")
-                .to_string_lossy()
-                .to_string(),
-        );
-    }
-    bins
+fn resolve_gemini_bins() -> Vec<CommandCandidate> {
+    resolve_gemini_command_candidates()
 }
 
 /// 描述：解析可用于执行 Git 命令的候选二进制路径列表。
@@ -509,20 +475,9 @@ fn resolve_git_bins() -> Vec<String> {
     bins
 }
 
-/// 描述：解析可用于执行 Python 命令的候选二进制路径列表。
-fn resolve_python_bins() -> Vec<String> {
-    let mut bins: Vec<String> = Vec::new();
-    if let Ok(path) = env::var("ZODILEAP_PYTHON_BIN") {
-        let path = path.trim().to_string();
-        if !path.is_empty() {
-            bins.push(path);
-        }
-    }
-    bins.push("python3".to_string());
-    bins.push("python".to_string());
-    bins.push("/usr/bin/python3".to_string());
-    bins.push("/opt/homebrew/bin/python3".to_string());
-    bins
+/// 描述：解析可用于执行 Python 命令的候选列表，复用 Core 侧统一规则。
+fn resolve_python_bins() -> Vec<CommandCandidate> {
+    resolve_python_command_candidates()
 }
 
 /// 描述：解析可用于执行 npm 命令的候选二进制路径列表。
@@ -559,8 +514,8 @@ fn read_git_version(bin: &str) -> Option<String> {
 }
 
 /// 描述：读取 Python 版本号，命中失败时返回 None。
-fn read_python_version(bin: &str) -> Option<String> {
-    let output = Command::new(bin).arg("--version").output().ok()?;
+fn read_python_version(candidate: &CommandCandidate) -> Option<String> {
+    let output = candidate.build_command().arg("--version").output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -582,11 +537,11 @@ fn read_npm_version(bin: &str) -> Option<String> {
     extract_semver(&stdout)
 }
 
-/// 描述：返回第一个可用 Python 二进制路径与版本号。
-fn detect_available_python() -> Option<(String, String)> {
-    for bin in resolve_python_bins() {
-        if let Some(version) = read_python_version(&bin) {
-            return Some((bin, version));
+/// 描述：返回第一个可用 Python 命令候选与版本号。
+fn detect_available_python() -> Option<(CommandCandidate, String)> {
+    for candidate in resolve_python_bins() {
+        if let Some(version) = read_python_version(&candidate) {
+            return Some((candidate, version));
         }
     }
     None
@@ -637,8 +592,8 @@ fn infer_repo_name_from_url(raw: &str) -> String {
     }
 }
 
-fn read_codex_version(bin: &str) -> Option<String> {
-    let output = Command::new(bin).arg("--version").output().ok()?;
+fn read_codex_version(candidate: &CommandCandidate) -> Option<String> {
+    let output = candidate.build_command().arg("--version").output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -653,8 +608,19 @@ fn read_codex_version(bin: &str) -> Option<String> {
 }
 
 /// 描述：读取 Gemini CLI 版本号，命中失败时返回 None。
-fn read_gemini_version(bin: &str) -> Option<String> {
-    read_codex_version(bin)
+fn read_gemini_version(candidate: &CommandCandidate) -> Option<String> {
+    let output = candidate.build_command().arg("--version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let raw = if stdout.trim().is_empty() {
+        stderr
+    } else {
+        stdout
+    };
+    extract_semver(&raw)
 }
 
 fn extract_semver(raw: &str) -> Option<String> {
@@ -890,6 +856,11 @@ fn run_agent_command_inner(
         .to_string();
     if let Some(session) = session_id.as_deref() {
         clear_agent_session_cancelled(session);
+        // 描述：
+        //
+        //   - 每次新的顶层请求都从干净的 Python 沙盒开始，避免上一轮执行残留状态
+        //     （如未消费输出、挂起工具结果或解释器上下文）串扰后续请求。
+        libra_agent_core::sandbox::SANDBOX_REGISTRY.reset(session);
     }
     let log = |level: &str, stage: &str, message: String| {
         eprintln!("[agent][{}][{}][{}] {}", trace_id, level, stage, message);
@@ -1270,6 +1241,12 @@ fn run_agent_command_inner(
                     data: Some(json!({ "code": protocol_err.code.clone() })),
                 },
             );
+            if let Some(session) = session_id.as_deref() {
+                // 描述：
+                //
+                //   - 异常终止后立即回收当前会话沙盒，避免故障状态污染下一次同会话执行。
+                libra_agent_core::sandbox::SANDBOX_REGISTRY.reset(session);
+            }
             return Err(protocol_err.into());
         }
     };
@@ -1278,13 +1255,19 @@ fn run_agent_command_inner(
         &app,
         AgentTextStreamEvent {
             trace_id: trace_id.clone(),
-            session_id,
+            session_id: session_id.clone(),
             kind: "finished".to_string(),
             message: "智能体执行完成".to_string(),
             delta: None,
             data: None,
         },
     );
+    if let Some(session) = session_id.as_deref() {
+        // 描述：
+        //
+        //   - 当前顶层请求结束后释放会话沙盒，保证下一次用户发送从全新解释器开始。
+        libra_agent_core::sandbox::SANDBOX_REGISTRY.reset(session);
+    }
 
     Ok(AgentRunResponse {
         trace_id,
@@ -2892,6 +2875,7 @@ fn check_codex_cli_health_inner(minimum_version: Option<String>) -> CodexCliHeal
 
     for bin in resolve_codex_bins() {
         if let Some(version) = read_codex_version(&bin) {
+            let bin_text = bin.display();
             let outdated = is_lower_semver(&version, &minimum_version).unwrap_or(false);
             let message = if outdated {
                 format!(
@@ -2899,14 +2883,14 @@ fn check_codex_cli_health_inner(minimum_version: Option<String>) -> CodexCliHeal
                     version, minimum_version
                 )
             } else {
-                format!("Codex CLI 可用：{} ({})", version, bin)
+                format!("Codex CLI 可用：{} ({})", version, bin_text)
             };
             return CodexCliHealthResponse {
                 available: true,
                 outdated,
                 version,
                 minimum_version,
-                bin_path: bin,
+                bin_path: bin_text,
                 message,
             };
         }
@@ -2930,6 +2914,7 @@ fn check_gemini_cli_health_inner(minimum_version: Option<String>) -> GeminiCliHe
 
     for bin in resolve_gemini_bins() {
         if let Some(version) = read_gemini_version(&bin) {
+            let bin_text = bin.display();
             let outdated = is_lower_semver(&version, &minimum_version).unwrap_or(false);
             let message = if outdated {
                 format!(
@@ -2937,14 +2922,14 @@ fn check_gemini_cli_health_inner(minimum_version: Option<String>) -> GeminiCliHe
                     version, minimum_version
                 )
             } else {
-                format!("Gemini CLI 可用：{} ({})", version, bin)
+                format!("Gemini CLI 可用：{} ({})", version, bin_text)
             };
             return GeminiCliHealthResponse {
                 available: true,
                 outdated,
                 version,
                 minimum_version,
-                bin_path: bin,
+                bin_path: bin_text,
                 message,
             };
         }
@@ -3038,11 +3023,12 @@ fn check_git_cli_health_inner() -> GitCliHealthResponse {
 /// 描述：执行 Python CLI 健康检查，确保脚本沙盒可用。
 fn check_python_cli_health_inner() -> PythonCliHealthResponse {
     if let Some((bin, version)) = detect_available_python() {
+        let bin_text = bin.display();
         return PythonCliHealthResponse {
             available: true,
             version: version.clone(),
-            bin_path: bin.clone(),
-            message: format!("Python 可用：{} ({})", version, bin),
+            bin_path: bin_text.clone(),
+            message: format!("Python 可用：{} ({})", version, bin_text),
         };
     }
 
@@ -3458,8 +3444,8 @@ async fn check_desktop_update(
         state.download_path = None;
     });
 
-    let manifest_endpoint = reqwest::Url::parse(&normalized_url)
-        .map_err(build_desktop_update_error_message)?;
+    let manifest_endpoint =
+        reqwest::Url::parse(&normalized_url).map_err(build_desktop_update_error_message)?;
 
     let update = app
         .updater_builder()
@@ -3851,10 +3837,10 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{describe_panic_payload, truncate_agent_stream_text};
     use super::blender_runtime::{
         blender_series_supports_extension, bridge_boot_script_content, bridge_enable_and_save_expr,
     };
+    use super::{describe_panic_payload, truncate_agent_stream_text};
 
     #[test]
     fn should_truncate_agent_stream_text_by_char_count() {

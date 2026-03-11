@@ -192,7 +192,7 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   //
   //   - 样式层仍应复用现有技能卡片布局类，不额外引入静态 catalog 特有结构。
   assert.match(styleSource, /\.desk-skills-shell/);
-  assert.match(styleSource, /\.desk-skill-grid \{[\s\S]*align-items: start;/);
+  assert.match(styleSource, /\.desk-skill-grid \{\s*display: grid;\s*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);\s*gap: calc\(var\(--z-inset\) \* 1\.125\);\s*align-items: start;/s);
   assert.match(styleSource, /\.desk-overview-card/);
   assert.match(styleSource, /\.desk-overview-card-content/);
   assert.match(styleSource, /\.desk-overview-card-title/);

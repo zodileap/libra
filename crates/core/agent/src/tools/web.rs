@@ -1,13 +1,16 @@
-use super::utils::{get_required_string, parse_positive_usize_arg, resolve_executable_binary};
+use super::utils::{get_required_string, parse_positive_usize_arg};
 use super::{AgentTool, ToolContext};
 use libra_mcp_common::ProtocolError;
+use reqwest::blocking::{Client, Response};
 use serde_json::{json, Value};
 use std::env;
-use std::process::Command;
+use std::io::Read;
+use std::time::Duration;
 use url::Url;
 
 const DEFAULT_WEB_MAX_BYTES: usize = 200_000;
 const MAX_WEB_MAX_BYTES: usize = 2_000_000;
+const DEFAULT_WEB_USER_AGENT: &str = "zodileap-agent/0.1";
 
 /// 描述：默认允许联网访问的域名列表；可通过环境变量覆盖或扩展。
 const DEFAULT_ALLOWED_WEB_DOMAINS: [&str; 9] = [
@@ -104,6 +107,104 @@ fn resolve_web_method(args: &Value, default_value: &str) -> Result<String, Proto
     Ok(method)
 }
 
+/// 描述：构建联网工具共享的 HTTP 客户端，统一设置超时与默认 User-Agent。
+fn build_web_client(
+    timeout_secs: usize,
+    error_code: &str,
+    error_message: &str,
+) -> Result<Client, ProtocolError> {
+    Client::builder()
+        .timeout(Duration::from_secs(timeout_secs as u64))
+        .user_agent(DEFAULT_WEB_USER_AGENT)
+        .build()
+        .map_err(|err| ProtocolError::new(error_code, format!("{}: {}", error_message, err)))
+}
+
+/// 描述：发送 GET 请求并把网络层失败统一映射成工具错误，避免再依赖系统 curl。
+fn execute_http_get(
+    client: &Client,
+    url: &str,
+    error_code: &str,
+    error_message: &str,
+) -> Result<Response, ProtocolError> {
+    client
+        .get(url)
+        .send()
+        .map_err(|err| ProtocolError::new(error_code, format!("{}: {}", error_message, err)))
+}
+
+/// 描述：校验响应状态码，非 2xx 时直接返回失败，避免把错误页继续当成正文处理。
+fn ensure_success_status(
+    response: &Response,
+    error_code: &str,
+    error_message: &str,
+) -> Result<(), ProtocolError> {
+    if response.status().is_success() {
+        return Ok(());
+    }
+    Err(ProtocolError::new(
+        error_code,
+        format!("{}，HTTP {}", error_message, response.status().as_u16()),
+    ))
+}
+
+/// 描述：从任意可读流中按上限读取字节，超过限制时返回统一的过大错误。
+fn read_limited_body<R: Read>(
+    mut reader: R,
+    max_bytes: usize,
+    read_failed_code: &str,
+    read_failed_message: &str,
+    too_large_code: &str,
+) -> Result<Vec<u8>, ProtocolError> {
+    let mut body: Vec<u8> = Vec::with_capacity(max_bytes.min(8192));
+    reader
+        .by_ref()
+        .take(max_bytes as u64 + 1)
+        .read_to_end(&mut body)
+        .map_err(|err| {
+            ProtocolError::new(
+                read_failed_code,
+                format!("{}: {}", read_failed_message, err),
+            )
+        })?;
+    if body.len() > max_bytes {
+        return Err(ProtocolError::new(
+            too_large_code,
+            format!("响应体过大（超过 {} bytes）", max_bytes),
+        )
+        .with_suggestion("请缩小抓取范围，或调小 max_bytes。"));
+    }
+    Ok(body)
+}
+
+/// 描述：读取 HTTP 响应正文并执行体积保护，优先利用 Content-Length 做提前拦截。
+fn read_limited_response_body(
+    mut response: Response,
+    max_bytes: usize,
+    read_failed_code: &str,
+    read_failed_message: &str,
+    too_large_code: &str,
+) -> Result<Vec<u8>, ProtocolError> {
+    if response
+        .content_length()
+        .map(|size| size > max_bytes as u64)
+        .unwrap_or(false)
+    {
+        return Err(ProtocolError::new(
+            too_large_code,
+            format!("响应体过大（超过 {} bytes）", max_bytes),
+        )
+        .with_suggestion("请缩小抓取范围，或调小 max_bytes。"));
+    }
+    read_limited_body(
+        &mut response,
+        max_bytes,
+        read_failed_code,
+        read_failed_message,
+        too_large_code,
+    )
+}
+
 pub struct WebSearchTool;
 
 impl AgentTool for WebSearchTool {
@@ -128,13 +229,6 @@ impl AgentTool for WebSearchTool {
         let max_bytes =
             parse_positive_usize_arg(args, "max_bytes", DEFAULT_WEB_MAX_BYTES, MAX_WEB_MAX_BYTES)?;
         let _method = resolve_web_method(args, "GET")?;
-        let curl_bin = resolve_executable_binary("curl", "--version").ok_or_else(|| {
-            ProtocolError::new(
-                "core.agent.python.web_search.curl_missing",
-                "未检测到可用 curl",
-            )
-            .with_suggestion("请安装 curl 后重试。")
-        })?;
         let encoded_query = url_encode_component(query.as_str());
         let url = format!(
             "https://api.duckduckgo.com/?q={}&format=json&no_html=1&skip_disambig=1",
@@ -142,36 +236,30 @@ impl AgentTool for WebSearchTool {
         );
         let allowlist = resolve_allowed_web_domains();
         ensure_url_allowed(url.as_str(), allowlist.as_slice())?;
-        let timeout_text = timeout_secs.to_string();
-        let output = Command::new(curl_bin.as_str())
-            .args([
-                "-L",
-                "-sS",
-                "--max-time",
-                timeout_text.as_str(),
-                url.as_str(),
-            ])
-            .output()
-            .map_err(|err| {
-                ProtocolError::new(
-                    "core.agent.python.web_search.exec_failed",
-                    format!("执行联网搜索失败: {}", err),
-                )
-            })?;
-        if !output.status.success() {
-            return Err(ProtocolError::new(
-                "core.agent.python.web_search.failed",
-                "联网搜索请求失败",
-            ));
-        }
-        if output.stdout.len() > max_bytes {
-            return Err(ProtocolError::new(
-                "core.agent.python.web_search.too_large",
-                format!("响应体过大（{} bytes）", output.stdout.len()),
-            )
-            .with_suggestion("请缩小查询范围，或调小 max_bytes。"));
-        }
-        let body = String::from_utf8_lossy(output.stdout.as_slice()).to_string();
+        let client = build_web_client(
+            timeout_secs,
+            "core.agent.python.web_search.exec_failed",
+            "初始化联网搜索客户端失败",
+        )?;
+        let response = execute_http_get(
+            &client,
+            url.as_str(),
+            "core.agent.python.web_search.exec_failed",
+            "执行联网搜索失败",
+        )?;
+        ensure_success_status(
+            &response,
+            "core.agent.python.web_search.failed",
+            "联网搜索请求失败",
+        )?;
+        let body_bytes = read_limited_response_body(
+            response,
+            max_bytes,
+            "core.agent.python.web_search.exec_failed",
+            "读取联网搜索响应失败",
+            "core.agent.python.web_search.too_large",
+        )?;
+        let body = String::from_utf8_lossy(body_bytes.as_slice()).to_string();
         let parsed: Value = serde_json::from_str(body.as_str()).map_err(|err| {
             ProtocolError::new(
                 "core.agent.python.web_search.parse_failed",
@@ -218,46 +306,30 @@ impl AgentTool for FetchUrlTool {
             parse_positive_usize_arg(args, "max_bytes", DEFAULT_WEB_MAX_BYTES, MAX_WEB_MAX_BYTES)?;
         let allowlist = resolve_allowed_web_domains();
         ensure_url_allowed(url.as_str(), allowlist.as_slice())?;
-        let timeout_text = timeout_secs.to_string();
-        let max_bytes_text = max_bytes.to_string();
-        let curl_bin = resolve_executable_binary("curl", "--version").ok_or_else(|| {
-            ProtocolError::new(
-                "core.agent.python.fetch_url.curl_missing",
-                "未检测到可用 curl",
-            )
-            .with_suggestion("请安装 curl 后重试。")
-        })?;
-        let output = Command::new(curl_bin.as_str())
-            .args([
-                "-L",
-                "-sS",
-                "--max-time",
-                timeout_text.as_str(),
-                "--max-filesize",
-                max_bytes_text.as_str(),
-                url.as_str(),
-            ])
-            .output()
-            .map_err(|err| {
-                ProtocolError::new(
-                    "core.agent.python.fetch_url.exec_failed",
-                    format!("抓取网页失败: {}", err),
-                )
-            })?;
-        if !output.status.success() {
-            return Err(ProtocolError::new(
-                "core.agent.python.fetch_url.failed",
-                "网页抓取请求失败",
-            ));
-        }
-        if output.stdout.len() > max_bytes {
-            return Err(ProtocolError::new(
-                "core.agent.python.fetch_url.too_large",
-                format!("响应体过大（{} bytes）", output.stdout.len()),
-            )
-            .with_suggestion("请缩小抓取范围，或调小 max_bytes。"));
-        }
-        let html = String::from_utf8_lossy(output.stdout.as_slice()).to_string();
+        let client = build_web_client(
+            timeout_secs,
+            "core.agent.python.fetch_url.exec_failed",
+            "初始化网页抓取客户端失败",
+        )?;
+        let response = execute_http_get(
+            &client,
+            url.as_str(),
+            "core.agent.python.fetch_url.exec_failed",
+            "抓取网页失败",
+        )?;
+        ensure_success_status(
+            &response,
+            "core.agent.python.fetch_url.failed",
+            "网页抓取请求失败",
+        )?;
+        let html_bytes = read_limited_response_body(
+            response,
+            max_bytes,
+            "core.agent.python.fetch_url.exec_failed",
+            "读取网页响应失败",
+            "core.agent.python.fetch_url.too_large",
+        )?;
+        let html = String::from_utf8_lossy(html_bytes.as_slice()).to_string();
         let plain_text = strip_html_tags(html.as_str());
         let mut truncated = plain_text.clone();
         if truncated.chars().count() > max_chars {
@@ -375,6 +447,7 @@ pub fn strip_html_tags(raw: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::io::Cursor;
 
     /// 描述：验证域名白名单文本支持逗号和空白混合分隔解析。
     #[test]
@@ -414,5 +487,50 @@ mod tests {
             result.expect_err("post should be blocked").code,
             "core.agent.python.web.method_not_allowed"
         );
+    }
+
+    /// 描述：验证未命中白名单的域名会被直接拦截，避免联网工具访问任意站点。
+    #[test]
+    fn should_reject_disallowed_domain() {
+        let allowlist = vec!["docs.rs".to_string()];
+        let result = ensure_url_allowed("https://example.com/guide", allowlist.as_slice());
+        assert!(result.is_err());
+        assert_eq!(
+            result.expect_err("example.com should be blocked").code,
+            "core.agent.python.web.domain_not_allowed"
+        );
+    }
+
+    /// 描述：验证正文读取在超过 max_bytes 时会及时返回过大错误，而不是继续吞下完整响应。
+    #[test]
+    fn should_limit_response_body_size() {
+        let reader = Cursor::new(b"abcdef".to_vec());
+        let result = read_limited_body(
+            reader,
+            5,
+            "core.agent.python.web.exec_failed",
+            "读取失败",
+            "core.agent.python.web.too_large",
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            result.expect_err("body should exceed limit").code,
+            "core.agent.python.web.too_large"
+        );
+    }
+
+    /// 描述：验证正文读取在未超出限制时会完整返回，保证纯 Rust 联网实现仍能正常处理响应体。
+    #[test]
+    fn should_read_response_body_within_limit() {
+        let reader = Cursor::new(b"abc".to_vec());
+        let body = read_limited_body(
+            reader,
+            5,
+            "core.agent.python.web.exec_failed",
+            "读取失败",
+            "core.agent.python.web.too_large",
+        )
+        .expect("body should be readable");
+        assert_eq!(body, b"abc");
     }
 }

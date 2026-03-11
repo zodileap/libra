@@ -403,12 +403,16 @@ export function DeskSettingsRow({
       align="center"
       justify="space-between"
     >
-      <AriContainer padding={0}>
-        {title ? <AriTypography variant="h4" value={title} /> : null}
+      <AriContainer className="desk-settings-row-main" padding={0}>
+        {title ? <AriTypography className="desk-settings-row-title" variant="h4" value={title} /> : null}
         {description ? (
-          <AriTypography variant="caption" value={description} />
+          <AriTypography className="desk-settings-row-description" variant="caption" value={description} />
         ) : null}
-        {metaSlot}
+        {metaSlot ? (
+          <AriContainer className="desk-settings-row-meta" padding={0}>
+            {metaSlot}
+          </AriContainer>
+        ) : null}
       </AriContainer>
       <AriContainer className="desk-settings-row-actions">
         {children}

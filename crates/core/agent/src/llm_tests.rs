@@ -116,3 +116,27 @@ fn should_emit_waiting_progress_after_interval_elapsed() {
     let last = now - std::time::Duration::from_millis(1500);
     assert!(should_emit_waiting_progress(Some(last), now));
 }
+
+/// 描述：验证在输出空闲时间未达到阈值时，不应中止当前 provider 调用。
+#[test]
+fn should_keep_running_when_output_idle_window_not_elapsed() {
+    let now = std::time::Instant::now();
+    let last_output_at = now - std::time::Duration::from_secs(2);
+    assert!(!should_abort_for_output_idle(
+        last_output_at,
+        now,
+        std::time::Duration::from_secs(5),
+    ));
+}
+
+/// 描述：验证在输出空闲时间达到阈值后，应中止当前 provider 调用。
+#[test]
+fn should_abort_when_output_idle_window_elapsed() {
+    let now = std::time::Instant::now();
+    let last_output_at = now - std::time::Duration::from_secs(6);
+    assert!(should_abort_for_output_idle(
+        last_output_at,
+        now,
+        std::time::Duration::from_secs(5),
+    ));
+}

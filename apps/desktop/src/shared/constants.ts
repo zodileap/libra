@@ -22,6 +22,24 @@ export const EVENT_AGENT_TEXT_STREAM = "agent:text_stream";
 //   - 智能体后台日志事件名，供调试面板消费。
 export const EVENT_AGENT_LOG = "agent:log";
 
+// 描述：
+//
+//   - 工作流注册表更新事件名；本地工作流创建、删除或保存后统一广播，供总览页、侧边栏等订阅刷新。
+export const AGENT_WORKFLOWS_UPDATED_EVENT = "libra:agent-workflows-updated";
+
+// 描述：
+//
+//   - 定义工作流注册表更新原因，区分仅内容保存与会影响列表结构的增删操作。
+export type AgentWorkflowsUpdatedReason = "save" | "create" | "delete";
+
+// 描述：
+//
+//   - 定义工作流注册表更新事件负载，供订阅方按原因选择普通刷新或强制重建菜单。
+export interface AgentWorkflowsUpdatedEventDetail {
+  reason: AgentWorkflowsUpdatedReason;
+  workflowId?: string;
+}
+
 // ── Tauri invoke 命令名 ──────────────────────────────────────────────
 
 // 描述:

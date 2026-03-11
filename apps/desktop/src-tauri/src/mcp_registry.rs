@@ -246,8 +246,7 @@ fn builtin_mcp_templates() -> Vec<McpTemplateRecord> {
         McpTemplateRecord {
             id: "generic-stdio".to_string(),
             name: "本地命令 MCP".to_string(),
-            description: "适合通过本地命令启动的 MCP 服务。"
-                .to_string(),
+            description: "适合通过本地命令启动的 MCP 服务。".to_string(),
             domain: "general".to_string(),
             software: "".to_string(),
             capabilities: Vec::new(),
@@ -289,8 +288,7 @@ fn builtin_mcp_templates() -> Vec<McpTemplateRecord> {
         McpTemplateRecord {
             id: "blender-local-bridge".to_string(),
             name: "Blender 建模桥接".to_string(),
-            description: "连接 Blender，提供场景检查、编辑和导入导出能力。"
-                .to_string(),
+            description: "连接 Blender，提供场景检查、编辑和导入导出能力。".to_string(),
             domain: "dcc".to_string(),
             software: "blender".to_string(),
             capabilities: vec![
@@ -320,8 +318,7 @@ fn builtin_mcp_templates() -> Vec<McpTemplateRecord> {
         McpTemplateRecord {
             id: "maya-local-bridge".to_string(),
             name: "Maya 建模桥接".to_string(),
-            description: "连接 Maya，提供场景编辑、材质处理和导入导出能力。"
-                .to_string(),
+            description: "连接 Maya，提供场景编辑、材质处理和导入导出能力。".to_string(),
             domain: "dcc".to_string(),
             software: "maya".to_string(),
             capabilities: vec![
@@ -351,8 +348,7 @@ fn builtin_mcp_templates() -> Vec<McpTemplateRecord> {
         McpTemplateRecord {
             id: "c4d-local-bridge".to_string(),
             name: "C4D 建模桥接".to_string(),
-            description: "连接 Cinema 4D，提供场景编辑、材质处理和导入导出能力。"
-                .to_string(),
+            description: "连接 Cinema 4D，提供场景编辑、材质处理和导入导出能力。".to_string(),
             domain: "dcc".to_string(),
             software: "c4d".to_string(),
             capabilities: vec![

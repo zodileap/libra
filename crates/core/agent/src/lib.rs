@@ -3,6 +3,7 @@
 pub mod activation;
 pub mod flow;
 pub mod llm;
+pub mod platform;
 pub mod policy;
 pub mod profile;
 mod python_orchestrator;

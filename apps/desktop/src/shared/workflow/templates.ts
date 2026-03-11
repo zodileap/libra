@@ -17,11 +17,6 @@ export function resolveDefaultAgentWorkflows(): AgentWorkflowDefinition[] {
       version: 1,
       shared: false,
       agentKey: "agent",
-      optionalCapabilities: [
-        "project-knowledge",
-        "dependency-policy",
-        "toolchain-integration",
-      ],
       promptPrefix:
         translateDesktopText("你正在执行“前端项目开发”工作流：先完成需求分析和接口建模，再设计前端结构、实现页面并补齐测试。"),
       graph: {

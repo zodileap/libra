@@ -5,6 +5,8 @@ import {
   AriButton,
   AriCard,
   AriContainer,
+  AriFlex,
+  AriIcon,
   AriTypography,
 } from "@aries-kit/react";
 import { useNavigate } from "react-router-dom";
@@ -262,13 +264,25 @@ export function AgentHomePage(props: AgentHomePageProps) {
   };
 
   const homeBusy = folderPickLoading || sessionCreating;
+  const homeHighlights = [
+    {
+      icon: "folder_open",
+      title: t("选择本地目录"),
+      description: t("直接从当前机器上的仓库或工作目录开始。"),
+    },
+    {
+      icon: "forum",
+      title: t("立即创建话题"),
+      description: t("目录确认后会直接进入新的项目会话。"),
+    },
+  ];
 
   // 描述：构建标题栏头部内容，确保主区域页面头部统一挂载到全局标题栏插槽。
   const headerNode = (
     <DeskPageHeader
       mode="slot"
       title={t("新项目")}
-      description={t("选择一个本地文件夹，创建一个新的项目话题。")}
+      description={t("本地优先，支持现有仓库与任意本地工作目录。")}
     />
   );
 
@@ -279,12 +293,42 @@ export function AgentHomePage(props: AgentHomePageProps) {
       <AriContainer className="desk-agent-home-shell" padding={0}>
         <AriContainer className="desk-agent-home-source-list" padding={0}>
           <AriCard className="desk-agent-home-source-card">
-            <AriContainer className="desk-agent-home-source-copy" padding={0}>
-              <AriTypography variant="h4" value={t("本地文件夹")} />
-              <AriTypography
-                variant="caption"
-                value={t("从本地目录开始，适合已经在当前机器上的仓库。")}
-              />
+            <AriFlex
+              className="desk-agent-home-source-hero"
+              align="center"
+              justify="space-between"
+              space={16}
+            >
+              <AriContainer className="desk-agent-home-source-copy" padding={0}>
+                <AriTypography className="desk-agent-home-source-title" variant="h4" bold value={t("本地文件夹")} />
+                <AriTypography
+                  className="desk-agent-home-source-description"
+                  variant="caption"
+                  value={t("选择当前机器上的目录后，会直接进入新的项目会话。")}
+                />
+              </AriContainer>
+              <AriContainer className="desk-agent-home-source-badge" padding={0}>
+                <AriIcon name="folder_open" />
+              </AriContainer>
+            </AriFlex>
+
+            <AriContainer className="desk-agent-home-feature-list" padding={0}>
+              {homeHighlights.map((item) => (
+                <AriFlex
+                  key={item.title}
+                  className="desk-agent-home-feature-item"
+                  align="flex-start"
+                  space={12}
+                >
+                  <AriContainer className="desk-agent-home-feature-icon" padding={0}>
+                    <AriIcon name={item.icon} />
+                  </AriContainer>
+                  <AriContainer className="desk-agent-home-feature-copy" padding={0}>
+                    <AriTypography variant="body" value={item.title} />
+                    <AriTypography variant="caption" value={item.description} />
+                  </AriContainer>
+                </AriFlex>
+              ))}
             </AriContainer>
 
             <AriContainer className="desk-agent-home-source-action-row" padding={0}>

@@ -1,5 +1,4 @@
 import type { AgentKey } from "../types";
-import type { ProjectWorkspaceCapabilityId } from "../data";
 
 // 描述:
 //
@@ -95,8 +94,6 @@ export interface AgentWorkflowDefinition {
   shared: boolean;
   agentKey: AgentKey;
   promptPrefix: string;
-  requiredCapabilities?: ProjectWorkspaceCapabilityId[];
-  optionalCapabilities?: ProjectWorkspaceCapabilityId[];
   source?: "builtin" | "user";
   templateId?: string;
   graph?: WorkflowGraph;

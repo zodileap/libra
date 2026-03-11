@@ -36,7 +36,14 @@ test("TestWorkflowSkillExecutionPlanShouldValidateRegistryStateAndBuildPrompt", 
   assert.match(skillPlanSource, /status: "missing_skill_id"/);
   assert.match(skillPlanSource, /status: "not_found"/);
   assert.match(skillPlanSource, /blockingIssues/);
+  assert.match(skillPlanSource, /activeItem: AgentWorkflowSkillPlanItem \| null;/);
+  assert.match(skillPlanSource, /activeStageIndex: number;/);
+  assert.match(skillPlanSource, /totalReadyCount: number;/);
+  assert.match(skillPlanSource, /hasNextStage: boolean;/);
+  assert.match(skillPlanSource, /stageIndex\?: number;/);
   assert.match(skillPlanSource, /"【Skill 执行计划】"/);
+  assert.match(skillPlanSource, /"当前阶段：\{\{current\}\}\/\{\{total\}\}"/);
+  assert.match(skillPlanSource, /"执行约束：本轮仅执行当前阶段，禁止提前执行后续技能；若当前阶段失败，先输出阻塞原因与修复建议，再决定是否继续。"/);
   assert.match(skillPlanSource, /"【Skill 定义】"/);
   assert.match(skillPlanSource, /skillMarkdownBody/);
   assert.match(skillPlanSource, /normalizeAgentSkillId/);
@@ -54,10 +61,9 @@ test("TestWorkflowSkillExecutionPlanShouldValidateRegistryStateAndBuildPrompt", 
   assert.match(workflowStorageSource, /AGENT_TOOLSET_LINES/);
   assert.match(workflowStorageSource, /normalizeAgentSkillId/);
   assert.match(workflowStorageSource, /translateDesktopText\("- \{\{label\}\}：技能编码 \{\{skillId\}\}"/);
-  assert.match(workflowStorageSource, /translateDesktopText\("【项目能力声明】"\)/);
-  assert.match(workflowStorageSource, /requiredCapabilities/);
-  assert.match(workflowStorageSource, /optionalCapabilities/);
-  assert.match(workflowStorageSource, /getProjectWorkspaceCapabilityManifest/);
+  assert.match(workflowStorageSource, /兼容读取历史工作流中残留的项目能力声明字段/);
+  assert.doesNotMatch(workflowStorageSource, /translateDesktopText\("【项目能力声明】"\)/);
+  assert.doesNotMatch(workflowStorageSource, /getProjectWorkspaceCapabilityManifest/);
 
   // 描述：
   //
@@ -67,16 +73,21 @@ test("TestWorkflowSkillExecutionPlanShouldValidateRegistryStateAndBuildPrompt", 
   // 描述：
   //
   //   - 统一智能体发送前应执行 Skill 计划校验，失败时阻断；成功时将计划拼接到 prompt。
-  assert.match(sessionPageSource, /buildAgentWorkflowSkillExecutionPlan\(selectedWorkflow, availableSkills\)/);
+  assert.match(sessionPageSource, /buildAgentWorkflowSkillExecutionPlan\(activeWorkflow, availableSkills\)/);
+  assert.match(sessionPageSource, /buildAgentWorkflowSkillExecutionPlan\(activeWorkflow, availableSkills, \{ stageIndex: currentStageIndex \}\)/);
   assert.match(sessionPageSource, /if \(skillExecutionPlan\.blockingIssues\.length > 0\)/);
   assert.match(sessionPageSource, /throw new Error\(t\("技能执行前检查未通过：\{\{issues\}\}", \{\s*issues: skillExecutionPlan\.blockingIssues\.join\("；"\),\s*\}\)\)/s);
-  assert.match(sessionPageSource, /if \(selectedWorkflowMissingRequiredCapabilities\.length > 0\)/);
+  assert.doesNotMatch(sessionPageSource, /selectedWorkflowMissingRequiredCapabilities/);
   assert.match(sessionPageSource, /const latestProjectProfile = activeWorkspace\?\.id\s*\?\s*\(activeProjectProfile \|\| getProjectWorkspaceProfile\(activeWorkspace\.id\)\)\s*:\s*null;/s);
-  assert.match(sessionPageSource, /const currentRequestPrompt = buildSessionContextPrompt\(\s*messages,\s*normalizedContent,\s*undefined,\s*latestProjectProfile,\s*activeWorkspaceEnabledCapabilities,\s*\);/s);
-  assert.match(sessionPageSource, /const contextualRequestPrompt = buildSessionContextPrompt\(\s*contextMessages,\s*normalizedContent,\s*String\(activeWorkspace\?\.path \|\| ""\)\.trim\(\) \|\| undefined,\s*latestProjectProfile,\s*activeWorkspaceEnabledCapabilities,\s*\);/s);
-  assert.match(sessionPageSource, /const agentPrompt = skillExecutionPlan\.planPrompt/);
+  assert.match(sessionPageSource, /const currentRequestPrompt = buildSessionContextPrompt\(\s*nextContextMessages,\s*normalizedContent,\s*undefined,\s*latestProjectProfile,\s*activeWorkspaceEnabledCapabilities,\s*\);/s);
+  assert.match(sessionPageSource, /const contextualRequestPrompt = buildSessionContextPrompt\(\s*nextContextMessages,\s*normalizedContent,\s*String\(activeWorkspace\?\.path \|\| ""\)\.trim\(\) \|\| undefined,\s*latestProjectProfile,\s*activeWorkspaceEnabledCapabilities,\s*\);/s);
+  assert.match(sessionPageSource, /scopeWorkflowDefinitionToSkillNode\(activeWorkflow, currentStageItem\.nodeId\)/);
+  assert.match(sessionPageSource, /const agentPrompt = currentStagePlan\.planPrompt/);
   assert.match(sessionPageSource, /source: "workflow:skill_plan"/);
   assert.match(sessionPageSource, /prompt: agentPrompt/);
+  assert.match(sessionPageSource, /for \(\s*let currentStageIndex = hasWorkflowStages \? initialStageIndex : 0;/s);
+  assert.match(sessionPageSource, /const nextWorkflowPhaseCursor = buildWorkflowPhaseCursorSnapshot\(/);
+  assert.match(sessionPageSource, /setWorkflowPhaseCursor\(nextWorkflowPhaseCursor\);/);
   assert.match(skillPlanSource, /lines\.push\(item\.skillMarkdownBody\);/);
 
   // 描述：

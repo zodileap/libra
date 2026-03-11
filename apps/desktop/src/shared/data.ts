@@ -195,6 +195,21 @@ export interface SessionRunMeta {
   segments: SessionRunSegment[];
 }
 
+// 描述：
+//
+//   - 会话工作流阶段游标快照，供分阶段执行时恢复当前阶段与重试上下文。
+export interface SessionWorkflowPhaseCursorSnapshot {
+  workflowId: string;
+  workflowName: string;
+  rootPrompt: string;
+  currentStageIndex: number;
+  totalStageCount: number;
+  currentNodeId: string;
+  currentNodeTitle: string;
+  currentMessageId: string;
+  updatedAt: number;
+}
+
 // 描述:
 //
 //   - 会话运行态快照结构。
@@ -205,6 +220,7 @@ export interface SessionRunStateSnapshot {
   sending: boolean;
   runMetaMap: Record<string, SessionRunMeta>;
   sessionApprovedToolNames?: string[];
+  workflowPhaseCursor?: SessionWorkflowPhaseCursorSnapshot | null;
   updatedAt: number;
 }
 
@@ -711,6 +727,19 @@ function readSessionRunStates(): StoredSessionRunState[] {
               .filter((toolName: string) => Boolean(toolName)),
           ))
           : [],
+        workflowPhaseCursor: item.workflowPhaseCursor && typeof item.workflowPhaseCursor === "object"
+          ? {
+            workflowId: String(item.workflowPhaseCursor.workflowId || "").trim(),
+            workflowName: String(item.workflowPhaseCursor.workflowName || "").trim(),
+            rootPrompt: String(item.workflowPhaseCursor.rootPrompt || ""),
+            currentStageIndex: Math.max(0, Number(item.workflowPhaseCursor.currentStageIndex || 0)),
+            totalStageCount: Math.max(0, Number(item.workflowPhaseCursor.totalStageCount || 0)),
+            currentNodeId: String(item.workflowPhaseCursor.currentNodeId || "").trim(),
+            currentNodeTitle: String(item.workflowPhaseCursor.currentNodeTitle || "").trim(),
+            currentMessageId: String(item.workflowPhaseCursor.currentMessageId || "").trim(),
+            updatedAt: Number(item.workflowPhaseCursor.updatedAt || Date.now()),
+          }
+          : null,
         updatedAt: Number(item.updatedAt || Date.now()),
       }));
   } catch (_err) {
@@ -2074,6 +2103,12 @@ function sanitizeRunSegmentDataForStorage(
   if (typeof data.__segment_kind === "string") {
     next.__segment_kind = truncateRunStateText(data.__segment_kind, 80);
   }
+  if (typeof data.__segment_role === "string") {
+    next.__segment_role = truncateRunStateText(data.__segment_role, 80);
+  }
+  if (typeof data.__step_type === "string") {
+    next.__step_type = truncateRunStateText(data.__step_type, 80);
+  }
   if (typeof data.approval_id === "string") {
     next.approval_id = truncateRunStateText(data.approval_id, 120);
   }
@@ -2085,6 +2120,24 @@ function sanitizeRunSegmentDataForStorage(
   }
   if (typeof data.code === "string") {
     next.code = truncateRunStateText(data.code, 160);
+  }
+  if (typeof data.browse_detail === "string") {
+    next.browse_detail = truncateRunStateText(data.browse_detail, RUN_STATE_DETAIL_MAX_CHARS);
+  }
+  if (typeof data.browse_prefix === "string") {
+    next.browse_prefix = truncateRunStateText(data.browse_prefix, 80);
+  }
+  if (Number.isFinite(Number(data.browse_file_delta))) {
+    next.browse_file_delta = Math.max(0, Math.floor(Number(data.browse_file_delta)));
+  }
+  if (Number.isFinite(Number(data.browse_search_delta))) {
+    next.browse_search_delta = Math.max(0, Math.floor(Number(data.browse_search_delta)));
+  }
+  if (Number.isFinite(Number(data.browse_file_count))) {
+    next.browse_file_count = Math.max(0, Math.floor(Number(data.browse_file_count)));
+  }
+  if (Number.isFinite(Number(data.browse_search_count))) {
+    next.browse_search_count = Math.max(0, Math.floor(Number(data.browse_search_count)));
   }
   return Object.keys(next).length > 0 ? next : undefined;
 }
@@ -2155,6 +2208,19 @@ export function upsertSessionRunState(input: SessionRunStateSnapshot) {
         .map((toolName) => String(toolName || "").trim().toLowerCase())
         .filter((toolName) => Boolean(toolName)),
     )),
+    workflowPhaseCursor: input.workflowPhaseCursor && typeof input.workflowPhaseCursor === "object"
+      ? {
+        workflowId: String(input.workflowPhaseCursor.workflowId || "").trim(),
+        workflowName: String(input.workflowPhaseCursor.workflowName || "").trim(),
+        rootPrompt: String(input.workflowPhaseCursor.rootPrompt || ""),
+        currentStageIndex: Math.max(0, Number(input.workflowPhaseCursor.currentStageIndex || 0)),
+        totalStageCount: Math.max(0, Number(input.workflowPhaseCursor.totalStageCount || 0)),
+        currentNodeId: String(input.workflowPhaseCursor.currentNodeId || "").trim(),
+        currentNodeTitle: String(input.workflowPhaseCursor.currentNodeTitle || "").trim(),
+        currentMessageId: String(input.workflowPhaseCursor.currentMessageId || "").trim(),
+        updatedAt: Number(input.workflowPhaseCursor.updatedAt || Date.now()),
+      }
+      : null,
     updatedAt: Number(input.updatedAt || Date.now()),
   };
   const next = [

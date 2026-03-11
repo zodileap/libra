@@ -6,6 +6,7 @@ import type { AiKeyItem } from "../types";
 import {
   DeskEmptyState,
   DeskPageHeader,
+  DeskSectionTitle,
 } from "../../../widgets/settings-primitives";
 import { useDesktopI18n } from "../../../shared/i18n";
 import { useDesktopHeaderSlot } from "../../../widgets/app-header/header-slot-context";
@@ -326,6 +327,7 @@ export function AiKeyPage({ aiKeys, onAiKeysChange }: AiKeyPageProps) {
     <AriContainer className="desk-content" showBorderRadius={false}>
       {headerSlotElement ? createPortal(headerNode, headerSlotElement) : null}
       <AriContainer className="desk-settings-shell">
+        <DeskSectionTitle title={t("Providers")} />
         <AriContainer className="desk-settings-panel">
           {aiKeys.length === 0 ? (
             <DeskEmptyState

@@ -257,6 +257,26 @@ pub(crate) fn should_emit_waiting_progress(last_emitted_at: Option<Instant>, now
     }
 }
 
+/// 描述：判断 provider 是否已经超过“空闲无输出超时”窗口。
+///
+/// Params:
+///
+///   - last_output_at: 最近一次收到 provider 原始输出的时间。
+///   - now: 当前时间。
+///   - timeout: 允许持续空闲的最长时长。
+///
+/// Returns:
+///
+///   - true: 已经超过空闲阈值，应终止当前调用。
+///   - false: 仍处于活动或可继续等待状态。
+pub(crate) fn should_abort_for_output_idle(
+    last_output_at: Instant,
+    now: Instant,
+    timeout: Duration,
+) -> bool {
+    now.duration_since(last_output_at) >= timeout
+}
+
 #[cfg(test)]
 #[path = "llm_tests.rs"]
 mod tests;

@@ -71,6 +71,8 @@
   --desk-workflow-sidebar-width: calc(var(--z-inset) * 21);
   --desk-workflow-floating-width: calc(var(--z-inset) * 23);
   --desk-workflow-stage-padding: var(--z-inset);
+  --desk-workflow-edit-modal-width: calc(var(--z-inset) * 42);
+  --desk-mcp-editor-modal-width: calc(var(--z-inset) * 56);
   --desk-sidebar-entry-hover-bg: var(--desk-container-bg);
   --desk-sidebar-entry-hover-border: var(--z-color-border-brand);
   --desk-user-menu-width: calc(var(--z-inset) * 18);
@@ -79,10 +81,22 @@
   --desk-user-menu-meta-color: color-mix(in srgb, var(--z-color-text) 68%, var(--z-color-border-glass));
   --desk-admin-card-active-border: color-mix(in srgb, var(--z-color-border-active) 62%, var(--z-color-border-glass));
   --desk-admin-card-active-shadow: var(--z-color-box-shadow);
-  --desk-ai-key-card-actions-width: calc(var(--z-inset) * 23);
+  --desk-ai-key-card-actions-width: calc(var(--z-inset) * 19);
   --desk-ai-key-card-input-max-width: calc(var(--z-inset) * 20);
   --desk-ai-key-card-surface: color-mix(in srgb, var(--desk-container-bg) 92%, var(--z-color-bg-subtle));
-  --desk-agent-home-shell-width: calc(var(--z-inset) * 34);
+  --desk-shell-width: calc(var(--z-inset) * 76);
+  --desk-shell-wide-width: calc(var(--z-inset) * 88);
+  --desk-shell-compact-width: calc(var(--z-inset) * 52);
+  --desk-session-shell-width: calc(var(--z-inset) * 86);
+  --desk-session-content-width: calc(var(--z-inset) * 60);
+  --desk-session-thread-width: var(--desk-session-content-width);
+  --desk-session-composer-width: var(--desk-session-content-width);
+  --desk-session-thread-gap: calc(var(--z-inset) * 1.75);
+  --desk-agent-home-shell-width: var(--desk-shell-compact-width);
+  --desk-panel-border-color: color-mix(in srgb, var(--z-color-border-brand) 24%, var(--z-color-border-glass));
+  --desk-panel-surface: color-mix(in srgb, var(--desk-container-bg) 94%, var(--z-color-bg-tertiary));
+  --desk-project-settings-control-compact-width: calc(var(--z-inset) * 18);
+  --desk-project-settings-control-wide-width: calc(var(--z-inset) * 24);
   color: var(--desk-root-color);
   background: var(--desk-root-bg);
   font-synthesis: none;
@@ -470,20 +484,21 @@ body {
 }
 
 .desk-settings-shell {
-  width: min(100%, calc(var(--z-inset) * 68));
+  width: min(100%, var(--desk-shell-width));
   margin: 0 auto;
   display: grid;
-  gap: var(--z-inset);
+  gap: calc(var(--z-inset) * 1.25);
+  padding-bottom: calc(var(--z-inset) * 2);
 }
 
 .desk-skills-shell {
-  width: min(100%, calc(var(--z-inset) * 72));
+  width: min(100%, var(--desk-shell-wide-width));
 }
 
 .desk-skill-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--z-inset);
+  gap: calc(var(--z-inset) * 1.125);
   align-items: start;
 }
 
@@ -520,22 +535,37 @@ body {
 
 .desk-overview-card {
   border-radius: var(--z-border-radius-lg);
-  min-height: calc(var(--z-inset) * 5.5);
-  border: var(--desk-border-width) solid var(--desk-workflow-card-border);
-  background: var(--desk-container-bg);
+  min-height: calc(var(--z-inset) * 6.5);
+  border: var(--desk-border-width) solid var(--desk-panel-border-color);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--z-color-bg-active) 10%, var(--desk-panel-surface)) 0%,
+    var(--desk-panel-surface) 100%
+  );
+  box-shadow: var(--z-color-box-shadow);
+  transition:
+    transform var(--z-duration-fast-4),
+    border-color var(--z-duration-fast-4),
+    box-shadow var(--z-duration-fast-4);
+}
+
+.desk-overview-card:hover {
+  transform: translateY(calc(var(--desk-border-width) * -1));
+  border-color: color-mix(in srgb, var(--z-color-border-brand) 48%, var(--z-color-border-glass));
+  box-shadow: var(--z-color-box-shadow-popover);
 }
 
 .desk-overview-card-main {
-  min-height: calc(var(--z-inset) * 5.5);
-  padding: var(--z-inset);
+  min-height: calc(var(--z-inset) * 6.5);
+  padding: calc(var(--z-inset) * 1.125);
 }
 
 .desk-overview-card-icon-wrap {
-  width: calc(var(--z-inset) * 3);
-  height: calc(var(--z-inset) * 3);
-  border-radius: calc(var(--z-inset) * 3) !important;
-  border: var(--desk-border-width) solid var(--z-color-border-glass);
-  background: var(--z-color-bg-tertiary);
+  width: calc(var(--z-inset) * 3.25);
+  height: calc(var(--z-inset) * 3.25);
+  border-radius: calc(var(--z-inset) * 3.25) !important;
+  border: var(--desk-border-width) solid color-mix(in srgb, var(--z-color-border-brand) 28%, var(--z-color-border-glass));
+  background: color-mix(in srgb, var(--z-color-bg-active) 18%, var(--z-color-bg-tertiary));
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -581,8 +611,10 @@ body {
   text-overflow: ellipsis;
   white-space: normal;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
+  color: var(--desk-workflow-muted-text);
+  line-height: 1.6;
 }
 
 .desk-overview-card-actions {
@@ -626,6 +658,8 @@ body {
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--z-inset);
+  padding-top: calc(var(--z-inset) * 1.25);
+  padding-bottom: calc(var(--z-inset) * 0.5);
 }
 
 .desk-page-header.is-slot {
@@ -633,6 +667,8 @@ body {
   min-height: 100%;
   align-items: center;
   gap: var(--z-inset-sm);
+  padding-top: 0;
+  padding-bottom: 0;
 }
 
 .desk-page-header-main {
@@ -643,10 +679,13 @@ body {
 
 .desk-page-header-title {
   min-width: 0;
+  color: color-mix(in srgb, var(--z-color-text) 94%, var(--z-color-border-brand));
 }
 
 .desk-page-header-description {
   color: var(--desk-workflow-muted-text);
+  max-width: calc(var(--z-inset) * 34);
+  line-height: 1.6;
 }
 
 .desk-page-header-title-line {
@@ -699,8 +738,8 @@ body {
 
 .desk-project-settings-form {
   display: grid;
-  gap: var(--z-inset);
-  padding: var(--z-inset);
+  gap: calc(var(--z-inset) * 1.125);
+  padding: calc(var(--z-inset) * 1.25);
 }
 
 .desk-section-label {
@@ -708,13 +747,15 @@ body {
 }
 
 .desk-settings-title {
-  margin-top: var(--z-inset-sm);
+  margin-top: calc(var(--z-inset) * 0.25);
+  color: color-mix(in srgb, var(--z-color-text) 90%, var(--z-color-border-brand));
 }
 
 .desk-settings-panel {
-  border: var(--desk-border-width) solid var(--z-color-border-glass);
+  border: var(--desk-border-width) solid var(--desk-panel-border-color);
   border-radius: var(--z-border-radius-lg);
-  background: var(--desk-container-bg);
+  background: var(--desk-panel-surface);
+  box-shadow: var(--z-color-box-shadow);
   overflow: hidden;
 }
 
@@ -787,14 +828,35 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--z-inset);
-  padding: var(--z-inset);
-  border-bottom: var(--desk-border-width) solid var(--z-color-border-glass);
-  min-height: calc(var(--z-inset) * 4);
+  gap: calc(var(--z-inset) * 1.25);
+  padding: calc(var(--z-inset) * 1.125) calc(var(--z-inset) * 1.25);
+  border-bottom: var(--desk-border-width) solid color-mix(in srgb, var(--z-color-border-glass) 82%, transparent);
+  min-height: calc(var(--z-inset) * 4.5);
 }
 
 .desk-settings-row:last-child {
   border-bottom: none;
+}
+
+.desk-settings-row-main {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: var(--z-inset-xs);
+}
+
+.desk-settings-row-title {
+  color: color-mix(in srgb, var(--z-color-text) 94%, var(--z-color-border-brand));
+}
+
+.desk-settings-row-description {
+  color: var(--desk-workflow-muted-text);
+  line-height: 1.6;
+  max-width: calc(var(--z-inset) * 32);
+}
+
+.desk-settings-row-meta {
+  min-width: 0;
 }
 
 .desk-settings-row-actions {
@@ -803,6 +865,7 @@ body {
   gap: var(--desk-row-actions-gap);
   flex-wrap: wrap;
   justify-content: flex-end;
+  flex-shrink: 0;
 }
 
 .desk-workflow-editor-main {
@@ -816,8 +879,13 @@ body {
   min-height: 0;
   height: 100%;
   border-radius: var(--z-border-radius-lg);
-  box-shadow: var(--z-color-box-shadow);
-  background: var(--desk-container-bg);
+  border: var(--desk-border-width) solid var(--desk-panel-border-color);
+  box-shadow: var(--z-color-box-shadow-popover);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--z-color-bg-active) 8%, var(--desk-container-bg)) 0%,
+    var(--desk-container-bg) 100%
+  );
   padding: var(--desk-workflow-stage-padding);
   display: flex;
   flex-direction: column;
@@ -842,6 +910,8 @@ body {
   flex: 1 1 auto;
   min-height: var(--desk-workflow-canvas-height);
   height: 100%;
+  border: var(--desk-border-width) solid color-mix(in srgb, var(--z-color-border-glass) 88%, transparent);
+  box-shadow: inset 0 0 0 var(--desk-border-width) color-mix(in srgb, var(--z-color-bg-active) 12%, transparent);
 }
 
 .desk-workflow-editor-canvas-toolbar-float {
@@ -861,6 +931,9 @@ body {
   max-height: calc(100% - var(--z-inset) * 2);
   overflow: auto;
   z-index: var(--z-z-index-sticky);
+  border: var(--desk-border-width) solid var(--desk-panel-border-color);
+  background: color-mix(in srgb, var(--desk-container-bg) 96%, var(--z-color-bg-tertiary));
+  box-shadow: var(--z-color-box-shadow-popover);
 }
 
 .desk-workflow-inspector-header {
@@ -895,7 +968,7 @@ body {
   height: var(--desk-workflow-canvas-height);
   border-radius: var(--z-border-radius-lg);
   overflow: hidden;
-  background: var(--z-color-bg-tertiary);
+  background: color-mix(in srgb, var(--z-color-bg-tertiary) 88%, var(--z-color-bg-active));
 }
 
 .desk-workflow-reactflow {
@@ -905,16 +978,16 @@ body {
   background:
     radial-gradient(
       circle,
-      color-mix(in srgb, var(--z-color-primary) 16%, transparent) var(--desk-border-width),
+      color-mix(in srgb, var(--z-color-primary) 22%, transparent) var(--desk-border-width),
       transparent var(--desk-border-width)
     ),
     linear-gradient(
       90deg,
-      color-mix(in srgb, var(--z-color-border-glass) 55%, transparent) var(--desk-border-width),
+      color-mix(in srgb, var(--z-color-border-glass) 72%, transparent) var(--desk-border-width),
       transparent var(--desk-border-width)
     ),
     linear-gradient(
-      color-mix(in srgb, var(--z-color-border-glass) 55%, transparent) var(--desk-border-width),
+      color-mix(in srgb, var(--z-color-border-glass) 72%, transparent) var(--desk-border-width),
       transparent var(--desk-border-width)
     );
   background-size:
@@ -1011,7 +1084,7 @@ body {
   display: flex;
   align-items: center;
   border: var(--desk-border-width) solid
-    color-mix(in srgb, var(--z-color-border-glass) 74%, transparent);
+    color-mix(in srgb, var(--z-color-border-brand) 20%, var(--z-color-border-glass));
   border-radius: var(--z-border-radius);
   background: var(--desk-workflow-node-content-surface);
 }
@@ -1152,10 +1225,41 @@ body {
   margin-top: var(--z-inset-sm);
 }
 
+.desk-workflow-edit-modal {
+  max-width: calc(100vw - calc(var(--z-inset) * 4));
+}
+
+.desk-workflow-edit-modal-body {
+  display: grid;
+  gap: calc(var(--z-inset) * 1.25);
+}
+
+.desk-workflow-edit-modal-card {
+  border: var(--desk-border-width) solid var(--desk-workflow-card-border);
+  background: color-mix(in srgb, var(--desk-container-bg) 94%, var(--z-color-bg-tertiary));
+}
+
+.desk-workflow-edit-modal-card-basic {
+  min-width: 0;
+}
+
+.desk-workflow-edit-section-head {
+  margin-bottom: var(--z-inset);
+}
+
+.desk-workflow-edit-section-title {
+  color: color-mix(in srgb, var(--z-color-text) 88%, var(--z-color-border-glass));
+}
+
+.desk-workflow-edit-form {
+  display: grid;
+  gap: var(--z-inset-sm);
+}
+
 .desk-workflow-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--z-inset);
+  gap: calc(var(--z-inset) * 1.125);
   align-items: start;
 }
 
@@ -1203,6 +1307,12 @@ body {
   flex-shrink: 0;
 }
 
+.desk-workflow-head-actions .z-button,
+.desk-workflow-editor-canvas-toolbar .z-button {
+  min-width: calc(var(--z-inset) * 2.25);
+  min-height: calc(var(--z-inset) * 2.25);
+}
+
 .desk-theme-group {
   flex-wrap: wrap;
   justify-content: flex-end;
@@ -1222,13 +1332,14 @@ body {
 }
 
 .desk-session-shell {
-  width: min(100%, calc(var(--z-inset) * 68));
+  width: min(100%, var(--desk-session-shell-width));
   margin: 0 auto;
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--z-inset-sm);
+  gap: var(--z-inset);
+  padding-bottom: calc(var(--z-inset) * 1.25);
 }
 
 .desk-session-head {
@@ -1276,11 +1387,17 @@ body {
 
 .desk-session-thread-wrap {
   flex: 1;
+  width: min(100%, var(--desk-session-content-width));
+  margin: 0 auto;
   min-height: 0;
   overflow: auto;
-  padding-right: var(--z-inset-xs);
+  padding-right: 0;
+  padding-top: var(--z-inset-sm);
+  padding-bottom: calc(var(--z-inset) * 0.5);
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
+  display: flex;
+  justify-content: flex-start;
 }
 
 .desk-session-content .desk-thread {
@@ -1289,16 +1406,27 @@ body {
 }
 
 .desk-prompt-dock {
+  display: grid;
+  width: min(100%, var(--desk-session-content-width));
+  gap: var(--z-inset-sm);
   margin-top: auto;
-  padding-top: var(--z-inset-sm);
+  margin-left: auto;
+  margin-right: auto;
+  padding-top: calc(var(--z-inset) * 1.25);
   background: linear-gradient(
     180deg,
     color-mix(in srgb, var(--desk-main-bg) 0%, transparent) 0%,
-    color-mix(in srgb, var(--desk-main-bg) 96%, transparent) 22%
+    color-mix(in srgb, var(--desk-main-bg) 96%, transparent) 18%
   );
   position: sticky;
   bottom: calc(var(--z-inset) * -0.5);
   z-index: 2;
+}
+
+.desk-prompt-dock > * {
+  width: 100%;
+  margin-left: 0;
+  margin-right: 0;
 }
 
 .desk-prompt-stack {
@@ -1322,12 +1450,13 @@ body {
 
 .desk-action-slot {
   margin-bottom: var(--z-inset-sm);
-  border: var(--desk-border-width) solid var(--z-color-border-glass);
+  border: var(--desk-border-width) solid var(--desk-panel-border-color);
   border-radius: var(--z-border-radius);
-  background: var(--desk-container-bg);
-  padding: var(--z-inset-sm);
+  background: var(--desk-panel-surface);
+  padding: var(--z-inset);
   display: grid;
   gap: var(--z-inset-sm);
+  box-shadow: var(--z-color-box-shadow);
 }
 
 .desk-session-content .desk-prompt-dock .desk-action-slot {
@@ -1429,6 +1558,9 @@ body {
   width: 100%;
   position: relative;
   z-index: 2;
+  border: var(--desk-border-width) solid var(--desk-panel-border-color);
+  background: color-mix(in srgb, var(--desk-container-bg) 96%, var(--z-color-bg-active));
+  box-shadow: var(--z-color-box-shadow-popover);
 }
 
 .desk-prompt-toolbar {
@@ -1491,9 +1623,6 @@ body {
 }
 
 .desk-session-strategy-item {
-  margin-top: 0;
-  border: var(--desk-border-width) solid var(--z-color-border-glass);
-  background: var(--desk-container-bg);
   cursor: pointer;
   transition:
     border-color var(--z-duration-fast-4),
@@ -1543,17 +1672,20 @@ body {
 }
 
 .desk-agent-home-content {
-  padding-left: var(--z-inset);
-  padding-right: var(--z-inset);
+  padding-top: calc(var(--desk-agent-surface-padding-top) + calc(var(--z-inset) * 3));
+  padding-left: var(--desk-content-padding-x);
+  padding-right: var(--desk-content-padding-x);
+  padding-bottom: calc(var(--z-inset) * 2);
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
 }
 
 .desk-agent-home-shell {
   width: min(100%, var(--desk-agent-home-shell-width));
   display: grid;
-  gap: var(--z-inset);
+  gap: calc(var(--z-inset) * 1.25);
+  margin: 0 auto;
 }
 
 .desk-agent-home-source-list {
@@ -1562,8 +1694,9 @@ body {
 }
 
 .desk-agent-home-source-card {
-  border: var(--desk-border-width) solid var(--z-color-border-glass);
-  background: color-mix(in srgb, var(--desk-container-bg) 92%, var(--z-color-use-bg));
+  border: var(--desk-border-width) solid color-mix(in srgb, var(--z-color-primary) 28%, var(--z-color-border-glass));
+  box-shadow: var(--z-color-box-shadow-popover);
+  padding: calc(var(--z-inset) * 1.5);
 }
 
 .desk-agent-home-source-copy {
@@ -1572,20 +1705,90 @@ body {
   gap: var(--z-inset-xs);
 }
 
+.desk-agent-home-source-hero {
+  min-width: 0;
+  margin-bottom: calc(var(--z-inset) * 1.25);
+}
+
+.desk-agent-home-source-kicker {
+  color: var(--z-color-text-brand);
+}
+
+.desk-agent-home-source-title {
+  color: color-mix(in srgb, var(--z-color-text) 94%, var(--z-color-border-brand));
+}
+
+.desk-agent-home-source-description {
+  color: var(--desk-workflow-muted-text);
+  line-height: 1.6;
+}
+
+.desk-agent-home-source-badge {
+  width: calc(var(--z-inset) * 4);
+  height: calc(var(--z-inset) * 4);
+  border-radius: var(--z-border-radius-lg);
+  border: var(--desk-border-width) solid color-mix(in srgb, var(--z-color-primary) 34%, var(--z-color-border-glass));
+  background: color-mix(in srgb, var(--z-color-primary) 12%, var(--desk-container-bg));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.desk-agent-home-feature-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--z-inset-sm);
+  margin-bottom: calc(var(--z-inset) * 1.25);
+}
+
+.desk-agent-home-feature-item {
+  min-width: 0;
+  padding: var(--z-inset);
+  border-radius: var(--z-border-radius);
+  border: var(--desk-border-width) solid color-mix(in srgb, var(--z-color-primary) 20%, var(--z-color-border-glass));
+  background: color-mix(in srgb, var(--z-color-primary) 6%, var(--desk-container-bg));
+}
+
+.desk-agent-home-feature-icon {
+  width: calc(var(--z-inset) * 2.25);
+  height: calc(var(--z-inset) * 2.25);
+  border-radius: var(--z-border-radius);
+  background: color-mix(in srgb, var(--z-color-primary) 12%, var(--z-color-bg-tertiary));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.desk-agent-home-feature-copy {
+  min-width: 0;
+  display: grid;
+  gap: var(--z-inset-xs);
+}
+
 .desk-agent-home-source-action-row {
-  margin-top: var(--z-inset);
+  display: grid;
+  gap: var(--z-inset-sm);
 }
 
 .desk-agent-home-source-button {
   width: 100%;
 }
 
+.desk-agent-home-source-helper {
+  color: var(--desk-workflow-muted-text);
+}
+
 .desk-thread {
   display: flex;
   flex-direction: column;
-  gap: calc(var(--z-inset) * 2.5);
-  margin-top: var(--z-inset);
+  width: 100%;
+  gap: var(--desk-session-thread-gap);
+  margin-top: calc(var(--z-inset) * 0.75);
   margin-bottom: var(--z-inset);
+  margin-left: 0;
+  margin-right: 0;
 }
 
 .desk-msg {
@@ -1897,7 +2100,8 @@ body {
 .desk-session-empty-state {
   width: 100%;
   display: grid;
-  gap: var(--z-inset);
+  gap: calc(var(--z-inset) * 1.25);
+  margin: calc(var(--z-inset) * 1.5) 0 0;
 }
 
 .desk-session-quick-start-heading {
@@ -1906,8 +2110,13 @@ body {
 }
 
 .desk-session-empty-card {
-  border: var(--desk-border-width) solid var(--z-color-border-glass);
-  background: var(--desk-container-bg);
+  border: var(--desk-border-width) solid var(--desk-panel-border-color);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--z-color-bg-active) 8%, var(--desk-panel-surface)) 0%,
+    var(--desk-panel-surface) 100%
+  );
+  box-shadow: var(--z-color-box-shadow);
 }
 
 .desk-session-quick-start-grid {
@@ -2108,15 +2317,65 @@ body {
 }
 
 .desk-empty-state {
-  padding: var(--z-inset);
+  padding: calc(var(--z-inset) * 1.5);
   display: grid;
   gap: var(--z-inset-sm);
+  border: var(--desk-border-width) solid var(--desk-panel-border-color);
+  border-radius: var(--z-border-radius-lg);
+  background: var(--desk-panel-surface);
+  box-shadow: var(--z-color-box-shadow);
 }
 
 .desk-status-text {
   display: block;
-  margin-top: var(--z-inset-sm);
-  color: var(--z-color-primary);
+  margin-top: 0;
+  padding: var(--z-inset-sm) var(--z-inset);
+  border: var(--desk-border-width) solid color-mix(in srgb, var(--z-color-primary) 24%, var(--z-color-border-glass));
+  border-radius: var(--z-border-radius);
+  background: color-mix(in srgb, var(--z-color-primary) 8%, var(--desk-panel-surface));
+  color: color-mix(in srgb, var(--z-color-primary) 80%, var(--z-color-text));
+}
+
+.desk-project-settings-control {
+  width: min(100%, var(--desk-project-settings-control-compact-width));
+}
+
+.desk-project-settings-control-wide {
+  width: min(100%, var(--desk-project-settings-control-wide-width));
+}
+
+.desk-project-settings-control > * {
+  width: 100%;
+  max-width: none;
+}
+
+.desk-project-settings-knowledge-section {
+  display: grid;
+  gap: var(--z-inset);
+  padding: var(--z-inset);
+  border: var(--desk-border-width) solid color-mix(in srgb, var(--z-color-border-brand) 18%, var(--z-color-border-glass));
+  border-radius: var(--z-border-radius);
+  background: color-mix(in srgb, var(--z-color-bg-active) 8%, var(--desk-container-bg));
+}
+
+.desk-project-settings-knowledge-description {
+  color: var(--desk-workflow-muted-text);
+  line-height: 1.6;
+}
+
+.desk-mcp-editor-modal {
+  max-width: calc(100vw - calc(var(--z-inset) * 4));
+}
+
+.desk-mcp-editor-form-wrap {
+  max-height: calc(var(--z-inset) * 38);
+  overflow: auto;
+  padding-right: var(--z-inset-xs);
+}
+
+.desk-mcp-editor-form {
+  display: grid;
+  gap: var(--z-inset);
 }
 
 .desk-main,
@@ -2238,6 +2497,10 @@ body {
 
   .desk-workflow-reactflow-wrap {
     height: calc(var(--z-inset) * 28);
+  }
+
+  .desk-agent-home-feature-list {
+    grid-template-columns: 1fr;
   }
 
 }

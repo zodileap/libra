@@ -28,6 +28,7 @@ test("TestSidebarRunStateShouldPreserveApprovalAcrossNavigation", () => {
   //   - 会话运行片段结构必须支持透传 data，保证 approval_id/tool_args 可持久化恢复。
   assert.match(sharedDataSource, /data\?: Record<string, unknown>;/);
   assert.match(sharedDataSource, /sessionApprovedToolNames\?: string\[\];/);
+  assert.match(sharedDataSource, /workflowPhaseCursor\?: SessionWorkflowPhaseCursorSnapshot \| null;/);
 
   // 描述：
   //
@@ -65,5 +66,12 @@ test("TestSidebarRunStateShouldPreserveApprovalAcrossNavigation", () => {
   assert.match(sharedDataSource, /function sanitizeRunMetaMapForStorage\(/);
   assert.match(sharedDataSource, /function sanitizeRunSegmentDataForStorage\(/);
   assert.match(sharedDataSource, /RUN_STATE_TOOL_ARGS_MAX_CHARS = 2000/);
+  assert.match(sharedDataSource, /if \(typeof data\.__segment_role === "string"\) \{\s*next\.__segment_role = truncateRunStateText\(data\.__segment_role, 80\);\s*\}/s);
+  assert.match(sharedDataSource, /if \(typeof data\.__step_type === "string"\) \{\s*next\.__step_type = truncateRunStateText\(data\.__step_type, 80\);\s*\}/s);
+  assert.match(sharedDataSource, /if \(typeof data\.browse_detail === "string"\) \{\s*next\.browse_detail = truncateRunStateText\(data\.browse_detail, RUN_STATE_DETAIL_MAX_CHARS\);\s*\}/s);
+  assert.match(sharedDataSource, /if \(Number\.isFinite\(Number\(data\.browse_file_delta\)\)\) \{\s*next\.browse_file_delta = Math\.max\(0, Math\.floor\(Number\(data\.browse_file_delta\)\)\);\s*\}/s);
+  assert.match(sharedDataSource, /if \(Number\.isFinite\(Number\(data\.browse_search_delta\)\)\) \{\s*next\.browse_search_delta = Math\.max\(0, Math\.floor\(Number\(data\.browse_search_delta\)\)\);\s*\}/s);
   assert.match(sharedDataSource, /sessionApprovedToolNames: Array\.from\(new Set\(/);
+  assert.match(sharedDataSource, /workflowPhaseCursor: input\.workflowPhaseCursor && typeof input\.workflowPhaseCursor === "object"/);
+  assert.match(sharedDataSource, /workflowPhaseCursor: item\.workflowPhaseCursor && typeof item\.workflowPhaseCursor === "object"/);
 });

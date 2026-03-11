@@ -1,11 +1,12 @@
 import { translateDesktopText } from "../i18n";
 import { resolveDefaultAgentWorkflows } from "./templates";
 import { AGENT_TOOLSET_LINES, normalizeAgentSkillId } from "./prompt-guidance";
-import { IS_BROWSER, STORAGE_KEYS } from "../constants";
 import {
-  getProjectWorkspaceCapabilityManifest,
-  type ProjectWorkspaceCapabilityId,
-} from "../data";
+  AGENT_WORKFLOWS_UPDATED_EVENT,
+  IS_BROWSER,
+  STORAGE_KEYS,
+  type AgentWorkflowsUpdatedEventDetail,
+} from "../constants";
 import type {
   AgentWorkflowDefinition,
   AgentWorkflowOverview,
@@ -22,6 +23,16 @@ import type {
 const DEFAULT_AGENT_WORKFLOW_ID_SET = new Set(
   resolveDefaultAgentWorkflows().map((item) => item.id),
 );
+
+// 描述：
+//
+//   - 匹配工作流副本末尾的数字后缀，如 `工作流 (2)` 或 `工作流（2）`。
+const WORKFLOW_COPY_INDEX_SUFFIX_PATTERN = /\s*[\(（](\d+)[\)）]$/u;
+
+// 描述：
+//
+//   - 匹配历史遗留的“ - 副本”命名后缀，兼容旧数据平滑迁移到 `(x)` 规则。
+const LEGACY_WORKFLOW_COPY_SUFFIX_PATTERN = /\s*-\s*副本$/u;
 
 // 描述：
 //
@@ -55,6 +66,119 @@ function normalizeAgentWorkflowId(workflowId: string): string {
     return "";
   }
   return normalizedWorkflowId;
+}
+
+// 描述：
+//
+//   - 转义正则特殊字符，供基于名称生成精确匹配规则时复用。
+//
+// Params:
+//
+//   - value: 待转义文本。
+//
+// Returns:
+//
+//   - 转义后的安全正则片段。
+function escapeWorkflowNameForRegExp(value: string): string {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// 描述：
+//
+//   - 提取工作流副本的基础名称；会移除历史“ - 副本”和当前 `(x)` 后缀，避免继续叠加脏后缀。
+//
+// Params:
+//
+//   - workflowName: 原始工作流名称。
+//
+// Returns:
+//
+//   - 用于生成下一份副本的基础名称。
+function resolveWorkflowCopyBaseName(workflowName: string): string {
+  let normalizedWorkflowName = String(workflowName || "").trim();
+  if (!normalizedWorkflowName) {
+    return translateDesktopText("未命名工作流");
+  }
+  while (normalizedWorkflowName) {
+    const nextWorkflowName = normalizedWorkflowName
+      .replace(WORKFLOW_COPY_INDEX_SUFFIX_PATTERN, "")
+      .replace(LEGACY_WORKFLOW_COPY_SUFFIX_PATTERN, "")
+      .trim();
+    if (nextWorkflowName === normalizedWorkflowName) {
+      break;
+    }
+    normalizedWorkflowName = nextWorkflowName;
+  }
+  return normalizedWorkflowName || translateDesktopText("未命名工作流");
+}
+
+// 描述：
+//
+//   - 解析工作流名称对应的副本编号；基础名称本身视为 0，`(x)` 视为 x，历史“ - 副本”按出现次数折算。
+//
+// Params:
+//
+//   - workflowName: 待解析名称。
+//   - baseName: 对应基础名称。
+//
+// Returns:
+//
+//   - 命中时返回编号；未命中返回 null。
+function resolveWorkflowCopyNameIndex(workflowName: string, baseName: string): number | null {
+  const normalizedWorkflowName = String(workflowName || "").trim();
+  const normalizedBaseName = String(baseName || "").trim();
+  if (!normalizedWorkflowName || !normalizedBaseName) {
+    return null;
+  }
+  if (normalizedWorkflowName === normalizedBaseName) {
+    return 0;
+  }
+  const escapedBaseName = escapeWorkflowNameForRegExp(normalizedBaseName);
+  const copyIndexMatch = normalizedWorkflowName.match(
+    new RegExp(`^${escapedBaseName}\\s*[\\(（](\\d+)[\\)）]$`, "u"),
+  );
+  if (copyIndexMatch) {
+    return Number.parseInt(copyIndexMatch[1] || "0", 10);
+  }
+  const legacyCopyMatch = normalizedWorkflowName.match(
+    new RegExp(`^${escapedBaseName}(\\s*-\\s*副本)+$`, "u"),
+  );
+  if (!legacyCopyMatch) {
+    return null;
+  }
+  const legacySuffix = normalizedWorkflowName.slice(normalizedBaseName.length);
+  const legacyCopyCount = legacySuffix.match(/-\s*副本/gu)?.length || 0;
+  return legacyCopyCount > 0 ? legacyCopyCount : null;
+}
+
+// 描述：
+//
+//   - 为复制动作生成下一个 `(x)` 名称；会在现有工作流中寻找同名族群并递增编号。
+//
+// Params:
+//
+//   - workflows: 当前全部工作流。
+//   - sourceName: 复制源名称。
+//
+// Returns:
+//
+//   - 新副本名称。
+function resolveNextWorkflowCopyName(
+  workflows: AgentWorkflowDefinition[],
+  sourceName: string,
+): string {
+  const baseName = resolveWorkflowCopyBaseName(sourceName);
+  const nextCopyIndex = workflows.reduce((currentMax, workflow) => {
+    const matchedIndex = resolveWorkflowCopyNameIndex(workflow.name, baseName);
+    if (matchedIndex === null) {
+      return currentMax;
+    }
+    return Math.max(currentMax, matchedIndex);
+  }, 0) + 1;
+  return translateDesktopText("{{name}} ({{index}})", {
+    name: baseName,
+    index: nextCopyIndex,
+  });
 }
 
 // 描述：
@@ -262,24 +386,26 @@ function buildAgentFallbackGraph(workflow: AgentWorkflowDefinition): WorkflowGra
 //
 //   - 规范化后的统一智能体工作流。
 function normalizeAgentWorkflow(workflow: AgentWorkflowDefinition): AgentWorkflowDefinition {
-  const normalizeCapabilityIds = (capabilityIds: ProjectWorkspaceCapabilityId[] | undefined) => {
-    const normalized = (capabilityIds || [])
-      .map((item) => String(item || "").trim())
-      .filter((item): item is ProjectWorkspaceCapabilityId => Boolean(getProjectWorkspaceCapabilityManifest(item)));
-    return normalized.filter((item, index) => normalized.indexOf(item) === index);
-  };
+  // 描述：
+  //
+  //   - 兼容读取历史工作流中残留的项目能力声明字段，但统一工作流模型不再保留该层配置；
+  //     项目能力统一由项目设置维护，避免同一能力在两个入口重复配置。
+  const workflowRest = { ...(workflow as AgentWorkflowDefinition & {
+    requiredCapabilities?: unknown;
+    optionalCapabilities?: unknown;
+  }) };
+  delete workflowRest.requiredCapabilities;
+  delete workflowRest.optionalCapabilities;
   const normalizedSource = DEFAULT_AGENT_WORKFLOW_ID_SET.has(String(workflow.id || "").trim())
     ? "builtin"
     : workflow.source === "builtin"
       ? "builtin"
       : "user";
   const normalizedWorkflow: AgentWorkflowDefinition = {
-    ...workflow,
+    ...workflowRest,
     id: normalizeAgentWorkflowId(String(workflow.id || "").trim()),
     agentKey: "agent",
     promptPrefix: String(workflow.promptPrefix || "").trim(),
-    requiredCapabilities: normalizeCapabilityIds(workflow.requiredCapabilities),
-    optionalCapabilities: normalizeCapabilityIds(workflow.optionalCapabilities),
     source: normalizedSource,
     templateId: String(workflow.templateId || "").trim() || undefined,
     graph: normalizeWorkflowGraph(workflow.graph),
@@ -321,12 +447,17 @@ function readSavedAgentWorkflows(): AgentWorkflowDefinition[] {
 // Params:
 //
 //   - workflows: 最新工作流列表。
-function writeSavedAgentWorkflows(workflows: AgentWorkflowDefinition[]) {
+//   - detail: 本次变更的事件负载。
+function writeSavedAgentWorkflows(
+  workflows: AgentWorkflowDefinition[],
+  detail: AgentWorkflowsUpdatedEventDetail,
+) {
   if (!IS_BROWSER) {
     return;
   }
   const serialized = JSON.stringify(workflows);
   window.localStorage.setItem(STORAGE_KEYS.AGENT_WORKFLOWS, serialized);
+  window.dispatchEvent(new CustomEvent(AGENT_WORKFLOWS_UPDATED_EVENT, { detail }));
 }
 
 // 描述：
@@ -418,6 +549,7 @@ export function saveAgentWorkflow(
     source: "user",
   });
   const all = readSavedAgentWorkflows();
+  const hasExistingWorkflow = all.some((item) => item.id === normalizedWorkflow.id);
   const next = all.map((item) => (
     item.id === normalizedWorkflow.id
       ? normalizedWorkflow
@@ -426,8 +558,18 @@ export function saveAgentWorkflow(
   if (!next.some((item) => item.id === normalizedWorkflow.id)) {
     next.push(normalizedWorkflow);
   }
-  writeSavedAgentWorkflows(next);
+  writeSavedAgentWorkflows(next, {
+    reason: hasExistingWorkflow ? "save" : "create",
+    workflowId: normalizedWorkflow.id,
+  });
   return normalizedWorkflow;
+}
+
+// 描述：
+//
+//   - 定义从模板创建工作流时的模式；`copy` 生成 `(x)` 副本名，`register` 保留模板原名并注册到已添加列表。
+interface CreateAgentWorkflowFromTemplateOptions {
+  mode?: "copy" | "register";
 }
 
 // 描述：
@@ -437,21 +579,26 @@ export function saveAgentWorkflow(
 // Params:
 //
 //   - baseId: 作为复制来源的工作流 ID。
+//   - options: 创建模式；`register` 保留模板原名，`copy` 生成 `(x)` 副本名。
 //
 // Returns:
 //
 //   - 新建的智能体工作流。
 export function createAgentWorkflowFromTemplate(
   baseId?: string,
+  options?: CreateAgentWorkflowFromTemplateOptions,
 ): AgentWorkflowDefinition {
   const normalizedBaseId = normalizeAgentWorkflowId(String(baseId || "").trim());
   const workflows = listAgentWorkflows();
   const source = workflows.find((item) => item.id === normalizedBaseId) || workflows[0];
+  const creationMode = options?.mode === "register" ? "register" : "copy";
   const nextWorkflow: AgentWorkflowDefinition = {
     ...source,
     id: `wf-agent-custom-${Date.now()}`,
-    name: translateDesktopText("{{name}} - 副本", { name: source.name }),
-    version: source.version + 1,
+    name: creationMode === "register"
+      ? String(source.name || "").trim() || translateDesktopText("未命名工作流")
+      : resolveNextWorkflowCopyName(workflows, source.name),
+    version: creationMode === "register" ? source.version : source.version + 1,
     shared: false,
     agentKey: "agent",
     source: "user",
@@ -507,7 +654,10 @@ export function deleteAgentWorkflow(workflowId: string): boolean {
     return false;
   }
   const next = all.filter((item) => item.id !== normalizedWorkflowId);
-  writeSavedAgentWorkflows(next);
+  writeSavedAgentWorkflows(next, {
+    reason: "delete",
+    workflowId: normalizedWorkflowId,
+  });
   return true;
 }
 
@@ -556,22 +706,6 @@ export function buildAgentWorkflowPrompt(
       return "";
     })
     .filter((line) => line.length > 0);
-  const capabilityLines = [
-    ...((workflow?.requiredCapabilities || []).map((item) => {
-      const manifest = getProjectWorkspaceCapabilityManifest(item);
-      return manifest ? translateDesktopText("- 必需能力：{{title}}（{{id}}）", {
-        title: manifest.title,
-        id: manifest.id,
-      }) : "";
-    })),
-    ...((workflow?.optionalCapabilities || []).map((item) => {
-      const manifest = getProjectWorkspaceCapabilityManifest(item);
-      return manifest ? translateDesktopText("- 可选能力：{{title}}（{{id}}）", {
-        title: manifest.title,
-        id: manifest.id,
-      }) : "";
-    })),
-  ].filter((line) => line.length > 0);
   const toolsetBlock = ["", ...AGENT_TOOLSET_LINES];
   if (!prefix) {
     if (skillChainLines.length === 0) {
@@ -585,7 +719,6 @@ export function buildAgentWorkflowPrompt(
     return [
       translateDesktopText("【技能链路】"),
       ...skillChainLines,
-      ...(capabilityLines.length > 0 ? ["", translateDesktopText("【项目能力声明】"), ...capabilityLines] : []),
       ...toolsetBlock,
       "",
       translateDesktopText("【用户需求】"),
@@ -595,16 +728,12 @@ export function buildAgentWorkflowPrompt(
   const skillChainBlock = skillChainLines.length > 0
     ? ["", translateDesktopText("【技能链路】"), ...skillChainLines]
     : [];
-  const capabilityBlock = capabilityLines.length > 0
-    ? ["", translateDesktopText("【项目能力声明】"), ...capabilityLines]
-    : [];
   return [
     translateDesktopText("【工作流：{{name}}】", {
       name: workflow?.name || translateDesktopText("智能体工作流"),
     }),
     prefix,
     ...skillChainBlock,
-    ...capabilityBlock,
     ...toolsetBlock,
     "",
     translateDesktopText("【用户需求】"),

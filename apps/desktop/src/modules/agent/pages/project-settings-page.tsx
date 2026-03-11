@@ -1104,13 +1104,14 @@ export function ProjectSettingsPage() {
         <AriContainer className="desk-settings-panel">
           <AriContainer className="desk-project-settings-form" padding={0}>
             <DeskSettingsRow title={t("项目名称")}>
-              <AriInput
-                value={name}
-                onChange={setName}
-                placeholder={t("请输入项目名称")}
-                maxLength={80}
-                minWidth={280}
-              />
+              <AriContainer className="desk-project-settings-control desk-project-settings-control-compact" padding={0}>
+                <AriInput
+                  value={name}
+                  onChange={setName}
+                  placeholder={t("请输入项目名称")}
+                  maxLength={80}
+                />
+              </AriContainer>
             </DeskSettingsRow>
           </AriContainer>
         </AriContainer>
@@ -1209,7 +1210,7 @@ export function ProjectSettingsPage() {
             <DeskSectionTitle title={t("依赖策略")} />
             <AriContainer className="desk-settings-panel">
               <AriContainer className="desk-project-settings-form" padding={0}>
-                <AriContainer padding={0}>
+                <AriContainer className="desk-project-settings-control desk-project-settings-control-wide" padding={0}>
                   <AriInput.TextList
                     value={dependencyRules}
                     onChange={setDependencyRules}
@@ -1217,7 +1218,6 @@ export function ProjectSettingsPage() {
                     addText={t("新增规范")}
                     allowDrag={false}
                     allowEmpty={false}
-                    minWidth={360}
                   />
                 </AriContainer>
               </AriContainer>
@@ -1347,24 +1347,26 @@ export function ProjectSettingsPage() {
             {projectProfileEditMode === "form" ? (
               <>
                 <DeskSettingsRow title={t("项目摘要")}>
-                  <AriInput.TextArea
-                    value={projectProfileDraft.summary}
-                    onChange={(value: string) => {
-                      setProjectProfileDraft((current) => ({
-                        ...current,
-                        summary: value,
-                      }));
-                    }}
-                    variant="borderless"
-                    rows={3}
-                    autoSize={{ minRows: 3, maxRows: 8 }}
-                    placeholder={t("描述项目目标、核心能力与边界。")}
-                    minWidth={360}
-                  />
+                  <AriContainer className="desk-project-settings-control desk-project-settings-control-wide" padding={0}>
+                    <AriInput.TextArea
+                      value={projectProfileDraft.summary}
+                      onChange={(value: string) => {
+                        setProjectProfileDraft((current) => ({
+                          ...current,
+                          summary: value,
+                        }));
+                      }}
+                      variant="borderless"
+                      rows={3}
+                      autoSize={{ minRows: 3, maxRows: 8 }}
+                      placeholder={t("描述项目目标、核心能力与边界。")}
+                    />
+                  </AriContainer>
                 </DeskSettingsRow>
                 {orderedKnowledgeSections.map((section) => (
-                  <AriContainer key={section.key} padding={0}>
+                  <AriContainer key={section.key} className="desk-project-settings-knowledge-section" padding={0}>
                     <AriTypography
+                      className="desk-project-settings-knowledge-description"
                       variant="caption"
                       value={section.description || t("{{title}}：请补充该分类的关键语义。", { title: section.title })}
                     />
@@ -1373,16 +1375,17 @@ export function ProjectSettingsPage() {
                         key={`${section.key}:${facet.key}`}
                         title={buildFacetRowTitle(section.title, facet.label)}
                       >
-                        <AriInput.TextList
-                          value={facet.entries || []}
-                          onChange={(value: string[]) => {
-                            handleUpdateKnowledgeSectionFacet(section.key, facet.key, value);
-                          }}
-                          itemPlaceholder={buildFacetPlaceholder(section.key, facet.key)}
-                          addText={t("新增")}
-                          allowDrag={false}
-                          minWidth={360}
-                        />
+                        <AriContainer className="desk-project-settings-control desk-project-settings-control-wide" padding={0}>
+                          <AriInput.TextList
+                            value={facet.entries || []}
+                            onChange={(value: string[]) => {
+                              handleUpdateKnowledgeSectionFacet(section.key, facet.key, value);
+                            }}
+                            itemPlaceholder={buildFacetPlaceholder(section.key, facet.key)}
+                            addText={t("新增")}
+                            allowDrag={false}
+                          />
+                        </AriContainer>
                       </DeskSettingsRow>
                     ))}
                   </AriContainer>
@@ -1391,19 +1394,20 @@ export function ProjectSettingsPage() {
             ) : (
               <>
                 <DeskSettingsRow title={t("JSON（高级）")}>
-                  <AriInput.TextArea
-                    value={projectProfileJsonDraft}
-                    onChange={(value: string) => {
-                      setProjectProfileJsonDraft(value);
-                      setProjectProfileJsonDirty(true);
-                      setProjectProfileJsonStatus("");
-                    }}
-                    variant="borderless"
-                    rows={14}
-                    autoSize={{ minRows: 12, maxRows: 24 }}
-                    placeholder={t("输入 ProjectProfile JSON，支持局部字段覆盖。")}
-                    minWidth={360}
-                  />
+                  <AriContainer className="desk-project-settings-control desk-project-settings-control-wide" padding={0}>
+                    <AriInput.TextArea
+                      value={projectProfileJsonDraft}
+                      onChange={(value: string) => {
+                        setProjectProfileJsonDraft(value);
+                        setProjectProfileJsonDirty(true);
+                        setProjectProfileJsonStatus("");
+                      }}
+                      variant="borderless"
+                      rows={14}
+                      autoSize={{ minRows: 12, maxRows: 24 }}
+                      placeholder={t("输入 ProjectProfile JSON，支持局部字段覆盖。")}
+                    />
+                  </AriContainer>
                 </DeskSettingsRow>
                 <DeskSettingsRow title={t("JSON 操作")}>
                   <AriFlex align="center" justify="flex-start" space={8}>

@@ -47,7 +47,8 @@ fn should_return_generic_status_for_unknown_dcc_runtime() {
 /// 描述：验证 Blender Runtime 会暴露“支持自动准备”的结构化元数据，便于前端模板卡片展示一键准备能力。
 #[test]
 fn should_expose_blender_auto_prepare_capability() {
-    let status = check_dcc_runtime_status_inner("blender".to_string(), None).expect("blender status");
+    let status =
+        check_dcc_runtime_status_inner("blender".to_string(), None).expect("blender status");
     assert_eq!(status.software, "blender");
     assert!(status.supports_auto_prepare);
     assert!(status.required_env_keys.is_empty());

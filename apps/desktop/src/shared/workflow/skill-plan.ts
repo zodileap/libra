@@ -30,7 +30,18 @@ export interface AgentWorkflowSkillExecutionPlan {
   items: AgentWorkflowSkillPlanItem[];
   readyItems: AgentWorkflowSkillPlanItem[];
   blockingIssues: string[];
+  activeItem: AgentWorkflowSkillPlanItem | null;
+  activeStageIndex: number;
+  totalReadyCount: number;
+  hasNextStage: boolean;
   planPrompt: string;
+}
+
+// 描述：
+//
+//   - 定义构建工作流技能执行计划时的可选参数，供运行时按阶段裁剪 Prompt。
+export interface BuildAgentWorkflowSkillExecutionPlanOptions {
+  stageIndex?: number;
 }
 
 // 描述：
@@ -94,6 +105,7 @@ function buildSkillInstructionBlock(item: AgentWorkflowSkillPlanItem): string {
 export function buildAgentWorkflowSkillExecutionPlan(
   workflow: AgentWorkflowDefinition | null | undefined,
   skills: AgentSkillItem[],
+  options?: BuildAgentWorkflowSkillExecutionPlanOptions,
 ): AgentWorkflowSkillExecutionPlan {
   const skillMap = buildAgentSkillMap(skills);
   const skillNodes = (workflow?.graph?.nodes || []).filter((node) => node.type === "skill");
@@ -103,6 +115,10 @@ export function buildAgentWorkflowSkillExecutionPlan(
       items: [],
       readyItems: [],
       blockingIssues: [],
+      activeItem: null,
+      activeStageIndex: 0,
+      totalReadyCount: 0,
+      hasNextStage: false,
       planPrompt: "",
     };
   }
@@ -168,22 +184,42 @@ export function buildAgentWorkflowSkillExecutionPlan(
       });
     });
 
-  const planPrompt = readyItems.length > 0
+  const totalReadyCount = readyItems.length;
+  const rawStageIndex = Number(options?.stageIndex ?? 0);
+  const normalizedStageIndex = totalReadyCount > 0
+    ? Math.min(Math.max(Number.isFinite(rawStageIndex) ? Math.floor(rawStageIndex) : 0, 0), totalReadyCount - 1)
+    : 0;
+  const stageScoped = typeof options?.stageIndex === "number" && totalReadyCount > 0;
+  const activeItem = totalReadyCount > 0 ? readyItems[normalizedStageIndex] : null;
+  const promptItems = stageScoped && activeItem ? [activeItem] : readyItems;
+
+  const planPrompt = promptItems.length > 0
     ? [
         translateDesktopText("【Skill 执行计划】"),
-        ...readyItems.map((item, index) => {
+        ...(stageScoped
+          ? [
+            translateDesktopText("当前阶段：{{current}}/{{total}}", {
+              current: normalizedStageIndex + 1,
+              total: totalReadyCount,
+            }),
+          ]
+          : []),
+        ...promptItems.map((item, index) => {
           const instructionText = item.instruction
             ? translateDesktopText("；节点要求：{{instruction}}", { instruction: item.instruction })
             : "";
           const descriptionText = item.skillDescription
             ? translateDesktopText("；技能说明：{{description}}", { description: item.skillDescription })
             : "";
-          return `${index + 1}. ${item.nodeTitle}：${item.skillName} (${item.skillId})${descriptionText}${instructionText}`;
+          const displayIndex = stageScoped ? normalizedStageIndex : index;
+          return `${displayIndex + 1}. ${item.nodeTitle}：${item.skillName} (${item.skillId})${descriptionText}${instructionText}`;
         }),
-        translateDesktopText("执行约束：按顺序执行技能；若任一步骤失败，先输出阻塞原因与修复建议，再决定是否继续。"),
+        stageScoped
+          ? translateDesktopText("执行约束：本轮仅执行当前阶段，禁止提前执行后续技能；若当前阶段失败，先输出阻塞原因与修复建议，再决定是否继续。")
+          : translateDesktopText("执行约束：按顺序执行技能；若任一步骤失败，先输出阻塞原因与修复建议，再决定是否继续。"),
         "",
         translateDesktopText("【Skill 定义】"),
-        ...readyItems.map((item) => buildSkillInstructionBlock(item)),
+        ...promptItems.map((item) => buildSkillInstructionBlock(item)),
       ].join("\n\n")
     : "";
 
@@ -191,6 +227,10 @@ export function buildAgentWorkflowSkillExecutionPlan(
     items,
     readyItems,
     blockingIssues,
+    activeItem,
+    activeStageIndex: normalizedStageIndex,
+    totalReadyCount,
+    hasNextStage: totalReadyCount > 0 && normalizedStageIndex + 1 < totalReadyCount,
     planPrompt,
   };
 }
