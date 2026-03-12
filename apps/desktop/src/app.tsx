@@ -49,6 +49,13 @@ import {
 	translateDesktopText,
 	useDesktopI18nController,
 } from "./shared/i18n";
+import {
+	isAiProvider,
+	isLocalCliAiProvider as isLocalCliAiProviderFromCatalog,
+	resolveAiProviderDefaultModel as resolveAiProviderDefaultModelFromCatalog,
+	resolveAiProviderDefaultMode as resolveAiProviderDefaultModeFromCatalog,
+	resolveAiProviderLabel as resolveAiProviderLabelFromCatalog,
+} from "./shared/ai-provider-catalog";
 
 // 描述：
 //
@@ -146,21 +153,12 @@ function buildSetupGateMessage(status: SetupStatus): string {
 //
 //   - 展示名称。
 function resolveAiProviderLabel(provider: AiKeyItem["provider"]): string {
-	if (provider === "codex") {
-		return "Codex CLI";
-	}
-	if (provider === "gemini-cli") {
-		return "Gemini CLI";
-	}
-	if (provider === "iflow") {
-		return "iFlow API";
-	}
-	return "Google Gemini";
+	return resolveAiProviderLabelFromCatalog(provider);
 }
 
 // 描述：
 //
-//   - 返回 Provider 的默认模型名称；当前仅为 iFlow 提供开箱即用的代码模型默认值。
+//   - 返回 Provider 的默认模型名称；具体值由共享 Provider 目录表统一维护。
 //
 // Params:
 //
@@ -170,10 +168,22 @@ function resolveAiProviderLabel(provider: AiKeyItem["provider"]): string {
 //
 //   - 默认模型名称；无需预置时返回空字符串。
 function resolveAiProviderDefaultModel(provider: AiKeyItem["provider"]): string {
-	if (provider === "iflow") {
-		return "Qwen3-Coder";
-	}
-	return "";
+	return resolveAiProviderDefaultModelFromCatalog(provider);
+}
+
+// 描述：
+//
+//   - 返回 Provider 的默认模式名称；具体值由共享 Provider 目录表统一维护。
+//
+// Params:
+//
+//   - provider: Provider 标识。
+//
+// Returns:
+//
+//   - 默认模式名称；无需预置时返回空字符串。
+function resolveAiProviderDefaultMode(provider: AiKeyItem["provider"]): string {
+	return resolveAiProviderDefaultModeFromCatalog(provider);
 }
 
 // 描述：
@@ -188,7 +198,7 @@ function resolveAiProviderDefaultModel(provider: AiKeyItem["provider"]): string 
 //
 //   - true: 本地 CLI Provider。
 function isLocalCliProvider(provider: AiKeyItem["provider"]): boolean {
-	return provider === "codex" || provider === "gemini-cli";
+	return isLocalCliAiProviderFromCatalog(provider);
 }
 
 // 描述：
@@ -209,6 +219,8 @@ function buildDefaultAiKeys(now: string): AiKeyItem[] {
 			provider: "codex",
 			providerLabel: resolveAiProviderLabel("codex"),
 			keyValue: "local-cli",
+			modelName: resolveAiProviderDefaultModel("codex"),
+			modeName: resolveAiProviderDefaultMode("codex"),
 			enabled: true,
 			updatedAt: now,
 		},
@@ -217,6 +229,8 @@ function buildDefaultAiKeys(now: string): AiKeyItem[] {
 			provider: "gemini-cli",
 			providerLabel: resolveAiProviderLabel("gemini-cli"),
 			keyValue: "local-cli",
+			modelName: resolveAiProviderDefaultModel("gemini-cli"),
+			modeName: resolveAiProviderDefaultMode("gemini-cli"),
 			enabled: false,
 			updatedAt: now,
 		},
@@ -226,6 +240,7 @@ function buildDefaultAiKeys(now: string): AiKeyItem[] {
 			providerLabel: resolveAiProviderLabel("gemini"),
 			keyValue: "",
 			modelName: resolveAiProviderDefaultModel("gemini"),
+			modeName: resolveAiProviderDefaultMode("gemini"),
 			enabled: false,
 			updatedAt: now,
 		},
@@ -235,6 +250,7 @@ function buildDefaultAiKeys(now: string): AiKeyItem[] {
 			providerLabel: resolveAiProviderLabel("iflow"),
 			keyValue: "",
 			modelName: resolveAiProviderDefaultModel("iflow"),
+			modeName: resolveAiProviderDefaultMode("iflow"),
 			enabled: false,
 			updatedAt: now,
 		},
@@ -261,8 +277,8 @@ function normalizeAiKeys(raw: unknown, now: string): AiKeyItem[] {
 
 	const normalized: AiKeyItem[] = raw
 		.map((item) => {
-			const provider = String((item as { provider?: string })?.provider || "").trim() as AiKeyItem["provider"];
-			if (provider !== "codex" && provider !== "gemini" && provider !== "gemini-cli" && provider !== "iflow") {
+			const provider = String((item as { provider?: string })?.provider || "").trim();
+			if (!isAiProvider(provider)) {
 				return null;
 			}
 			const keyValueRaw = String((item as { keyValue?: string })?.keyValue || "");
@@ -270,13 +286,16 @@ function normalizeAiKeys(raw: unknown, now: string): AiKeyItem[] {
 				? (keyValueRaw.trim() || "local-cli")
 				: keyValueRaw;
 			const defaultModelName = resolveAiProviderDefaultModel(provider);
+			const defaultModeName = resolveAiProviderDefaultMode(provider);
 			const modelName = String((item as { modelName?: string })?.modelName || "").trim() || defaultModelName;
+			const modeName = String((item as { modeName?: string })?.modeName || "").trim() || defaultModeName;
 			return {
 				id: String((item as { id?: string })?.id || `${provider}-default`),
 				provider,
 				providerLabel: String((item as { providerLabel?: string })?.providerLabel || "").trim() || resolveAiProviderLabel(provider),
 				keyValue,
 				modelName,
+				modeName,
 				enabled: Boolean((item as { enabled?: boolean })?.enabled),
 				updatedAt: String((item as { updatedAt?: string })?.updatedAt || now),
 			} as AiKeyItem;

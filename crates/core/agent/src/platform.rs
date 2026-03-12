@@ -141,7 +141,22 @@ fn resolve_cli_command_candidates_with(
                 &mut candidates,
                 CommandCandidate::new(format!("/opt/homebrew/bin/{}", bin_name)),
             );
+            push_unique_candidate(
+                &mut candidates,
+                CommandCandidate::new(format!("/usr/local/bin/{}", bin_name)),
+            );
             if let Some(home) = home.map(str::trim).filter(|value| !value.is_empty()) {
+                push_unique_candidate(
+                    &mut candidates,
+                    CommandCandidate::new(
+                        Path::new(home)
+                            .join(".volta")
+                            .join("bin")
+                            .join(bin_name)
+                            .to_string_lossy()
+                            .to_string(),
+                    ),
+                );
                 push_unique_candidate(
                     &mut candidates,
                     CommandCandidate::new(
@@ -157,6 +172,23 @@ fn resolve_cli_command_candidates_with(
         }
         PlatformTarget::Unix => {
             push_unique_candidate(&mut candidates, CommandCandidate::new(bin_name.to_string()));
+            push_unique_candidate(
+                &mut candidates,
+                CommandCandidate::new(format!("/usr/local/bin/{}", bin_name)),
+            );
+            if let Some(home) = home.map(str::trim).filter(|value| !value.is_empty()) {
+                push_unique_candidate(
+                    &mut candidates,
+                    CommandCandidate::new(
+                        Path::new(home)
+                            .join(".volta")
+                            .join("bin")
+                            .join(bin_name)
+                            .to_string_lossy()
+                            .to_string(),
+                    ),
+                );
+            }
         }
     }
 
@@ -257,7 +289,7 @@ mod tests {
         );
     }
 
-    /// 描述：验证 macOS CLI 候选会包含 Homebrew 与 pnpm 默认安装路径。
+    /// 描述：验证 macOS CLI 候选会包含 Homebrew、npm 全局目录与 Volta 默认安装路径。
     #[test]
     fn should_include_macos_specific_cli_locations() {
         let candidates = resolve_cli_command_candidates_with(
@@ -272,7 +304,29 @@ mod tests {
                 CommandCandidate::new("/custom/bin/gemini".to_string()),
                 CommandCandidate::new("gemini".to_string()),
                 CommandCandidate::new("/opt/homebrew/bin/gemini".to_string()),
+                CommandCandidate::new("/usr/local/bin/gemini".to_string()),
+                CommandCandidate::new("/Users/demo/.volta/bin/gemini".to_string()),
                 CommandCandidate::new("/Users/demo/Library/pnpm/gemini".to_string()),
+            ]
+        );
+    }
+
+    /// 描述：验证 Unix CLI 候选会补齐 Volta 与 `/usr/local/bin`，兼容图形界面未继承 shell PATH 的安装场景。
+    #[test]
+    fn should_include_unix_specific_cli_locations() {
+        let candidates = resolve_cli_command_candidates_with(
+            Some(" /custom/bin/codex "),
+            "codex",
+            Some("/home/demo"),
+            PlatformTarget::Unix,
+        );
+        assert_eq!(
+            candidates,
+            vec![
+                CommandCandidate::new("/custom/bin/codex".to_string()),
+                CommandCandidate::new("codex".to_string()),
+                CommandCandidate::new("/usr/local/bin/codex".to_string()),
+                CommandCandidate::new("/home/demo/.volta/bin/codex".to_string()),
             ]
         );
     }

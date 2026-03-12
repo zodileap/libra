@@ -94,6 +94,7 @@ export interface AiKeyItem {
   providerLabel: string;
   keyValue: string;
   modelName?: string;
+  modeName?: string;
   enabled: boolean;
   updatedAt: string;
 }

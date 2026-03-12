@@ -81,9 +81,12 @@
   --desk-user-menu-meta-color: color-mix(in srgb, var(--z-color-text) 68%, var(--z-color-border-glass));
   --desk-admin-card-active-border: color-mix(in srgb, var(--z-color-border-active) 62%, var(--z-color-border-glass));
   --desk-admin-card-active-shadow: var(--z-color-box-shadow);
-  --desk-ai-key-card-actions-width: calc(var(--z-inset) * 19);
+  --desk-ai-key-card-actions-width: calc(var(--z-inset) * 22);
+  --desk-ai-key-card-title-width: calc(var(--z-inset) * 10);
   --desk-ai-key-card-input-max-width: calc(var(--z-inset) * 20);
   --desk-ai-key-card-model-max-width: calc(var(--z-inset) * 14);
+  --desk-ai-key-card-mode-max-width: calc(var(--z-inset) * 12);
+  --desk-ai-key-card-mode-group-width: calc(var(--z-inset) * 22);
   --desk-ai-key-card-surface: color-mix(in srgb, var(--desk-container-bg) 92%, var(--z-color-bg-subtle));
   --desk-shell-width: calc(var(--z-inset) * 76);
   --desk-shell-wide-width: calc(var(--z-inset) * 88);
@@ -93,6 +96,14 @@
   --desk-session-thread-width: var(--desk-session-content-width);
   --desk-session-composer-width: var(--desk-session-content-width);
   --desk-session-thread-gap: calc(var(--z-inset) * 1.75);
+  /* 描述:
+   *
+   *   - 执行流正文/标签/尾部说明三档文本层级。
+   *   - 正文保持最高对比度，步骤标签与尾部说明逐级减弱，避免整行信息抢占同一视觉权重。
+   */
+  --desk-run-text-primary: var(--z-color-text);
+  --desk-run-text-secondary: color-mix(in srgb, var(--z-color-text) 72%, var(--z-color-border-glass));
+  --desk-run-text-tertiary: color-mix(in srgb, var(--z-color-text) 54%, var(--z-color-border-glass));
   --desk-agent-home-shell-width: var(--desk-shell-compact-width);
   --desk-panel-border-color: color-mix(in srgb, var(--z-color-border-brand) 24%, var(--z-color-border-glass));
   --desk-panel-surface: color-mix(in srgb, var(--desk-container-bg) 94%, var(--z-color-bg-tertiary));
@@ -784,12 +795,27 @@ body {
 }
 
 .desk-ai-key-card-primary {
-  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns:
+    minmax(0, var(--desk-ai-key-card-title-width))
+    minmax(0, var(--desk-ai-key-card-model-max-width))
+    minmax(0, var(--desk-ai-key-card-mode-group-width));
+  align-items: center;
+  column-gap: var(--z-inset);
+  min-width: 0;
+  width: 100%;
+}
+
+.desk-ai-key-card-title-slot,
+.desk-ai-key-card-model-slot,
+.desk-ai-key-card-mode-slot {
   min-width: 0;
 }
 
-.desk-ai-key-card-body.is-api .desk-ai-key-card-primary {
-  gap: var(--z-inset);
+.desk-ai-key-card-title-slot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
 }
 
 .desk-ai-key-card-title {
@@ -809,15 +835,52 @@ body {
   max-width: var(--desk-ai-key-card-input-max-width);
 }
 
+.desk-ai-key-card-input-wrap > * {
+  width: 100%;
+  max-width: none;
+}
+
 .desk-ai-key-card-input-stack {
   flex: 1 1 auto;
   min-width: 0;
 }
 
+.desk-ai-key-card-model-slot,
+.desk-ai-key-card-mode-slot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
 .desk-ai-key-card-model-wrap {
-  flex: 0 1 var(--desk-ai-key-card-model-max-width);
+  width: 100%;
   min-width: 0;
-  max-width: var(--desk-ai-key-card-model-max-width);
+}
+
+.desk-ai-key-card-model-wrap > * {
+  width: 100%;
+  max-width: none;
+}
+
+.desk-ai-key-card-mode-group {
+  width: 100%;
+  min-width: 0;
+}
+
+.desk-ai-key-card-mode-wrap {
+  flex: 0 1 var(--desk-ai-key-card-mode-max-width);
+  min-width: 0;
+  max-width: var(--desk-ai-key-card-mode-max-width);
+}
+
+.desk-ai-key-card-mode-wrap > * {
+  width: 100%;
+  max-width: none;
+}
+
+.desk-ai-key-card-fast-toggle {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .desk-ai-key-card-actions {
@@ -1495,6 +1558,63 @@ body {
   background: var(--desk-container-bg);
 }
 
+.desk-action-slot-todo {
+  gap: var(--z-inset-xs);
+}
+
+.desk-todo-dock-head {
+  min-width: 0;
+}
+
+.desk-todo-dock-list {
+  display: grid;
+  gap: var(--z-inset-xs);
+}
+
+.desk-todo-dock-item {
+  gap: var(--z-inset-sm);
+  padding: var(--z-inset-xs) 0;
+  border-top: var(--desk-border-width) solid color-mix(in srgb, var(--z-color-border-glass) 88%, transparent);
+}
+
+.desk-todo-dock-item:first-child {
+  border-top: none;
+}
+
+.desk-todo-dock-item-text {
+  min-width: 0;
+  flex: 1;
+}
+
+.desk-todo-dock-item-text.is-completed {
+  color: color-mix(in srgb, var(--z-color-text-secondary) 92%, var(--z-color-text));
+  text-decoration: line-through;
+}
+
+.desk-todo-dock-status {
+  flex-shrink: 0;
+  padding: 0 var(--z-inset-xs);
+  border-radius: var(--z-border-radius-sm);
+  border: var(--desk-border-width) solid color-mix(in srgb, var(--z-color-border-glass) 90%, transparent);
+  background: color-mix(in srgb, var(--z-color-bg-subtle) 92%, transparent);
+}
+
+.desk-todo-dock-status-pending {
+  color: var(--z-color-text-secondary);
+}
+
+.desk-todo-dock-status-in_progress {
+  color: var(--z-color-text);
+}
+
+.desk-todo-dock-status-completed {
+  color: var(--z-color-success);
+}
+
+.desk-todo-dock-status-blocked {
+  color: var(--z-color-danger);
+}
+
 .desk-action-slot-actions {
   flex-wrap: wrap;
 }
@@ -1595,13 +1715,23 @@ body {
 }
 
 .desk-prompt-toolbar-select-provider {
-  min-width: calc(var(--z-inset) * 11);
-  max-width: calc(var(--z-inset) * 14);
+  min-width: calc(var(--z-inset) * 9);
+  max-width: calc(var(--z-inset) * 11);
+}
+
+.desk-prompt-toolbar-select-model {
+  min-width: calc(var(--z-inset) * 10);
+  max-width: calc(var(--z-inset) * 12);
+}
+
+.desk-prompt-toolbar-select-mode {
+  min-width: calc(var(--z-inset) * 7);
+  max-width: calc(var(--z-inset) * 9);
 }
 
 .desk-prompt-toolbar-select-strategy {
-  min-width: calc(var(--z-inset) * 18);
-  max-width: calc(var(--z-inset) * 22);
+  min-width: calc(var(--z-inset) * 9);
+  max-width: calc(var(--z-inset) * 11);
 }
 
 .desk-prompt-icon-btn {
@@ -1619,9 +1749,24 @@ body {
   gap: var(--z-inset-sm);
 }
 
+.desk-session-token-usage {
+  color: color-mix(in srgb, var(--z-color-text) 78%, var(--z-color-border-brand));
+  white-space: nowrap;
+}
+
 .desk-session-strategy-modal-body {
   display: grid;
   gap: var(--z-inset-sm);
+}
+
+.desk-session-settings-modal-body {
+  display: grid;
+  gap: var(--z-inset);
+}
+
+.desk-session-settings-field {
+  display: grid;
+  gap: var(--z-inset-xs);
 }
 
 .desk-session-strategy-list {
@@ -1894,44 +2039,92 @@ body {
 }
 
 .desk-run-intro {
-  color: var(--z-color-text);
+  color: var(--desk-run-text-primary);
 }
 
 .desk-run-step {
   font-size: var(--z-font-size-sm);
   line-height: var(--z-line-height-sm, var(--z-line-height));
-  color: color-mix(in srgb, var(--z-color-text) 56%, var(--z-color-border-glass));
+  color: var(--desk-run-text-primary);
+}
+
+.desk-run-step-body {
+  width: 100%;
+  font-size: var(--z-font-size-sm);
+  line-height: var(--z-line-height-sm, var(--z-line-height));
+  color: var(--desk-run-text-primary);
+}
+
+.desk-run-step-body .desk-md-text-block {
+  gap: var(--z-inset-xs);
+}
+
+.desk-run-step-body .desk-md-paragraph,
+.desk-run-step-body .desk-md-heading,
+.desk-run-step-body .desk-md-list li {
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.desk-run-step-body .desk-md-list {
+  gap: var(--z-inset-xs);
+  list-style-position: inside;
+  padding-inline-start: 0;
+}
+
+.desk-run-step-body .desk-md-quote {
+  border-radius: 0;
+  background: color-mix(in srgb, var(--desk-container-bg) 92%, var(--z-color-bg-subtle));
 }
 
 .desk-run-step-rich {
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--z-inset-sm);
   gap: calc(var(--z-inset-xs) * 0.5);
+  color: var(--desk-run-text-tertiary);
 }
 
 .desk-run-step-prefix {
+  display: inline-flex;
+  align-items: center;
+  min-inline-size: calc(var(--z-font-size-sm) * 4.5);
   font-weight: var(--z-font-weight-semibold, 600);
-  color: color-mix(in srgb, var(--z-color-text) 86%, var(--z-color-border-glass));
+  color: var(--desk-run-text-secondary);
 }
 
 .desk-run-step-approval-label {
+  display: inline-flex;
+  align-items: center;
+  min-inline-size: calc(var(--z-font-size-sm) * 4.5);
   font-weight: var(--z-font-weight-semibold, 600);
-  color: color-mix(in srgb, var(--z-color-text) 86%, var(--z-color-border-glass));
+  color: var(--desk-run-text-secondary);
 }
 
 .desk-run-step-approval-label-rejected {
   color: var(--z-color-danger);
 }
 
+.desk-run-step-suffix {
+  color: var(--desk-run-text-tertiary);
+}
+
 .desk-run-step-file-link {
   display: inline-flex;
   align-items: center;
-  color: var(--z-color-primary);
+  color: var(--desk-run-text-tertiary);
   text-decoration: underline;
   text-decoration-thickness: var(--desk-border-width);
   text-underline-offset: calc(var(--z-inset-xs) * 0.3);
   cursor: pointer;
+}
+
+.desk-run-step-file-link:hover {
+  color: var(--desk-run-text-primary);
 }
 
 .desk-run-step-file-link:focus-visible {
@@ -1972,6 +2165,10 @@ body {
   background: color-mix(in srgb, var(--z-color-border-brand) 8%, transparent);
 }
 
+.desk-run-segment-detail-toggle-rich {
+  padding: 0;
+}
+
 .desk-run-segment-detail-toggle-content {
   min-width: 0;
   flex: 1;
@@ -1983,6 +2180,22 @@ body {
   color: inherit;
   font: inherit;
   padding: var(--z-inset-sm);
+}
+
+/* 描述:
+ *
+ *   - 无详情但带结构化前缀的静态步骤需和可展开步骤保持同一层级的左右内边距与布局基线。
+ *   - 该容器复用 detail-toggle 的 padding / flex 壳，仅移除点击与悬浮态。
+ */
+.desk-run-segment-static-step-rich {
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--z-inset-sm);
+  text-align: left;
 }
 
 .desk-run-thinking-indicator {
@@ -2039,6 +2252,18 @@ body {
 
 .desk-run-step-running {
   animation: desk-run-step-wave var(--z-transition-duration, 1.2s) ease-in-out infinite;
+}
+
+.desk-run-stage-divider {
+  width: 100%;
+}
+
+/* 描述:
+ *
+ *   - 阶段分隔线复用“已完成/执行中断”分割线的结构，但保持静态展示，不响应点击。
+ */
+.desk-run-divider-static {
+  cursor: default;
 }
 
 .desk-run-divider {
@@ -2466,9 +2691,9 @@ body {
     align-items: stretch;
   }
 
-  .desk-ai-key-card-body.is-api .desk-ai-key-card-primary {
-    align-items: stretch;
-    flex-direction: column;
+  .desk-ai-key-card-primary {
+    grid-template-columns: 1fr;
+    row-gap: var(--z-inset-sm);
   }
 
   .desk-ai-key-card-input-wrap {
@@ -2485,6 +2710,21 @@ body {
   .desk-ai-key-card-model-wrap {
     width: 100%;
     max-width: none;
+  }
+
+  .desk-ai-key-card-mode-group {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .desk-ai-key-card-mode-wrap {
+    width: 100%;
+    max-width: none;
+  }
+
+  .desk-ai-key-card-fast-toggle {
+    width: 100%;
+    justify-content: space-between;
   }
 
   .desk-ai-key-card-actions,

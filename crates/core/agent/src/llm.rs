@@ -33,6 +33,7 @@ pub struct LlmRunResult {
 pub struct LlmProviderConfig {
     pub api_key: Option<String>,
     pub model: Option<String>,
+    pub mode: Option<String>,
 }
 
 impl LlmUsage {
@@ -233,12 +234,22 @@ pub(crate) fn call_model_with_policy_and_stream(
     on_progress: Option<&mut LlmProgressObserver>,
 ) -> Result<LlmRunResult, LlmGatewayError> {
     match provider {
-        LlmProvider::CodexCli => {
-            providers::codex_cli::call_with_retry(prompt, workdir, policy, on_chunk, on_progress)
-        }
-        LlmProvider::Gemini => {
-            providers::gemini::call_with_retry(prompt, workdir, policy, on_chunk, on_progress)
-        }
+        LlmProvider::CodexCli => providers::codex_cli::call_with_retry(
+            prompt,
+            workdir,
+            policy,
+            provider_config,
+            on_chunk,
+            on_progress,
+        ),
+        LlmProvider::Gemini => providers::gemini::call_with_retry(
+            prompt,
+            workdir,
+            policy,
+            provider_config,
+            on_chunk,
+            on_progress,
+        ),
         LlmProvider::Iflow => providers::iflow::call_with_retry(
             prompt,
             workdir,
@@ -252,7 +263,9 @@ pub(crate) fn call_model_with_policy_and_stream(
             "core.agent.llm.provider_unknown",
             "unknown llm provider",
         )
-        .with_suggestion("请将 provider 设置为 codex / codex-cli、gemini / gemini-cli 或 iflow / iflow-api")),
+        .with_suggestion(
+            "请将 provider 设置为 codex / codex-cli、gemini / gemini-cli 或 iflow / iflow-api",
+        )),
     }
 }
 

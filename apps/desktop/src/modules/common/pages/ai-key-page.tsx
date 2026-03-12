@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { AriButton, AriContainer, AriFlex, AriInput, AriMessage, AriSwitch, AriTypography } from "@aries-kit/react";
+import { AriButton, AriContainer, AriFlex, AriInput, AriMessage, AriModal, AriSelect, AriSwitch, AriTooltip, AriTypography } from "@aries-kit/react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AiKeyItem } from "../types";
 import {
@@ -10,6 +10,18 @@ import {
 } from "../../../widgets/settings-primitives";
 import { useDesktopI18n } from "../../../shared/i18n";
 import { useDesktopHeaderSlot } from "../../../widgets/app-header/header-slot-context";
+import {
+  composeAiProviderModeValue,
+  isLocalCliAiProvider,
+  mergeAiProviderSelectOptions,
+  resolveAiProviderFastModeEnabled,
+  resolveAiProviderModeOptions,
+  resolveAiProviderModeSelectValue,
+  resolveAiProviderModelOptions,
+  supportsAiProviderFastModeToggle,
+  supportsAiProviderModeSelection,
+  supportsAiProviderModelSelection,
+} from "../../../shared/ai-provider-catalog";
 
 // 描述:
 //
@@ -44,12 +56,12 @@ interface LocalCliHealthResponse {
 //
 //   - true: 本地 CLI Provider。
 function isLocalCliProvider(provider: AiKeyItem["provider"]): boolean {
-  return provider === "codex" || provider === "gemini-cli";
+  return isLocalCliAiProvider(provider);
 }
 
 // 描述：
 //
-//   - 判断当前 Provider 是否需要额外填写模型名称；当前仅 iFlow API 走固定基地址 + 可配置模型名方案。
+//   - 判断当前 Provider 是否需要额外填写模型名称；当前 Codex CLI 与 iFlow API 都支持单独指定模型。
 //
 // Params:
 //
@@ -59,7 +71,22 @@ function isLocalCliProvider(provider: AiKeyItem["provider"]): boolean {
 //
 //   - true: 需要展示模型名称输入框。
 function shouldRenderModelInput(provider: AiKeyItem["provider"]): boolean {
-  return provider === "iflow";
+  return supportsAiProviderModelSelection(provider);
+}
+
+// 描述：
+//
+//   - 判断当前 Provider 是否需要额外填写模式；当前仅 Codex CLI 暴露推理强度类模式配置。
+//
+// Params:
+//
+//   - provider: Provider 标识。
+//
+// Returns:
+//
+//   - true: 需要展示模式输入框。
+function shouldRenderModeInput(provider: AiKeyItem["provider"]): boolean {
+  return supportsAiProviderModeSelection(provider);
 }
 
 // 描述：
@@ -142,31 +169,42 @@ interface AiKeyProviderCardProps {
   item: AiKeyItem;
   isDefault: boolean;
   checking: boolean;
+  modelOptions: Array<{ value: string; label: string }>;
+  modeOptions: Array<{ value: string; label: string }>;
   onToggleEnabled: (checked: boolean) => void;
   onMoveAsPrimary: () => void;
-  onUpdateKeyValue: (value: string) => void;
+  onEditKey: (() => void) | null;
   onUpdateModelName: (value: string) => void;
+  onUpdateModeName: (value: string) => void;
+  onUpdateFastModeEnabled: (enabled: boolean) => void;
   onCheckCli: (() => void) | null;
 }
 
 // 描述：
 //
 //   - 渲染 AI Key Provider 专用卡片。
-//   - 本地 CLI Provider 采用“名称 + 启停/默认/检测”单行布局。
-//   - API Provider 采用“名称 + 输入框 + 启停/默认”单行布局。
+//   - 本地 CLI Provider 采用“名称 + 模型/模式选择 + 启停/默认/检测”单行布局。
+//   - API Provider 采用“名称 + 模型选择 + 启停/Key/默认”单行布局；Key 编辑收敛到弹窗中。
 function AiKeyProviderCard({
   item,
   isDefault,
   checking,
+  modelOptions,
+  modeOptions,
   onToggleEnabled,
   onMoveAsPrimary,
-  onUpdateKeyValue,
+  onEditKey,
   onUpdateModelName,
+  onUpdateModeName,
+  onUpdateFastModeEnabled,
   onCheckCli,
 }: AiKeyProviderCardProps) {
   const { t } = useDesktopI18n();
   const localCliProvider = isLocalCliProvider(item.provider);
   const showModelInput = shouldRenderModelInput(item.provider);
+  const showModeInput = shouldRenderModeInput(item.provider);
+  const showFastModeToggle = supportsAiProviderFastModeToggle(item.provider);
+  const hasConfiguredKey = Boolean(String(item.keyValue || "").trim()) && !localCliProvider;
   return (
     <AriContainer className="desk-ai-key-card" padding={0}>
       <AriFlex
@@ -175,35 +213,70 @@ function AiKeyProviderCard({
         justify="flex-start"
         space={12}
       >
-        <AriFlex className="desk-ai-key-card-primary" align="center" space={12}>
-          <AriTypography
-            className="desk-ai-key-card-title"
-            variant="body"
-            value={item.providerLabel}
-          />
-          {!localCliProvider ? (
-            <AriFlex className="desk-ai-key-card-input-stack" align="center" space={8}>
-              <AriContainer className="desk-ai-key-card-input-wrap" padding={0}>
-                <AriInput
-                  className="desk-ai-key-card-input"
-                  value={item.keyValue}
-                  onChange={onUpdateKeyValue}
-                  placeholder={t("输入 {{providerLabel}} Key", { providerLabel: item.providerLabel })}
+        <AriContainer className="desk-ai-key-card-primary" padding={0}>
+          <AriContainer className="desk-ai-key-card-title-slot" padding={0}>
+            <AriTypography
+              className="desk-ai-key-card-title"
+              variant="body"
+              value={item.providerLabel}
+            />
+          </AriContainer>
+          <AriContainer className="desk-ai-key-card-model-slot" padding={0}>
+            {showModelInput ? (
+              <AriContainer className="desk-ai-key-card-model-wrap" padding={0}>
+                <AriSelect
+                  value={String(item.modelName || "").trim() || undefined}
+                  options={modelOptions}
+                  placeholder={t("选择 {{providerLabel}} 模型", { providerLabel: item.providerLabel })}
+                  onChange={(value) => {
+                    if (Array.isArray(value)) {
+                      return;
+                    }
+                    onUpdateModelName(String(value || "").trim());
+                  }}
                 />
               </AriContainer>
-              {showModelInput ? (
-                <AriContainer className="desk-ai-key-card-model-wrap" padding={0}>
-                  <AriInput
-                    className="desk-ai-key-card-input"
-                    value={String(item.modelName || "")}
-                    onChange={onUpdateModelName}
-                    placeholder={t("输入 {{providerLabel}} 模型名", { providerLabel: item.providerLabel })}
-                  />
-                </AriContainer>
-              ) : null}
-            </AriFlex>
-          ) : null}
-        </AriFlex>
+            ) : null}
+          </AriContainer>
+          <AriContainer className="desk-ai-key-card-mode-slot" padding={0}>
+            {(showModeInput || showFastModeToggle) ? (
+              <AriFlex className="desk-ai-key-card-mode-group" align="center" justify="flex-start" space={8}>
+                {showModeInput ? (
+                  <AriContainer className="desk-ai-key-card-mode-wrap" padding={0}>
+                    <AriSelect
+                      value={resolveAiProviderModeSelectValue(
+                        item.provider,
+                        String(item.modeName || ""),
+                      ) || undefined}
+                      options={modeOptions}
+                      placeholder={t("选择 {{providerLabel}} 模式", { providerLabel: item.providerLabel })}
+                      onChange={(value) => {
+                        if (Array.isArray(value)) {
+                          return;
+                        }
+                        onUpdateModeName(String(value || "").trim());
+                      }}
+                    />
+                  </AriContainer>
+                ) : null}
+                {showFastModeToggle ? (
+                  <AriFlex
+                    className="desk-ai-key-card-fast-toggle"
+                    align="center"
+                    justify="flex-start"
+                    space={6}
+                  >
+                    <AriTypography variant="caption" value={t("Fast 模式")} />
+                    <AriSwitch
+                      checked={resolveAiProviderFastModeEnabled(item.provider, String(item.modeName || ""))}
+                      onChange={onUpdateFastModeEnabled}
+                    />
+                  </AriFlex>
+                ) : null}
+              </AriFlex>
+            ) : null}
+          </AriContainer>
+        </AriContainer>
         <AriFlex className="desk-ai-key-card-actions" align="center" justify="flex-start" space={8}>
           <AriFlex className="desk-ai-key-card-toggle" align="center" justify="flex-start" space={8}>
             <AriTypography
@@ -216,6 +289,26 @@ function AiKeyProviderCard({
               onChange={onToggleEnabled}
             />
           </AriFlex>
+          {!localCliProvider && onEditKey ? (
+            <AriTooltip
+              content={hasConfiguredKey
+                ? t("编辑 {{providerLabel}} Key", { providerLabel: item.providerLabel })
+                : t("设置 {{providerLabel}} Key", { providerLabel: item.providerLabel })}
+              position="top"
+              minWidth={0}
+              matchTriggerWidth={false}
+            >
+              <AriButton
+                type="text"
+                icon="vpn_key"
+                color={hasConfiguredKey ? "brand" : "default"}
+                aria-label={hasConfiguredKey
+                  ? t("编辑 {{providerLabel}} Key", { providerLabel: item.providerLabel })
+                  : t("设置 {{providerLabel}} Key", { providerLabel: item.providerLabel })}
+                onClick={onEditKey}
+              />
+            </AriTooltip>
+          ) : null}
           <AriButton
             type="default"
             icon="star"
@@ -247,6 +340,8 @@ export function AiKeyPage({ aiKeys, onAiKeysChange }: AiKeyPageProps) {
   const { formatDateTime, t } = useDesktopI18n();
   const headerSlotElement = useDesktopHeaderSlot();
   const [checkingProviderIds, setCheckingProviderIds] = useState<Record<string, boolean>>({});
+  const [editingKeyProviderId, setEditingKeyProviderId] = useState("");
+  const [draftKeyValue, setDraftKeyValue] = useState("");
   // 描述:
   //
   //   - 生成统一格式的更新时间文本。
@@ -291,6 +386,57 @@ export function AiKeyPage({ aiKeys, onAiKeysChange }: AiKeyPageProps) {
           : item
       )
     );
+  };
+
+  // 描述：
+  //
+  //   - 当前正在编辑 Key 的 Provider 项；关闭弹窗时会回到 null。
+  const editingKeyItem = useMemo(
+    () => aiKeys.find((item) => item.id === editingKeyProviderId) || null,
+    [aiKeys, editingKeyProviderId],
+  );
+
+  // 描述：
+  //
+  //   - 打开指定 Provider 的 Key 编辑弹窗，并回填当前已保存值。
+  //
+  // Params:
+  //
+  //   - item: 目标 Provider 配置。
+  const handleOpenKeyEditor = (item: AiKeyItem) => {
+    if (isLocalCliProvider(item.provider)) {
+      return;
+    }
+    setEditingKeyProviderId(item.id);
+    setDraftKeyValue(String(item.keyValue || ""));
+  };
+
+  // 描述：
+  //
+  //   - 关闭 Key 编辑弹窗并清空草稿。
+  const handleCloseKeyEditor = () => {
+    setEditingKeyProviderId("");
+    setDraftKeyValue("");
+  };
+
+  // 描述：
+  //
+  //   - 确认保存当前 Key 草稿，并给出统一成功反馈。
+  const handleConfirmKeyEditor = () => {
+    if (!editingKeyItem) {
+      return;
+    }
+    patchItem(editingKeyItem.id, {
+      keyValue: draftKeyValue,
+    });
+    AriMessage.success({
+      content: t("{{providerLabel}} Key 已保存。", {
+        providerLabel: editingKeyItem.providerLabel,
+      }),
+      duration: 2200,
+      showClose: true,
+    });
+    handleCloseKeyEditor();
   };
 
   // 描述：
@@ -356,6 +502,36 @@ export function AiKeyPage({ aiKeys, onAiKeysChange }: AiKeyPageProps) {
   return (
     <AriContainer className="desk-content" showBorderRadius={false}>
       {headerSlotElement ? createPortal(headerNode, headerSlotElement) : null}
+      <AriModal
+        visible={Boolean(editingKeyItem)}
+        title={t("设置 {{providerLabel}} Key", {
+          providerLabel: editingKeyItem?.providerLabel || "",
+        })}
+        onClose={handleCloseKeyEditor}
+        footer={(
+          <AriFlex justify="flex-end" align="center" space={8}>
+            <AriButton
+              type="default"
+              label={t("取消")}
+              onClick={handleCloseKeyEditor}
+            />
+            <AriButton
+              type="default"
+              color="brand"
+              label={t("保存 Key")}
+              onClick={handleConfirmKeyEditor}
+            />
+          </AriFlex>
+        )}
+      >
+        <AriInput
+          value={draftKeyValue}
+          onChange={setDraftKeyValue}
+          placeholder={t("输入 {{providerLabel}} Key", {
+            providerLabel: editingKeyItem?.providerLabel || "",
+          })}
+        />
+      </AriModal>
       <AriContainer className="desk-settings-shell">
         <DeskSectionTitle title={t("Providers")} />
         <AriContainer className="desk-settings-panel">
@@ -372,10 +548,32 @@ export function AiKeyPage({ aiKeys, onAiKeysChange }: AiKeyPageProps) {
                   item={item}
                   isDefault={index === 0}
                   checking={checkingProviderIds[item.id] === true}
+                  modelOptions={mergeAiProviderSelectOptions(
+                    resolveAiProviderModelOptions(item.provider),
+                    String(item.modelName || ""),
+                  )}
+                  modeOptions={mergeAiProviderSelectOptions(
+                    resolveAiProviderModeOptions(item.provider),
+                    resolveAiProviderModeSelectValue(item.provider, String(item.modeName || "")),
+                  )}
                   onToggleEnabled={(checked) => patchItem(item.id, { enabled: checked })}
                   onMoveAsPrimary={() => moveAsPrimary(item.id)}
-                  onUpdateKeyValue={(next) => patchItem(item.id, { keyValue: next })}
+                  onEditKey={!isLocalCliProvider(item.provider) ? () => handleOpenKeyEditor(item) : null}
                   onUpdateModelName={(next) => patchItem(item.id, { modelName: next })}
+                  onUpdateModeName={(next) => patchItem(item.id, {
+                    modeName: composeAiProviderModeValue(
+                      item.provider,
+                      next,
+                      resolveAiProviderFastModeEnabled(item.provider, String(item.modeName || "")),
+                    ),
+                  })}
+                  onUpdateFastModeEnabled={(enabled) => patchItem(item.id, {
+                    modeName: composeAiProviderModeValue(
+                      item.provider,
+                      resolveAiProviderModeSelectValue(item.provider, String(item.modeName || "")),
+                      enabled,
+                    ),
+                  })}
                   onCheckCli={isLocalCliProvider(item.provider) ? () => {
                     void checkCliProvider(item);
                   } : null}

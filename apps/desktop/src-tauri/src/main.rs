@@ -18,6 +18,7 @@ use dcc_runtime::{
     check_dcc_runtime_status_inner, prepare_dcc_runtime_inner, DccRuntimeStatusResponse,
 };
 use libra_agent_core::{
+    llm::LlmUsage,
     platform::{
         resolve_codex_command_candidates, resolve_gemini_command_candidates,
         resolve_python_command_candidates, CommandCandidate,
@@ -201,7 +202,10 @@ const APIFOX_MCP_PACKAGE_VERSION: &str = "latest";
 #[derive(Serialize)]
 struct AgentRunResponse {
     trace_id: String,
+    control: String,
     message: String,
+    display_message: String,
+    usage: Option<LlmUsage>,
     actions: Vec<String>,
     exported_file: Option<String>,
     steps: Vec<ProtocolStepRecord>,
@@ -693,6 +697,7 @@ async fn run_agent_command(
     provider: Option<String>,
     provider_api_key: Option<String>,
     provider_model: Option<String>,
+    provider_mode: Option<String>,
     prompt: String,
     trace_id: Option<String>,
     project_name: Option<String>,
@@ -710,6 +715,7 @@ async fn run_agent_command(
                 provider,
                 provider_api_key,
                 provider_model,
+                provider_mode,
                 prompt,
                 trace_id,
                 project_name,
@@ -840,6 +846,7 @@ fn run_agent_command_inner(
     provider: Option<String>,
     provider_api_key: Option<String>,
     provider_model: Option<String>,
+    provider_mode: Option<String>,
     prompt: String,
     trace_id: Option<String>,
     project_name: Option<String>,
@@ -995,6 +1002,7 @@ fn run_agent_command_inner(
             provider: provider.unwrap_or_else(|| "codex".to_string()),
             provider_api_key,
             provider_model,
+            provider_mode,
             prompt,
             project_name,
             model_export_enabled: model_export_enabled.unwrap_or(false),
@@ -1279,7 +1287,10 @@ fn run_agent_command_inner(
 
     Ok(AgentRunResponse {
         trace_id,
+        control: result.control,
         message: result.message,
+        display_message: result.display_message,
+        usage: result.usage,
         actions: result.actions,
         exported_file: result.exported_file,
         steps: result.steps,

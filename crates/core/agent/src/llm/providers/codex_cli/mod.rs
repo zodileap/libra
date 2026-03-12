@@ -1,7 +1,7 @@
 use crate::llm::{
     should_abort_for_output_idle, should_emit_waiting_progress, LlmGatewayError, LlmGatewayPolicy,
-    LlmProgressObserver, LlmProvider, LlmRunResult, LlmTextStreamObserver, LlmUsage,
-    LLM_RUNTIME_TAG,
+    LlmProgressObserver, LlmProvider, LlmProviderConfig, LlmRunResult, LlmTextStreamObserver,
+    LlmUsage, LLM_RUNTIME_TAG,
 };
 use crate::platform::{resolve_codex_command_candidates, CommandCandidate};
 use crate::workflow::{run_step_with_retry, DefaultWorkflowRecoveryHook};
@@ -15,6 +15,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+const CODEX_FAST_MODE_PREFIX: &str = "fast";
+const CODEX_FAST_SERVICE_TIER: &str = "priority";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CodexOutputStreamKind {
     Stdout,
@@ -25,6 +28,12 @@ enum CodexOutputStreamKind {
 struct CodexOutputChunk {
     stream: CodexOutputStreamKind,
     text: String,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct CodexModeSelection {
+    reasoning_effort: Option<String>,
+    service_tier: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -69,6 +78,7 @@ pub fn call_with_retry(
     prompt: &str,
     workdir: Option<&str>,
     policy: LlmGatewayPolicy,
+    provider_config: Option<&LlmProviderConfig>,
     mut on_chunk: Option<&mut LlmTextStreamObserver>,
     mut on_progress: Option<&mut LlmProgressObserver>,
 ) -> Result<LlmRunResult, LlmGatewayError> {
@@ -79,6 +89,7 @@ pub fn call_with_retry(
             workdir,
             policy.timeout_secs,
             attempt,
+            provider_config,
             on_chunk.as_deref_mut(),
             on_progress.as_deref_mut(),
         )
@@ -91,6 +102,7 @@ fn call_once(
     workdir: Option<&str>,
     timeout_secs: u64,
     attempt: u8,
+    provider_config: Option<&LlmProviderConfig>,
     mut on_chunk: Option<&mut LlmTextStreamObserver>,
     mut on_progress: Option<&mut LlmProgressObserver>,
 ) -> Result<LlmRunResult, LlmGatewayError> {
@@ -104,6 +116,7 @@ fn call_once(
         output_path.as_str(),
         candidates.as_slice(),
         attempt,
+        provider_config,
     )?;
 
     let stdout = child.stdout.take().ok_or_else(|| {
@@ -286,11 +299,13 @@ fn spawn_codex_process(
     output_path: &str,
     candidates: &[CommandCandidate],
     attempt: u8,
+    provider_config: Option<&LlmProviderConfig>,
 ) -> Result<(Child, String), LlmGatewayError> {
     let provider = LlmProvider::CodexCli;
     let mut spawn_errors: Vec<String> = Vec::new();
     for candidate in candidates {
         let mut command = candidate.build_command();
+        let resolved_mode = resolve_codex_mode_selection(provider_config);
         command
             .arg("exec")
             .arg("--skip-git-repo-check")
@@ -298,7 +313,23 @@ fn spawn_codex_process(
             .arg("read-only")
             .arg("--json")
             .arg("--output-last-message")
-            .arg(output_path)
+            .arg(output_path);
+        if let Some(model) = resolve_codex_model(provider_config) {
+            command.arg("-m").arg(model);
+        }
+        if let Some(service_tier) = resolved_mode.service_tier.as_deref() {
+            command.arg("-c").arg(format!(
+                "service_tier=\"{}\"",
+                escape_codex_config_string(service_tier)
+            ));
+        }
+        if let Some(mode) = resolved_mode.reasoning_effort.as_deref() {
+            command.arg("-c").arg(format!(
+                "model_reasoning_effort=\"{}\"",
+                escape_codex_config_string(mode)
+            ));
+        }
+        command
             .arg(prompt)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -326,6 +357,56 @@ fn spawn_codex_process(
     .with_suggestion("确认 Codex CLI 已安装并可执行，或通过 ZODILEAP_CODEX_BIN 指定二进制路径")
     .with_retryable(false)
     .with_attempts(attempt))
+}
+
+fn resolve_codex_model(provider_config: Option<&LlmProviderConfig>) -> Option<&str> {
+    provider_config
+        .and_then(|config| config.model.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+/// 描述：解析 Desktop 透传的 Codex 模式值，拆分成 reasoning effort 与 Fast 对应的 service tier。
+///
+/// Params:
+///
+///   - provider_config: Provider 运行时配置。
+///
+/// Returns:
+///
+///   - 0: 已拆分好的模式配置。
+fn resolve_codex_mode_selection(provider_config: Option<&LlmProviderConfig>) -> CodexModeSelection {
+    let normalized_mode = provider_config
+        .and_then(|config| config.mode.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase);
+    let Some(mode) = normalized_mode else {
+        return CodexModeSelection::default();
+    };
+    if mode == CODEX_FAST_MODE_PREFIX {
+        return CodexModeSelection {
+            reasoning_effort: None,
+            service_tier: Some(CODEX_FAST_SERVICE_TIER.to_string()),
+        };
+    }
+    if let Some(reasoning_effort) = mode.strip_prefix(&format!("{}:", CODEX_FAST_MODE_PREFIX)) {
+        let normalized_reasoning_effort = reasoning_effort.trim();
+        return CodexModeSelection {
+            reasoning_effort: (!normalized_reasoning_effort.is_empty())
+                .then(|| normalized_reasoning_effort.to_string()),
+            service_tier: Some(CODEX_FAST_SERVICE_TIER.to_string()),
+        };
+    }
+    CodexModeSelection {
+        reasoning_effort: Some(mode),
+        service_tier: None,
+    }
+}
+
+/// 描述：对 Codex CLI `-c key="value"` 形式的 TOML 字符串值做最小转义，避免双引号和反斜杠打断配置。
+fn escape_codex_config_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 /// 描述：在 CLI 尚未返回首个 stdout 分片时，按节流窗口向上层发送等待进度。
@@ -624,5 +705,37 @@ Warning: no last agent message"#;
         assert!(first.is_empty());
         assert_eq!(second, vec!["hello".to_string()]);
         assert!(tail.is_empty());
+    }
+
+    #[test]
+    fn should_map_fast_mode_to_priority_service_tier() {
+        let selection = resolve_codex_mode_selection(Some(&LlmProviderConfig {
+            api_key: None,
+            model: None,
+            mode: Some("fast".to_string()),
+        }));
+        assert_eq!(
+            selection,
+            CodexModeSelection {
+                reasoning_effort: None,
+                service_tier: Some("priority".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn should_split_fast_reasoning_mode_into_service_tier_and_effort() {
+        let selection = resolve_codex_mode_selection(Some(&LlmProviderConfig {
+            api_key: None,
+            model: None,
+            mode: Some("fast:high".to_string()),
+        }));
+        assert_eq!(
+            selection,
+            CodexModeSelection {
+                reasoning_effort: Some("high".to_string()),
+                service_tier: Some("priority".to_string()),
+            }
+        );
     }
 }

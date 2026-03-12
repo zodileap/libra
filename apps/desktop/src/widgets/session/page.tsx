@@ -26,16 +26,24 @@ import {
   getProjectWorkspaceGroupById,
   getProjectWorkspaceIdBySessionId,
   getSessionDebugArtifact,
+  getSessionAgentContextMessages,
   getSessionRunState,
   getSessionMessages,
   removeSessionDebugArtifact,
+  resolveAgentSessionSelectedAiModel,
+  resolveAgentSessionSelectedAiMode,
   resolveAgentSessionSelectedAiProvider,
+  resolveAgentSessionCumulativeTokenUsage,
   resolveAgentSessionTitle,
   resolveAgentSessionSelectedDccSoftware,
+  increaseAgentSessionCumulativeTokenUsage,
+  rememberAgentSessionSelectedAiModel,
+  rememberAgentSessionSelectedAiMode,
   rememberAgentSessionSelectedAiProvider,
   rememberAgentSessionSelectedDccSoftware,
   removeSessionRunState,
   SESSION_TITLE_UPDATED_EVENT,
+  upsertSessionAgentContextMessages,
   upsertSessionRunState,
   upsertSessionDebugArtifact,
   upsertSessionMessages,
@@ -87,8 +95,20 @@ import {
 import { useDesktopHeaderSlot } from "../app-header/header-slot-context";
 import { resolveDesktopTextVariants, translateDesktopText, useDesktopI18n } from "../../shared/i18n";
 import { DESKTOP_TEXT_VARIANT_GROUPS } from "../../shared/i18n/messages";
+import {
+  isAiProvider,
+  mergeAiProviderSelectOptions,
+  resolveAiProviderDefaultMode,
+  resolveAiProviderDefaultModel,
+  resolveAiProviderModeOptions,
+  resolveAiProviderModeSelectValue,
+  resolveAiProviderModelOptions,
+  supportsAiProviderModeSelection,
+  supportsAiProviderModelSelection,
+} from "../../shared/ai-provider-catalog";
 import type {
   AgentWorkflowDefinition,
+  AgentWorkflowSkillPlanItem,
   WorkflowUiHint,
 } from "../../shared/workflow";
 import { resolveSessionUiConfig, type SessionAgentUiConfig } from "./config";
@@ -97,12 +117,14 @@ import {
   buildSessionSkillPrompt,
   AGENT_SKILL_SELECTED_KEY,
   AGENT_WORKFLOW_SELECTED_KEY,
+  filterWorkflowStageContextMessages,
   pruneAssistantRetryTail,
   readSelectedSkillIds,
   readSelectedWorkflowId,
   type MessageItem,
   type RetryTailPruneResult,
   type TraceRecord,
+  upsertAssistantMessageBeforeAnchorById,
   upsertAssistantMessageById,
 } from "./prompt-utils";
 import { SessionRunSegmentItem } from "./run-segment";
@@ -149,6 +171,7 @@ interface ExecutePromptOptions {
   skipDependencyRuleCheck?: boolean;
   replaceAssistantMessageId?: string;
   contextMessages?: MessageItem[];
+  displayMessages?: MessageItem[];
   resolvedDccSoftware?: string;
   resolvedCrossDccSoftwares?: string[];
   skipDccSelectionPrompt?: boolean;
@@ -161,7 +184,14 @@ interface ExecutePromptOptions {
 //   - 定义通用智能体执行响应结构，兼容动作、步骤、事件与资产返回。
 interface AgentRunResponse {
   trace_id: string;
+  control?: "continue" | "done";
   message: string;
+  display_message?: string;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
   actions: string[];
   exported_file?: string;
   steps: AgentStepRecord[];
@@ -271,6 +301,31 @@ function buildWorkflowPhaseCursorSnapshot(
   };
 }
 
+// 描述：
+//
+//   - 统一生成工作流阶段标题，供运行轨迹分割线、状态栏和复制文本复用。
+//
+// Params:
+//
+//   - currentStageIndex: 当前阶段索引（0 基）。
+//   - totalStageCount: 工作流总阶段数。
+//   - stageTitle: 当前阶段标题。
+//
+// Returns:
+//
+//   - 阶段标题文本。
+function buildWorkflowStageDividerTitle(
+  currentStageIndex: number,
+  totalStageCount: number,
+  stageTitle: string,
+): string {
+  return translateDesktopText("阶段 {{current}}/{{total}}：{{title}}", {
+    current: currentStageIndex + 1,
+    total: totalStageCount,
+    title: String(stageTitle || "").trim() || translateDesktopText("未命名阶段"),
+  });
+}
+
 // 描述:
 //
 //   - 定义文本流工具调用事件 data 的最小字段结构。
@@ -298,8 +353,436 @@ interface AgentRequireApprovalEventData {
 const APPROVAL_TOOL_ARGS_PREVIEW_MAX_CHARS = 2000;
 const PLANNING_META_PREFIX = "__libra_planning__:";
 const INITIAL_THINKING_SEGMENT_ROLE = "initial_thinking";
+const ROUND_DESCRIPTION_SEGMENT_ROLE = "round_description";
+const WORKFLOW_STAGE_DIVIDER_SEGMENT_ROLE = "workflow_stage_divider";
+const WORKFLOW_STAGE_SUMMARY_STEP_TYPE = "workflow_stage_summary";
+const WORKFLOW_STAGE_VALIDATION_REQUIRED_KEYWORDS = [
+  "补齐测试",
+  "可运行代码与测试",
+  "测试与错误提示映射",
+  "运行验证",
+  "测试验证",
+];
+const WORKFLOW_STAGE_VALIDATION_COMMAND_KEYWORDS = [
+  "pnpm test",
+  "npm test",
+  "pnpm build",
+  "npm run build",
+  "vite build",
+  "pnpm dev",
+  "npm run dev",
+  "vite preview",
+  "pnpm preview",
+  "npm run preview",
+  "pnpm lint",
+  "npm run lint",
+  "pnpm check",
+  "npm run check",
+  "vitest",
+  "jest",
+  "playwright",
+  "cargo test",
+  "cargo check",
+  "go test",
+];
+const WORKFLOW_STAGE_DIAGNOSTIC_LINE_PATTERNS = [
+  /^Scripts:\s*/u,
+  /^package\.json length:\s*\d+\s*$/iu,
+  /^[A-Za-z0-9_.-]+(?:_str)? length:\s*\d+\s*$/u,
+  /^Test Result Success:\s*(true|false)\s*$/iu,
+];
 const DCC_MODELING_SKILL_ID = "dcc-modeling";
 const QUICK_START_CODE_WORKFLOW_ID = "wf-agent-full-delivery-v1";
+
+// 描述：
+//
+//   - 定义工作流阶段完成性守门结果，避免模型误报 DONE 时前端直接提前收尾。
+interface WorkflowStageCompletionDecision {
+  control: "continue" | "done";
+  reason: string;
+  displayMessage: string;
+}
+
+// 描述：
+//
+//   - 定义工作流阶段摘要项，供最终“执行总结”正文按阶段生成可读列表。
+interface WorkflowStageSummaryItem {
+  index: number;
+  title: string;
+  summary: string;
+}
+
+// 描述：
+//
+//   - 汇总当前阶段的技能标题、节点要求和 `SKILL.md` 说明，用于判断是否必须补齐测试或运行验证。
+//
+// Params:
+//
+//   - item: 当前阶段技能计划项。
+//
+// Returns:
+//
+//   - 归一化后的阶段要求文本。
+function resolveWorkflowStageRequirementText(item: AgentWorkflowSkillPlanItem | null): string {
+  if (!item) {
+    return "";
+  }
+  return [
+    item.nodeTitle,
+    item.skillId,
+    item.skillName,
+    item.skillDescription,
+    item.instruction,
+    item.skillMarkdownBody,
+  ]
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter((value) => value.length > 0)
+    .join("\n");
+}
+
+// 描述：
+//
+//   - 判断当前阶段是否属于“必须看到测试/构建/运行验证动作后才允许完成”的交付节点。
+//
+// Params:
+//
+//   - item: 当前阶段技能计划项。
+//
+// Returns:
+//
+//   - true: 当前阶段需要运行验证证据后才能视为完成。
+function shouldRequireWorkflowStageValidation(item: AgentWorkflowSkillPlanItem | null): boolean {
+  if (!item) {
+    return false;
+  }
+  if (String(item.skillId || "").trim() === "frontend-page-builder") {
+    return true;
+  }
+  const requirementText = resolveWorkflowStageRequirementText(item);
+  if (!requirementText) {
+    return false;
+  }
+  return WORKFLOW_STAGE_VALIDATION_REQUIRED_KEYWORDS.some((keyword) => requirementText.includes(keyword.toLowerCase()));
+}
+
+// 描述：
+//
+//   - 从运行片段详情中提取后台终端实际执行命令，供阶段完成性校验复用。
+//
+// Params:
+//
+//   - segment: 当前运行片段。
+//
+// Returns:
+//
+//   - 解析出的命令文本；若未命中则返回空字符串。
+function resolveTerminalCommandFromRunSegment(segment: AssistantRunSegment): string {
+  const segmentData = segment.data && typeof segment.data === "object"
+    ? (segment.data as Record<string, unknown>)
+    : {};
+  const explicitCommand = String(
+    typeof segmentData.terminal_command === "string" ? segmentData.terminal_command : "",
+  ).trim();
+  if (explicitCommand) {
+    return explicitCommand;
+  }
+  const detailText = String(segment.detail || "").trim();
+  if (!detailText) {
+    return "";
+  }
+  const matchedCommand = detailText.match(/^Command:\s*(.+)$/m);
+  return matchedCommand?.[1]?.trim() || "";
+}
+
+// 描述：
+//
+//   - 汇总当前阶段已执行的终端命令，供“测试/构建/运行验证”守门逻辑判断是否已有真实验证动作。
+//
+// Params:
+//
+//   - runMeta: 当前运行消息的轨迹元数据。
+//
+// Returns:
+//
+//   - 已去重的终端命令列表。
+function collectWorkflowStageTerminalCommands(runMeta: AssistantRunMeta | undefined): string[] {
+  if (!runMeta || !Array.isArray(runMeta.segments)) {
+    return [];
+  }
+  return Array.from(
+    new Set(
+      runMeta.segments
+        .filter((segment) => {
+          const stepType = segment.data && typeof segment.data.__step_type === "string"
+            ? String(segment.data.__step_type).trim()
+            : "";
+          return stepType === "terminal";
+        })
+        .map((segment) => resolveTerminalCommandFromRunSegment(segment))
+        .filter((command) => command.length > 0),
+    ),
+  );
+}
+
+// 描述：
+//
+//   - 判断当前阶段是否已出现测试、构建或运行验证命令，避免只写代码未验证就提前结束。
+//
+// Params:
+//
+//   - terminalCommands: 当前阶段终端命令列表。
+//
+// Returns:
+//
+//   - true: 已出现可作为完成证据的验证命令。
+function hasWorkflowStageValidationEvidence(terminalCommands: string[]): boolean {
+  return terminalCommands.some((command) => {
+    const normalizedCommand = String(command || "").trim().toLowerCase();
+    if (!normalizedCommand) {
+      return false;
+    }
+    return WORKFLOW_STAGE_VALIDATION_COMMAND_KEYWORDS.some((keyword) => normalizedCommand.includes(keyword));
+  });
+}
+
+// 描述：
+//
+//   - 结合阶段要求与本轮真实执行证据，收敛当前阶段最终完成态，避免“模型误报 DONE”导致工作流提前结束。
+//
+// Params:
+//
+//   - currentStageItem: 当前阶段技能计划项。
+//   - responseControl: 模型返回的阶段控制信号。
+//   - responseDisplayMessage: 当前阶段对用户可见的正文摘要。
+//   - runMeta: 当前运行消息的执行轨迹元数据。
+//
+// Returns:
+//
+//   - 经过守门后的阶段完成结果。
+function resolveWorkflowStageCompletionDecision(
+  currentStageItem: AgentWorkflowSkillPlanItem | null,
+  responseControl: "continue" | "done",
+  responseDisplayMessage: string,
+  runMeta: AssistantRunMeta | undefined,
+): WorkflowStageCompletionDecision {
+  if (responseControl !== "done" || !shouldRequireWorkflowStageValidation(currentStageItem)) {
+    return {
+      control: responseControl,
+      reason: "",
+      displayMessage: responseDisplayMessage,
+    };
+  }
+
+  const terminalCommands = collectWorkflowStageTerminalCommands(runMeta);
+  if (hasWorkflowStageValidationEvidence(terminalCommands)) {
+    return {
+      control: "done",
+      reason: "",
+      displayMessage: responseDisplayMessage,
+    };
+  }
+
+  const validationReason = translateDesktopText("校验结果：未检测到测试、构建或运行验证动作，当前阶段继续执行。");
+  return {
+    control: "continue",
+    reason: validationReason,
+    displayMessage: responseDisplayMessage
+      ? `${responseDisplayMessage}\n\n${validationReason}`
+      : validationReason,
+  };
+}
+
+// 描述：
+//
+//   - 将阶段摘要压缩为单行预览，避免最终总结直接塞入整段日志正文导致顶部消息过长。
+//
+// Params:
+//
+//   - value: 原始阶段摘要。
+//
+// Returns:
+//
+//   - 适合用于最终总结的单行摘要。
+function resolveWorkflowStageSummaryPreview(value: string): string {
+  const candidateLines = String(value || "")
+    .split(/\r?\n/g)
+    .map((line) => String(line || "").trim())
+    .filter((line) => line.length > 0)
+    .map((line) => line.replace(/^#+\s*/, "").replace(/^[-*]\s+/, "").replace(/^\d+\.\s+/, "").trim())
+    .filter((line) => line.length > 0);
+  return truncateRunText(candidateLines[0] || "", 160);
+}
+
+// 描述：
+//
+//   - 判断一行阶段摘要是否属于 agent 的调试/诊断输出，避免把 `Scripts:`、`length:` 等噪声注入前端正文。
+//
+// Params:
+//
+//   - line: 单行文本。
+//
+// Returns:
+//
+//   - true 表示该行应从用户可见正文中过滤。
+function isWorkflowStageDiagnosticLine(line: string): boolean {
+  const normalizedLine = String(line || "").trim();
+  if (!normalizedLine) {
+    return false;
+  }
+  return WORKFLOW_STAGE_DIAGNOSTIC_LINE_PATTERNS.some((pattern) => pattern.test(normalizedLine));
+}
+
+// 描述：
+//
+//   - 清洗工作流阶段正文中的调试诊断行，仅保留用户可理解的总结内容。
+//
+// Params:
+//
+//   - primaryMessage: display_message 优先候选。
+//   - fallbackMessage: message 兜底候选。
+//
+// Returns:
+//
+//   - 过滤后的阶段正文；若两者都只剩诊断信息，则返回通用总结文案。
+function sanitizeWorkflowStageDisplayMessage(
+  primaryMessage: string,
+  fallbackMessage: string,
+): string {
+  const sanitizeMessage = (value: string): string => {
+    const rawLines = String(value || "").split(/\r?\n/g);
+    const filteredLines: string[] = [];
+    let previousLineEmpty = false;
+    rawLines.forEach((line) => {
+      const normalizedLine = String(line || "").trimEnd();
+      if (!normalizedLine.trim()) {
+        if (!previousLineEmpty && filteredLines.length > 0) {
+          filteredLines.push("");
+        }
+        previousLineEmpty = true;
+        return;
+      }
+      if (isWorkflowStageDiagnosticLine(normalizedLine)) {
+        return;
+      }
+      filteredLines.push(normalizedLine);
+      previousLineEmpty = false;
+    });
+    while (filteredLines.length > 0 && filteredLines[filteredLines.length - 1] === "") {
+      filteredLines.pop();
+    }
+    return filteredLines.join("\n").trim();
+  };
+
+  const normalizedPrimary = sanitizeMessage(primaryMessage);
+  if (normalizedPrimary) {
+    return normalizedPrimary;
+  }
+  const normalizedFallback = sanitizeMessage(fallbackMessage);
+  if (normalizedFallback) {
+    return normalizedFallback;
+  }
+  return translateDesktopText("已记录当前阶段结果。");
+}
+
+// 描述：
+//
+//   - 从当前运行轨迹与最后阶段摘要中汇总出最终可见的工作流总结正文，避免只展示“执行过程已完成”这类占位句。
+//
+// Params:
+//
+//   - runMeta: 当前运行消息元数据。
+//   - finalStageIndex: 最后阶段索引。
+//   - finalStageTitle: 最后阶段标题。
+//   - finalStageSummary: 最后阶段摘要。
+//
+// Returns:
+//
+//   - 适合显示在根消息顶部的最终总结正文。
+function buildWorkflowCompletionSummary(
+  runMeta: AssistantRunMeta | undefined,
+  finalStageIndex: number,
+  finalStageTitle: string,
+  finalStageSummary: string,
+): string {
+  const stageSummaryMap = new Map<number, WorkflowStageSummaryItem>();
+  (runMeta?.segments || []).forEach((segment) => {
+    const stepType = segment.data && typeof segment.data.__step_type === "string"
+      ? String(segment.data.__step_type).trim()
+      : "";
+    if (stepType !== WORKFLOW_STAGE_SUMMARY_STEP_TYPE) {
+      return;
+    }
+    const stageIndex = Number(segment.data?.workflow_stage_index);
+    if (!Number.isFinite(stageIndex)) {
+      return;
+    }
+    const stageTitle = String(segment.data?.workflow_stage_title || "").trim();
+    const stageSummary = resolveWorkflowStageSummaryPreview(
+      String(segment.data?.workflow_stage_summary_message || segment.step || "").trim(),
+    );
+    if (!stageSummary) {
+      return;
+    }
+    stageSummaryMap.set(stageIndex, {
+      index: Math.max(0, Math.floor(stageIndex)),
+      title: stageTitle || translateDesktopText("未命名阶段"),
+      summary: stageSummary,
+    });
+  });
+
+  const normalizedFinalSummary = resolveWorkflowStageSummaryPreview(finalStageSummary);
+  if (normalizedFinalSummary) {
+    stageSummaryMap.set(finalStageIndex, {
+      index: Math.max(0, Math.floor(finalStageIndex)),
+      title: String(finalStageTitle || "").trim() || translateDesktopText("未命名阶段"),
+      summary: normalizedFinalSummary,
+    });
+  }
+
+  const orderedStageSummaries = Array.from(stageSummaryMap.values())
+    .sort((left, right) => left.index - right.index);
+  if (orderedStageSummaries.length === 0) {
+    return normalizedFinalSummary || translateDesktopText("执行过程已完成。");
+  }
+  return [
+    translateDesktopText("本次执行总结："),
+    ...orderedStageSummaries.map((item) => `${item.index + 1}. ${item.title}：${item.summary}`),
+  ].join("\n");
+}
+
+// 描述：
+//
+//   - 在流式 FINAL 事件到达时统一解析最终总结文案，优先复用已有阶段总结或运行轨迹摘要，
+//     避免再次被“执行过程已完成”“执行完成”等泛化占位覆盖。
+//
+// Params:
+//
+//   - existingSummary: 当前运行态中已经生成的总结。
+//   - payloadSummary: FINAL 事件直接携带的总结。
+//   - fallbackSummary: 从运行轨迹反推出的兜底摘要。
+//
+// Returns:
+//
+//   - 最终展示给用户的总结正文。
+function resolveFinalAssistantRunSummary(
+  existingSummary: string,
+  payloadSummary: string,
+  fallbackSummary: string,
+): string {
+  const normalizedExistingSummary = String(existingSummary || "").trim();
+  const normalizedPayloadSummary = String(payloadSummary || "").trim();
+  const normalizedFallbackSummary = String(fallbackSummary || "").trim();
+  if (normalizedExistingSummary && !isGenericFinishedRunSummaryText(normalizedExistingSummary)) {
+    return normalizedExistingSummary;
+  }
+  if (normalizedPayloadSummary && !isGenericFinishedRunSummaryText(normalizedPayloadSummary)) {
+    return normalizedPayloadSummary;
+  }
+  return normalizedFallbackSummary
+    || normalizedPayloadSummary
+    || normalizedExistingSummary
+    || translateDesktopText("执行完成");
+}
 
 // 描述:
 //
@@ -333,6 +816,7 @@ interface PendingDccSelectionState {
   selectionMode: "single" | "cross";
   prompt: string;
   options: ExecutePromptOptions;
+  displayMessages: MessageItem[];
   contextMessages: MessageItem[];
   softwareOptions: DccSoftwareOption[];
   selectedSoftware: string;
@@ -651,6 +1135,7 @@ interface AssistantRunSegmentStep {
 interface AssistantRunSegmentGroup {
   key: string;
   title: string;
+  kind?: "default" | "divider";
   steps: AssistantRunSegmentStep[];
 }
 
@@ -683,6 +1168,28 @@ interface SessionDebugFlowRecord {
   title: string;
   detail: string;
   timestamp: number;
+}
+
+// 描述：
+//
+//   - 定义 dock 中任务计划项的状态类型，统一覆盖待处理、进行中、已完成和阻塞态。
+type SessionTodoDockItemStatus = "pending" | "in_progress" | "completed" | "blocked";
+
+// 描述：
+//
+//   - 定义 dock 中展示的任务计划项结构。
+interface SessionTodoDockItem {
+  id: string;
+  content: string;
+  status: SessionTodoDockItemStatus;
+}
+
+// 描述：
+//
+//   - 定义从运行片段中提取出的任务计划快照，供 `desk-prompt-dock` 统一渲染。
+interface SessionTodoDockSnapshot {
+  items: SessionTodoDockItem[];
+  messageId: string;
 }
 
 // 描述:
@@ -766,6 +1273,21 @@ function isTerminalTool(toolName: string): boolean {
 
 // 描述：
 //
+//   - 判断工具是否属于“任务计划”步骤类型。
+//
+// Params:
+//
+//   - toolName: 工具名。
+//
+// Returns:
+//
+//   - true: 任务计划类工具。
+function isTodoTool(toolName: string): boolean {
+  return toolName === "todo_read" || toolName === "todo_write";
+}
+
+// 描述：
+//
 //   - 判断工具是否属于“文件编辑”步骤类型。
 //
 // Params:
@@ -779,8 +1301,22 @@ function isEditTool(toolName: string): boolean {
   return toolName === "write_text"
     || toolName === "write_json"
     || toolName === "apply_patch"
-    || toolName === "apply_patch_file"
-    || toolName === "todo_write";
+    || toolName === "apply_patch_file";
+}
+
+// 描述：
+//
+//   - 判断工具是否属于“创建目录/文件节点”步骤类型。
+//
+// Params:
+//
+//   - toolName: 工具名。
+//
+// Returns:
+//
+//   - true: 创建类工具。
+function isCreateTool(toolName: string): boolean {
+  return toolName === "mkdir";
 }
 
 // 描述：
@@ -797,7 +1333,6 @@ function isEditTool(toolName: string): boolean {
 function isBrowseTool(toolName: string): boolean {
   return toolName === "read_text"
     || toolName === "read_json"
-    || toolName === "todo_read"
     || toolName === "list_dir"
     || toolName === "list_directory"
     || toolName === "glob"
@@ -976,6 +1511,162 @@ function parseJsonRecord(value: unknown): Record<string, unknown> | null {
 
 // 描述：
 //
+//   - 将原始 todo 数组规整为 dock 可消费的任务项列表，并统一兼容 content/task/title/text 字段。
+//
+// Params:
+//
+//   - rawItems: 原始任务数组。
+//
+// Returns:
+//
+//   - 规整后的任务项列表。
+function normalizeTodoDockItems(rawItems: unknown): SessionTodoDockItem[] {
+  if (!Array.isArray(rawItems)) {
+    return [];
+  }
+  return rawItems
+    .map((item, index) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const record = item as Record<string, unknown>;
+      const content = String(
+        record.content
+        ?? record.task
+        ?? record.title
+        ?? record.text
+        ?? "",
+      ).trim();
+      if (!content) {
+        return null;
+      }
+      const rawStatus = String(record.status ?? record.state ?? "").trim().toLowerCase();
+      let status: SessionTodoDockItemStatus = "pending";
+      if (
+        rawStatus === "in_progress"
+        || rawStatus === "in-progress"
+        || rawStatus === "running"
+        || rawStatus === "doing"
+      ) {
+        status = "in_progress";
+      } else if (
+        rawStatus === "completed"
+        || rawStatus === "complete"
+        || rawStatus === "done"
+        || rawStatus === "finished"
+        || rawStatus === "success"
+      ) {
+        status = "completed";
+      } else if (
+        rawStatus === "blocked"
+        || rawStatus === "failed"
+        || rawStatus === "cancelled"
+        || rawStatus === "canceled"
+      ) {
+        status = "blocked";
+      }
+      return {
+        id: String(record.id ?? `todo-${index + 1}`).trim() || `todo-${index + 1}`,
+        content,
+        status,
+      } satisfies SessionTodoDockItem;
+    })
+    .filter((item): item is SessionTodoDockItem => Boolean(item));
+}
+
+// 描述：
+//
+//   - 从单个运行片段中提取任务计划项；仅识别显式透传的 `todo_items` 数据。
+//
+// Params:
+//
+//   - segment: 运行片段。
+//
+// Returns:
+//
+//   - 任务计划项列表；若当前片段不包含 todo 数据则返回 null。
+function resolveTodoItemsFromSegment(segment: AssistantRunSegment): SessionTodoDockItem[] | null {
+  const rawItems = segment.data && typeof segment.data === "object"
+    ? (segment.data as Record<string, unknown>).todo_items
+    : undefined;
+  if (!Array.isArray(rawItems)) {
+    return null;
+  }
+  return normalizeTodoDockItems(rawItems);
+}
+
+// 描述：
+//
+//   - 从当前会话的运行态里提取最近一次任务计划快照，优先取正在执行的消息，再回退到最新助手消息。
+//
+// Params:
+//
+//   - messages: 当前消息列表。
+//   - runMetaMap: 运行态映射。
+//   - preferredMessageId: 优先消息 ID。
+//
+// Returns:
+//
+//   - 最近一次任务计划快照；若尚无 todo 数据则返回 null。
+function resolveAssistantTodoDockSnapshot(
+  messages: MessageItem[],
+  runMetaMap: Record<string, AssistantRunMeta>,
+  preferredMessageId: string,
+): SessionTodoDockSnapshot | null {
+  const orderedMessageIds = Array.from(new Set([
+    String(preferredMessageId || "").trim(),
+    ...[...messages]
+      .reverse()
+      .map((item) => String(item.id || "").trim())
+      .filter((item) => item.length > 0),
+    ...Object.keys(runMetaMap).reverse(),
+  ].filter((item) => item.length > 0)));
+
+  for (const messageId of orderedMessageIds) {
+    const meta = runMetaMap[messageId];
+    if (!meta) {
+      continue;
+    }
+    for (const segment of [...meta.segments].reverse()) {
+      const items = resolveTodoItemsFromSegment(segment);
+      if (!items) {
+        continue;
+      }
+      return {
+        items,
+        messageId,
+      };
+    }
+  }
+  return null;
+}
+
+// 描述：
+//
+//   - 将任务状态翻译为用户可见文案，统一供 dock 任务卡片复用。
+//
+// Params:
+//
+//   - status: 任务状态。
+//
+// Returns:
+//
+//   - 中文状态文案。
+function resolveTodoDockStatusLabel(status: SessionTodoDockItemStatus): string {
+  if (status === "completed") {
+    return translateDesktopText("已完成");
+  }
+  if (status === "in_progress") {
+    return translateDesktopText("进行中");
+  }
+  if (status === "blocked") {
+    return translateDesktopText("已阻塞");
+  }
+  return translateDesktopText("待处理");
+}
+
+// 描述：
+//
 //   - 构建授权步骤透传数据，仅保留恢复授权所需关键字段，并对长参数做裁剪。
 function buildApprovalSegmentData(payload: AgentTextStreamEvent): Record<string, unknown> {
   const rawData = payload.data && typeof payload.data === "object"
@@ -1058,6 +1749,21 @@ function mapAgentTextStreamToRunSegment(
   if (payload.kind === STREAM_KINDS.TOOL_CALL_STARTED) {
     const data = resolveToolCallEventData(payload);
     const toolName = String(data.name || "").trim();
+    if (isTodoTool(toolName)) {
+      return {
+        key: segmentKey,
+        intro: translateDesktopText("任务计划"),
+        step: toolName === "todo_write"
+          ? translateDesktopText("正在更新任务计划")
+          : translateDesktopText("正在读取任务计划"),
+        status: "running",
+        data: {
+          __segment_kind: payload.kind,
+          __step_type: "todo",
+          todo_operation: toolName,
+        },
+      };
+    }
     if (!isBrowseTool(toolName)) {
       return null;
     }
@@ -1090,6 +1796,52 @@ function mapAgentTextStreamToRunSegment(
     const runOk = data.ok !== false;
     const argsData = data.args_data || {};
     const resultData = data.result_data || {};
+
+    if (isTodoTool(toolName)) {
+      const parsedResultRecord = parseJsonRecord(data.result);
+      const parsedRawRecord = parseJsonRecord(resultData.raw);
+      const normalizedTodoItems = normalizeTodoDockItems(
+        resultData.items
+        ?? parsedResultRecord?.items
+        ?? parsedRawRecord?.items
+        ?? [],
+      );
+      const todoCount = Math.max(
+        0,
+        Math.floor(Number(
+          resultData.count
+          ?? parsedResultRecord?.count
+          ?? parsedRawRecord?.count
+          ?? normalizedTodoItems.length,
+        )),
+      );
+      const detail = truncateRunText(
+        String(
+          resultData.content_preview
+          || data.result
+          || JSON.stringify(normalizedTodoItems, null, 2)
+          || eventMessage
+          || "",
+        ).trim(),
+        64000,
+      );
+      return {
+        key: segmentKey,
+        intro: translateDesktopText("任务计划"),
+        step: toolName === "todo_write"
+          ? translateDesktopText("已同步 {{count}} 项任务", { count: todoCount })
+          : translateDesktopText("已读取 {{count}} 项任务", { count: todoCount }),
+        status: runOk ? "finished" : "failed",
+        detail,
+        data: {
+          __segment_kind: payload.kind,
+          __step_type: "todo",
+          todo_operation: toolName,
+          todo_items: normalizedTodoItems,
+          todo_count: todoCount,
+        },
+      };
+    }
 
     if (isBrowseTool(toolName)) {
       const parsedResultRecord = parseJsonRecord(data.result);
@@ -1145,7 +1897,7 @@ function mapAgentTextStreamToRunSegment(
       return {
         key: segmentKey,
         intro: translateDesktopText("后台终端"),
-        step: translateDesktopText("后台终端已完成以及 {{command}}", {
+        step: translateDesktopText("已执行命令 {{command}}", {
           command: command || "(unknown)",
         }),
         status: runOk ? "finished" : "failed",
@@ -1153,6 +1905,7 @@ function mapAgentTextStreamToRunSegment(
         data: {
           __segment_kind: payload.kind,
           __step_type: "terminal",
+          terminal_command: command || "(unknown)",
         },
       };
     }
@@ -1210,6 +1963,36 @@ function mapAgentTextStreamToRunSegment(
       };
     }
 
+    if (isCreateTool(toolName)) {
+      const parsedResultRecord = parseJsonRecord(data.result);
+      const parsedRawRecord = parseJsonRecord(resultData.raw);
+      const path = String(
+        resultData.path
+        || parsedResultRecord?.path
+        || parsedRawRecord?.path
+        || argsData.path
+        || "",
+      ).trim();
+      const detail = truncateRunText(
+        path || String(resultData.raw || data.result || eventMessage || "").trim(),
+        64000,
+      );
+      return {
+        key: segmentKey,
+        intro: translateDesktopText("文件创建"),
+        step: translateDesktopText("已创建 {{path}}", {
+          path: path || "unknown",
+        }),
+        status: runOk ? "finished" : "failed",
+        detail,
+        data: {
+          __segment_kind: payload.kind,
+          __step_type: "create",
+          create_path: path,
+        },
+      };
+    }
+
     const fallbackDetail = truncateRunText(
       JSON.stringify(
         {
@@ -1225,13 +2008,20 @@ function mapAgentTextStreamToRunSegment(
     );
     return {
       key: segmentKey,
-      intro: translateDesktopText("执行过程"),
-      step: translateDesktopText("未定义步骤"),
+      intro: translateDesktopText("工具执行"),
+      step: runOk
+        ? translateDesktopText("已执行 {{tool}}", {
+          tool: toolName || translateDesktopText("未知工具"),
+        })
+        : translateDesktopText("{{tool}} 执行失败", {
+          tool: toolName || translateDesktopText("未知工具"),
+        }),
       status: runOk ? "finished" : "failed",
       detail: fallbackDetail,
       data: {
         __segment_kind: payload.kind,
         __step_type: "undefined",
+        tool_name: toolName,
       },
     };
   }
@@ -1417,13 +2207,33 @@ function isRoundDescriptionSegment(segment: AssistantRunSegment): boolean {
   const segmentRole = segment.data && typeof segment.data.__segment_role === "string"
     ? segment.data.__segment_role
     : "";
-  return segmentRole === "round_description";
+  return segmentRole === ROUND_DESCRIPTION_SEGMENT_ROLE;
+}
+
+// 描述：
+//
+//   - 判断运行片段是否属于“工作流阶段分割线”；该类片段只负责在同一条助手消息里分隔不同技能节点，
+//     不参与普通步骤合并。
+//
+// Params:
+//
+//   - segment: 待判定片段。
+//
+// Returns:
+//
+//   - true: 工作流阶段分割线。
+function isWorkflowStageDividerSegment(segment: AssistantRunSegment): boolean {
+  const segmentRole = segment.data && typeof segment.data.__segment_role === "string"
+    ? segment.data.__segment_role
+    : "";
+  return segmentRole === WORKFLOW_STAGE_DIVIDER_SEGMENT_ROLE;
 }
 
 // 描述：
 //
 //   - 规范化运行片段列表，去掉历史遗留的重复思考占位；若当前仍处于纯等待阶段，
 //     则只保留一条统一的初始化思考占位，避免返回会话后出现双“正在思考”或空执行过程组。
+//   - 不再裁剪旧片段，确保同一条助手消息中的执行历史可完整保留并在刷新后恢复。
 //
 // Params:
 //
@@ -1440,8 +2250,7 @@ function normalizeAssistantRunSegments(segments: AssistantRunSegment[]): Assista
       intro: String(item.intro || "").trim(),
       step: String(item.step || "").trim(),
     }))
-    .filter((item) => item.intro || item.step)
-    .slice(-160);
+    .filter((item) => item.intro || item.step);
   if (sanitizedSegments.length === 0) {
     return [];
   }
@@ -1519,6 +2328,13 @@ function buildRunSegmentGroups(segments: AssistantRunSegment[]): AssistantRunSeg
       detailSet: Set<string>;
       running: boolean;
     };
+    todoState?: {
+      stepIndex: number;
+      details: string[];
+      detailSet: Set<string>;
+      latestText: string;
+      latestStatus: AssistantRunSegmentStatus;
+    };
   }
 
   const groups: InternalGroup[] = [];
@@ -1528,8 +2344,9 @@ function buildRunSegmentGroups(segments: AssistantRunSegment[]): AssistantRunSeg
       return activeGroupIndex;
     }
     groups.push({
-      key: `run-group-${groups.length}-${translateDesktopText("执行过程")}`,
-      title: translateDesktopText("执行过程"),
+      key: `run-group-${groups.length}-default`,
+      title: "",
+      kind: "default",
       steps: [],
     });
     activeGroupIndex = groups.length - 1;
@@ -1567,7 +2384,7 @@ function buildRunSegmentGroups(segments: AssistantRunSegment[]): AssistantRunSeg
       return;
     }
 
-    if (segmentRole === "round_description" || looksLikeRecoveredRoundDescription) {
+    if (segmentRole === ROUND_DESCRIPTION_SEGMENT_ROLE || looksLikeRecoveredRoundDescription) {
       const title = normalizedIntro;
       if (!title) {
         return;
@@ -1575,15 +2392,81 @@ function buildRunSegmentGroups(segments: AssistantRunSegment[]): AssistantRunSeg
       groups.push({
         key: `run-group-${groups.length}-${title}`,
         title,
+        kind: "default",
         steps: [],
       });
       activeGroupIndex = groups.length - 1;
       return;
     }
 
+    if (segmentRole === WORKFLOW_STAGE_DIVIDER_SEGMENT_ROLE || isWorkflowStageDividerSegment(segment)) {
+      const title = normalizedIntro || normalizedStep;
+      if (!title) {
+        return;
+      }
+      groups.push({
+        key: `run-group-${groups.length}-${title}`,
+        title,
+        kind: "divider",
+        steps: [],
+      });
+      activeGroupIndex = -1;
+      return;
+    }
+
     const groupIndex = ensureActiveGroup();
     const currentGroup = groups[groupIndex];
     const detail = resolveRunSegmentStepDetail(segment, normalizedStep);
+    if (stepType === "todo") {
+      // 描述：
+      //
+      //   - 任务计划的读写步骤会频繁往返；主日志仅保留一条动态状态，
+      //   - 既避免重复刷屏，也确保正文不会被成排的“已读取/已同步”步骤挤下去。
+      const todoTimelineDetail = segment.status === "failed" && detail
+        ? `${normalizedStep}\n${detail}`.trim()
+        : normalizedStep;
+      if (!currentGroup.todoState) {
+        currentGroup.todoState = {
+          stepIndex: currentGroup.steps.length,
+          details: [],
+          detailSet: new Set<string>(),
+          latestText: normalizedStep || translateDesktopText("任务计划"),
+          latestStatus: segment.status,
+        };
+        currentGroup.steps.push({
+          key: `todo-${segment.key}-${index}`,
+          status: segment.status,
+          text: normalizedStep || translateDesktopText("任务计划"),
+          detail: "",
+          data: {
+            __step_type: "todo",
+            ...(segmentData && typeof segmentData === "object" ? { ...segmentData } : {}),
+          },
+        });
+      }
+      const todoState = currentGroup.todoState;
+      if (!todoState) {
+        return;
+      }
+      todoState.latestText = normalizedStep || todoState.latestText;
+      todoState.latestStatus = segment.status;
+      if (todoTimelineDetail && !todoState.detailSet.has(todoTimelineDetail)) {
+        todoState.detailSet.add(todoTimelineDetail);
+        todoState.details.push(todoTimelineDetail);
+      }
+      const todoStep = currentGroup.steps[todoState.stepIndex];
+      if (todoStep) {
+        todoStep.status = todoState.latestStatus;
+        todoStep.text = todoState.latestText;
+        todoStep.detail = todoState.details.join("\n");
+        todoStep.data = {
+          __step_type: "todo",
+          ...(segmentData && typeof segmentData === "object" ? { ...segmentData } : {}),
+        };
+      }
+      return;
+    }
+
     if (stepType === "browse") {
       const fileDelta = Math.max(
         0,
@@ -1662,9 +2545,10 @@ function buildRunSegmentGroups(segments: AssistantRunSegment[]): AssistantRunSeg
     .map((group) => ({
       key: group.key,
       title: group.title,
+      kind: group.kind,
       steps: group.steps.filter((step) => String(step.text || "").trim()),
     }))
-    .filter((group) => group.steps.length > 0 || group.title !== translateDesktopText("执行过程"));
+    .filter((group) => group.kind === "divider" || group.steps.length > 0);
 }
 
 // 描述：根据智能体文本流事件判断当前执行阶段，用于无事件时的“心跳提示”文案。
@@ -1882,6 +2766,89 @@ function isGenericRunningIndicatorText(value: string): boolean {
 
 // 描述：
 //
+//   - 判断执行完成后的总结是否仍属于“通用过程性占位”。
+//   - 这类文案只适合前端展示执行状态，不适合作为后续 agent 上下文继续传给模型。
+//
+// Params:
+//
+//   - value: 待判断的总结文本。
+//
+// Returns:
+//
+//   - true: 属于通用过程性占位总结。
+function isGenericFinishedRunSummaryText(value: string): boolean {
+  const normalizedValue = String(value || "").trim();
+  if (!normalizedValue) {
+    return true;
+  }
+  return normalizedValue === translateDesktopText("执行过程已完成。")
+    || normalizedValue === translateDesktopText("执行完成");
+}
+
+// 描述：
+//
+//   - 从前端完整 transcript 中提炼“供 agent 使用的上下文消息”。
+//   - UI 侧保留所有正文与执行过程；agent 侧仅保留用户输入、关键助手结论，并主动剔除工作流根运行消息这类过程占位。
+//
+// Params:
+//
+//   - transcriptMessages: 前端展示用的完整消息列表。
+//   - runMetaMap: 助手运行态映射。
+//
+// Returns:
+//
+//   - 精简后的 agent 上下文消息列表。
+function buildPromptContextMessages(
+  transcriptMessages: MessageItem[],
+  runMetaMap: Record<string, AssistantRunMeta>,
+): MessageItem[] {
+  const workflowRootMessageIdSet = new Set(
+    transcriptMessages
+      .map((item) => String(item.id || "").trim())
+      .filter((messageId) => {
+        if (!messageId) {
+          return false;
+        }
+        return transcriptMessages.some((candidate) => {
+          const candidateId = String(candidate.id || "").trim();
+          return candidateId.startsWith(`${messageId}-stage-`);
+        });
+      }),
+  );
+  return transcriptMessages
+    .map((item) => {
+      const normalizedMessageId = String(item.id || "").trim();
+      if (item.role === "user") {
+        const normalizedText = String(item.text || "").trim();
+        if (!normalizedText) {
+          return null;
+        }
+        return {
+          ...item,
+          text: normalizedText,
+        } satisfies MessageItem;
+      }
+      if (normalizedMessageId && workflowRootMessageIdSet.has(normalizedMessageId)) {
+        return null;
+      }
+      const runMeta = normalizedMessageId ? runMetaMap[normalizedMessageId] : undefined;
+      const effectiveText = String(runMeta?.summary || item.text || "").trim();
+      if (!effectiveText) {
+        return null;
+      }
+      if (isGenericRunningIndicatorText(effectiveText) || isGenericFinishedRunSummaryText(effectiveText)) {
+        return null;
+      }
+      return {
+        ...item,
+        text: effectiveText,
+      } satisfies MessageItem;
+    })
+    .filter((item): item is MessageItem => Boolean(item));
+}
+
+// 描述：
+//
 //   - 在恢复执行中会话时，优先使用已持久化的真实助手文本；若缓存里只有泛化占位，再回退到运行总结或最后步骤。
 //
 // Params:
@@ -2007,6 +2974,9 @@ export function SessionPage({
   const [input, setInput] = useState("");
   const [status, setStatus] = useState("");
   const [sandboxMetrics, setSandboxMetrics] = useState<AgentSandboxMetrics | null>(null);
+  const [sessionCumulativeTokenUsage, setSessionCumulativeTokenUsage] = useState<number>(
+    () => resolveAgentSessionCumulativeTokenUsage(sessionId),
+  );
 
   // 描述：格式化内存字节数为可读文本，兼容 B/KB/MB/GB/TB。
   const formatMemory = (bytes: number) => {
@@ -2026,6 +2996,14 @@ export function SessionPage({
     if (secs < 60) return `${secs}s`;
     const mins = Math.floor(secs / 60);
     return `${mins}m ${secs % 60}s`;
+  };
+
+  // 描述：格式化累计 token 数量，统一输出千分位文本，避免输入栏展示过长原始数字。
+  const formatTokenUsage = (totalTokens: number) => {
+    const normalizedTotalTokens = Number.isFinite(totalTokens) && totalTokens > 0
+      ? Math.floor(totalTokens)
+      : 0;
+    return normalizedTotalTokens.toLocaleString("en-US");
   };
 
   useEffect(() => {
@@ -2158,6 +3136,7 @@ export function SessionPage({
     [isSessionPinned, t],
   );
   const [messages, setMessages] = useState<MessageItem[]>([]);
+  const [agentContextMessages, setAgentContextMessages] = useState<MessageItem[]>([]);
   const [assistantRunMetaMap, setAssistantRunMetaMap] = useState<Record<string, AssistantRunMeta>>({});
   const [sessionApprovedToolNames, setSessionApprovedToolNames] = useState<string[]>([]);
   const [workflowPhaseCursor, setWorkflowPhaseCursor] = useState<SessionWorkflowPhaseCursorSnapshot | null>(null);
@@ -2184,6 +3163,12 @@ export function SessionPage({
   const [selectedProvider, setSelectedProvider] = useState<string>(
     () => resolveAgentSessionSelectedAiProvider(sessionId),
   );
+  const [selectedModelName, setSelectedModelName] = useState<string>(
+    () => resolveAgentSessionSelectedAiModel(sessionId),
+  );
+  const [selectedModeName, setSelectedModeName] = useState<string>(
+    () => resolveAgentSessionSelectedAiMode(sessionId),
+  );
   // 描述：解析当前选中的 Provider，未命中时回退到列表首项。
   const selectedAi = useMemo(
     () => availableAiKeys.find((item) => item.provider === selectedProvider) || availableAiKeys[0] || null,
@@ -2204,6 +3189,11 @@ export function SessionPage({
   const [draftSkillIds, setDraftSkillIds] = useState<string[]>([]);
   const [availableSkills, setAvailableSkills] = useState<AgentSkillItem[]>([]);
   const [availableSkillsLoaded, setAvailableSkillsLoaded] = useState(false);
+
+  useEffect(() => {
+    setSessionCumulativeTokenUsage(resolveAgentSessionCumulativeTokenUsage(sessionId));
+  }, [sessionId]);
+
   // 描述：
   //
   //   - 会话中的工作流选择器只展示“已注册”工作流，避免未注册内置模板直接出现在执行策略列表中。
@@ -2281,6 +3271,118 @@ export function SessionPage({
         label: item.providerLabel,
       })),
     [availableAiKeys],
+  );
+  // 描述：按 Provider 解析当前默认模型名，供会话级 AI 配置在切换 Provider 时自动回填。
+  //
+  // Params:
+  //
+  //   - provider: Provider 标识。
+  //
+  // Returns:
+  //
+  //   - 当前 Provider 在 AI Key 中保存的默认模型名；不存在时返回空字符串。
+  const resolveProviderDefaultModelName = useCallback(
+    (provider: string) => {
+      if (!isAiProvider(provider)) {
+        return "";
+      }
+      const storedModelName = String(
+        availableAiKeys.find((item) => item.provider === provider)?.modelName || "",
+      ).trim();
+      return storedModelName || resolveAiProviderDefaultModel(provider);
+    },
+    [availableAiKeys],
+  );
+  // 描述：按 Provider 解析当前默认模式名，供会话级 AI 配置在切换 Provider 时自动回填。
+  //
+  // Params:
+  //
+  //   - provider: Provider 标识。
+  //
+  // Returns:
+  //
+  //   - 当前 Provider 在 AI Key 中保存的默认模式名；不存在时返回空字符串。
+  const resolveProviderDefaultModeName = useCallback(
+    (provider: string) => {
+      if (!isAiProvider(provider)) {
+        return "";
+      }
+      const storedModeName = String(
+        availableAiKeys.find((item) => item.provider === provider)?.modeName || "",
+      ).trim();
+      return storedModeName || resolveAiProviderDefaultMode(provider);
+    },
+    [availableAiKeys],
+  );
+  // 描述：判断当前 Provider 是否支持会话级模型配置。
+  //
+  // Params:
+  //
+  //   - provider: Provider 标识。
+  //
+  // Returns:
+  //
+  //   - true: 当前 Provider 支持模型配置。
+  const supportsProviderModelConfig = useCallback(
+    (provider: string) => isAiProvider(provider) && supportsAiProviderModelSelection(provider),
+    [],
+  );
+  // 描述：判断当前 Provider 是否支持会话级模式配置。
+  //
+  // Params:
+  //
+  //   - provider: Provider 标识。
+  //
+  // Returns:
+  //
+  //   - true: 当前 Provider 支持模式配置。
+  const supportsProviderModeConfig = useCallback(
+    (provider: string) => isAiProvider(provider) && supportsAiProviderModeSelection(provider),
+    [],
+  );
+  // 描述：按 Provider 生成模型下拉选项，并补回历史自定义值。
+  //
+  // Params:
+  //
+  //   - provider: Provider 标识。
+  //   - currentValue: 当前模型值。
+  //
+  // Returns:
+  //
+  //   - 可直接传入 AriSelect 的模型选项。
+  const resolveProviderModelSelectOptions = useCallback(
+    (provider: string, currentValue: string) => {
+      if (!isAiProvider(provider)) {
+        return [];
+      }
+      return mergeAiProviderSelectOptions(
+        resolveAiProviderModelOptions(provider),
+        currentValue,
+      );
+    },
+    [],
+  );
+  // 描述：按 Provider 生成模式下拉选项，并补回历史自定义值。
+  //
+  // Params:
+  //
+  //   - provider: Provider 标识。
+  //   - currentValue: 当前模式值。
+  //
+  // Returns:
+  //
+  //   - 可直接传入 AriSelect 的模式选项。
+  const resolveProviderModeSelectOptions = useCallback(
+    (provider: string, currentValue: string) => {
+      if (!isAiProvider(provider)) {
+        return [];
+      }
+      return mergeAiProviderSelectOptions(
+        resolveAiProviderModeOptions(provider),
+        resolveAiProviderModeSelectValue(provider, currentValue),
+      );
+    },
+    [],
   );
   const workflowSkillSelectorLabel = useMemo(() => {
     if (selectedSessionSkills.length > 0) {
@@ -2402,6 +3504,7 @@ export function SessionPage({
   const autoPromptDispatchedRef = useRef(false);
   const assistantRunMetaMapRef = useRef<Record<string, AssistantRunMeta>>({});
   const messagesRef = useRef<MessageItem[]>([]);
+  const agentContextMessagesRef = useRef<MessageItem[]>([]);
   const sendingRef = useRef(false);
   const sessionApprovedToolNameSetRef = useRef<Set<string>>(new Set());
   const workflowPhaseCursorRef = useRef<SessionWorkflowPhaseCursorSnapshot | null>(null);
@@ -2618,13 +3721,15 @@ export function SessionPage({
           },
         };
       });
-      return {
+      const nextRunMetaMap = {
         ...prev,
         [messageId]: {
           ...current,
           segments: normalizeAssistantRunSegments([...normalizedSegments, segment]),
         },
       };
+      assistantRunMetaMapRef.current = nextRunMetaMap;
+      return nextRunMetaMap;
     });
   };
 
@@ -2641,6 +3746,13 @@ export function SessionPage({
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  // 描述：
+  //
+  //   - 同步 agent 上下文 ref，供页面切走或重试时立即复用独立上下文，不受 UI transcript 结构影响。
+  useEffect(() => {
+    agentContextMessagesRef.current = agentContextMessages;
+  }, [agentContextMessages]);
 
   // 描述：
   //
@@ -2739,6 +3851,20 @@ export function SessionPage({
         },
       };
     });
+  };
+
+  // 描述：判断当前工作流是否仍有后续阶段待执行，供流式 FINAL 事件决定是否保持同一条消息继续运行。
+  //
+  // Returns:
+  //
+  //   - true: 当前仅完成了中间阶段，消息应继续保持 running。
+  const hasPendingWorkflowStages = () => {
+    const currentWorkflowPhaseCursor = workflowPhaseCursorRef.current;
+    if (!currentWorkflowPhaseCursor) {
+      return false;
+    }
+    return currentWorkflowPhaseCursor.totalStageCount > 0
+      && currentWorkflowPhaseCursor.currentStageIndex + 1 < currentWorkflowPhaseCursor.totalStageCount;
   };
 
   // 描述：切换执行消息轨迹详情折叠状态，供“用时分割线”点击展开/收起。
@@ -2876,11 +4002,15 @@ export function SessionPage({
     if (!sessionId) {
       // 描述：新建会话时不注入默认欢迎语，仅保留空线程与输入框。
       setMessages([]);
+      setAgentContextMessages([]);
       setMessagesHydrated(true);
       setHydratedSessionKey(sessionStorageKey);
       return;
     }
-    const stored = getSessionMessages(normalizedAgentKey, sessionId);
+    const stored = filterWorkflowStageContextMessages(
+      getSessionMessages(normalizedAgentKey, sessionId),
+    );
+    const storedAgentContext = getSessionAgentContextMessages(normalizedAgentKey, sessionId);
     const debugArtifact = getSessionDebugArtifact(normalizedAgentKey, sessionId);
     const runSnapshot = getSessionRunState(normalizedAgentKey, sessionId);
     const restoredSessionApprovedToolNames = Array.isArray(runSnapshot?.sessionApprovedToolNames)
@@ -2905,6 +4035,7 @@ export function SessionPage({
     workflowPhaseCursorRef.current = restoredWorkflowPhaseCursor;
     setWorkflowPhaseCursor(restoredWorkflowPhaseCursor);
     let nextMessages: MessageItem[] = stored.length > 0 ? stored : [];
+    let normalizedRunMetaMap: Record<string, AssistantRunMeta> = {};
     if (debugArtifact) {
       setTraceRecords((debugArtifact.traceRecords || []).map((item) => ({
         traceId: String(item.traceId || "").trim(),
@@ -2946,7 +4077,7 @@ export function SessionPage({
       agentLlmResponseRawRef.current = artifactResponseRaw;
     }
     if (runSnapshot && runSnapshot.runMetaMap && Object.keys(runSnapshot.runMetaMap).length > 0) {
-      const normalizedRunMetaMap = Object.fromEntries(
+      normalizedRunMetaMap = Object.fromEntries(
         Object.entries(runSnapshot.runMetaMap).map(([messageId, meta]) => [messageId, normalizePersistedRunMeta(meta)]),
       );
       setAssistantRunMetaMap(normalizedRunMetaMap);
@@ -2970,7 +4101,11 @@ export function SessionPage({
     } else {
       setAssistantRunMetaMap({});
     }
+    const nextAgentContextMessages = storedAgentContext.length > 0
+      ? storedAgentContext
+      : buildPromptContextMessages(nextMessages, normalizedRunMetaMap);
     setMessages(nextMessages);
+    setAgentContextMessages(nextAgentContextMessages);
     setMessagesHydrated(true);
     setHydratedSessionKey(sessionStorageKey);
   }, [normalizedAgentKey, sessionId, sessionStorageKey]);
@@ -2994,7 +4129,12 @@ export function SessionPage({
       upsertSessionMessages({
         agentKey: normalizedAgentKey,
         sessionId,
-        messages: messagesRef.current,
+        messages: filterWorkflowStageContextMessages(messagesRef.current),
+      });
+      upsertSessionAgentContextMessages({
+        agentKey: normalizedAgentKey,
+        sessionId,
+        messages: agentContextMessagesRef.current,
       });
       const normalizedSessionApprovedToolNames = Array.from(new Set(
         Array.from(sessionApprovedToolNameSetRef.current.values())
@@ -3020,7 +4160,7 @@ export function SessionPage({
         updatedAt: Date.now(),
       });
     };
-  }, [hydratedSessionKey, messagesHydrated, normalizedAgentKey, sessionId, sessionStorageKey]);
+  }, [agentContextMessages, hydratedSessionKey, messagesHydrated, normalizedAgentKey, sessionId, sessionStorageKey]);
 
   useEffect(() => {
     if (!sessionId || !messagesHydrated || hydratedSessionKey !== sessionStorageKey) {
@@ -3035,13 +4175,18 @@ export function SessionPage({
       upsertSessionMessages({
         agentKey: normalizedAgentKey,
         sessionId,
-        messages,
+        messages: filterWorkflowStageContextMessages(messages),
+      });
+      upsertSessionAgentContextMessages({
+        agentKey: normalizedAgentKey,
+        sessionId,
+        messages: agentContextMessages,
       });
     }, persistDelay);
     return () => {
       clearSessionMessagePersistTimer();
     };
-  }, [messages, messagesHydrated, hydratedSessionKey, normalizedAgentKey, sending, sessionId, sessionStorageKey]);
+  }, [agentContextMessages, messages, messagesHydrated, hydratedSessionKey, normalizedAgentKey, sending, sessionId, sessionStorageKey]);
 
   // 描述：进入发送态时关闭“重试”按钮 tooltip，避免点击后 tooltip 残留悬浮。
   useEffect(() => {
@@ -3228,14 +4373,20 @@ export function SessionPage({
   // 描述：在切换会话时恢复线程级 AI Provider 绑定，避免 AI Key 页调整默认顺序后回写已存在话题。
   useEffect(() => {
     setSelectedProvider(resolveAgentSessionSelectedAiProvider(sessionId));
+    setSelectedModelName(resolveAgentSessionSelectedAiModel(sessionId));
+    setSelectedModeName(resolveAgentSessionSelectedAiMode(sessionId));
   }, [sessionId]);
 
   // 描述：仅在当前会话尚未绑定 Provider 或绑定项失效时回退到首个可用 Provider；一旦完成回退即写回会话元数据，冻结该话题后续默认值。
   useEffect(() => {
     if (availableAiKeys.length === 0) {
       setSelectedProvider("");
+      setSelectedModelName("");
+      setSelectedModeName("");
       if (sessionId) {
         rememberAgentSessionSelectedAiProvider(sessionId, "");
+        rememberAgentSessionSelectedAiModel(sessionId, "");
+        rememberAgentSessionSelectedAiMode(sessionId, "");
       }
       return;
     }
@@ -3244,11 +4395,43 @@ export function SessionPage({
       return;
     }
     const nextProvider = String(availableAiKeys[0]?.provider || "").trim();
-    setSelectedProvider(nextProvider);
-    if (sessionId && nextProvider) {
-      rememberAgentSessionSelectedAiProvider(sessionId, nextProvider);
-    }
+    applySessionAiSelection(nextProvider);
   }, [availableAiKeys, selectedProvider, sessionId]);
+
+  // 描述：为旧会话补齐模型/模式初始值；仅在当前会话尚未存储覆盖值时回填，避免 AI Key 新字段接入后出现空白执行参数。
+  useEffect(() => {
+    const normalizedProvider = String(selectedProvider || "").trim();
+    if (!normalizedProvider) {
+      return;
+    }
+    const nextModelName = supportsProviderModelConfig(normalizedProvider)
+      ? resolveProviderDefaultModelName(normalizedProvider)
+      : "";
+    const nextModeName = supportsProviderModeConfig(normalizedProvider)
+      ? resolveProviderDefaultModeName(normalizedProvider)
+      : "";
+    if (supportsProviderModelConfig(normalizedProvider) && !String(selectedModelName || "").trim() && nextModelName) {
+      setSelectedModelName(nextModelName);
+      if (sessionId) {
+        rememberAgentSessionSelectedAiModel(sessionId, nextModelName);
+      }
+    }
+    if (supportsProviderModeConfig(normalizedProvider) && !String(selectedModeName || "").trim() && nextModeName) {
+      setSelectedModeName(nextModeName);
+      if (sessionId) {
+        rememberAgentSessionSelectedAiMode(sessionId, nextModeName);
+      }
+    }
+  }, [
+    resolveProviderDefaultModelName,
+    resolveProviderDefaultModeName,
+    selectedModeName,
+    selectedModelName,
+    selectedProvider,
+    sessionId,
+    supportsProviderModelConfig,
+    supportsProviderModeConfig,
+  ]);
 
   // 描述：加载“已发现技能”列表，供会话中的“工作流/技能”弹窗选择器使用。
   useEffect(() => {
@@ -3434,10 +4617,15 @@ export function SessionPage({
           ? assistantRunMetaMapRef.current[currentMessageId]
           : undefined;
         const fallbackSummary = resolveMeaningfulRunSummary(currentMeta?.segments || []);
-        const finalSummary = String(payload.message || "").trim()
-          || fallbackSummary
-          || t("执行完成");
+        const finalSummary = resolveFinalAssistantRunSummary(
+          String(currentMeta?.summary || "").trim(),
+          String(payload.message || "").trim(),
+          fallbackSummary,
+        );
         setStreamingAssistantTarget(finalSummary);
+        if (hasPendingWorkflowStages()) {
+          return;
+        }
         finishAssistantRunMessage(streamMessageIdRef.current, "finished", finalSummary);
         setStatus(t("执行完成"));
         setSending(false);
@@ -3523,6 +4711,7 @@ export function SessionPage({
   //   - 在正式执行前解析 DCC 软件路由；当存在多个可用软件且用户未明确指定时，阻断执行并要求用户先选软件。
   const resolveDccPreflight = useCallback(async (
     promptText: string,
+    displayMessages: MessageItem[],
     contextMessages: MessageItem[],
     options?: ExecutePromptOptions,
   ): Promise<DccPreflightResult> => {
@@ -3542,7 +4731,7 @@ export function SessionPage({
     }
 
     const userSourceTexts = [
-      ...contextMessages
+      ...displayMessages
         .filter((item) => item.role === "user")
         .map((item) => item.text),
       promptText,
@@ -3583,6 +4772,7 @@ export function SessionPage({
           options: {
             ...options,
           },
+          displayMessages,
           contextMessages,
           softwareOptions,
           selectedSoftware: defaultSourceSoftware,
@@ -3649,6 +4839,7 @@ export function SessionPage({
         options: {
           ...options,
         },
+        displayMessages,
         contextMessages,
         softwareOptions,
         selectedSoftware: softwareOptions[0]?.software || "",
@@ -3675,11 +4866,19 @@ export function SessionPage({
 
     const allowDangerousAction = Boolean(options?.allowDangerousAction);
     const appendUserMessage = options?.appendUserMessage !== false;
-    const baseContextMessages = options?.contextMessages || messages;
+    const baseDisplayMessages = options?.displayMessages || messages;
+    const baseContextMessages = options?.contextMessages?.length
+      ? options.contextMessages
+      : agentContextMessages.length > 0
+        ? agentContextMessages
+        : buildPromptContextMessages(
+          baseDisplayMessages,
+          assistantRunMetaMapRef.current,
+        );
     const activeWorkflow = options?.workflowIdOverride
       ? getAgentWorkflowById(options.workflowIdOverride) || workflows.find((item) => item.id === options.workflowIdOverride) || null
       : selectedWorkflow;
-    const dccPreflight = await resolveDccPreflight(normalizedContent, baseContextMessages, options);
+    const dccPreflight = await resolveDccPreflight(normalizedContent, baseDisplayMessages, baseContextMessages, options);
     if (dccPreflight.blocked) {
       return;
     }
@@ -3758,6 +4957,7 @@ export function SessionPage({
       nextContextMessages = [...nextContextMessages, nextUserMessage];
       setMessages((prev) => [...prev, nextUserMessage]);
     }
+    setAgentContextMessages(nextContextMessages);
 
     try {
       const skillExecutionPlan = buildAgentWorkflowSkillExecutionPlan(activeWorkflow, availableSkills);
@@ -3798,12 +4998,12 @@ export function SessionPage({
       const initialStageIndex = hasWorkflowStages
         ? clampWorkflowStageIndex(options?.workflowStageIndex, totalWorkflowStageCount)
         : 0;
+      const workflowRootStreamMessageId = String(options?.replaceAssistantMessageId || "").trim()
+        || `assistant-stream-${Date.now()}`;
 
-      for (
-        let currentStageIndex = hasWorkflowStages ? initialStageIndex : 0;
-        currentStageIndex < (hasWorkflowStages ? totalWorkflowStageCount : 1);
-        currentStageIndex += 1
-      ) {
+      let currentStageIndex = hasWorkflowStages ? initialStageIndex : 0;
+      let currentStageAttempt = 0;
+      while (currentStageIndex < (hasWorkflowStages ? totalWorkflowStageCount : 1)) {
         const currentStagePlan = hasWorkflowStages
           ? buildAgentWorkflowSkillExecutionPlan(activeWorkflow, availableSkills, { stageIndex: currentStageIndex })
           : skillExecutionPlan;
@@ -3812,9 +5012,17 @@ export function SessionPage({
           ? scopeWorkflowDefinitionToSkillNode(activeWorkflow, currentStageItem.nodeId)
           : activeWorkflow;
         const stageTraceId = `${executionTraceId}-${currentStageIndex + 1}`;
-        const streamMessageId = String(
-          (currentStageIndex === initialStageIndex ? options?.replaceAssistantMessageId : "") || "",
-        ).trim() || `assistant-stream-${Date.now()}-${currentStageIndex + 1}`;
+        const streamMessageId = workflowRootStreamMessageId;
+        const stageContextMessageId = hasWorkflowStages
+          ? `${streamMessageId}-stage-${currentStageIndex + 1}`
+          : streamMessageId;
+        const stageDividerTitle = hasWorkflowStages && currentStageItem && currentStageAttempt === 0
+          ? buildWorkflowStageDividerTitle(
+            currentStageIndex,
+            totalWorkflowStageCount,
+            currentStageItem.nodeTitle,
+          )
+          : "";
         const initialStreamText = "";
 
         if (hasWorkflowStages && currentStageItem) {
@@ -3854,33 +5062,64 @@ export function SessionPage({
         agentStreamTextBufferRef.current = "";
         agentStreamSeenKeysRef.current.clear();
         setMessages((prev) => upsertAssistantMessageById(prev, streamMessageId, initialStreamText));
-        nextContextMessages = upsertAssistantMessageById(nextContextMessages, streamMessageId, initialStreamText);
+        if (!hasWorkflowStages) {
+          nextContextMessages = upsertAssistantMessageById(nextContextMessages, streamMessageId, initialStreamText);
+        }
         streamDisplayedTextRef.current = initialStreamText;
         streamLatestTextRef.current = initialStreamText;
         assistantRunStatusRef.current = "running";
         assistantRunStageRef.current = "planning";
         assistantRunHeartbeatCountRef.current = 0;
         assistantRunLastActivityAtRef.current = Date.now();
-        setAssistantRunMetaMap((prev) => ({
-          ...prev,
-          [streamMessageId]: {
-            status: "running",
-            startedAt: Date.now(),
-            collapsed: false,
-            summary: "",
-            segments: [
-              {
-                key: `intro-${Date.now()}`,
-                intro: "",
-                step: t("正在思考…"),
-                status: "running",
-                data: {
-                  __segment_role: INITIAL_THINKING_SEGMENT_ROLE,
-                },
-              },
-            ],
-          },
-        }));
+        setAssistantRunMetaMap((prev) => {
+          const currentMeta = prev[streamMessageId];
+          const shouldPreserveExistingWorkflowSegments = hasWorkflowStages
+            && Boolean(currentMeta)
+            && (currentStageIndex > initialStageIndex || initialStageIndex > 0 || currentStageAttempt > 0);
+          const stageDividerSegments = stageDividerTitle ? [{
+            key: `workflow-stage-divider-${Date.now()}-${currentStageIndex + 1}`,
+            intro: stageDividerTitle,
+            step: "",
+            status: "finished" as const,
+            data: {
+              __segment_role: WORKFLOW_STAGE_DIVIDER_SEGMENT_ROLE,
+              workflow_stage_index: currentStageIndex,
+              workflow_stage_total: totalWorkflowStageCount,
+              workflow_stage_title: String(currentStageItem?.nodeTitle || "").trim(),
+            },
+          }] : [];
+          const thinkingSegments = hasWorkflowStages ? [] : [{
+            key: `intro-${Date.now()}`,
+            intro: "",
+            step: t("正在思考…"),
+            status: "running" as const,
+            data: {
+              __segment_role: INITIAL_THINKING_SEGMENT_ROLE,
+            },
+          }];
+          const segments = shouldPreserveExistingWorkflowSegments && currentMeta
+            ? normalizeAssistantRunSegments([
+              ...currentMeta.segments,
+              ...stageDividerSegments,
+            ])
+            : normalizeAssistantRunSegments([
+              ...stageDividerSegments,
+              ...thinkingSegments,
+            ]);
+          return {
+            ...prev,
+            [streamMessageId]: {
+              status: "running",
+              startedAt: shouldPreserveExistingWorkflowSegments && currentMeta
+                ? currentMeta.startedAt
+                : Date.now(),
+              finishedAt: undefined,
+              collapsed: false,
+              summary: "",
+              segments,
+            },
+          };
+        });
         if (activeWorkflow && currentStageItem && totalWorkflowStageCount > 0) {
           const nextWorkflowPhaseCursor = buildWorkflowPhaseCursorSnapshot(
             activeWorkflow,
@@ -3942,8 +5181,11 @@ export function SessionPage({
           providerApiKey: provider === "codex" || provider === "gemini-cli"
             ? undefined
             : String(selectedAi?.keyValue || "").trim() || undefined,
-          providerModel: provider === "iflow"
-            ? String(selectedAi?.modelName || "").trim() || undefined
+          providerModel: supportsProviderModelConfig(provider)
+            ? String(selectedModelName || "").trim() || undefined
+            : undefined,
+          providerMode: supportsProviderModeConfig(provider)
+            ? String(selectedModeName || "").trim() || undefined
             : undefined,
           prompt: agentPrompt,
           traceId: stageTraceId,
@@ -3972,6 +5214,33 @@ export function SessionPage({
             },
           }));
         }
+        const responseTotalTokens = Number(response.usage?.total_tokens || 0);
+        if (sessionId && Number.isFinite(responseTotalTokens) && responseTotalTokens > 0) {
+          setSessionCumulativeTokenUsage(
+            increaseAgentSessionCumulativeTokenUsage(sessionId, responseTotalTokens),
+          );
+        }
+        const responseControl = String(response.control || "").trim().toLowerCase() === "done"
+          ? "done"
+          : "continue";
+        const responseDisplayMessage = sanitizeWorkflowStageDisplayMessage(
+          String(response.display_message || "").trim(),
+          String(response.message || "").trim(),
+        );
+        const completionDecision = hasWorkflowStages
+          ? resolveWorkflowStageCompletionDecision(
+            currentStageItem,
+            responseControl,
+            responseDisplayMessage,
+            assistantRunMetaMapRef.current[streamMessageId],
+          )
+          : {
+            control: responseControl,
+            reason: "",
+            displayMessage: responseDisplayMessage,
+          };
+        const effectiveResponseControl = completionDecision.control;
+        const effectiveResponseDisplayMessage = completionDecision.displayMessage;
         appendTraceRecord({
           traceId: response.trace_id,
           source: "agent:run",
@@ -3979,18 +5248,61 @@ export function SessionPage({
             ? t("阶段 {{current}}/{{total}}：{{message}}", {
               current: currentStageIndex + 1,
               total: totalWorkflowStageCount,
-              message: response.message,
+              message: effectiveResponseDisplayMessage,
             })
-            : response.message,
+            : effectiveResponseDisplayMessage,
         });
         setUiHint(response.ui_hint ? mapProtocolUiHint(response.ui_hint) : null);
         setPendingDangerousToken("");
-        setStreamingAssistantTarget(response.message);
-        finishAssistantRunMessage(streamMessageId, "finished", response.message);
-        nextContextMessages = upsertAssistantMessageById(nextContextMessages, streamMessageId, response.message);
+        setStreamingAssistantTarget(effectiveResponseDisplayMessage);
+        if (hasWorkflowStages) {
+          appendAssistantRunSegment(streamMessageId, {
+            key: `workflow-stage-summary-${Date.now()}-${currentStageIndex + 1}`,
+            intro: "",
+            step: effectiveResponseDisplayMessage,
+            status: "finished",
+            data: {
+              __step_type: WORKFLOW_STAGE_SUMMARY_STEP_TYPE,
+              workflow_stage_index: currentStageIndex,
+              workflow_stage_total: totalWorkflowStageCount,
+              workflow_stage_summary_message: sanitizeWorkflowStageDisplayMessage(
+                String(response.display_message || "").trim(),
+                String(response.message || "").trim(),
+              ),
+              workflow_stage_title: String(currentStageItem?.nodeTitle || "").trim(),
+            },
+          });
+          nextContextMessages = upsertAssistantMessageBeforeAnchorById(
+            nextContextMessages,
+            stageContextMessageId,
+            effectiveResponseDisplayMessage,
+            streamMessageId,
+          );
+          setAgentContextMessages(nextContextMessages);
+        } else {
+          finishAssistantRunMessage(streamMessageId, "finished", effectiveResponseDisplayMessage);
+          nextContextMessages = upsertAssistantMessageById(nextContextMessages, streamMessageId, effectiveResponseDisplayMessage);
+          setAgentContextMessages(nextContextMessages);
+        }
         const actionText = response.actions?.length > 0
           ? t("动作：{{actions}}", { actions: response.actions.join(", ") })
           : t("动作：无");
+        if (hasWorkflowStages && effectiveResponseControl !== "done") {
+          currentStageAttempt += 1;
+          const pendingStageStatus = completionDecision.reason
+            ? t("阶段 {{current}}/{{total}} 尚未完成：{{reason}}", {
+              current: currentStageIndex + 1,
+              total: totalWorkflowStageCount,
+              reason: completionDecision.reason,
+            })
+            : t("阶段 {{current}}/{{total}} 尚未完成，继续当前阶段…", {
+              current: currentStageIndex + 1,
+              total: totalWorkflowStageCount,
+            });
+          setStatus(pendingStageStatus);
+          continue;
+        }
+        currentStageAttempt = 0;
         if (hasWorkflowStages && currentStageIndex + 1 < totalWorkflowStageCount) {
           setStatus(
             t("阶段 {{current}}/{{total}} 已完成，继续下一阶段…", {
@@ -3998,7 +5310,20 @@ export function SessionPage({
               total: totalWorkflowStageCount,
             }),
           );
+          currentStageIndex += 1;
           continue;
+        }
+        if (hasWorkflowStages) {
+          finishAssistantRunMessage(
+            streamMessageId,
+            "finished",
+            buildWorkflowCompletionSummary(
+              assistantRunMetaMapRef.current[streamMessageId],
+              currentStageIndex,
+              String(currentStageItem?.nodeTitle || "").trim(),
+              String(response.message || "").trim() || effectiveResponseDisplayMessage,
+            ),
+          );
         }
         setStatus(
           response.exported_file
@@ -4014,6 +5339,7 @@ export function SessionPage({
         );
         workflowPhaseCursorRef.current = null;
         setWorkflowPhaseCursor(null);
+        break;
       }
     } catch (err) {
       const detail = normalizeInvokeErrorDetail(err);
@@ -4149,25 +5475,25 @@ export function SessionPage({
       return;
     }
     const prunedRetryTail = pruneAssistantRetryTail(messages, assistantMessageIndex);
+    const nextPrunedRunMetaMap = { ...assistantRunMetaMapRef.current };
     if (prunedRetryTail.removedAssistantMessageIds.length > 0) {
       setMessages(prunedRetryTail.messages);
-      setAssistantRunMetaMap((prev) => {
-        const next = { ...prev };
-        prunedRetryTail.removedAssistantMessageIds.forEach((messageId) => {
-          delete next[messageId];
-        });
-        return next;
+      prunedRetryTail.removedAssistantMessageIds.forEach((messageId) => {
+        delete nextPrunedRunMetaMap[messageId];
       });
+      setAssistantRunMetaMap(nextPrunedRunMetaMap);
     }
+    const prunedRetryContextMessages = buildPromptContextMessages(
+      prunedRetryTail.messages,
+      nextPrunedRunMetaMap,
+    );
+    setAgentContextMessages(prunedRetryContextMessages);
     // 描述：若当前失败为 Gemini 未实现，并且已启用 Codex，则自动切换到 Codex 再重试。
     if (
       isGeminiProviderNotImplementedError(assistantMessage.text)
       && availableAiKeys.some((item) => item.provider === "codex" && item.enabled)
     ) {
-      setSelectedProvider("codex");
-      if (sessionId) {
-        rememberAgentSessionSelectedAiProvider(sessionId, "codex");
-      }
+      applySessionAiSelection("codex");
       setStatus(t("检测到 Gemini 暂不可用，已切换到 Codex 重试"));
     } else {
       setStatus(t("正在重试本轮执行..."));
@@ -4181,7 +5507,8 @@ export function SessionPage({
       allowDangerousAction: false,
       appendUserMessage: false,
       replaceAssistantMessageId: String(assistantMessage.id || "").trim() || undefined,
-      contextMessages: prunedRetryTail.messages,
+      displayMessages: prunedRetryTail.messages,
+      contextMessages: prunedRetryContextMessages,
       workflowIdOverride: shouldResumeWorkflowStage ? currentWorkflowPhaseCursor?.workflowId : undefined,
       workflowStageIndex: shouldResumeWorkflowStage ? currentWorkflowPhaseCursor?.currentStageIndex : undefined,
     });
@@ -4247,21 +5574,69 @@ export function SessionPage({
     }
   };
 
-  // 描述：
+  // 描述：应用当前会话的 AI 选择，统一收敛 Provider、模型与模式的会话级覆盖值。
   //
-  //   - 处理 AI 下拉选择，统一把选择值收敛为 provider 字符串。
+  // Params:
+  //
+  //   - provider: 目标 Provider 标识。
+  //   - options: 可选的模型与模式覆盖值；未传时自动回填当前 Provider 默认值。
+  function applySessionAiSelection(
+    provider: string,
+    options?: {
+      modelName?: string;
+      modeName?: string;
+    },
+  ) {
+    const normalizedProvider = String(provider || "").trim();
+    if (!normalizedProvider) {
+      return;
+    }
+    const supportsModel = supportsProviderModelConfig(normalizedProvider);
+    const supportsMode = supportsProviderModeConfig(normalizedProvider);
+    const nextModelName = supportsModel
+      ? String(options?.modelName ?? resolveProviderDefaultModelName(normalizedProvider)).trim()
+      : "";
+    const nextModeName = supportsMode
+      ? String(options?.modeName ?? resolveProviderDefaultModeName(normalizedProvider)).trim()
+      : "";
+    setSelectedProvider(normalizedProvider);
+    setSelectedModelName(nextModelName);
+    setSelectedModeName(nextModeName);
+    if (sessionId) {
+      rememberAgentSessionSelectedAiProvider(sessionId, normalizedProvider);
+      rememberAgentSessionSelectedAiModel(sessionId, nextModelName);
+      rememberAgentSessionSelectedAiMode(sessionId, nextModeName);
+    }
+  }
+
+  // 描述：切换会话级模型选择，确保当前 Provider 下的覆盖值立即持久化。
   //
   // Params:
   //
   //   - value: AriSelect 回传值。
-  const handleResetSandbox = async () => {
-    if (!sessionId) return;
-    try {
-      await invoke(COMMANDS.RESET_AGENT_SANDBOX, { sessionId });
-      setStatus(t("沙盒环境已重置（跨轮次上下文已清空）"));
-    } catch (err) {
-      setStatus(t("沙盒重置失败，请查看日志"));
+  const handleChangeModel = (value: string | number | (string | number)[] | undefined) => {
+    if (Array.isArray(value) || !supportsProviderModelConfig(selectedProvider)) {
+      return;
     }
+    applySessionAiSelection(selectedProvider, {
+      modelName: String(value || "").trim(),
+      modeName: selectedModeName,
+    });
+  };
+
+  // 描述：切换会话级模式选择，并将结果立即写回当前会话。
+  //
+  // Params:
+  //
+  //   - value: AriSelect 回传值。
+  const handleChangeMode = (value: string | number | (string | number)[] | undefined) => {
+    if (Array.isArray(value) || !supportsProviderModeConfig(selectedProvider)) {
+      return;
+    }
+    applySessionAiSelection(selectedProvider, {
+      modelName: selectedModelName,
+      modeName: String(value || "").trim(),
+    });
   };
 
   // 描述：主动取消当前执行任务，要求后端立即终止对应会话沙盒。
@@ -4294,7 +5669,13 @@ export function SessionPage({
     }
     void sendMessage();
   };
-
+  // 描述：
+  //
+  //   - 处理 AI 下拉选择，统一把选择值收敛为 Provider 字符串，并在切换时同步重置会话级模型/模式。
+  //
+  // Params:
+  //
+  //   - value: AriSelect 回传值。
   const handleChangeProvider = (value: string | number | (string | number)[] | undefined) => {
     if (Array.isArray(value)) {
       return;
@@ -4303,10 +5684,7 @@ export function SessionPage({
     if (!nextProvider) {
       return;
     }
-    setSelectedProvider(nextProvider);
-    if (sessionId) {
-      rememberAgentSessionSelectedAiProvider(sessionId, nextProvider);
-    }
+    applySessionAiSelection(nextProvider);
   };
 
   // 描述：根据审批结果更新本地运行片段状态，确保授权卡片在用户操作后即时收敛。
@@ -4443,12 +5821,14 @@ export function SessionPage({
       }
       const pendingPrompt = pendingDccSelection.prompt;
       const pendingOptions = pendingDccSelection.options;
+      const pendingDisplayMessages = pendingDccSelection.displayMessages;
       const pendingContextMessages = pendingDccSelection.contextMessages;
       setPendingDccSelection(null);
       await executePrompt(pendingPrompt, {
         ...pendingOptions,
         resolvedCrossDccSoftwares: [nextSoftware, nextTargetSoftware],
         skipDccSelectionPrompt: true,
+        displayMessages: pendingDisplayMessages,
         contextMessages: pendingContextMessages,
       });
       return;
@@ -4464,12 +5844,14 @@ export function SessionPage({
     setSelectedDccSoftware(nextSoftware);
     const pendingPrompt = pendingDccSelection.prompt;
     const pendingOptions = pendingDccSelection.options;
+    const pendingDisplayMessages = pendingDccSelection.displayMessages;
     const pendingContextMessages = pendingDccSelection.contextMessages;
     setPendingDccSelection(null);
     await executePrompt(pendingPrompt, {
       ...pendingOptions,
       resolvedDccSoftware: nextSoftware,
       skipDccSelectionPrompt: true,
+      displayMessages: pendingDisplayMessages,
       contextMessages: pendingContextMessages,
     });
   };
@@ -4515,6 +5897,30 @@ export function SessionPage({
     typeof activeApprovalData.tool_args === "string"
       ? truncateRunText(activeApprovalData.tool_args, APPROVAL_TOOL_ARGS_PREVIEW_MAX_CHARS)
       : "";
+  const activeTodoDockSnapshot = useMemo(
+    () => resolveAssistantTodoDockSnapshot(
+      messages,
+      assistantRunMetaMap,
+      String(streamMessageIdRef.current || "").trim(),
+    ),
+    [assistantRunMetaMap, messages],
+  );
+  const activeTodoDockItems = activeTodoDockSnapshot?.items || [];
+  const shouldShowTodoDock = activeTodoDockItems.length > 0;
+  const completedTodoCount = activeTodoDockItems.filter((item) => item.status === "completed").length;
+  const todoDockProgressText = activeTodoDockItems.length > 0
+    ? t("已完成 {{done}} / {{total}}", {
+      done: completedTodoCount,
+      total: activeTodoDockItems.length,
+    })
+    : "";
+  const todoDockCaption = workflowPhaseCursor && workflowPhaseCursor.totalStageCount > 0
+    ? t("当前阶段：{{current}}/{{total}} · {{title}}", {
+      current: workflowPhaseCursor.currentStageIndex + 1,
+      total: workflowPhaseCursor.totalStageCount,
+      title: workflowPhaseCursor.currentNodeTitle || t("未命名阶段"),
+    })
+    : t("会话内任务计划会随执行自动更新。");
 
   // 描述：
   //
@@ -4965,9 +6371,13 @@ const handleConfirmWorkflowSkillModal = () => {
       : t("（当前未选择工作流，可能已切换为技能执行）");
     const providerName = String(selectedAi?.providerLabel || selectedAi?.provider || selectedProvider || "").trim() || "-";
     const providerId = String(selectedAi?.provider || selectedProvider || "").trim() || "-";
+    const providerModel = String(selectedModelName || "").trim() || t("(未填写)");
+    const providerMode = String(selectedModeName || "").trim() || t("(未填写)");
     return [
       t("- 会话类型：智能体"),
       t("- AI：{{name}} ({{id}})", { name: providerName, id: providerId }),
+      t("- 模型：{{model}}", { model: providerModel }),
+      t("- 模式：{{mode}}", { mode: providerMode }),
       t("- 工作流：{{workflow}}", { workflow: workflowSummary }),
       "",
       t("#### 可使用技能列表"),
@@ -5228,8 +6638,13 @@ const handleConfirmWorkflowSkillModal = () => {
       const summary = String(entry.runMeta.summary || "").trim();
       const filteredSegments = entry.runMeta.segments
         .map((segment) => {
-          const intro = normalizeRunSegmentIntroForCopy(segment.intro, segment.step);
-          const step = String(segment.step || "").trim() || t("（空步骤）");
+          const stageDividerTitle = String(segment.intro || segment.step || "").trim();
+          const intro = isWorkflowStageDividerSegment(segment)
+            ? t("工作流阶段")
+            : normalizeRunSegmentIntroForCopy(segment.intro, segment.step);
+          const step = isWorkflowStageDividerSegment(segment)
+            ? stageDividerTitle || t("（空步骤）")
+            : String(segment.step || "").trim() || t("（空步骤）");
           return {
             status: segment.status,
             intro,
@@ -5339,6 +6754,8 @@ const handleConfirmWorkflowSkillModal = () => {
     messages,
     normalizedAgentKey,
     selectedAi,
+    selectedModeName,
+    selectedModelName,
     selectedWorkflow,
     selectedProvider,
     selectedSessionSkills,
@@ -5737,24 +7154,42 @@ const handleConfirmWorkflowSkillModal = () => {
                   />
                 );
               };
+              const renderRunSegmentGroup = (group: AssistantRunSegmentGroup, segmentKeyPrefix = "") => {
+                if (group.kind === "divider") {
+                  return (
+                    <AriContainer
+                      key={`${segmentKeyPrefix}${group.key}`}
+                      className="desk-run-divider desk-run-divider-static desk-run-stage-divider"
+                      padding={0}
+                    >
+                      <span className="desk-run-divider-line" />
+                      <span className="desk-run-divider-text">
+                        {group.title}
+                      </span>
+                      <span className="desk-run-divider-line" />
+                    </AriContainer>
+                  );
+                }
+                return (
+                  <AriContainer key={`${segmentKeyPrefix}${group.key}`} className="desk-run-group" padding={0}>
+                    {String(group.title || "").trim() ? (
+                      <AriTypography
+                        className="desk-run-intro"
+                        variant="body"
+                        value={group.title}
+                      />
+                    ) : null}
+                    <AriContainer className="desk-run-group-steps" padding={0}>
+                      {group.steps.map((step) => renderRunSegment(step, segmentKeyPrefix))}
+                    </AriContainer>
+                  </AriContainer>
+                );
+              };
               const messageContent = useRunLayout && runMeta ? (
                 <AriContainer className="desk-run-flow" padding={0}>
                   {runMeta.status === "running" ? (
                     <AriContainer className="desk-run-segments" padding={0}>
-                      {runSegmentGroups.map((group) => (
-                        <AriContainer key={group.key} className="desk-run-group" padding={0}>
-                          {String(group.title || "").trim() ? (
-                            <AriTypography
-                              className="desk-run-intro"
-                              variant="body"
-                              value={group.title}
-                            />
-                          ) : null}
-                          <AriContainer className="desk-run-group-steps" padding={0}>
-                            {group.steps.map((step) => renderRunSegment(step))}
-                          </AriContainer>
-                        </AriContainer>
-                      ))}
+                      {runSegmentGroups.map((group) => renderRunSegmentGroup(group))}
                       {!hasPendingApprovalInRender ? (
                         <AriContainer className="desk-run-thinking-indicator" padding={0}>
                           <AriTypography
@@ -5789,20 +7224,7 @@ const handleConfirmWorkflowSkillModal = () => {
                       </button>
                       {!runMeta.collapsed ? (
                         <AriContainer className="desk-run-segments desk-run-segments-collapsed" padding={0}>
-                          {runSegmentGroups.map((group) => (
-                            <AriContainer key={`collapsed-${group.key}`} className="desk-run-group" padding={0}>
-                              {String(group.title || "").trim() ? (
-                                <AriTypography
-                                  className="desk-run-intro"
-                                  variant="body"
-                                  value={group.title}
-                                />
-                              ) : null}
-                              <AriContainer className="desk-run-group-steps" padding={0}>
-                                {group.steps.map((step) => renderRunSegment(step, "collapsed-"))}
-                              </AriContainer>
-                            </AriContainer>
-                          ))}
+                          {runSegmentGroups.map((group) => renderRunSegmentGroup(group, "collapsed-"))}
                         </AriContainer>
                       ) : null}
                       <AriContainer className={`desk-run-summary ${runMeta.status === "failed" ? "desk-run-summary-failed" : ""}`} padding={0}>
@@ -6098,6 +7520,37 @@ const handleConfirmWorkflowSkillModal = () => {
               ) : null}
             </AriCard>
           ) : null}
+          {shouldShowTodoDock ? (
+            <AriCard className="desk-action-slot desk-action-slot-info desk-action-slot-todo">
+              <AriFlex align="center" justify="space-between" className="desk-todo-dock-head">
+                <AriTypography variant="h4" value={t("任务计划")} />
+                {todoDockProgressText ? (
+                  <AriTypography variant="caption" value={todoDockProgressText} />
+                ) : null}
+              </AriFlex>
+              <AriTypography variant="caption" value={todoDockCaption} />
+              <AriContainer className="desk-todo-dock-list">
+                {activeTodoDockItems.map((item, index) => (
+                  <AriFlex
+                    key={`${item.id}-${index}`}
+                    align="center"
+                    justify="space-between"
+                    className="desk-todo-dock-item"
+                  >
+                    <AriTypography
+                      className={`desk-todo-dock-item-text ${item.status === "completed" ? "is-completed" : ""}`}
+                      value={item.content}
+                    />
+                    <AriTypography
+                      className={`desk-todo-dock-status desk-todo-dock-status-${item.status}`}
+                      variant="caption"
+                      value={resolveTodoDockStatusLabel(item.status)}
+                    />
+                  </AriFlex>
+                ))}
+              </AriContainer>
+            </AriCard>
+          ) : null}
           <AriCard className="desk-prompt-card desk-session-prompt-card">
             <AriInput.TextArea
               className="desk-session-prompt-input"
@@ -6135,6 +7588,34 @@ const handleConfirmWorkflowSkillModal = () => {
                   onChange={handleChangeProvider}
                   disabled={availableAiKeys.length === 0}
                 />
+                {supportsProviderModelConfig(selectedProvider) ? (
+                  <AriSelect
+                    className="desk-prompt-toolbar-select desk-prompt-toolbar-select-model"
+                    value={selectedModelName || undefined}
+                    options={resolveProviderModelSelectOptions(selectedProvider, selectedModelName)}
+                    placeholder={t("选择 {{providerLabel}} 模型", {
+                      providerLabel: String(selectedAi?.providerLabel || selectedProvider || "").trim(),
+                    })}
+                    bordered={false}
+                    onChange={handleChangeModel}
+                    disabled={availableAiKeys.length === 0}
+                  />
+                ) : null}
+                {supportsProviderModeConfig(selectedProvider) ? (
+                  <AriSelect
+                    className="desk-prompt-toolbar-select desk-prompt-toolbar-select-mode"
+                    value={isAiProvider(selectedProvider)
+                      ? (resolveAiProviderModeSelectValue(selectedProvider, selectedModeName) || undefined)
+                      : (selectedModeName || undefined)}
+                    options={resolveProviderModeSelectOptions(selectedProvider, selectedModeName)}
+                    placeholder={t("选择 {{providerLabel}} 模式", {
+                      providerLabel: String(selectedAi?.providerLabel || selectedProvider || "").trim(),
+                    })}
+                    bordered={false}
+                    onChange={handleChangeMode}
+                    disabled={availableAiKeys.length === 0}
+                  />
+                ) : null}
                 <AriSelect
                   className="desk-prompt-toolbar-select desk-prompt-toolbar-select-strategy"
                   value="workflow_skill"
@@ -6152,16 +7633,13 @@ const handleConfirmWorkflowSkillModal = () => {
                     <span>{t("Uptime: {{value}}", { value: formatUptime(sandboxMetrics.uptime_secs) })}</span>
                   </AriFlex>
                 )}
-                <AriTooltip content={t("重置沙盒环境（清空变量）")} position="top" minWidth={0} matchTriggerWidth={false}>
-                  <AriButton
-                    ghost
-                    size="sm"
-                    icon="refresh"
-                    className="desk-prompt-icon-btn"
-                    disabled={sending}
-                    onClick={handleResetSandbox}
-                  />
-                </AriTooltip>
+                <AriTypography
+                  variant="caption"
+                  className="desk-session-token-usage"
+                  value={t("Token：{{value}}", {
+                    value: formatTokenUsage(sessionCumulativeTokenUsage),
+                  })}
+                />
               </AriFlex>
               <AriButton
                 type="default"

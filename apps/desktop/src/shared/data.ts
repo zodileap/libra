@@ -69,6 +69,11 @@ const SESSION_MESSAGES_STORAGE_KEY = "libra.desktop.session.messages";
 
 // 描述:
 //
+//   - Agent 上下文本地存储键；独立于前端 transcript 持久化，避免 UI 展示消息与模型上下文相互污染。
+const SESSION_AGENT_CONTEXT_MESSAGES_STORAGE_KEY = "libra.desktop.session.agent.context.messages";
+
+// 描述:
+//
 //   - 会话运行态本地存储键，用于恢复“执行中步骤流”与侧边栏运行标识。
 const SESSION_RUN_STATE_STORAGE_KEY = "libra.desktop.session.run.state";
 
@@ -135,7 +140,10 @@ interface SessionMeta {
   pinnedIds: string[];
   removedIds: string[];
   selectedAiProviderBySessionId: Record<string, string>;
+  selectedAiModelBySessionId: Record<string, string>;
+  selectedAiModeBySessionId: Record<string, string>;
   selectedDccSoftwareBySessionId: Record<string, string>;
+  cumulativeTokenUsageBySessionId: Record<string, number>;
 }
 
 // 描述:
@@ -146,7 +154,10 @@ export interface AgentSessionMetaSnapshot {
   pinnedIds: string[];
   removedIds: string[];
   selectedAiProviderBySessionId: Record<string, string>;
+  selectedAiModelBySessionId: Record<string, string>;
+  selectedAiModeBySessionId: Record<string, string>;
   selectedDccSoftwareBySessionId: Record<string, string>;
+  cumulativeTokenUsageBySessionId: Record<string, number>;
 }
 
 // 描述:
@@ -503,7 +514,10 @@ function readSessionMeta(): SessionMeta {
       pinnedIds: [],
       removedIds: [],
       selectedAiProviderBySessionId: {},
+      selectedAiModelBySessionId: {},
+      selectedAiModeBySessionId: {},
       selectedDccSoftwareBySessionId: {},
+      cumulativeTokenUsageBySessionId: {},
     };
   }
 
@@ -514,7 +528,10 @@ function readSessionMeta(): SessionMeta {
       pinnedIds: [],
       removedIds: [],
       selectedAiProviderBySessionId: {},
+      selectedAiModelBySessionId: {},
+      selectedAiModeBySessionId: {},
       selectedDccSoftwareBySessionId: {},
+      cumulativeTokenUsageBySessionId: {},
     };
   }
 
@@ -530,11 +547,29 @@ function readSessionMeta(): SessionMeta {
         && !Array.isArray(parsed.selectedAiProviderBySessionId)
           ? parsed.selectedAiProviderBySessionId
           : {},
+      selectedAiModelBySessionId:
+        parsed?.selectedAiModelBySessionId
+        && typeof parsed.selectedAiModelBySessionId === "object"
+        && !Array.isArray(parsed.selectedAiModelBySessionId)
+          ? parsed.selectedAiModelBySessionId
+          : {},
+      selectedAiModeBySessionId:
+        parsed?.selectedAiModeBySessionId
+        && typeof parsed.selectedAiModeBySessionId === "object"
+        && !Array.isArray(parsed.selectedAiModeBySessionId)
+          ? parsed.selectedAiModeBySessionId
+          : {},
       selectedDccSoftwareBySessionId:
         parsed?.selectedDccSoftwareBySessionId
         && typeof parsed.selectedDccSoftwareBySessionId === "object"
         && !Array.isArray(parsed.selectedDccSoftwareBySessionId)
           ? parsed.selectedDccSoftwareBySessionId
+          : {},
+      cumulativeTokenUsageBySessionId:
+        parsed?.cumulativeTokenUsageBySessionId
+        && typeof parsed.cumulativeTokenUsageBySessionId === "object"
+        && !Array.isArray(parsed.cumulativeTokenUsageBySessionId)
+          ? parsed.cumulativeTokenUsageBySessionId
           : {},
     };
   } catch (_err) {
@@ -543,7 +578,10 @@ function readSessionMeta(): SessionMeta {
       pinnedIds: [],
       removedIds: [],
       selectedAiProviderBySessionId: {},
+      selectedAiModelBySessionId: {},
+      selectedAiModeBySessionId: {},
       selectedDccSoftwareBySessionId: {},
+      cumulativeTokenUsageBySessionId: {},
     };
   }
 }
@@ -670,6 +708,51 @@ function writeSessionMessages(groups: StoredSessionMessageGroup[]) {
     return;
   }
   window.localStorage.setItem(SESSION_MESSAGES_STORAGE_KEY, JSON.stringify(groups));
+}
+
+// 描述:
+//
+//   - 读取 agent 上下文消息分组列表。
+//
+// Returns:
+//
+//   - agent 上下文消息分组数组。
+function readSessionAgentContextMessages(): StoredSessionMessageGroup[] {
+  if (!IS_BROWSER) {
+    return [];
+  }
+  const raw = window.localStorage.getItem(SESSION_AGENT_CONTEXT_MESSAGES_STORAGE_KEY);
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.filter(
+      (item) =>
+        item?.sessionId &&
+        Boolean(item?.agentKey) &&
+        Array.isArray(item?.messages),
+    );
+  } catch (_err) {
+    return [];
+  }
+}
+
+// 描述:
+//
+//   - 写入 agent 上下文消息分组列表。
+//
+// Params:
+//
+//   - groups: agent 上下文消息分组数组。
+function writeSessionAgentContextMessages(groups: StoredSessionMessageGroup[]) {
+  if (!IS_BROWSER) {
+    return;
+  }
+  window.localStorage.setItem(SESSION_AGENT_CONTEXT_MESSAGES_STORAGE_KEY, JSON.stringify(groups));
 }
 
 // 描述：向当前窗口广播会话运行态更新事件，供侧边栏与会话页协同刷新。
@@ -1975,6 +2058,136 @@ export function clearAgentSessionSelectedAiProvider(sessionId: string) {
   rememberAgentSessionSelectedAiProvider(sessionId, "");
 }
 
+// 描述：读取指定会话当前绑定的模型名，供会话级 AI 配置在 Provider 默认值之外进行覆盖。
+//
+// Params:
+//
+//   - sessionId: 会话 ID。
+//
+// Returns:
+//
+//   - 已绑定的模型名；未绑定时返回空字符串。
+export function resolveAgentSessionSelectedAiModel(sessionId: string): string {
+  return String(readSessionMeta().selectedAiModelBySessionId[sessionId] || "").trim();
+}
+
+// 描述：记录指定会话当前选择的模型名；空值会清理旧绑定，便于回退到 AI Key 默认模型。
+//
+// Params:
+//
+//   - sessionId: 会话 ID。
+//   - modelName: 模型名。
+export function rememberAgentSessionSelectedAiModel(sessionId: string, modelName: string) {
+  const meta = readSessionMeta();
+  const normalizedModelName = String(modelName || "").trim();
+  if (!normalizedModelName) {
+    delete meta.selectedAiModelBySessionId[sessionId];
+  } else {
+    meta.selectedAiModelBySessionId[sessionId] = normalizedModelName;
+  }
+  writeSessionMeta(meta);
+}
+
+// 描述：清理指定会话绑定的模型名，供移除会话或主动重置 AI 配置时复用。
+//
+// Params:
+//
+//   - sessionId: 会话 ID。
+export function clearAgentSessionSelectedAiModel(sessionId: string) {
+  rememberAgentSessionSelectedAiModel(sessionId, "");
+}
+
+// 描述：读取指定会话当前绑定的模式名，供会话级 AI 配置覆盖 Provider 默认模式。
+//
+// Params:
+//
+//   - sessionId: 会话 ID。
+//
+// Returns:
+//
+//   - 已绑定的模式名；未绑定时返回空字符串。
+export function resolveAgentSessionSelectedAiMode(sessionId: string): string {
+  return String(readSessionMeta().selectedAiModeBySessionId[sessionId] || "").trim();
+}
+
+// 描述：记录指定会话当前选择的模式名；空值会清理旧绑定，便于回退到 AI Key 默认模式。
+//
+// Params:
+//
+//   - sessionId: 会话 ID。
+//   - modeName: 模式名。
+export function rememberAgentSessionSelectedAiMode(sessionId: string, modeName: string) {
+  const meta = readSessionMeta();
+  const normalizedModeName = String(modeName || "").trim();
+  if (!normalizedModeName) {
+    delete meta.selectedAiModeBySessionId[sessionId];
+  } else {
+    meta.selectedAiModeBySessionId[sessionId] = normalizedModeName;
+  }
+  writeSessionMeta(meta);
+}
+
+// 描述：清理指定会话绑定的模式名，供移除会话或主动重置 AI 配置时复用。
+//
+// Params:
+//
+//   - sessionId: 会话 ID。
+export function clearAgentSessionSelectedAiMode(sessionId: string) {
+  rememberAgentSessionSelectedAiMode(sessionId, "");
+}
+
+// 描述：读取指定会话当前累计消耗的 token 数量，供会话输入区展示线程级用量。
+//
+// Params:
+//
+//   - sessionId: 会话 ID。
+//
+// Returns:
+//
+//   - 当前会话累计 token；不存在时返回 0。
+export function resolveAgentSessionCumulativeTokenUsage(sessionId: string): number {
+  const rawValue = Number(readSessionMeta().cumulativeTokenUsageBySessionId[sessionId] || 0);
+  return Number.isFinite(rawValue) && rawValue > 0 ? Math.floor(rawValue) : 0;
+}
+
+// 描述：记录指定会话当前累计 token 数量；写入时会自动过滤负数与非法值。
+//
+// Params:
+//
+//   - sessionId: 会话 ID。
+//   - totalTokens: 最新累计 token 数量。
+export function rememberAgentSessionCumulativeTokenUsage(sessionId: string, totalTokens: number) {
+  const meta = readSessionMeta();
+  const normalizedTotalTokens = Number.isFinite(totalTokens) && totalTokens > 0
+    ? Math.floor(totalTokens)
+    : 0;
+  if (normalizedTotalTokens <= 0) {
+    delete meta.cumulativeTokenUsageBySessionId[sessionId];
+  } else {
+    meta.cumulativeTokenUsageBySessionId[sessionId] = normalizedTotalTokens;
+  }
+  writeSessionMeta(meta);
+}
+
+// 描述：在当前会话累计 token 上叠加本轮新增用量，供每次执行完成后持续累积。
+//
+// Params:
+//
+//   - sessionId: 会话 ID。
+//   - tokenDelta: 本轮新增 token 数。
+//
+// Returns:
+//
+//   - 更新后的累计 token 数量。
+export function increaseAgentSessionCumulativeTokenUsage(sessionId: string, tokenDelta: number): number {
+  const normalizedTokenDelta = Number.isFinite(tokenDelta) && tokenDelta > 0
+    ? Math.floor(tokenDelta)
+    : 0;
+  const nextTotalTokens = resolveAgentSessionCumulativeTokenUsage(sessionId) + normalizedTokenDelta;
+  rememberAgentSessionCumulativeTokenUsage(sessionId, nextTotalTokens);
+  return nextTotalTokens;
+}
+
 // 描述：读取指定会话当前绑定的 DCC 软件标识，供建模 Skill 在多软件场景下保持线程级一致性。
 //
 // Params:
@@ -2029,12 +2242,19 @@ export function removeAgentSession(agentKey: AgentKey, sessionId: string) {
   meta.pinnedIds = meta.pinnedIds.filter((id) => id !== sessionId);
   delete meta.renamedTitles[sessionId];
   delete meta.selectedAiProviderBySessionId[sessionId];
+  delete meta.selectedAiModelBySessionId[sessionId];
+  delete meta.selectedAiModeBySessionId[sessionId];
   delete meta.selectedDccSoftwareBySessionId[sessionId];
+  delete meta.cumulativeTokenUsageBySessionId[sessionId];
   writeSessionMeta(meta);
 
   const groups = readSessionMessages();
   writeSessionMessages(
     groups.filter((item) => !(item.agentKey === agentKey && item.sessionId === sessionId)),
+  );
+  const contextGroups = readSessionAgentContextMessages();
+  writeSessionAgentContextMessages(
+    contextGroups.filter((item) => !(item.agentKey === agentKey && item.sessionId === sessionId)),
   );
   removeSessionRunState(agentKey, sessionId);
   removeSessionDebugArtifact(agentKey, sessionId);
@@ -2054,7 +2274,21 @@ export function getSessionMessages(
   return group?.messages || [];
 }
 
-// 描述：写入会话消息并按会话维度覆盖，限制总存储分组数量。
+// 描述：按智能体与会话 ID 读取本地 agent 上下文消息列表。
+export function getSessionAgentContextMessages(
+  agentKey: AgentKey,
+  sessionId: string,
+): Array<{ id?: string; role: "user" | "assistant"; text: string }> {
+  const group = readSessionAgentContextMessages().find(
+    (item) => item.agentKey === agentKey && item.sessionId === sessionId,
+  );
+  return group?.messages || [];
+}
+
+// 描述：写入会话消息并按会话维度覆盖。
+//
+//   - transcript 是前端完整历史记录，关闭软件后重开仍需保留从第一句到当前的全部可见消息，
+//     因此这里不再按消息条数裁剪，只限制会话分组数量。
 export function upsertSessionMessages(input: {
   agentKey: AgentKey;
   sessionId: string;
@@ -2064,11 +2298,31 @@ export function upsertSessionMessages(input: {
   const nextGroup: StoredSessionMessageGroup = {
     agentKey: input.agentKey,
     sessionId: input.sessionId,
-    messages: input.messages.slice(-200),
+    messages: input.messages,
   };
   const next = [nextGroup, ...groups.filter((item) => !(item.agentKey === input.agentKey && item.sessionId === input.sessionId))]
     .slice(0, 200);
   writeSessionMessages(next);
+}
+
+// 描述：写入 agent 上下文消息并按会话维度覆盖，限制总存储分组数量。
+//
+//   - agent context 与前端 transcript 独立持久化，但这里仍保留条数收敛，
+//     避免模型上下文在长期对话中无限膨胀。
+export function upsertSessionAgentContextMessages(input: {
+  agentKey: AgentKey;
+  sessionId: string;
+  messages: Array<{ id?: string; role: "user" | "assistant"; text: string }>;
+}) {
+  const groups = readSessionAgentContextMessages();
+  const nextGroup: StoredSessionMessageGroup = {
+    agentKey: input.agentKey,
+    sessionId: input.sessionId,
+    messages: input.messages.slice(-200),
+  };
+  const next = [nextGroup, ...groups.filter((item) => !(item.agentKey === input.agentKey && item.sessionId === input.sessionId))]
+    .slice(0, 200);
+  writeSessionAgentContextMessages(next);
 }
 
 const RUN_STATE_TEXT_MAX_CHARS = 800;
@@ -2144,7 +2398,8 @@ function sanitizeRunSegmentDataForStorage(
 
 // 描述：
 //
-//   - 在写入本地会话运行态前做体积收敛，降低授权阶段高频写入对前端交互的影响。
+//   - 在写入本地会话运行态前做字段级收敛，避免无关 payload 过大。
+//   - 这里不再裁掉旧片段，确保前端执行过程历史在软件重开后仍能完整恢复。
 function sanitizeRunMetaMapForStorage(
   runMetaMap: Record<string, SessionRunMeta>,
 ): Record<string, SessionRunMeta> {
@@ -2174,8 +2429,7 @@ function sanitizeRunMetaMapForStorage(
                 : undefined,
             ),
           }))
-          .filter((segment) => segment.key || segment.intro || segment.step)
-          .slice(-160);
+          .filter((segment) => segment.key || segment.intro || segment.step);
         return [
           normalizedMessageId,
           {

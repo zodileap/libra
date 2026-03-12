@@ -1,7 +1,7 @@
 use crate::llm::{
     should_abort_for_output_idle, should_emit_waiting_progress, LlmGatewayError, LlmGatewayPolicy,
-    LlmProgressObserver, LlmProvider, LlmRunResult, LlmTextStreamObserver, LlmUsage,
-    LLM_RUNTIME_TAG,
+    LlmProgressObserver, LlmProvider, LlmProviderConfig, LlmRunResult, LlmTextStreamObserver,
+    LlmUsage, LLM_RUNTIME_TAG,
 };
 use crate::platform::{resolve_gemini_command_candidates, CommandCandidate};
 use crate::workflow::{run_step_with_retry, DefaultWorkflowRecoveryHook};
@@ -77,6 +77,7 @@ pub fn call_with_retry(
     prompt: &str,
     workdir: Option<&str>,
     policy: LlmGatewayPolicy,
+    provider_config: Option<&LlmProviderConfig>,
     mut on_chunk: Option<&mut LlmTextStreamObserver>,
     mut on_progress: Option<&mut LlmProgressObserver>,
 ) -> Result<LlmRunResult, LlmGatewayError> {
@@ -85,6 +86,7 @@ pub fn call_with_retry(
         prompt,
         workdir,
         policy,
+        provider_config,
         #[allow(clippy::needless_option_as_deref)]
         on_chunk.as_deref_mut(),
         #[allow(clippy::needless_option_as_deref)]
@@ -97,6 +99,7 @@ fn call_with_retry_and_bins(
     prompt: &str,
     workdir: Option<&str>,
     policy: LlmGatewayPolicy,
+    provider_config: Option<&LlmProviderConfig>,
     mut on_chunk: Option<&mut LlmTextStreamObserver>,
     mut on_progress: Option<&mut LlmProgressObserver>,
     bins: &[CommandCandidate],
@@ -108,6 +111,7 @@ fn call_with_retry_and_bins(
             workdir,
             policy.timeout_secs,
             attempt,
+            provider_config,
             #[allow(clippy::needless_option_as_deref)]
             on_chunk.as_deref_mut(),
             #[allow(clippy::needless_option_as_deref)]
@@ -123,12 +127,14 @@ fn call_once(
     workdir: Option<&str>,
     timeout_secs: u64,
     attempt: u8,
+    provider_config: Option<&LlmProviderConfig>,
     mut on_chunk: Option<&mut LlmTextStreamObserver>,
     mut on_progress: Option<&mut LlmProgressObserver>,
     bins: &[CommandCandidate],
 ) -> Result<LlmRunResult, LlmGatewayError> {
     let provider = LlmProvider::Gemini;
-    let (mut child, selected_bin) = spawn_gemini_process(prompt, workdir, bins, attempt)?;
+    let (mut child, selected_bin) =
+        spawn_gemini_process(prompt, workdir, provider_config, bins, attempt)?;
     let stdout = child.stdout.take().ok_or_else(|| {
         LlmGatewayError::new(
             provider,
@@ -341,9 +347,36 @@ fn append_gemini_prompt_args(command: &mut Command, prompt: &str) {
     command.arg(prompt);
 }
 
+/// 描述：为 Gemini CLI 注入 Provider 运行时配置，支持 API Key 鉴权与模型透传。
+///
+/// Params:
+///
+///   - command: 待启动的 Gemini CLI 命令。
+///   - provider_config: Provider 运行时配置。
+fn apply_gemini_provider_config(
+    command: &mut Command,
+    provider_config: Option<&LlmProviderConfig>,
+) {
+    if let Some(api_key) = provider_config
+        .and_then(|config| config.api_key.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        command.env("GEMINI_API_KEY", api_key);
+    }
+    if let Some(model) = provider_config
+        .and_then(|config| config.model.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        command.arg("-m").arg(model);
+    }
+}
+
 fn spawn_gemini_process(
     prompt: &str,
     workdir: Option<&str>,
+    provider_config: Option<&LlmProviderConfig>,
     bins: &[CommandCandidate],
     attempt: u8,
 ) -> Result<(Child, String), LlmGatewayError> {
@@ -351,6 +384,7 @@ fn spawn_gemini_process(
     let mut spawn_errors: Vec<String> = Vec::new();
     for bin in bins {
         let mut command = bin.build_command();
+        apply_gemini_provider_config(&mut command, provider_config);
         append_gemini_prompt_args(&mut command, prompt);
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
         if let Some(cwd) = workdir.map(str::trim).filter(|value| !value.is_empty()) {
@@ -513,6 +547,7 @@ stacktrace: omitted"#;
             },
             None,
             None,
+            None,
             bins.as_slice(),
         );
         assert!(result.is_err());
@@ -546,6 +581,23 @@ stacktrace: omitted"#;
         let (deltas, saw_structured_event) = extract_gemini_json_delta_texts_from_line(line);
         assert!(saw_structured_event);
         assert_eq!(deltas, vec!["hello".to_string()]);
+    }
+
+    #[test]
+    fn should_apply_provider_config_to_gemini_command() {
+        let mut command = Command::new("gemini");
+        let provider_config = LlmProviderConfig {
+            api_key: Some("demo-key".to_string()),
+            model: Some("gemini-2.5-pro".to_string()),
+            mode: None,
+        };
+        apply_gemini_provider_config(&mut command, Some(&provider_config));
+        let debug_args = format!("{:?}", command);
+        let debug_envs = format!("{:?}", command.get_envs().collect::<Vec<_>>());
+        assert!(debug_args.contains("-m"));
+        assert!(debug_args.contains("gemini-2.5-pro"));
+        assert!(debug_envs.contains("GEMINI_API_KEY"));
+        assert!(debug_envs.contains("demo-key"));
     }
 
     #[test]
