@@ -264,6 +264,39 @@ export interface SessionDebugFlowRecordSnapshot {
 
 // 描述:
 //
+//   - 会话内单次 AI 原始收发结构；一条助手消息可能对应多轮请求/响应。
+export interface SessionAiRawExchangeSnapshot {
+  requestRaw: string;
+  responseRaw: string;
+  stepCode?: string;
+  stepSummary?: string;
+  turnIndex?: number;
+  capturedAt?: number;
+}
+
+// 描述:
+//
+//   - 按助手消息聚合的 AI 原始收发结构；保留最新聚合值和完整 exchanges 历史。
+export interface SessionAiRawByMessageSnapshot {
+  promptRaw: string;
+  responseRaw: string;
+  exchanges?: SessionAiRawExchangeSnapshot[];
+}
+
+// 描述:
+//
+//   - 会话完整调用记录结构；用于复制排查时回放“从第一句开始”的函数调用与执行轨迹。
+export interface SessionCallRecordSnapshot {
+  id: string;
+  kind: string;
+  timestamp?: number;
+  messageId?: string;
+  traceId?: string;
+  payload?: Record<string, unknown>;
+}
+
+// 描述:
+//
 //   - 会话调试资产快照结构。
 export interface SessionDebugArtifactSnapshot {
   agentKey: AgentKey;
@@ -272,7 +305,8 @@ export interface SessionDebugArtifactSnapshot {
   debugFlowRecords: SessionDebugFlowRecordSnapshot[];
   aiPromptRaw: string;
   aiResponseRaw: string;
-  aiRawByMessage?: Record<string, { promptRaw: string; responseRaw: string }>;
+  aiRawByMessage?: Record<string, SessionAiRawByMessageSnapshot>;
+  callRecords?: SessionCallRecordSnapshot[];
   updatedAt: number;
 }
 
@@ -865,56 +899,111 @@ function readSessionDebugArtifacts(): StoredSessionDebugArtifact[] {
       .map((item) => {
         const traceRecords = Array.isArray(item.traceRecords)
           ? item.traceRecords
-            .filter((record) => record && typeof record === "object")
-            .map((record) => ({
+            .filter((record: unknown) => record && typeof record === "object")
+            .map((record: Record<string, unknown>) => ({
               traceId: String(record.traceId || "").trim(),
               source: String(record.source || "").trim(),
               code: String(record.code || "").trim() || undefined,
-              message: String(record.message || "").trim(),
+              message: String(record.message ?? ""),
             }))
-            .filter((record) => record.traceId || record.message)
-            .slice(0, 100)
+            .filter((record: SessionTraceRecordSnapshot) => record.traceId || record.message)
           : [];
         const debugFlowRecords = Array.isArray(item.debugFlowRecords)
           ? item.debugFlowRecords
-            .filter((record) => record && typeof record === "object")
-            .map((record, index) => ({
+            .filter((record: unknown) => record && typeof record === "object")
+            .map((record: Record<string, unknown>, index: number) => ({
               id: String(record.id || "").trim() || `debug-${index + 1}`,
               source: record.source === "backend" ? "backend" : "ui",
               stage: String(record.stage || "").trim(),
-              title: String(record.title || "").trim(),
-              detail: String(record.detail || "").trim(),
+              title: String(record.title ?? ""),
+              detail: String(record.detail ?? ""),
               timestamp: Number(record.timestamp || 0),
             }))
-            .slice(0, 200)
           : [];
         const aiRawByMessage = item.aiRawByMessage && typeof item.aiRawByMessage === "object"
           ? Object.entries(item.aiRawByMessage as Record<string, unknown>)
-            .map(([messageId, rawItem]) => {
+            .flatMap(([messageId, rawItem]) => {
               const normalizedMessageId = String(messageId || "").trim();
               if (!normalizedMessageId || !rawItem || typeof rawItem !== "object") {
-                return null;
+                return [];
               }
               const rawRecord = rawItem as Record<string, unknown>;
-              return [
+              const exchanges: SessionAiRawExchangeSnapshot[] = Array.isArray(rawRecord.exchanges)
+                ? rawRecord.exchanges
+                  .filter((exchange) => exchange && typeof exchange === "object")
+                  .map((exchange) => {
+                    const exchangeRecord = exchange as Record<string, unknown>;
+                    return {
+                      requestRaw: String(exchangeRecord.requestRaw ?? ""),
+                      responseRaw: String(exchangeRecord.responseRaw ?? ""),
+                      stepCode: typeof exchangeRecord.stepCode === "string"
+                        ? String(exchangeRecord.stepCode || "").trim() || undefined
+                        : undefined,
+                      stepSummary: typeof exchangeRecord.stepSummary === "string"
+                        ? String(exchangeRecord.stepSummary ?? "")
+                        : undefined,
+                      turnIndex: Number.isFinite(Number(exchangeRecord.turnIndex))
+                        ? Number(exchangeRecord.turnIndex)
+                        : undefined,
+                      capturedAt: Number.isFinite(Number(exchangeRecord.capturedAt))
+                        ? Number(exchangeRecord.capturedAt)
+                        : undefined,
+                    };
+                  })
+                : [];
+              const promptRaw = String(rawRecord.promptRaw ?? "");
+              const responseRaw = String(rawRecord.responseRaw ?? "");
+              const normalizedExchanges: SessionAiRawExchangeSnapshot[] = exchanges.length > 0
+                ? exchanges
+                : (promptRaw || responseRaw)
+                  ? [{
+                    requestRaw: promptRaw,
+                    responseRaw,
+                  }]
+                  : [];
+              return [[
                 normalizedMessageId,
                 {
-                  promptRaw: String(rawRecord.promptRaw || ""),
-                  responseRaw: String(rawRecord.responseRaw || ""),
+                  promptRaw,
+                  responseRaw,
+                  exchanges: normalizedExchanges,
                 },
-              ] as const;
+              ] as const];
             })
-            .filter((item): item is readonly [string, { promptRaw: string; responseRaw: string }] => Boolean(item))
-            .slice(0, 200)
+          : [];
+        const callRecords = Array.isArray(item.callRecords)
+          ? item.callRecords
+            .filter((record: unknown) => record && typeof record === "object")
+            .map((record: Record<string, unknown>, index: number) => {
+              const callRecord = record as Record<string, unknown>;
+              const payload = callRecord.payload && typeof callRecord.payload === "object"
+                ? callRecord.payload as Record<string, unknown>
+                : undefined;
+              return {
+                id: String(callRecord.id || "").trim() || `call-${index + 1}`,
+                kind: String(callRecord.kind || "").trim() || "unknown",
+                timestamp: Number.isFinite(Number(callRecord.timestamp))
+                  ? Number(callRecord.timestamp)
+                  : undefined,
+                messageId: typeof callRecord.messageId === "string"
+                  ? String(callRecord.messageId || "").trim() || undefined
+                  : undefined,
+                traceId: typeof callRecord.traceId === "string"
+                  ? String(callRecord.traceId || "").trim() || undefined
+                  : undefined,
+                payload,
+              };
+            })
           : [];
         return {
           sessionId: String(item.sessionId).trim(),
           agentKey: "agent",
           traceRecords,
           debugFlowRecords,
-          aiPromptRaw: String(item.aiPromptRaw || ""),
-          aiResponseRaw: String(item.aiResponseRaw || ""),
+          aiPromptRaw: String(item.aiPromptRaw ?? ""),
+          aiResponseRaw: String(item.aiResponseRaw ?? ""),
           aiRawByMessage: Object.fromEntries(aiRawByMessage),
+          callRecords,
           updatedAt: Number(item.updatedAt || Date.now()),
         } as StoredSessionDebugArtifact;
       });
@@ -2503,40 +2592,75 @@ export function upsertSessionDebugArtifact(input: SessionDebugArtifactSnapshot) 
         traceId: String(record.traceId || "").trim(),
         source: String(record.source || "").trim(),
         code: String(record.code || "").trim() || undefined,
-        message: String(record.message || "").trim(),
+        message: String(record.message ?? ""),
       }))
-      .filter((record) => record.traceId || record.message)
-      .slice(0, 100),
+      .filter((record) => record.traceId || record.message),
     debugFlowRecords: (input.debugFlowRecords || [])
       .map((record, index) => ({
         id: String(record.id || "").trim() || `debug-${index + 1}`,
         source: record.source === "backend" ? "backend" : "ui",
         stage: String(record.stage || "").trim(),
-        title: String(record.title || "").trim(),
-        detail: String(record.detail || "").trim(),
+        title: String(record.title ?? ""),
+        detail: String(record.detail ?? ""),
         timestamp: Number(record.timestamp || 0),
-      }))
-      .slice(0, 200),
-    aiPromptRaw: String(input.aiPromptRaw || ""),
-    aiResponseRaw: String(input.aiResponseRaw || ""),
+      })),
+    aiPromptRaw: String(input.aiPromptRaw ?? ""),
+    aiResponseRaw: String(input.aiResponseRaw ?? ""),
     aiRawByMessage: Object.fromEntries(
       Object.entries(input.aiRawByMessage || {})
-        .map(([messageId, rawItem]) => {
+        .flatMap(([messageId, rawItem]) => {
           const normalizedMessageId = String(messageId || "").trim();
           if (!normalizedMessageId || !rawItem || typeof rawItem !== "object") {
-            return null;
+            return [];
           }
-          return [
+          const normalizedExchanges: SessionAiRawExchangeSnapshot[] = Array.isArray(rawItem.exchanges)
+            ? rawItem.exchanges
+              .filter((exchange) => exchange && typeof exchange === "object")
+              .map((exchange) => ({
+                requestRaw: String(exchange.requestRaw ?? ""),
+                responseRaw: String(exchange.responseRaw ?? ""),
+                stepCode: typeof exchange.stepCode === "string"
+                  ? String(exchange.stepCode || "").trim() || undefined
+                  : undefined,
+                stepSummary: typeof exchange.stepSummary === "string"
+                  ? String(exchange.stepSummary ?? "")
+                  : undefined,
+                turnIndex: Number.isFinite(Number(exchange.turnIndex))
+                  ? Number(exchange.turnIndex)
+                  : undefined,
+                capturedAt: Number.isFinite(Number(exchange.capturedAt))
+                  ? Number(exchange.capturedAt)
+                  : undefined,
+              }))
+            : [];
+          return [[
             normalizedMessageId,
             {
-              promptRaw: String(rawItem.promptRaw || ""),
-              responseRaw: String(rawItem.responseRaw || ""),
+              promptRaw: String(rawItem.promptRaw ?? ""),
+              responseRaw: String(rawItem.responseRaw ?? ""),
+              exchanges: normalizedExchanges,
             },
-          ] as const;
+          ] as const];
         })
-        .filter((item): item is readonly [string, { promptRaw: string; responseRaw: string }] => Boolean(item))
-        .slice(0, 200),
     ),
+    callRecords: (input.callRecords || [])
+      .filter((record) => record && typeof record === "object")
+      .map((record, index) => ({
+        id: String(record.id || "").trim() || `call-${index + 1}`,
+        kind: String(record.kind || "").trim() || "unknown",
+        timestamp: Number.isFinite(Number(record.timestamp))
+          ? Number(record.timestamp)
+          : undefined,
+        messageId: typeof record.messageId === "string"
+          ? String(record.messageId || "").trim() || undefined
+          : undefined,
+        traceId: typeof record.traceId === "string"
+          ? String(record.traceId || "").trim() || undefined
+          : undefined,
+        payload: record.payload && typeof record.payload === "object"
+          ? record.payload
+          : undefined,
+      })),
     updatedAt: Number(input.updatedAt || Date.now()),
   };
   if (!nextArtifact.sessionId) {

@@ -54,6 +54,7 @@ import {
   isProjectWorkspaceCapabilityEnabled,
   type ProjectWorkspaceProfile,
   type ProjectWorkspaceCapabilityId,
+  type SessionCallRecordSnapshot,
   type SessionRunMeta as PersistedSessionRunMeta,
   type SessionWorkflowPhaseCursorSnapshot,
 } from "../../shared/data";
@@ -1262,10 +1263,117 @@ interface SessionTodoDockSnapshot {
 
 // 描述:
 //
+//   - 定义单条助手消息下的 AI 原始请求/响应结构；用于保留多轮模型往返记录。
+interface SessionAiRawExchangeItem {
+  requestRaw: string;
+  responseRaw: string;
+  stepCode?: string;
+  stepSummary?: string;
+  turnIndex?: number;
+  capturedAt?: number;
+}
+
+// 描述:
+//
 //   - 定义助手消息维度的 AI 原始收发记录结构。
 interface SessionAiRawByMessageItem {
   promptRaw: string;
   responseRaw: string;
+  exchanges: SessionAiRawExchangeItem[];
+}
+
+// 描述：
+//
+//   - 规范化单条 AI 原始收发记录，统一清洗字段并保留原始文本内容。
+//
+// Params:
+//
+//   - input: 原始收发记录。
+//
+// Returns:
+//
+//   - 规范化后的收发记录；若请求和响应均为空则返回 null。
+function normalizeSessionAiRawExchangeItem(input: Partial<SessionAiRawExchangeItem> | null | undefined): SessionAiRawExchangeItem | null {
+  if (!input) {
+    return null;
+  }
+  const requestRaw = String(input.requestRaw ?? "");
+  const responseRaw = String(input.responseRaw ?? "");
+  if (!requestRaw && !responseRaw) {
+    return null;
+  }
+  return {
+    requestRaw,
+    responseRaw,
+    stepCode: typeof input.stepCode === "string" ? String(input.stepCode || "").trim() || undefined : undefined,
+    stepSummary: typeof input.stepSummary === "string" ? String(input.stepSummary ?? "") : undefined,
+    turnIndex: Number.isFinite(Number(input.turnIndex)) ? Number(input.turnIndex) : undefined,
+    capturedAt: Number.isFinite(Number(input.capturedAt)) ? Number(input.capturedAt) : undefined,
+  };
+}
+
+// 描述：
+//
+//   - 基于 prompt/response 与 exchanges 构建单条助手消息的 AI 原始收发聚合结果。
+//
+// Params:
+//
+//   - input: 原始字段。
+//
+// Returns:
+//
+//   - 可直接写入状态与持久化层的聚合结构。
+function buildSessionAiRawByMessageItem(input?: Partial<SessionAiRawByMessageItem> | null): SessionAiRawByMessageItem {
+  const promptRaw = String(input?.promptRaw ?? "");
+  const responseRaw = String(input?.responseRaw ?? "");
+  const exchanges = Array.isArray(input?.exchanges)
+    ? input.exchanges
+      .map((item) => normalizeSessionAiRawExchangeItem(item))
+      .filter((item): item is SessionAiRawExchangeItem => Boolean(item))
+    : [];
+  if (exchanges.length > 0) {
+    return {
+      promptRaw,
+      responseRaw,
+      exchanges,
+    };
+  }
+  const fallbackExchange = normalizeSessionAiRawExchangeItem({
+    requestRaw: promptRaw,
+    responseRaw,
+  });
+  return {
+    promptRaw,
+    responseRaw,
+    exchanges: fallbackExchange ? [fallbackExchange] : [],
+  };
+}
+
+// 描述：
+//
+//   - 从后端步骤记录中提取多轮 AI 原始请求/响应，保证复制排查时能看到完整往返链路。
+//
+// Params:
+//
+//   - steps: 当前响应返回的步骤记录。
+//
+// Returns:
+//
+//   - 按步骤顺序提取出的原始收发数组。
+function extractSessionAiRawExchangesFromStepRecords(steps: AgentStepRecord[]): SessionAiRawExchangeItem[] {
+  return (steps || [])
+    .filter((step) => step?.data && typeof step.data === "object")
+    .map((step) => {
+      const stepData = step.data as Record<string, unknown>;
+      return normalizeSessionAiRawExchangeItem({
+        requestRaw: typeof stepData.llm_prompt_raw === "string" ? stepData.llm_prompt_raw : "",
+        responseRaw: typeof stepData.llm_response_raw === "string" ? stepData.llm_response_raw : "",
+        stepCode: step.code,
+        stepSummary: step.summary,
+        turnIndex: Number.isFinite(Number(stepData.turn_index)) ? Number(stepData.turn_index) : undefined,
+      });
+    })
+    .filter((item): item is SessionAiRawExchangeItem => Boolean(item));
 }
 
 // 描述：格式化任务耗时文案，统一用于完成分割线展示。
@@ -3221,6 +3329,7 @@ export function SessionPage({
   const [sessionAiPromptRaw, setSessionAiPromptRaw] = useState("");
   const [sessionAiResponseRaw, setSessionAiResponseRaw] = useState("");
   const [sessionAiRawByMessage, setSessionAiRawByMessage] = useState<Record<string, SessionAiRawByMessageItem>>({});
+  const [sessionCallRecords, setSessionCallRecords] = useState<SessionCallRecordSnapshot[]>([]);
   // 描述：过滤可用 AI Provider 列表，保留已启用项或已配置 key 的项。
   const availableAiKeys = useMemo(
     () =>
@@ -3976,8 +4085,27 @@ export function SessionPage({
     }));
   };
 
+  // 描述：向会话调用记录追加一条结构化轨迹，保证复制排查时可以完整回放。
+  //
+  // Params:
+  //
+  //   - record: 待追加的调用记录。
+  const appendSessionCallRecord = (record: SessionCallRecordSnapshot) => {
+    setSessionCallRecords((prev) => [...prev, record]);
+  };
+
   const appendTraceRecord = (input: TraceRecord) => {
-    setTraceRecords((prev) => [input, ...prev].slice(0, 50));
+    setTraceRecords((prev) => [input, ...prev]);
+    appendSessionCallRecord({
+      id: `trace-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      kind: "trace",
+      payload: {
+        traceId: input.traceId,
+        source: input.source,
+        code: input.code,
+        message: input.message,
+      },
+    });
   };
 
   // 描述：写入 Dev 调试全链路记录，覆盖“请求→执行→返回→解析”关键节点。
@@ -4001,17 +4129,29 @@ export function SessionPage({
     if (!normalizedDetail) {
       return;
     }
+    const debugRecord = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      source,
+      stage,
+      title,
+      detail: normalizedDetail,
+      timestamp: Date.now(),
+    } as const;
     setDebugFlowRecords((prev) => [
-      {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        source,
-        stage,
-        title,
-        detail: normalizedDetail,
-        timestamp: Date.now(),
-      },
+      debugRecord,
       ...prev,
-    ].slice(0, 400));
+    ]);
+    appendSessionCallRecord({
+      id: `call-debug-${debugRecord.id}`,
+      kind: "debug_flow",
+      timestamp: debugRecord.timestamp,
+      payload: {
+        source: debugRecord.source,
+        stage: debugRecord.stage,
+        title: debugRecord.title,
+        detail: debugRecord.detail,
+      },
+    });
   };
 
   useEffect(() => {
@@ -4073,6 +4213,7 @@ export function SessionPage({
     setSessionAiPromptRaw("");
     setSessionAiResponseRaw("");
     setSessionAiRawByMessage({});
+    setSessionCallRecords([]);
     setSending(false);
     setPendingDangerousPrompt("");
     setPendingDangerousToken("");
@@ -4141,15 +4282,19 @@ export function SessionPage({
             }
             return [
               normalizedMessageId,
-              {
-                promptRaw: String(rawItem.promptRaw || ""),
-                responseRaw: String(rawItem.responseRaw || ""),
-              },
+              buildSessionAiRawByMessageItem({
+                promptRaw: String(rawItem.promptRaw ?? ""),
+                responseRaw: String(rawItem.responseRaw ?? ""),
+                exchanges: Array.isArray(rawItem.exchanges)
+                  ? rawItem.exchanges
+                  : undefined,
+              }),
             ] as const;
           })
           .filter((item): item is readonly [string, SessionAiRawByMessageItem] => Boolean(item)),
       );
       setSessionAiRawByMessage(artifactAiRawByMessage);
+      setSessionCallRecords(Array.isArray(debugArtifact.callRecords) ? debugArtifact.callRecords : []);
       agentPromptRawRef.current = artifactPromptRaw;
       agentLlmResponseRawRef.current = artifactResponseRaw;
     }
@@ -4329,19 +4474,20 @@ export function SessionPage({
     if (!sessionId || !messagesHydrated || hydratedSessionKey !== sessionStorageKey) {
       return;
     }
-    const promptRaw = String(sessionAiPromptRaw || agentPromptRawRef.current || "").trim();
+    const promptRaw = String(sessionAiPromptRaw || agentPromptRawRef.current || "");
     const responseRaw = String(
       sessionAiResponseRaw
       || agentLlmResponseRawRef.current
       || agentLlmDeltaBufferRef.current
       || "",
-    ).trim();
+    );
     if (
       traceRecords.length === 0
       && debugFlowRecords.length === 0
       && !promptRaw
       && !responseRaw
       && Object.keys(sessionAiRawByMessage).length === 0
+      && sessionCallRecords.length === 0
     ) {
       removeSessionDebugArtifact(normalizedAgentKey, sessionId);
       return;
@@ -4354,6 +4500,7 @@ export function SessionPage({
       aiPromptRaw: promptRaw,
       aiResponseRaw: responseRaw,
       aiRawByMessage: sessionAiRawByMessage,
+      callRecords: sessionCallRecords,
       updatedAt: Date.now(),
     });
   }, [
@@ -4364,6 +4511,7 @@ export function SessionPage({
     sessionAiPromptRaw,
     sessionAiResponseRaw,
     sessionAiRawByMessage,
+    sessionCallRecords,
     sessionId,
     sessionStorageKey,
     traceRecords,
@@ -4644,20 +4792,34 @@ export function SessionPage({
         return;
       }
       if (payload.kind === STREAM_KINDS.LLM_FINISHED) {
-        const normalizedRawResponse = String(agentLlmDeltaBufferRef.current || "").trim();
+        const normalizedRawResponse = String(agentLlmDeltaBufferRef.current || "");
         if (normalizedRawResponse) {
           agentLlmResponseRawRef.current = normalizedRawResponse;
           setSessionAiResponseRaw(normalizedRawResponse);
           const currentMessageId = String(streamMessageIdRef.current || "").trim();
           if (currentMessageId) {
             setSessionAiRawByMessage((prev) => {
-              const current = prev[currentMessageId] || { promptRaw: "", responseRaw: "" };
+              const current = buildSessionAiRawByMessageItem(prev[currentMessageId]);
+              const exchanges = current.exchanges.length > 0
+                ? current.exchanges.map((item, index) =>
+                  index === current.exchanges.length - 1
+                    ? {
+                      ...item,
+                      responseRaw: normalizedRawResponse,
+                    }
+                    : item)
+                : [{
+                  requestRaw: current.promptRaw,
+                  responseRaw: normalizedRawResponse,
+                  capturedAt: Date.now(),
+                }];
               return {
                 ...prev,
-                [currentMessageId]: {
+                [currentMessageId]: buildSessionAiRawByMessageItem({
                   promptRaw: current.promptRaw,
                   responseRaw: normalizedRawResponse,
-                },
+                  exchanges,
+                }),
               };
             });
           }
@@ -5245,10 +5407,15 @@ export function SessionPage({
         setSessionAiResponseRaw("");
         setSessionAiRawByMessage((prev) => ({
           ...prev,
-          [streamMessageId]: {
+          [streamMessageId]: buildSessionAiRawByMessageItem({
             promptRaw: agentPrompt,
             responseRaw: "",
-          },
+            exchanges: [{
+              requestRaw: agentPrompt,
+              responseRaw: "",
+              capturedAt: Date.now(),
+            }],
+          }),
         }));
 
         const response = await invoke<AgentRunResponse>(COMMANDS.RUN_AGENT_COMMAND, {
@@ -5275,22 +5442,62 @@ export function SessionPage({
         const responseSteps = response.steps || [];
         setStepRecords(responseSteps);
         setEventRecords(response.events || []);
+        const extractedRawExchanges = extractSessionAiRawExchangesFromStepRecords(responseSteps);
         const codegenRawStep = [...responseSteps]
           .reverse()
           .find((item) => item.code === "llm_python_codegen" && item.data && typeof item.data === "object");
         const codegenRawData = codegenRawStep?.data || {};
-        const responsePromptRaw = String(codegenRawData.llm_prompt_raw || "").trim() || agentPrompt;
-        const responseRawText = String(codegenRawData.llm_response_raw || "").trim()
-          || String(agentLlmResponseRawRef.current || agentLlmDeltaBufferRef.current || "").trim();
+        const responsePromptRaw = String(codegenRawData.llm_prompt_raw || "") || agentPrompt;
+        const responseRawText = String(codegenRawData.llm_response_raw || "")
+          || String(agentLlmResponseRawRef.current || agentLlmDeltaBufferRef.current || "");
         if (responsePromptRaw || responseRawText) {
           setSessionAiRawByMessage((prev) => ({
             ...prev,
-            [streamMessageId]: {
+            [streamMessageId]: buildSessionAiRawByMessageItem({
               promptRaw: responsePromptRaw,
               responseRaw: responseRawText,
-            },
+              exchanges: extractedRawExchanges.length > 0
+                ? extractedRawExchanges
+                : [{
+                  requestRaw: responsePromptRaw,
+                  responseRaw: responseRawText,
+                  capturedAt: Date.now(),
+                }],
+            }),
           }));
         }
+        setSessionCallRecords((prev) => [
+          ...prev,
+          ...responseSteps.map((step) => ({
+            id: `call-step-${stageTraceId}-${step.index}`,
+            kind: "step",
+            timestamp: Date.now(),
+            messageId: streamMessageId,
+            traceId: response.trace_id || stageTraceId,
+            payload: {
+              index: step.index,
+              code: step.code,
+              status: step.status,
+              elapsed_ms: step.elapsed_ms,
+              summary: step.summary,
+              error: step.error,
+              data: step.data,
+            },
+          }) satisfies SessionCallRecordSnapshot),
+          ...(response.events || []).map((event, eventIndex) => ({
+            id: `call-event-${stageTraceId}-${eventIndex}`,
+            kind: "event",
+            timestamp: Number(event.timestamp_ms || Date.now()),
+            messageId: streamMessageId,
+            traceId: response.trace_id || stageTraceId,
+            payload: {
+              event: event.event,
+              step_index: event.step_index,
+              timestamp_ms: event.timestamp_ms,
+              message: event.message,
+            },
+          }) satisfies SessionCallRecordSnapshot),
+        ]);
         const responseTotalTokens = Number(response.usage?.total_tokens || 0);
         if (sessionId && Number.isFinite(responseTotalTokens) && responseTotalTokens > 0) {
           setSessionCumulativeTokenUsage(
@@ -5471,14 +5678,19 @@ export function SessionPage({
         const failedPromptRaw = String(agentPromptRawRef.current || "").trim();
         const rawCodeResponse = String(
           agentLlmResponseRawRef.current || agentLlmDeltaBufferRef.current || "",
-        ).trim();
+        );
         if (failedMessageId && (failedPromptRaw || rawCodeResponse)) {
           setSessionAiRawByMessage((prev) => ({
             ...prev,
-            [failedMessageId]: {
+            [failedMessageId]: buildSessionAiRawByMessageItem({
               promptRaw: failedPromptRaw,
               responseRaw: rawCodeResponse,
-            },
+              exchanges: [{
+                requestRaw: failedPromptRaw,
+                responseRaw: rawCodeResponse,
+                capturedAt: Date.now(),
+              }],
+            }),
           }));
         }
       }
@@ -6316,7 +6528,124 @@ const handleConfirmWorkflowSkillModal = () => {
     });
   };
 
-  // 描述：构建会话消息文本，按消息顺序拼接“角色 + 内容”，并在每条助手消息下附加对应的原始收发与运行片段。
+  // 描述：格式化 Markdown 代码块文本，统一处理空值与围栏转义。
+  //
+  // Params:
+  //
+  //   - content: 代码块原始内容。
+  //   - language: 代码块语言标记。
+  //
+  // Returns:
+  //
+  //   - Markdown fenced code block 文本。
+  const wrapMarkdownCodeFence = (content: string, language = "text") => {
+    const normalizedContent = String(content || "").trim() || t("（无）");
+    const escapedContent = normalizedContent.replace(/```/g, "``\\`");
+    return `\`\`\`${language}\n${escapedContent}\n\`\`\``;
+  };
+
+  // 描述：格式化“需保留原始空白字符”的 Markdown 代码块，用于完整导出消息正文与 AI 原始收发。
+  //
+  // Params:
+  //
+  //   - content: 原始内容。
+  //   - language: 代码块语言标记。
+  //
+  // Returns:
+  //
+  //   - 保留原始换行与空格的 fenced code block。
+  const wrapMarkdownCodeFencePreserveContent = (content: string, language = "text") => {
+    const normalizedContent = String(content ?? "");
+    const escapedContent = normalizedContent.replace(/```/g, "``\\`");
+    return `\`\`\`${language}\n${escapedContent}\n\`\`\``;
+  };
+
+  // 描述：构建指定助手消息对应的 AI 原始收发列表；优先读取消息级完整 exchanges，缺失时兼容旧数据。
+  //
+  // Returns:
+  //
+  //   - 原始收发数组。
+  const buildSessionAiRawExchangeList = (
+    messageId: string,
+    assistantIndex: number,
+    assistantCount: number,
+  ) => {
+    const rawByMessage = messageId ? buildSessionAiRawByMessageItem(sessionAiRawByMessage[messageId]) : null;
+    if (rawByMessage && rawByMessage.exchanges.length > 0) {
+      return rawByMessage.exchanges;
+    }
+    // 描述：兼容历史会话（仅存会话级原始收发）时，仅在“单助手消息”场景回退，避免多消息错配。
+    if (assistantCount !== 1 || assistantIndex !== 0) {
+      return [];
+    }
+    const stepExchanges = extractSessionAiRawExchangesFromStepRecords(stepRecords);
+    if (stepExchanges.length > 0) {
+      return stepExchanges;
+    }
+    const latestCodegenStep = [...stepRecords]
+      .reverse()
+      .find((item) => item.code === "llm_python_codegen" && item.data && typeof item.data === "object");
+    const latestCodegenData = latestCodegenStep?.data || {};
+    const agentPromptRaw = String(latestCodegenData.llm_prompt_raw || "");
+    const codeResponseRaw = String(latestCodegenData.llm_response_raw || "");
+    const findDebugFlowDetail = (
+      stageCandidates: string[],
+      titleKeywords: string[],
+    ) => {
+      const record = debugFlowRecords.find((item) => {
+        const stage = String(item.stage || "").trim().toLowerCase();
+        const titleText = String(item.title || "").trim();
+        return stageCandidates.includes(stage)
+          || titleKeywords.some((keyword) => titleText.includes(keyword));
+      });
+      return String(record?.detail ?? "");
+    };
+    const fallbackPromptRaw = findDebugFlowDetail(
+      ["llm_plan_prompt", "ai_summary_prompt"],
+      [t("Prompt"), t("提示词")],
+    );
+    const fallbackResponseRaw = findDebugFlowDetail(
+      ["llm_plan_raw_response", "ai_summary_raw"],
+      [t("原始返回"), "raw"],
+    );
+    const promptRaw = agentPromptRaw || fallbackPromptRaw || String(sessionAiPromptRaw || agentPromptRawRef.current || "");
+    const responseRaw = codeResponseRaw
+      || fallbackResponseRaw
+      || String(sessionAiResponseRaw || agentLlmResponseRawRef.current || agentLlmDeltaBufferRef.current || "");
+    const fallbackExchange = normalizeSessionAiRawExchangeItem({
+      requestRaw: promptRaw,
+      responseRaw,
+    });
+    return fallbackExchange ? [fallbackExchange] : [];
+  };
+
+  // 描述：构建指定助手消息对应的“AI 原始收发”文本，按“请求 1 / 响应 1”完整输出。
+  //
+  // Returns:
+  //
+  //   - AI 原始收发文本。
+  const buildSessionAiRawExchangeText = (
+    messageId: string,
+    assistantIndex: number,
+    assistantCount: number,
+  ) => {
+    const exchanges = buildSessionAiRawExchangeList(messageId, assistantIndex, assistantCount);
+    if (exchanges.length === 0) {
+      return "";
+    }
+    return [
+      t("#### AI 原始收发"),
+      ...exchanges.flatMap((exchange, index) => [
+        t("##### 请求 {{index}}", { index: index + 1 }),
+        wrapMarkdownCodeFencePreserveContent(exchange.requestRaw, "text"),
+        "",
+        t("##### 响应 {{index}}", { index: index + 1 }),
+        wrapMarkdownCodeFencePreserveContent(exchange.responseRaw, "text"),
+      ]),
+    ].join("\n");
+  };
+
+  // 描述：构建会话消息文本，按消息顺序拼接完整原始消息；助手消息附带全部 AI 原始收发记录。
   //
   // Params:
   //
@@ -6334,13 +6663,13 @@ const handleConfirmWorkflowSkillModal = () => {
     return items
       .map((item, index) => {
         const roleLabel = item.role === "user" ? t("用户") : t("助手");
-        const content = String(item.text || "").trim() || t("（空消息）");
         const blocks = [
-          t("#### 消息 {{index}} · {{role}}", {
+          t("### 消息 {{index}} · {{role}}", {
             index: index + 1,
             role: roleLabel,
           }),
-          wrapMarkdownCodeFence(content, "text"),
+          t("#### 原始消息"),
+          wrapMarkdownCodeFencePreserveContent(String(item.text ?? ""), "text"),
         ];
         if (item.role === "assistant") {
           assistantMessageIndex += 1;
@@ -6350,65 +6679,13 @@ const handleConfirmWorkflowSkillModal = () => {
             assistantMessageIndex,
             assistantMessageCount,
           );
-          const runSnippetText = buildSessionRunSnippetText(assistantMessageId);
           if (aiRawText) {
             blocks.push(aiRawText);
-          }
-          if (runSnippetText) {
-            blocks.push(runSnippetText);
           }
         }
         return blocks.join("\n\n");
       })
       .join("\n\n");
-  };
-
-  // 描述：构建会话运行过程文本，覆盖全链路调试与 Trace 信息。
-  //
-  // Returns:
-  //
-  //   - 会话运行过程文本。
-  const buildSessionProcessText = () => {
-    const debugFlowLines = debugFlowRecords.length > 0
-      ? debugFlowRecords.map((record, index) => {
-        const prefix = record.timestamp
-          ? `[${formatDateTime(record.timestamp, {
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-            hour12: false,
-          })}]`
-          : "[--:--:--]";
-        const detail = String(record.detail || "").trim() || t("（空详情）");
-        return `${index + 1}. ${prefix} [${record.source || "ui"}] [${record.stage || "-"}] ${record.title || "-"}\n${detail}`;
-      })
-      : [t("（暂无全链路调试记录）")];
-    const traceLines = traceRecords.length > 0
-      ? traceRecords.map((item, index) => `${index + 1}. ${item.traceId || "-"} · ${item.source || "-"}${item.code ? ` · ${item.code}` : ""} · ${item.message || "-"}`)
-      : [t("（暂无 trace 记录）")];
-    return [
-      t("### 4.1 全链路调试"),
-      wrapMarkdownCodeFence(debugFlowLines.join("\n"), "text"),
-      "",
-      t("### 4.2 Trace 记录"),
-      wrapMarkdownCodeFence(traceLines.join("\n"), "text"),
-    ].join("\n");
-  };
-
-  // 描述：格式化 Markdown 代码块文本，统一处理空值与围栏转义。
-  //
-  // Params:
-  //
-  //   - content: 代码块原始内容。
-  //   - language: 代码块语言标记。
-  //
-  // Returns:
-  //
-  //   - Markdown fenced code block 文本。
-  const wrapMarkdownCodeFence = (content: string, language = "text") => {
-    const normalizedContent = String(content || "").trim() || t("（无）");
-    const escapedContent = normalizedContent.replace(/```/g, "``\\`");
-    return `\`\`\`${language}\n${escapedContent}\n\`\`\``;
   };
 
   // 描述：格式化复制内容中的字符串列表，统一输出“序号 + 文本”样式。
@@ -6541,79 +6818,6 @@ const handleConfirmWorkflowSkillModal = () => {
     ].join("\n");
   };
 
-  // 描述：构建指定助手消息对应的“AI 原始收发”文本，优先读取 messageId 对应的原始数据。
-  //
-  // Returns:
-  //
-  //   - AI 原始收发文本。
-  const buildSessionAiRawExchangeText = (
-    messageId: string,
-    assistantIndex: number,
-    assistantCount: number,
-  ) => {
-    const rawByMessage = messageId ? sessionAiRawByMessage[messageId] : undefined;
-    const mappedPromptRaw = String(rawByMessage?.promptRaw || "").trim();
-    const mappedResponseRaw = String(rawByMessage?.responseRaw || "").trim();
-    if (mappedPromptRaw || mappedResponseRaw) {
-      return [
-        t("##### AI 原始收发"),
-        t("###### 请求（Prompt，原始）"),
-        wrapMarkdownCodeFence(mappedPromptRaw || t("（无）"), "text"),
-        "",
-        t("###### 响应（Raw）"),
-        wrapMarkdownCodeFence(mappedResponseRaw || t("（无）"), "text"),
-      ].join("\n");
-    }
-    // 描述：兼容历史会话（仅存会话级原始收发）时，仅在“单助手消息”场景回退，避免多消息错配。
-    if (assistantCount !== 1 || assistantIndex !== 0) {
-      return "";
-    }
-    const latestCodegenStep = [...stepRecords]
-      .reverse()
-      .find((item) => item.code === "llm_python_codegen" && item.data && typeof item.data === "object");
-    const latestCodegenData = latestCodegenStep?.data || {};
-    const agentPromptRaw = String(latestCodegenData.llm_prompt_raw || "").trim();
-    const codeResponseRaw = String(latestCodegenData.llm_response_raw || "").trim();
-    const findDebugFlowDetail = (
-      stageCandidates: string[],
-      titleKeywords: string[],
-    ) => {
-      const record = debugFlowRecords.find((item) => {
-        const stage = String(item.stage || "").trim().toLowerCase();
-        const titleText = String(item.title || "").trim();
-        return stageCandidates.includes(stage)
-          || titleKeywords.some((keyword) => titleText.includes(keyword));
-      });
-      return String(record?.detail || "").trim();
-    };
-    const fallbackPromptRaw = findDebugFlowDetail(
-      ["llm_plan_prompt", "ai_summary_prompt"],
-      [t("Prompt"), t("提示词")],
-    );
-    const fallbackResponseRaw = findDebugFlowDetail(
-      ["llm_plan_raw_response", "ai_summary_raw"],
-      [t("原始返回"), "raw"],
-    );
-    const promptRaw = agentPromptRaw || fallbackPromptRaw;
-    const fallbackPrompt = String(sessionAiPromptRaw || agentPromptRawRef.current || "").trim();
-    const fallbackResponse = String(
-      sessionAiResponseRaw || agentLlmResponseRawRef.current || agentLlmDeltaBufferRef.current || "",
-    ).trim();
-    const responseRaw = codeResponseRaw || fallbackResponseRaw || fallbackResponse;
-    const rawPromptForCopy = promptRaw || fallbackPrompt;
-    if (!rawPromptForCopy && !responseRaw) {
-      return "";
-    }
-    return [
-      t("##### AI 原始收发"),
-      t("###### 请求（Prompt，原始）"),
-      wrapMarkdownCodeFence(rawPromptForCopy || t("（无）"), "text"),
-      "",
-      t("###### 响应（Raw）"),
-      wrapMarkdownCodeFence(responseRaw || t("（无）"), "text"),
-    ].join("\n");
-  };
-
   // 描述：规范化运行片段标题，兼容历史“泛化标题”并输出更具体的排查语义。
   //
   // Params:
@@ -6686,69 +6890,163 @@ const handleConfirmWorkflowSkillModal = () => {
     return false;
   };
 
-  // 描述：构建指定助手消息对应的运行片段文本，仅按 messageId 命中，避免跨消息错配。
+  // 描述：构建“运行片段”可见快照，严格复用会话页当前渲染规则，保证复制内容与 UI 所见一致。
   //
-  // Params:
+  // Returns:
   //
-  //   - messageId: 助手消息 ID。
+  //   - 运行片段 JSON 快照对象。
+  const buildSessionRunSnippetSnapshot = () => {
+    return messages.flatMap((message, index) => {
+      if (message.role !== "assistant" || !message.id) {
+        return [];
+      }
+      const runMeta = assistantRunMetaMap[message.id];
+      if (!runMeta) {
+        return [];
+      }
+      const messageKey = String(message.id || `message-${index}`);
+      const dividerTitle = runMeta.status === "failed"
+        ? t("执行中断，用时 {{duration}}", { duration: formatElapsedDuration(runMeta.startedAt, runMeta.finishedAt) })
+        : t("已完成，用时 {{duration}}", { duration: formatElapsedDuration(runMeta.startedAt, runMeta.finishedAt) });
+      const failureSummary = runMeta.status === "failed"
+        ? buildAssistantFailureSummary(runMeta.summary || message.text)
+        : null;
+      const runSegmentsForRender: AssistantRunSegment[] = (() => {
+        const normalizedRenderSegments = normalizeAssistantRunSegments(runMeta.segments);
+        const normalizedSegments = normalizedRenderSegments
+          .map((segment) => {
+            const intro = isInitialThinkingSegment(segment)
+              ? ""
+              : normalizeRunSegmentIntroForCopy(segment.intro, segment.step);
+            const step = String(segment.step || "").trim() || t("（空步骤）");
+            return {
+              ...segment,
+              intro,
+              step,
+            };
+          })
+          .filter((segment) => !shouldHideRunSegmentInCopy(segment.intro, segment.step, segment.status));
+        if (normalizedSegments.length > 0) {
+          return normalizedSegments;
+        }
+        if (runMeta.status === "running") {
+          return [{
+            key: `fallback-running-${messageKey}`,
+            intro: t("执行进行中"),
+            step: t("等待执行状态回传…"),
+            status: "running",
+          }];
+        }
+        const fallbackStep = String(runMeta.summary || message.text || "").trim()
+          || t("（本轮未记录可展示的执行片段）");
+        return [{
+          key: `fallback-summary-${messageKey}`,
+          intro: t("执行过程摘要"),
+          step: fallbackStep,
+          status: runMeta.status === "failed" ? "failed" : "finished",
+        }];
+      })();
+      const hasPendingApprovalInRender = runMeta.status === "running"
+        && runSegmentsForRender.some(
+          (segment) => segment.status === "running" && isApprovalPendingSegment(segment),
+        );
+      const runSegmentGroups = buildRunSegmentGroups(runSegmentsForRender);
+      const runningIndicatorText = resolveRunningIndicatorText(message.text, runMeta);
+      const visibleGroups = runMeta.status === "running" || !runMeta.collapsed
+        ? runSegmentGroups.map((group) => {
+          if (group.kind === "divider") {
+            return {
+              kind: "divider",
+              title: group.title,
+            };
+          }
+          return {
+            kind: group.kind,
+            title: group.title,
+            steps: group.steps.map((step) => {
+              const segmentKeyPrefix = runMeta.status === "running" ? "" : "collapsed-";
+              const detailKey = `${messageKey}:${segmentKeyPrefix}${step.key}`;
+              const detailExpanded = Boolean(expandedRunSegmentDetailMap[detailKey]);
+              return {
+                key: step.key,
+                status: step.status,
+                text: step.text,
+                detail_expanded: detailExpanded,
+                detail: detailExpanded ? step.detail : undefined,
+              };
+            }),
+          };
+        })
+        : [];
+      return [{
+        message_index: index + 1,
+        message_id: message.id,
+        status: runMeta.status,
+        started_at: formatSessionCopyTime(runMeta.startedAt),
+        finished_at: formatSessionCopyTime(runMeta.finishedAt),
+        divider_title: runMeta.status === "running" ? undefined : dividerTitle,
+        collapsed: runMeta.status === "running" ? undefined : runMeta.collapsed,
+        visible_groups: visibleGroups,
+        running_indicator: runMeta.status === "running" && !hasPendingApprovalInRender ? runningIndicatorText : undefined,
+        visible_summary: runMeta.status === "failed" && failureSummary
+          ? {
+            type: "failure",
+            title: t("执行失败"),
+            detail: failureSummary.detail,
+            hint: failureSummary.hint,
+            action_label: t("重试本轮"),
+          }
+          : {
+            type: "markdown",
+            content: runMeta.summary || message.text,
+          },
+      }];
+    });
+  };
+
+  // 描述：构建会话运行片段文本；内容严格来源于当前前端可见数据，并以 JSON 输出。
   //
   // Returns:
   //
   //   - 运行片段文本。
-  const buildSessionRunSnippetText = (messageId: string) => {
-    if (!messageId) {
-      return "";
-    }
-    const runMetaEntries = Object.entries(assistantRunMetaMap)
-      .map(([entryMessageId, runMeta]) => ({ messageId: entryMessageId, runMeta }))
-      .sort((a, b) => a.runMeta.startedAt - b.runMeta.startedAt);
-    if (runMetaEntries.length === 0) {
-      return "";
-    }
-    const matchedEntry = runMetaEntries.find((entry) => entry.messageId === messageId);
-    if (!matchedEntry) {
-      return "";
-    }
-    const scopedEntries = [matchedEntry];
-    const runMetaLines = scopedEntries.flatMap((entry, runIndex) => {
-      const runHeader = `${runIndex + 1}. message=${entry.messageId || "-"} · status=${entry.runMeta.status || "-"} · started=${formatSessionCopyTime(entry.runMeta.startedAt)} · finished=${formatSessionCopyTime(entry.runMeta.finishedAt)}`;
-      const summary = String(entry.runMeta.summary || "").trim();
-      const filteredSegments = entry.runMeta.segments
-        .map((segment) => {
-          const stageDividerTitle = String(segment.intro || segment.step || "").trim();
-          const intro = isWorkflowStageDividerSegment(segment)
-            ? t("工作流阶段")
-            : normalizeRunSegmentIntroForCopy(segment.intro, segment.step);
-          const step = isWorkflowStageDividerSegment(segment)
-            ? stageDividerTitle || t("（空步骤）")
-            : String(segment.step || "").trim() || t("（空步骤）");
-          return {
-            status: segment.status,
-            intro,
-            step,
-          };
-        })
-        .filter((segment) => !shouldHideRunSegmentInCopy(segment.intro, segment.step, segment.status));
-      const segmentLines = (filteredSegments.length > 0 ? filteredSegments : [{
-        status: entry.runMeta.status === "failed" ? "failed" : "finished",
-        intro: t("执行过程摘要"),
-        step: summary || t("（本轮未记录可展示的执行片段）"),
-      }]).map((segment, segmentIndex) => (
-        `   ${segmentIndex + 1}. [${segment.status}] ${segment.intro}\n      ${segment.step}`
-      ));
-      return [
-        runHeader,
-        summary ? t("   总结：{{summary}}", { summary }) : "",
-        ...segmentLines,
-      ].filter(Boolean);
-    });
-    return [
-      t("##### 运行片段"),
-      wrapMarkdownCodeFence(runMetaLines.join("\n"), "text"),
-    ].join("\n");
+  const buildSessionRunSnippetText = () => {
+    return wrapMarkdownCodeFence(JSON.stringify(buildSessionRunSnippetSnapshot(), null, 2), "json");
   };
 
-  // 描述：构建可复制的完整会话文本，包含会话消息、执行配置、项目设置、AI 原始收发与运行过程。
+  // 描述：构建会话执行过程文本，仅保留从第一句开始累计的全链路调用记录，并以 JSON 输出。
+  //
+  // Returns:
+  //
+  //   - 执行过程文本。
+  const buildSessionProcessText = () => {
+    const legacyRecords = [
+      ...[...debugFlowRecords].reverse().map((record) => ({
+        id: `legacy-debug-${record.id}`,
+        kind: "debug_flow",
+        timestamp: record.timestamp,
+        payload: {
+          source: record.source,
+          stage: record.stage,
+          title: record.title,
+          detail: record.detail,
+        },
+      })),
+      ...[...traceRecords].reverse().map((record, index) => ({
+        id: `legacy-trace-${index + 1}`,
+        kind: "trace",
+        payload: {
+          traceId: record.traceId,
+          source: record.source,
+          code: record.code,
+          message: record.message,
+        },
+      })),
+    ];
+    const processRecords = sessionCallRecords.length > 0 ? sessionCallRecords : legacyRecords;
+    return wrapMarkdownCodeFence(JSON.stringify(processRecords, null, 2), "json");
+  };
+
+  // 描述：构建可复制的完整会话文本，包含会话消息、执行配置、项目设置、运行片段与执行过程。
   //
   // Returns:
   //
@@ -6774,7 +7072,10 @@ const handleConfirmWorkflowSkillModal = () => {
       t("### 3.1 会话消息"),
       buildSessionMessageText(messages),
       "",
-      t("## 四、执行过程"),
+      t("## 四、运行片段"),
+      buildSessionRunSnippetText(),
+      "",
+      t("## 五、执行过程"),
       buildSessionProcessText(),
     ].join("\n");
   };
@@ -6827,6 +7128,7 @@ const handleConfirmWorkflowSkillModal = () => {
     assistantRunMetaMap,
     debugFlowRecords,
     emitSessionCopyResult,
+    expandedRunSegmentDetailMap,
     t,
     messages,
     normalizedAgentKey,
@@ -6836,6 +7138,10 @@ const handleConfirmWorkflowSkillModal = () => {
     selectedWorkflow,
     selectedProvider,
     selectedSessionSkills,
+    sessionAiPromptRaw,
+    sessionAiRawByMessage,
+    sessionAiResponseRaw,
+    sessionCallRecords,
     sessionId,
     status,
     stepRecords,

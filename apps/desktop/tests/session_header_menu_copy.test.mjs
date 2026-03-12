@@ -22,6 +22,7 @@ function readDesktopSource(relativePath) {
 test("TestSessionCopyShouldBeMovedToDevDebugPanel", () => {
   const sessionSource = readDesktopSource("src/widgets/session/page.tsx");
   const devDebugSource = readDesktopSource("src/widgets/dev-debug-float.tsx");
+  const sharedDataSource = readDesktopSource("src/shared/data.ts");
 
   // 描述：
   //
@@ -30,10 +31,14 @@ test("TestSessionCopyShouldBeMovedToDevDebugPanel", () => {
   assert.doesNotMatch(sessionSource, /label: "复制会话内容"/);
   assert.match(sessionSource, /const buildSessionFullCopyText = \(\) =>/);
   assert.match(sessionSource, /const buildSessionProcessText = \(\) =>/);
+  assert.match(sessionSource, /const buildSessionRunSnippetSnapshot = \(\) =>/);
   assert.match(sessionSource, /const buildSessionExecutionConfigText = \(\) =>/);
   assert.match(sessionSource, /const buildSessionProjectSettingsText = \(\) =>/);
   assert.match(sessionSource, /const buildSessionAiRawExchangeText = \(\s*messageId: string,/);
-  assert.match(sessionSource, /const buildSessionRunSnippetText = \(messageId: string\) =>/);
+  assert.match(sessionSource, /const buildSessionAiRawExchangeList = \(\s*messageId: string,/);
+  assert.match(sessionSource, /const buildSessionRunSnippetText = \(\) =>/);
+  assert.match(sessionSource, /const \[sessionCallRecords, setSessionCallRecords\] = useState<SessionCallRecordSnapshot\[]>\(\[\]\);/);
+  assert.match(sessionSource, /const appendSessionCallRecord = \(record: SessionCallRecordSnapshot\) =>/);
   assert.doesNotMatch(sessionSource, /const stripPromptSectionsForCopy = \(rawPrompt: string, sectionTitles: string\[\]\) =>/);
   assert.match(sessionSource, /# 会话排查记录/);
   assert.match(sessionSource, /## 一、会话概览/);
@@ -43,33 +48,50 @@ test("TestSessionCopyShouldBeMovedToDevDebugPanel", () => {
   assert.match(sessionSource, /## 三、会话内容/);
   assert.match(sessionSource, /### 3\.1 会话消息/);
   assert.doesNotMatch(sessionSource, /### 3\.2 AI 原始收发/);
-  assert.match(sessionSource, /## 四、执行过程/);
-  assert.match(sessionSource, /### 4\.1 全链路调试/);
-  assert.match(sessionSource, /### 4\.2 Trace 记录/);
-  assert.match(sessionSource, /##### AI 原始收发/);
-  assert.match(sessionSource, /###### 请求（Prompt，原始）/);
-  assert.match(sessionSource, /###### 响应（Raw）/);
-  assert.match(sessionSource, /##### 运行片段/);
+  assert.match(sessionSource, /## 四、运行片段/);
+  assert.match(sessionSource, /## 五、执行过程/);
+  assert.match(sessionSource, /### 消息 \{\{index\}\} · \{\{role\}\}/);
+  assert.match(sessionSource, /#### 原始消息/);
+  assert.match(sessionSource, /#### AI 原始收发/);
+  assert.match(sessionSource, /##### 请求 \{\{index\}\}/);
+  assert.match(sessionSource, /##### 响应 \{\{index\}\}/);
+  assert.doesNotMatch(sessionSource, /### 4\.1 全链路调试/);
+  assert.doesNotMatch(sessionSource, /### 4\.2 Trace 记录/);
+  assert.doesNotMatch(sessionSource, /###### 请求（Prompt，原始）/);
+  assert.doesNotMatch(sessionSource, /###### 响应（Raw）/);
+  assert.doesNotMatch(sessionSource, /##### 运行片段/);
   assert.match(sessionSource, /const normalizeRunSegmentIntroForCopy = \(intro: string, step: string\) =>/);
   assert.match(sessionSource, /const shouldHideRunSegmentInCopy = \(\s*intro: string,\s*step: string,\s*status: AssistantRunSegmentStatus,/s);
   assert.match(sessionSource, /normalizeRunSegmentIntroForCopy\(segment\.intro, segment\.step\)/);
   assert.match(sessionSource, /shouldHideRunSegmentInCopy\(segment\.intro, segment\.step, segment\.status\)/);
+  assert.match(sessionSource, /isWorkflowStageDividerSegment\(segment\)/);
+  assert.match(sessionSource, /t\("工作流阶段"\)/);
   assert.match(sessionSource, /const runSegmentsForRender: AssistantRunSegment\[] = runMeta/);
   assert.match(sessionSource, /const runSegmentGroups = buildRunSegmentGroups\(runSegmentsForRender\);/);
-  assert.match(sessionSource, /runSegmentGroups\.map\(\(group\) =>/);
-  assert.match(sessionSource, /group\.steps\.map\(\(step\) => renderRunSegment\(step\)\)/);
-  assert.match(sessionSource, /group\.steps\.map\(\(step\) => renderRunSegment\(step, "collapsed-"\)\)/);
+  assert.match(sessionSource, /const renderRunSegmentGroup = \(group: AssistantRunSegmentGroup, segmentKeyPrefix = ""\) => \{/);
+  assert.match(sessionSource, /runSegmentGroups\.map\(\(group\) => renderRunSegmentGroup\(group\)\)/);
+  assert.match(sessionSource, /runSegmentGroups\.map\(\(group\) => renderRunSegmentGroup\(group, "collapsed-"\)\)/);
   assert.match(sessionSource, /const wrapMarkdownCodeFence = \(content: string, language = "text"\) =>/);
-  assert.match(sessionSource, /wrapMarkdownCodeFence\(rawPromptForCopy \|\| t\("（无）"\), "text"\)/);
-  assert.match(sessionSource, /wrapMarkdownCodeFence\(responseRaw \|\| t\("（无）"\), "text"\)/);
+  assert.match(sessionSource, /const wrapMarkdownCodeFencePreserveContent = \(content: string, language = "text"\) =>/);
+  assert.match(sessionSource, /wrapMarkdownCodeFencePreserveContent\(exchange\.requestRaw, "text"\)/);
+  assert.match(sessionSource, /wrapMarkdownCodeFencePreserveContent\(exchange\.responseRaw, "text"\)/);
+  assert.match(sessionSource, /JSON\.stringify\(buildSessionRunSnippetSnapshot\(\), null, 2\)/);
+  assert.match(sessionSource, /sessionCallRecords\.length > 0 \? sessionCallRecords : legacyRecords/);
+  assert.match(sessionSource, /kind: "step"/);
+  assert.match(sessionSource, /kind: "event"/);
+  assert.match(sessionSource, /kind: "debug_flow"/);
+  assert.match(sessionSource, /kind: "trace"/);
   assert.match(sessionSource, /sessionAiPromptRaw/);
   assert.match(sessionSource, /sessionAiResponseRaw/);
   assert.match(sessionSource, /sessionAiRawByMessage/);
   assert.match(sessionSource, /const assistantMessageId = String\(item\.id \|\| ""\)\.trim\(\);/);
   assert.match(sessionSource, /buildSessionAiRawExchangeText\(\s*assistantMessageId,/);
   assert.match(sessionSource, /setSessionAiRawByMessage\(\(prev\) => \(\{/);
+  assert.match(sessionSource, /buildSessionAiRawByMessageItem\(/);
   assert.match(sessionSource, /upsertSessionDebugArtifact\(\{/);
   assert.match(sessionSource, /getSessionDebugArtifact\(normalizedAgentKey, sessionId\)/);
+  assert.match(sessionSource, /setSessionCallRecords\(Array\.isArray\(debugArtifact\.callRecords\) \? debugArtifact\.callRecords : \[\]\);/);
+  assert.match(sessionSource, /callRecords: sessionCallRecords/);
   assert.match(sessionSource, /agentPromptRawRef/);
   assert.match(sessionSource, /agentLlmDeltaBufferRef/);
   assert.match(sessionSource, /agentLlmResponseRawRef/);
@@ -90,6 +112,18 @@ test("TestSessionCopyShouldBeMovedToDevDebugPanel", () => {
   assert.match(sessionSource, /window\.addEventListener\("libra:session-copy-request"/);
   assert.match(sessionSource, /new CustomEvent\("libra:session-copy-result"/);
   assert.match(sessionSource, /会话内容（含过程）已复制/);
+
+  // 描述：
+  //
+  //   - 调试资产持久化必须同步支持多轮 AI 原始收发与完整调用链，避免复制时只能拿到最后一轮数据。
+  assert.match(sharedDataSource, /export interface SessionAiRawExchangeSnapshot/);
+  assert.match(sharedDataSource, /export interface SessionAiRawByMessageSnapshot/);
+  assert.match(sharedDataSource, /export interface SessionCallRecordSnapshot/);
+  assert.match(sharedDataSource, /aiRawByMessage\?: Record<string, SessionAiRawByMessageSnapshot>;/);
+  assert.match(sharedDataSource, /callRecords\?: SessionCallRecordSnapshot\[];/);
+  assert.match(sharedDataSource, /const normalizedExchanges: SessionAiRawExchangeSnapshot\[] = exchanges\.length > 0/);
+  assert.match(sharedDataSource, /callRecords = Array\.isArray\(item\.callRecords\)/);
+  assert.match(sharedDataSource, /callRecords: \(input\.callRecords \|\| \[\]\)/);
 
   // 描述：
   //
