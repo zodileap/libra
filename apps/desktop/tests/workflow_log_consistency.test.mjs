@@ -84,23 +84,98 @@ test("TestTauriHealthChecksShouldRunInSpawnBlocking", () => {
 
 test("TestSessionLayoutShouldAlignUserRightAndAssistantLeft", () => {
   const source = readDesktopSource("src/styles.css");
+  const markdownSource = readDesktopSource("src/widgets/chat-markdown.tsx");
 
   // 描述:
   //
   //   - 会话布局应确保用户消息右对齐、智能体消息左对齐，贴近主流聊天交互。
   assert.match(source, /\.desk-msg\.user\s*\{[\s\S]*align-self:\s*flex-end/);
   assert.match(source, /\.desk-msg\.assistant\s*\{[\s\S]*align-self:\s*flex-start/);
+  assert.match(source, /--desk-run-text-primary:\s*var\(--z-color-text\);/);
+  assert.match(source, /--desk-run-text-secondary:\s*color-mix/);
+  assert.match(source, /--desk-run-text-tertiary:\s*color-mix/);
+  assert.match(source, /\.desk-run-intro\s*\{[\s\S]*color:\s*var\(--desk-run-text-primary\)/);
+  assert.match(source, /\.desk-run-step-body\s*\{[\s\S]*font-size:\s*var\(--z-font-size-sm\);[\s\S]*color:\s*var\(--desk-run-text-primary\);/);
+  assert.match(source, /\.desk-run-step-body \.desk-md-list\s*\{[\s\S]*list-style-position:\s*inside;[\s\S]*padding-inline-start:\s*0;/);
+  assert.match(source, /\.desk-run-step-body \.desk-md-quote\s*\{[\s\S]*border-radius:\s*0;/);
+  assert.match(markdownSource, /{index > 0 \? <br \/> : null}/);
+  assert.match(markdownSource, /const orderedStart = ordered \? Number\.parseInt\(listMatch\[1\], 10\) \|\| 1 : undefined;/);
+  assert.match(markdownSource, /<ListTag[\s\S]*start=\{orderedStart\}/s);
+  assert.match(source, /\.desk-run-step-rich\s*\{[\s\S]*color:\s*var\(--desk-run-text-tertiary\)/);
+  assert.match(source, /\.desk-run-step-prefix\s*\{[\s\S]*min-inline-size:/);
+  assert.match(source, /\.desk-run-step-prefix\s*\{[\s\S]*color:\s*var\(--desk-run-text-secondary\)/);
+  assert.match(source, /\.desk-run-step-approval-label\s*\{[\s\S]*min-inline-size:/);
+  assert.match(source, /\.desk-run-step-approval-label\s*\{[\s\S]*color:\s*var\(--desk-run-text-secondary\)/);
+  assert.match(source, /\.desk-run-step-suffix\s*\{[\s\S]*color:\s*var\(--desk-run-text-tertiary\)/);
+  assert.match(source, /\.desk-run-step-rich\s*\{[\s\S]*padding:\s*var\(--z-inset-sm\);/);
+  assert.match(source, /\.desk-run-segment-detail-toggle-rich\s*\{[\s\S]*padding:\s*0;/);
+  assert.match(source, /\.desk-run-segment-static-step-rich\s*\{[\s\S]*padding:\s*0;/);
+  assert.match(source, /\.desk-run-segment-static-step-rich\s*\{[\s\S]*display:\s*flex;/);
+});
+
+test("TestRepositoryAgentsShouldDefineDesktopMessageTaxonomy", () => {
+  const source = readDesktopSource("../../Agents.md");
+  const runSegmentSource = readDesktopSource("src/widgets/session/run-segment.tsx");
+
+  // 描述:
+  //
+  //   - 仓库规范应明确 Desktop 会话消息只允许四种类型，避免后续继续把正文按来源拆散。
+  //   - 运行日志中的非结构化步骤正文也应复用正文渲染，而不是退回到独立纯文本 step。
+  assert.match(source, /Desktop 会话消息类型约束/);
+  assert.match(source, /1\.\s*正文/);
+  assert.match(source, /2\.\s*结构化状态/);
+  assert.match(source, /3\.\s*分割线/);
+  assert.match(source, /4\.\s*状态卡片/);
+  assert.match(source, /禁止额外发明第五种消息形态/);
+  assert.match(runSegmentSource, /function renderRunSegmentBodyContent\(/);
+  assert.match(runSegmentSource, /return renderRunSegmentBodyContent\(segment\.text, runningClass\);/);
+  assert.doesNotMatch(runSegmentSource, /AriTypography[\s\S]*value=\{segment\.text\}/);
 });
 
 test("TestSessionPageShouldRenderCollapsibleRunDividerAndSummary", () => {
   const source = readDesktopSource("src/widgets/session/page.tsx");
+  const promptUtilsSource = readDesktopSource("src/widgets/session/prompt-utils.ts");
+  const styleSource = readDesktopSource("src/styles.css");
+  const messagesSource = readDesktopSource("src/shared/i18n/messages.ts");
 
   // 描述:
   //
   //   - 执行完成后应渲染可点击的用时分割线，并在其下展示总结内容。
+  //   - 工作流阶段正文应保留在运行日志与 agent context 中，但不应被当成独立 transcript 消息置顶渲染。
   assert.match(source, /className=\"desk-run-divider\"/);
+  assert.match(source, /className=\"desk-run-divider desk-run-divider-static desk-run-stage-divider\"/);
   assert.match(source, /formatElapsedDuration\(runMeta.startedAt, runMeta.finishedAt\)/);
   assert.match(source, /className=\{`desk-run-summary/);
+  assert.match(source, /control\?: "continue" \| "done";/);
+  assert.match(source, /display_message\?: string;/);
+  assert.match(source, /const responseDisplayMessage = sanitizeWorkflowStageDisplayMessage\(/);
+  assert.match(source, /const responseControl = String\(response\.control \|\| ""\)\.trim\(\)\.toLowerCase\(\) === "done"/);
+  assert.match(source, /const completionDecision = hasWorkflowStages\s*\?\s*resolveWorkflowStageCompletionDecision\(/s);
+  assert.match(source, /const effectiveResponseDisplayMessage = completionDecision\.displayMessage;/);
+  assert.match(source, /if \(hasWorkflowStages && effectiveResponseControl !== "done"\) \{/);
+  assert.match(promptUtilsSource, /export function upsertAssistantMessageBeforeAnchorById\(/);
+  assert.match(promptUtilsSource, /export function filterWorkflowStageContextMessages\(/);
+  assert.match(source, /const stored = filterWorkflowStageContextMessages\(/);
+  assert.match(source, /messages: filterWorkflowStageContextMessages\(messages\)/);
+  assert.doesNotMatch(source, /setMessages\(\(prev\) => upsertAssistantMessageBeforeAnchorById\(\s*prev,\s*stageContextMessageId,\s*responseDisplayMessage,\s*streamMessageId,\s*\)\)/s);
+  assert.match(source, /function buildWorkflowCompletionSummary\(/);
+  assert.match(source, /function sanitizeWorkflowStageDisplayMessage\(/);
+  assert.match(source, /const WORKFLOW_STAGE_AUTO_COMPLETION_LEAD_LINE_PATTERNS = \[/);
+  assert.match(source, /function stripWorkflowStageAutoCompletionPlaceholder\(/);
+  assert.match(source, /stripWorkflowStageAutoCompletionPlaceholder\(String\(value \|\| ""\)\)/);
+  assert.match(source, /normalizedValue\.startsWith\("脚本执行完成（自动补全结果）："\)/);
+  assert.match(source, /const WORKFLOW_STAGE_DIAGNOSTIC_LINE_PATTERNS = \[/);
+  assert.match(source, /const explicitCommand = String\(\s*typeof segmentData\.terminal_command === "string" \? segmentData\.terminal_command : "",\s*\)\.trim\(\);/s);
+  assert.match(source, /return translateDesktopText\("已记录当前阶段结果。"\);/);
+  assert.match(source, /groups\.push\(\{\s*key: `run-group-\$\{groups\.length\}-default`,\s*title: "",\s*kind: "default",/s);
+  assert.doesNotMatch(source, /key: `run-group-\$\{groups\.length\}-\$\{translateDesktopText\("执行过程"\)\}`[\s\S]*title: translateDesktopText\("执行过程"\),/s);
+  assert.match(source, /function resolveFinalAssistantRunSummary\(/);
+  assert.match(source, /const finalSummary = resolveFinalAssistantRunSummary\(/);
+  assert.match(messagesSource, /"已记录当前阶段结果。": "已记录当前阶段结果。"/);
+  assert.match(source, /finishAssistantRunMessage\(\s*streamMessageId,\s*"finished",\s*buildWorkflowCompletionSummary\(/s);
+  assert.doesNotMatch(source, /finishAssistantRunMessage\(streamMessageId, "finished", t\("执行过程已完成。"\)\);/);
+  assert.match(styleSource, /\.desk-run-stage-divider/);
+  assert.match(styleSource, /\.desk-run-divider-static/);
 });
 
 test("TestSessionPageShouldKeepHeartbeatDuringLongWait", () => {
@@ -112,6 +187,32 @@ test("TestSessionPageShouldKeepHeartbeatDuringLongWait", () => {
   assert.match(source, /function buildAssistantHeartbeatSegment/);
   assert.match(source, /const startAssistantRunHeartbeat = \(messageId: string\) =>/);
   assert.match(source, /等待工具返回本步结果…/);
+});
+
+test("TestSessionDataShouldPersistTranscriptAndAgentContextSeparately", () => {
+  const source = readDesktopSource("src/shared/data.ts");
+
+  // 描述:
+  //
+  //   - UI transcript 与 agent context 必须使用两套本地存储键和独立读写函数，避免关闭软件后只恢复一侧状态。
+  assert.match(source, /const SESSION_MESSAGES_STORAGE_KEY = "libra\.desktop\.session\.messages";/);
+  assert.match(source, /const SESSION_AGENT_CONTEXT_MESSAGES_STORAGE_KEY = "libra\.desktop\.session\.agent\.context\.messages";/);
+  assert.match(source, /function readSessionAgentContextMessages\(\): StoredSessionMessageGroup\[\] \{/);
+  assert.match(source, /function writeSessionAgentContextMessages\(groups: StoredSessionMessageGroup\[\]\) \{/);
+  assert.match(source, /export function upsertSessionMessages\(input: \{[\s\S]*messages: input\.messages,[\s\S]*writeSessionMessages\(next\);/);
+  assert.match(source, /export function getSessionAgentContextMessages\(/);
+  assert.match(source, /export function upsertSessionAgentContextMessages\(input: \{/);
+  assert.match(source, /messages: input\.messages\.slice\(-200\),/);
+});
+
+test("TestSessionRunStateShouldKeepHistoricalSegmentsAcrossRestart", () => {
+  const source = readDesktopSource("src/shared/data.ts");
+
+  // 描述:
+  //
+  //   - 前端执行过程历史在软件关闭后重开仍需恢复，因此运行片段持久化不能再只保留最近一段。
+  assert.match(source, /function sanitizeRunMetaMapForStorage\(/);
+  assert.doesNotMatch(source, /\.slice\(-160\)/);
 });
 
 test("TestSessionPromptInputShouldSupportKeyboardHotkeys", () => {

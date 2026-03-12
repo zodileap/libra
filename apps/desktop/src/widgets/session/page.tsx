@@ -391,6 +391,12 @@ const WORKFLOW_STAGE_DIAGNOSTIC_LINE_PATTERNS = [
   /^[A-Za-z0-9_.-]+(?:_str)? length:\s*\d+\s*$/u,
   /^Test Result Success:\s*(true|false)\s*$/iu,
 ];
+const WORKFLOW_STAGE_AUTO_COMPLETION_LEAD_LINE_PATTERNS = [
+  /^脚本执行完成（自动补全结果）[:：]?\s*$/u,
+  /^脚本执行完成（未产生可见输出，系统自动收尾）[。：:：]?\s*$/u,
+  /^执行完成（系统自动补全 finish）\s*$/u,
+  /^执行完成（未返回总结，已自动收尾）\s*$/u,
+];
 const DCC_MODELING_SKILL_ID = "dcc-modeling";
 const QUICK_START_CODE_WORKFLOW_ID = "wf-agent-full-delivery-v1";
 
@@ -604,13 +610,71 @@ function resolveWorkflowStageCompletionDecision(
 //
 //   - 适合用于最终总结的单行摘要。
 function resolveWorkflowStageSummaryPreview(value: string): string {
-  const candidateLines = String(value || "")
+  const candidateLines = stripWorkflowStageAutoCompletionPlaceholder(String(value || ""))
     .split(/\r?\n/g)
     .map((line) => String(line || "").trim())
     .filter((line) => line.length > 0)
     .map((line) => line.replace(/^#+\s*/, "").replace(/^[-*]\s+/, "").replace(/^\d+\.\s+/, "").trim())
     .filter((line) => line.length > 0);
   return truncateRunText(candidateLines[0] || "", 160);
+}
+
+// 描述：
+//
+//   - 判断当前文本是否属于脚本自动补全 finish 生成的前缀占位行。
+//   - 这类文案只用于兜底执行闭环，不应直接作为阶段正文展示给用户。
+//
+// Params:
+//
+//   - line: 单行候选文本。
+//
+// Returns:
+//
+//   - true 表示命中自动补全占位前缀。
+function isWorkflowStageAutoCompletionLeadLine(line: string): boolean {
+  const normalizedLine = String(line || "").trim();
+  if (!normalizedLine) {
+    return false;
+  }
+  return WORKFLOW_STAGE_AUTO_COMPLETION_LEAD_LINE_PATTERNS.some((pattern) => pattern.test(normalizedLine));
+}
+
+// 描述：
+//
+//   - 从阶段正文候选文本中剥离脚本自动补全产生的占位前缀。
+//   - 若占位前缀后仍带有真实正文，则保留正文；若只有占位句本身，则返回空字符串。
+//
+// Params:
+//
+//   - value: 原始正文候选。
+//
+// Returns:
+//
+//   - 去掉占位前缀后的正文文本。
+function stripWorkflowStageAutoCompletionPlaceholder(value: string): string {
+  const normalizedValue = String(value || "").trim();
+  if (!normalizedValue) {
+    return "";
+  }
+  const remainingLines = normalizedValue.split(/\r?\n/g);
+  while (remainingLines.length > 0) {
+    const firstLine = String(remainingLines[0] || "").trim();
+    if (!isWorkflowStageAutoCompletionLeadLine(firstLine)) {
+      break;
+    }
+    remainingLines.shift();
+    while (remainingLines.length > 0 && !String(remainingLines[0] || "").trim()) {
+      remainingLines.shift();
+    }
+  }
+  const strippedValue = remainingLines.join("\n").trim();
+  if (strippedValue) {
+    return strippedValue;
+  }
+  if (isWorkflowStageAutoCompletionLeadLine(normalizedValue)) {
+    return "";
+  }
+  return normalizedValue;
 }
 
 // 描述：
@@ -649,7 +713,11 @@ function sanitizeWorkflowStageDisplayMessage(
   fallbackMessage: string,
 ): string {
   const sanitizeMessage = (value: string): string => {
-    const rawLines = String(value || "").split(/\r?\n/g);
+    const strippedValue = stripWorkflowStageAutoCompletionPlaceholder(String(value || ""));
+    if (!strippedValue) {
+      return "";
+    }
+    const rawLines = strippedValue.split(/\r?\n/g);
     const filteredLines: string[] = [];
     let previousLineEmpty = false;
     rawLines.forEach((line) => {
@@ -2782,7 +2850,16 @@ function isGenericFinishedRunSummaryText(value: string): boolean {
     return true;
   }
   return normalizedValue === translateDesktopText("执行过程已完成。")
-    || normalizedValue === translateDesktopText("执行完成");
+    || normalizedValue === translateDesktopText("执行完成")
+    || (
+      normalizedValue.length > 0
+      && stripWorkflowStageAutoCompletionPlaceholder(normalizedValue).length === 0
+      && (
+        isWorkflowStageAutoCompletionLeadLine(normalizedValue)
+        || normalizedValue.startsWith("脚本执行完成（自动补全结果）：")
+        || normalizedValue.startsWith("脚本执行完成（未产生可见输出，系统自动收尾）：")
+      )
+    );
 }
 
 // 描述：
