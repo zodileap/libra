@@ -1,0 +1,5 @@
+libra:
+  title: 接口开发
+  description: 在契约明确后生成调用层、类型、mock 或测试骨架，并说明边界、未覆盖项和验证命令。
+  example_prompt: 根据这份接口契约生成调用层、类型和基础测试骨架，并标出未覆盖项与验证命令。
+  icon: libra_skill

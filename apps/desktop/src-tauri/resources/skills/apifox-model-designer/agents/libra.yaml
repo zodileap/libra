@@ -1,0 +1,5 @@
+libra:
+  title: 接口建模
+  description: 梳理接口实体、请求响应、Mock 场景和 Apifox 同步步骤，并如实标注可用性与阻塞。
+  example_prompt: 先帮我整理这组接口的实体、请求响应、Mock 场景和 Apifox 同步方案，并说明是否存在阻塞。
+  icon: libra_skill

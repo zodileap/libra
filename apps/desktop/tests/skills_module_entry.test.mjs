@@ -19,6 +19,94 @@ function readDesktopSource(relativePath) {
   return fs.readFileSync(absolutePath, "utf8");
 }
 
+// 描述：
+//
+//   - 返回 Desktop 内置技能包的稳定断言配置，用于校验资源结构、标题与引用文件。
+//
+// Returns:
+//
+//   - 内置技能断言配置列表。
+function builtinSkillPackageAssertions() {
+  return [
+    {
+      id: "requirements-analyst",
+      title: "需求分析",
+      heading: "# Requirements Analysis",
+      references: ["references/acceptance-checklist.md"],
+    },
+    {
+      id: "frontend-architect",
+      title: "前端架构",
+      heading: "# Frontend Architecture",
+      references: ["references/desktop-frontend-rules.md"],
+    },
+    {
+      id: "frontend-page-builder",
+      title: "页面实现",
+      heading: "# Frontend Page Build",
+      references: ["references/page-implementation-checklist.md"],
+    },
+    {
+      id: "test-runner",
+      title: "测试执行",
+      heading: "# Test Execution",
+      references: ["references/desktop-test-matrix.md"],
+    },
+    {
+      id: "api-codegen",
+      title: "接口开发",
+      heading: "# API Code Generation",
+      references: ["references/output-contract.md"],
+    },
+    {
+      id: "apifox-model-designer",
+      title: "接口建模",
+      heading: "# Apifox Model Design",
+      references: ["references/apifox-sync-checklist.md"],
+    },
+    {
+      id: "db-designer",
+      title: "数据库设计",
+      heading: "# Database Design",
+      references: ["references/schema-review-checklist.md"],
+    },
+    {
+      id: "dcc-modeling",
+      title: "建模执行",
+      heading: "# DCC Modeling",
+      references: ["references/dcc-routing-rules.md", "runtime/requirements.json"],
+    },
+    {
+      id: "report-builder",
+      title: "交付报告",
+      heading: "# Delivery Report",
+      references: ["references/delivery-structure.md"],
+    },
+  ];
+}
+
+// 描述：
+//
+//   - 读取指定内置技能包下的资源文件，用于内容和结构断言。
+//
+// Params:
+//
+//   - skillId: 技能编码。
+//   - relativePath: 技能目录下的相对路径。
+//
+// Returns:
+//
+//   - UTF-8 文本内容。
+function readBuiltinSkillResource(skillId, relativePath) {
+  const absolutePath = path.resolve(
+    process.cwd(),
+    "src-tauri/resources/skills",
+    skillId,
+    relativePath,
+  );
+  return fs.readFileSync(absolutePath, "utf8");
+}
+
 test("TestSkillsModuleShouldExposeRouteAndSidebarEntry", () => {
   const commonRoutesSource = readDesktopSource("src/modules/common/routes.tsx");
   const routerSource = readDesktopSource("src/router/index.tsx");
@@ -72,6 +160,10 @@ test("TestSkillsModuleShouldExposeRouteAndSidebarEntry", () => {
 test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   const skillsPageSource = readDesktopSource("src/modules/common/pages/skills-page.tsx");
   const skillServiceSource = readDesktopSource("src/modules/common/services/skills.ts");
+  const promptUtilsSource = readDesktopSource("src/widgets/session/prompt-utils.ts");
+  const workflowPageSource = readDesktopSource("src/widgets/workflow/page.tsx");
+  const skillPlanSource = readDesktopSource("src/shared/workflow/skill-plan.ts");
+  const sessionPageSource = readDesktopSource("src/widgets/session/page.tsx");
   const constantsSource = readDesktopSource("src/shared/constants.ts");
   const tauriSkillRegistrySource = readDesktopSource("src-tauri/src/agent_skills.rs");
   const tauriMainSource = readDesktopSource("src-tauri/src/main.rs");
@@ -79,89 +171,164 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   const buildSource = readDesktopSource("src-tauri/build.rs");
   const cargoSource = readDesktopSource("src-tauri/Cargo.toml");
   const styleSource = readDesktopSource("src/styles.css");
-  const builtinSkillPath = path.resolve(process.cwd(), "src-tauri/resources/skills/requirements-analyst/SKILL.md");
-  const builtinSkillSource = fs.readFileSync(builtinSkillPath, "utf8");
-  const dccSkillPath = path.resolve(process.cwd(), "src-tauri/resources/skills/dcc-modeling/SKILL.md");
-  const dccSkillSource = fs.readFileSync(dccSkillPath, "utf8");
+  const builtinSkillPackages = builtinSkillPackageAssertions();
+  const skillResourceRoot = path.resolve(process.cwd(), "src-tauri/resources/skills");
   const dccSkillRuntimePath = path.resolve(process.cwd(), "src-tauri/resources/skills/dcc-modeling/runtime/requirements.json");
   const dccSkillRuntimeSource = fs.readFileSync(dccSkillRuntimePath, "utf8");
 
   // 描述：
   //
-  //   - 技能页应展示“已注册/未注册”分区，并将标题、说明和操作统一挂到标题栏 slot。
+  //   - 技能页应恢复“已注册 / 未注册”分区，并将标题与详情统一挂到标题栏 slot。
   assert.match(skillsPageSource, /DeskSectionTitle title=\{t\("已注册"\)\}/);
   assert.match(skillsPageSource, /DeskSectionTitle title=\{t\("未注册"\)\}/);
   assert.match(skillsPageSource, /DeskPageHeader/);
   assert.match(skillsPageSource, /DeskOverviewCard/);
-  assert.match(skillsPageSource, /icon=\{<AriIcon name="new_releases" \/>\}/);
-  assert.match(skillsPageSource, /DeskOverviewDetailsModal/);
-  assert.match(skillsPageSource, /DeskOverviewDetailRow/);
+  assert.match(skillsPageSource, /function SkillIcon/);
+  assert.match(skillsPageSource, /resolveAgentSkillIconName/);
+  assert.match(skillsPageSource, /<AriIcon/);
+  assert.match(skillsPageSource, /name=\{iconName\}/);
+  assert.match(skillsPageSource, /size=\{size === "hero" \? "xxl" : "lg"\}/);
+  assert.match(skillsPageSource, /title=\{skill\.title\}/);
+  assert.match(skillsPageSource, /<AriModal/);
+  assert.match(skillsPageSource, /title=\{managingSkill \? \(/);
+  assert.match(skillsPageSource, /className="desk-skill-details-modal-title"/);
   assert.match(skillsPageSource, /mode="slot"/);
-  assert.match(skillsPageSource, /color="brand"/);
-  assert.match(skillsPageSource, /label=\{t\("导入本地技能"\)\}/);
-  assert.match(skillsPageSource, /size="sm"/);
-  assert.match(skillsPageSource, /icon="add"/);
-  assert.match(skillsPageSource, /title=\{t\("移除技能"\)\}/);
   assert.match(skillsPageSource, /type="text"/);
   assert.match(skillsPageSource, /content=\{t\("管理"\)\}/);
   assert.match(skillsPageSource, /aria-label=\{t\("管理技能"\)\}/);
-  assert.match(skillsPageSource, /aria-label=\{t\("添加技能"\)\}/);
-  assert.match(skillsPageSource, /!registered && onAdd \? \(\s*<AriButton\s*type="text"\s*icon="add"\s*aria-label=\{t\("添加技能"\)\}/s);
-  assert.doesNotMatch(skillsPageSource, /!registered && onAdd \? \(\s*<AriButton[\s\S]*color="brand"[\s\S]*aria-label=\{t\("添加技能"\)\}/s);
+  assert.match(skillsPageSource, /registerBuiltinAgentSkill/);
+  assert.match(skillsPageSource, /unregisterBuiltinAgentSkill/);
+  assert.match(skillsPageSource, /openBuiltinAgentSkillFolder/);
+  assert.match(skillsPageSource, /ChatMarkdown/);
+  assert.match(skillsPageSource, /label=\{t\("打开文件夹"\)\}/);
+  assert.match(skillsPageSource, /stripSkillDetailHeading/);
+  assert.match(skillsPageSource, /className="desk-skill-details-section-label"[\s\S]*variant="body"[\s\S]*value=\{t\("示例提示"\)\}/);
+  assert.match(skillsPageSource, /value=\{t\("示例提示"\)\}/);
+  assert.match(skillsPageSource, /aria-label=\{t\("复制示例提示"\)\}/);
+  assert.match(skillsPageSource, /width="var\(--desk-skill-details-modal-width\)"/);
+  assert.match(skillsPageSource, /className="desk-skill-details-markdown-panel"/);
+  assert.match(skillsPageSource, /className="desk-skill-details-markdown-scroll"/);
+  assert.match(skillsPageSource, /className="desk-skill-details-prompt-card"/);
+  assert.doesNotMatch(skillsPageSource, /className="desk-skill-details-prompt-card" padding=\{0\}/);
+  assert.doesNotMatch(skillsPageSource, /className="desk-skill-details-markdown-panel" padding=\{0\}/);
+  assert.doesNotMatch(skillsPageSource, /className="desk-skill-details-card"/);
+  assert.doesNotMatch(skillsPageSource, /className="desk-skill-details-shell"/);
+  assert.match(skillsPageSource, /const registeredSkillIds = useMemo/);
+  assert.match(skillsPageSource, /icon=\{registered \? "delete" : "add"\}/);
+  assert.match(skillsPageSource, /aria-label=\{registered \? t\("移除技能"\) : t\("添加技能"\)\}/);
+  assert.match(skillsPageSource, /DeskEmptyState title=\{t\("暂无已注册技能"\)\} description=\{t\("可从下方未注册技能中添加。"\)\}/);
+  assert.match(skillsPageSource, /DeskEmptyState title=\{t\("暂无未注册技能"\)\} description=\{t\("当前应用未发现可添加的内置技能。"\)\}/);
+  assert.match(skillsPageSource, /content: t\("已添加 \{\{name\}\}"\, \{ name: skill\.title \}\)/);
+  assert.match(skillsPageSource, /content: t\("已移除 \{\{name\}\}"\, \{ name: skill\.title \}\)/);
+  assert.doesNotMatch(skillsPageSource, /DeskSectionTitle title=\{t\("已提供"\)\}/);
+  assert.doesNotMatch(skillsPageSource, /DeskOverviewDetailsModal/);
+  assert.doesNotMatch(skillsPageSource, /DeskOverviewDetailRow/);
+  assert.doesNotMatch(skillsPageSource, /导入本地技能/);
   assert.doesNotMatch(skillsPageSource, /label="刷新"/);
-  assert.match(skillsPageSource, /pickLocalAgentSkillFolder/);
-  assert.match(skillsPageSource, /importAgentSkillFromPath/);
-  assert.match(skillsPageSource, /removeAgentSkill/);
-  assert.match(skillsPageSource, /t\("已添加 \{\{name\}\}"/);
+  assert.doesNotMatch(skillsPageSource, /pickLocalAgentSkillFolder/);
+  assert.doesNotMatch(skillsPageSource, /importAgentSkillFromPath/);
+  assert.doesNotMatch(skillsPageSource, /removeAgentSkill/);
   assert.match(skillsPageSource, /createPortal\(headerNode, headerSlotElement\)/);
 
   // 描述：
   //
-  //   - 技能服务层应改为调用 Tauri 注册表，不再依赖前端静态 catalog 或 localStorage 安装态。
+  //   - 技能服务层应输出技能标题、描述、示例提示与图标键，并统一映射到桌面端内置图标资源。
   assert.match(skillServiceSource, /export interface AgentSkillItem/);
+  assert.match(skillServiceSource, /title: string;/);
+  assert.match(skillServiceSource, /examplePrompt: string;/);
+  assert.match(skillServiceSource, /icon: string;/);
   assert.match(skillServiceSource, /markdownBody: string;/);
   assert.match(skillServiceSource, /runtimeRequirements: Record<string, unknown>;/);
   assert.match(skillServiceSource, /removable: boolean;/);
+  assert.match(skillServiceSource, /registered: AgentSkillItem\[];/);
+  assert.match(skillServiceSource, /unregistered: AgentSkillItem\[];/);
+  assert.match(skillServiceSource, /const AGENT_SKILL_ICON_NAMES = \{/);
+  assert.match(skillServiceSource, /libra_skill: "new_releases"/);
+  assert.match(skillServiceSource, /const DEFAULT_AGENT_SKILL_ICON_KEY = "libra_skill" as const;/);
+  assert.match(skillServiceSource, /function normalizeSkillIconKey\(rawIcon: string\): keyof typeof AGENT_SKILL_ICON_NAMES/);
+  assert.match(skillServiceSource, /export function resolveAgentSkillIconName\(iconKey: string\): string/);
   assert.match(skillServiceSource, /invoke<unknown\[]>\(COMMANDS\.LIST_AGENT_SKILLS\)/);
+  assert.match(skillServiceSource, /invoke<unknown>\(COMMANDS\.LIST_AGENT_SKILL_OVERVIEW\)/);
+  assert.match(skillServiceSource, /invoke<unknown>\(COMMANDS\.REGISTER_BUILTIN_AGENT_SKILL,\s*\{\s*skillId,\s*\}\)/s);
+  assert.match(skillServiceSource, /invoke<unknown>\(COMMANDS\.UNREGISTER_BUILTIN_AGENT_SKILL,\s*\{\s*skillId,\s*\}\)/s);
+  assert.match(skillServiceSource, /export async function openBuiltinAgentSkillFolder\(skillId: string\): Promise<boolean>/);
+  assert.match(skillServiceSource, /COMMANDS\.OPEN_BUILTIN_AGENT_SKILL_FOLDER/);
   assert.match(skillServiceSource, /invoke<string \| null>\(COMMANDS\.PICK_AGENT_SKILL_FOLDER\)/);
   assert.match(skillServiceSource, /COMMANDS\.IMPORT_AGENT_SKILL_FROM_PATH/);
   assert.match(skillServiceSource, /COMMANDS\.REMOVE_USER_AGENT_SKILL/);
-  assert.match(skillServiceSource, /function resolveExternalSkillDisplayPreset\(skillId: string\): SkillDisplayPreset \| null/);
-  assert.match(skillServiceSource, /if \(skillId === "doc"\) \{\s*return \{\s*name: translateDesktopText\("文档处理"\)/s);
-  assert.match(skillServiceSource, /if \(skillId === "repo-readme"\) \{\s*return \{\s*name: translateDesktopText\("仓库说明"\)/s);
-  assert.match(skillServiceSource, /if \(skillId === "skill-creator"\) \{\s*return \{\s*name: translateDesktopText\("技能创建"\)/s);
-  assert.match(skillServiceSource, /if \(skillId === "skill-installer"\) \{\s*return \{\s*name: translateDesktopText\("技能安装"\)/s);
-  assert.match(skillServiceSource, /function resolveSkillDisplayName\(skillId: string, rawName: string\): string/);
-  assert.match(skillServiceSource, /function resolveSkillDisplayDescription\(skillId: string, rawDescription: string\): string/);
-  assert.match(skillServiceSource, /name: resolveSkillDisplayName\(id, name\)/);
-  assert.match(skillServiceSource, /description: resolveSkillDisplayDescription\(id, String\(source\.description \|\| ""\)\.trim\(\)\)/);
+  assert.match(skillServiceSource, /function normalizeSkillOverview\(rawOverview: unknown\): SkillOverview/);
+  assert.match(skillServiceSource, /const title = String\(source\.title \|\| ""\)\.trim\(\);/);
+  assert.match(skillServiceSource, /title,/);
+  assert.match(skillServiceSource, /examplePrompt: String\(source\.example_prompt \|\| ""\)\.trim\(\),/);
+  assert.match(skillServiceSource, /icon: normalizeSkillIconKey\(String\(source\.icon \|\| ""\)\.trim\(\)\),/);
   assert.doesNotMatch(skillServiceSource, /SKILL_CATALOG/);
   assert.doesNotMatch(skillServiceSource, /localStorage/);
 
   // 描述：
   //
+  //   - 会话提示词与工作流技能选择器应统一使用技能标题，不再复用旧的 `name` 展示字段。
+  assert.match(promptUtilsSource, /const lines = \[`### \$\{item\.title\} \(\$\{item\.id\}\)`\];/);
+  assert.match(workflowPageSource, /label: translateDesktopText\("\{\{name\}\}（\{\{id\}\}）", \{ name: item\.title, id: item\.id \}\)/);
+  assert.match(skillPlanSource, /skillTitle: string;/);
+  assert.match(skillPlanSource, /skillTitle: resolvedSkill\.title,/);
+  assert.match(skillPlanSource, /return `\$\{displayIndex \+ 1\}\. \$\{item\.nodeTitle\}：\$\{item\.skillTitle\} \(\$\{item\.skillId\}\)\$\{descriptionText\}\$\{instructionText\}`;/);
+  assert.match(sessionPageSource, /return selectedSessionSkills\[0\]\?\.title \|\| t\("技能"\);/);
+  assert.match(sessionPageSource, /const name = String\(item\.title \|\| ""\)\.trim\(\) \|\| item\.id;/);
+
+  // 描述：
+  //
   //   - 常量层应暴露新的 Agent Skills 命令名。
   assert.match(constantsSource, /LIST_AGENT_SKILLS: "list_agent_skills"/);
+  assert.match(constantsSource, /LIST_AGENT_SKILL_OVERVIEW: "list_agent_skill_overview"/);
+  assert.match(constantsSource, /REGISTER_BUILTIN_AGENT_SKILL: "register_builtin_agent_skill"/);
+  assert.match(constantsSource, /UNREGISTER_BUILTIN_AGENT_SKILL: "unregister_builtin_agent_skill"/);
+  assert.match(constantsSource, /OPEN_BUILTIN_AGENT_SKILL_FOLDER: "open_builtin_agent_skill_folder"/);
   assert.match(constantsSource, /PICK_AGENT_SKILL_FOLDER: "pick_agent_skill_folder"/);
   assert.match(constantsSource, /IMPORT_AGENT_SKILL_FROM_PATH: "import_agent_skill_from_path"/);
   assert.match(constantsSource, /REMOVE_USER_AGENT_SKILL: "remove_user_agent_skill"/);
 
   // 描述：
   //
-  //   - Tauri 侧应具备标准技能扫描、YAML frontmatter 解析和本地导入/删除命令。
+  //   - Tauri 侧应保留内置技能扫描与注册表能力，并明确封禁外部导入/删除入口。
   assert.match(tauriSkillRegistrySource, /pub async fn list_agent_skills/);
+  assert.match(tauriSkillRegistrySource, /pub async fn list_agent_skill_overview/);
+  assert.match(tauriSkillRegistrySource, /pub async fn register_builtin_agent_skill/);
+  assert.match(tauriSkillRegistrySource, /pub async fn unregister_builtin_agent_skill/);
+  assert.match(tauriSkillRegistrySource, /pub async fn open_builtin_agent_skill_folder/);
   assert.match(tauriSkillRegistrySource, /pub async fn pick_agent_skill_folder/);
   assert.match(tauriSkillRegistrySource, /pub async fn import_agent_skill_from_path/);
   assert.match(tauriSkillRegistrySource, /pub async fn remove_user_agent_skill/);
   assert.match(tauriSkillRegistrySource, /serde_yaml::from_str/);
+  assert.match(tauriSkillRegistrySource, /pub title: String,/);
+  assert.match(tauriSkillRegistrySource, /pub example_prompt: String,/);
+  assert.match(tauriSkillRegistrySource, /pub icon: String,/);
+  assert.match(tauriSkillRegistrySource, /struct AgentSkillLibraMetadata/);
+  assert.match(tauriSkillRegistrySource, /struct AgentSkillLibraMetadataDocument/);
+  assert.match(tauriSkillRegistrySource, /fn parse_skill_libra_metadata\(metadata: &str\) -> Result<AgentSkillLibraMetadata, String>/);
+  assert.match(tauriSkillRegistrySource, /fn read_skill_libra_metadata\(skill_root: &Path\) -> Result<AgentSkillLibraMetadata, String>/);
+  assert.match(tauriSkillRegistrySource, /let parsed: AgentSkillLibraMetadataDocument = serde_yaml::from_str\(metadata\)/);
+  assert.match(tauriSkillRegistrySource, /let parsed = parsed\.libra;/);
+  assert.match(tauriSkillRegistrySource, /fn resolve_skill_description\(/);
   assert.match(tauriSkillRegistrySource, /read_optional_runtime_requirements/);
-  assert.match(tauriSkillRegistrySource, /resolve_external_skill_root/);
-  assert.match(tauriSkillRegistrySource, /CODEX_HOME/);
-  assert.match(tauriSkillRegistrySource, /copy_directory_recursive/);
-  assert.match(tauriSkillRegistrySource, /title: Option<String>/);
-  assert.match(tauriSkillRegistrySource, /unwrap_or\(frontmatter\.name\)/);
+  assert.match(tauriSkillRegistrySource, /resolve_agent_skill_registry_path/);
+  assert.match(tauriSkillRegistrySource, /write_agent_skill_registry_state/);
+  assert.match(tauriSkillRegistrySource, /build_agent_skill_overview/);
+  assert.match(tauriSkillRegistrySource, /register_builtin_agent_skill_inner/);
+  assert.match(tauriSkillRegistrySource, /unregister_builtin_agent_skill_inner/);
+  assert.match(tauriSkillRegistrySource, /open_builtin_agent_skill_folder_inner/);
+  assert.match(tauriSkillRegistrySource, /open_directory_path/);
+  assert.match(tauriSkillRegistrySource, /app_data_dir\(\)/);
+  assert.match(tauriSkillRegistrySource, /external_skill_operations_disabled_error/);
+  assert.match(tauriSkillRegistrySource, /当前版本仅允许使用应用内置技能/);
+  assert.doesNotMatch(tauriSkillRegistrySource, /copy_directory_recursive/);
+  assert.doesNotMatch(tauriSkillRegistrySource, /title: Option<String>/);
+  assert.doesNotMatch(tauriSkillRegistrySource, /unwrap_or\(frontmatter\.name\)/);
   assert.match(tauriMainSource, /mod agent_skills;/);
   assert.match(tauriMainSource, /list_agent_skills,/);
+  assert.match(tauriMainSource, /list_agent_skill_overview,/);
+  assert.match(tauriMainSource, /register_builtin_agent_skill,/);
+  assert.match(tauriMainSource, /unregister_builtin_agent_skill,/);
+  assert.match(tauriMainSource, /open_builtin_agent_skill_folder,/);
   assert.match(tauriMainSource, /pick_agent_skill_folder,/);
   assert.match(tauriMainSource, /import_agent_skill_from_path,/);
   assert.match(tauriMainSource, /remove_user_agent_skill,/);
@@ -176,29 +343,82 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
 
   // 描述：
   //
-  //   - 至少应存在一个标准内置技能包，并包含合法 frontmatter 与正文。
-  assert.match(builtinSkillSource, /^---\nname: requirements-analyst\ndescription:/);
-  assert.match(builtinSkillSource, /title: 需求分析/);
-  assert.match(builtinSkillSource, /# 需求分析/);
-  assert.match(dccSkillSource, /^---\nname: dcc-modeling\ndescription:/);
-  assert.match(dccSkillSource, /title: 建模执行/);
-  assert.match(dccSkillSource, /# 建模执行/);
-  assert.match(dccSkillSource, /如果用户表达了“跨软件导出\/导入\/迁移”意图，但没有明确提到两个或以上建模软件，必须先让用户选择源软件和目标软件/);
+  //   - 内置技能包应统一为 Codex 风格资源结构：英文 H1、中文正文、`libra.yaml` 元数据和按需 references。
+  const visibleSkillDirectories = fs
+    .readdirSync(skillResourceRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+    .map((entry) => entry.name)
+    .sort();
+  const expectedSkillDirectories = builtinSkillPackages.map((item) => item.id).sort();
+  assert.deepEqual(visibleSkillDirectories, expectedSkillDirectories);
+  assert.ok(!fs.existsSync(path.resolve(skillResourceRoot, ".DS_Store")));
+  for (const skillPackage of builtinSkillPackages) {
+    const skillSource = readBuiltinSkillResource(skillPackage.id, "SKILL.md");
+    const metadataSource = readBuiltinSkillResource(skillPackage.id, "agents/libra.yaml");
+
+    assert.match(skillSource, new RegExp(`^---\\nname: ${skillPackage.id}\\ndescription:`));
+    assert.doesNotMatch(skillSource, /^title:/m);
+    assert.match(skillSource, new RegExp(skillPackage.heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(skillSource, /^## Overview$/m);
+    assert.match(skillSource, /^## When to use$/m);
+    assert.match(skillSource, /^## Preconditions$/m);
+    assert.match(skillSource, /^## Core Workflow$/m);
+    assert.match(skillSource, /^## Guardrails$/m);
+    assert.match(skillSource, /^## Validation$/m);
+    assert.match(skillSource, /^## References$/m);
+    assert.doesNotMatch(skillSource, /^## 何时使用$/m);
+    assert.doesNotMatch(skillSource, /^## 执行要求$/m);
+    assert.doesNotMatch(skillSource, /^## 输出格式$/m);
+
+    for (const referencePath of skillPackage.references) {
+      assert.ok(
+        fs.existsSync(path.resolve(skillResourceRoot, skillPackage.id, referencePath)),
+        `expected skill reference to exist: ${skillPackage.id}/${referencePath}`,
+      );
+      assert.match(
+        skillSource,
+        new RegExp(referencePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+      );
+    }
+
+    assert.match(metadataSource, /^libra:$/m);
+    assert.match(metadataSource, new RegExp(`^  title: ${skillPackage.title}$`, "m"));
+    assert.match(metadataSource, /^  description: .+$/m);
+    assert.match(metadataSource, /^  example_prompt: .+$/m);
+    assert.match(metadataSource, /^  icon: libra_skill$/m);
+  }
   assert.match(dccSkillRuntimeSource, /"domain": "dcc-modeling"/);
   assert.match(dccSkillRuntimeSource, /"require_user_choice_when_multiple": true/);
   assert.match(dccSkillRuntimeSource, /"require_cross_dcc_source_and_target_choice_when_not_explicit": true/);
 
   // 描述：
   //
-  //   - 样式层仍应复用现有技能卡片布局类，不额外引入静态 catalog 特有结构。
+  //   - 样式层应补齐技能图标、示例提示卡片与详情页编排所需的变量和结构类。
   assert.match(styleSource, /\.desk-skills-shell/);
   assert.match(styleSource, /\.desk-skill-grid \{\s*display: grid;\s*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);\s*gap: calc\(var\(--z-inset\) \* 1\.125\);\s*align-items: start;/s);
+  assert.match(styleSource, /--desk-skill-details-modal-width: calc\(var\(--z-inset\) \* 56\);/);
+  assert.match(styleSource, /--desk-skill-details-hero-size: calc\(var\(--z-inset\) \* 4\.75\);/);
+  assert.match(styleSource, /\.desk-skill-icon-glyph \{/);
+  assert.match(styleSource, /\.desk-skill-icon-glyph\.is-hero \{/);
+  assert.match(styleSource, /\.desk-skill-icon-glyph svg \{/);
+  assert.match(styleSource, /\.desk-skill-icon-glyph\.is-hero svg \{/);
+  assert.match(styleSource, /\.desk-skill-details-section-label \{/);
+  assert.match(styleSource, /color: var\(--z-color-text-secondary\);/);
+  assert.doesNotMatch(styleSource, /\.desk-skill-details-shell \{/);
+  assert.match(styleSource, /\.desk-skill-details-modal-title \{/);
+  assert.match(styleSource, /\.desk-skill-details-hero \{/);
+  assert.match(styleSource, /\.desk-skill-details-prompt-card \{/);
+  assert.match(styleSource, /background: var\(--z-color-info-tertiary\);/);
+  assert.match(styleSource, /\.desk-skill-details-prompt-text \{/);
+  assert.match(styleSource, /\.desk-skill-details-markdown-panel \{/);
+  assert.match(styleSource, /\.desk-skill-details-markdown-scroll \{/);
+  assert.match(styleSource, /padding: var\(--desk-skill-details-card-padding\);/);
+  assert.match(styleSource, /\.desk-skill-details-markdown \{/);
+  assert.doesNotMatch(styleSource, /\.desk-skill-details-card \{/);
   assert.match(styleSource, /\.desk-overview-card/);
   assert.match(styleSource, /\.desk-overview-card-content/);
   assert.match(styleSource, /\.desk-overview-card-title/);
   assert.match(styleSource, /\.desk-overview-card-description/);
-  assert.match(styleSource, /\.desk-overview-details-body/);
-  assert.match(styleSource, /\.desk-overview-detail-row/);
 });
 
 test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
@@ -233,7 +453,7 @@ test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
   assert.match(mcpPageSource, /renderDccRuntimeEnvRequirementLabel/);
   assert.match(mcpPageSource, /环境变量：MAYA_BIN/);
   assert.match(mcpPageSource, /环境变量：C4D_BIN/);
-  assert.match(mcpPageSource, /label=\{t\("新增 MCP"\)\}/);
+  assert.doesNotMatch(mcpPageSource, /label=\{t\("新增 MCP"\)\}/);
   assert.match(mcpPageSource, /createPortal\(headerNode, headerSlotElement\)/);
   assert.match(mcpPageSource, /t\("安装 Runtime"\)/);
   assert.match(mcpPageSource, /label=\{t\("文档"\)\}/);
@@ -245,15 +465,22 @@ test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
   assert.match(mcpPageSource, /label=\{t\("安装 Runtime"\)\}/);
   assert.match(mcpPageSource, /label=\{t\("卸载 Runtime"\)\}/);
   assert.match(mcpPageSource, /label=\{dccRuntimeStatusMap\[managingTemplateItem\.software\]\?\.available \? t\("校验 Runtime"\) : t\("准备 Runtime"\)\}/);
-  assert.match(mcpPageSource, /aria-label=\{alreadyRegistered \? t\("模板已添加"\) : t\("添加 MCP"\)\}/);
-  assert.match(mcpPageSource, /<AriButton\s*type="text"\s*icon="add"\s*aria-label=\{alreadyRegistered \? t\("模板已添加"\) : t\("添加 MCP"\)\}/s);
-  assert.doesNotMatch(mcpPageSource, /<AriButton\s*type="text"[\s\S]*color=\{alreadyRegistered \? "default" : "brand"\}[\s\S]*aria-label=\{alreadyRegistered \? t\("模板已添加"\) : t\("添加 MCP"\)\}/s);
+  assert.match(mcpPageSource, /aria-label=\{t\("添加 MCP"\)\}/);
+  assert.match(mcpPageSource, /<AriButton\s*type="text"\s*icon="add"\s*aria-label=\{t\("添加 MCP"\)\}/s);
+  assert.doesNotMatch(mcpPageSource, /模板已添加/);
+  assert.match(mcpPageSource, /const unregisteredTemplates = useMemo/);
+  assert.match(mcpPageSource, /overview\.templates\.filter\(\(item\) => !registeredTemplateIds\.has\(item\.id\)\)/);
+  assert.match(mcpPageSource, /const handleCreateTemplate = useCallback/);
+  assert.match(mcpPageSource, /item\.runtimeKind === "apifox_runtime" && !apifoxRuntimeStatus\?\.managedByApp/);
+  assert.match(mcpPageSource, /void handleCreateTemplate\(managingTemplateItem\)/);
+  assert.match(mcpPageSource, /void handleCreateTemplate\(target\)/);
   assert.match(mcpPageSource, /value=\{workspaceId\}/);
   assert.match(mcpPageSource, /label: t\("全局（User）"\)/);
   assert.match(mcpPageSource, /label=\{t\("作用域"\)\}/);
   assert.match(mcpPageSource, /t\("已注册 \{\{count\}\} 个；当前项目：\{\{name\}\}"/);
   assert.match(mcpPageSource, /t\("已注册 \{\{count\}\} 个；当前显示全局 user 级 MCP。"/);
   assert.match(mcpPageSource, /buildDraftFromRegistration/);
+  assert.match(mcpPageSource, /可从下方未注册模板新增。/);
 
   // 描述：
   //
@@ -302,8 +529,8 @@ test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
   assert.match(mcpRegistrySource, /slugify_identifier/);
   assert.match(mcpRegistrySource, /normalize_registration_payload/);
   assert.match(mcpRegistrySource, /Apifox 接口工具/);
-  assert.match(mcpRegistrySource, /本地命令 MCP/);
-  assert.match(mcpRegistrySource, /HTTP 地址 MCP/);
+  assert.doesNotMatch(mcpRegistrySource, /本地命令 MCP/);
+  assert.doesNotMatch(mcpRegistrySource, /HTTP 地址 MCP/);
   assert.match(mcpRegistrySource, /Blender 建模桥接/);
   assert.match(mcpRegistrySource, /Maya 建模桥接/);
   assert.match(mcpRegistrySource, /C4D 建模桥接/);
@@ -315,6 +542,9 @@ test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
   assert.match(mcpRegistrySource, /domain: "dcc"/);
   assert.match(mcpRegistrySource, /software: "blender"/);
   assert.match(mcpRegistrySource, /capabilities: vec!\[/);
+  assert.match(mcpRegistrySource, /当前版本仅允许添加应用内置 MCP/);
+  assert.match(mcpRegistrySource, /find_builtin_mcp_template/);
+  assert.match(mcpRegistrySource, /filter_supported_registration_records/);
   assert.match(tauriMainSource, /mod blender_runtime;/);
   assert.match(tauriMainSource, /mod maya_runtime;/);
   assert.match(tauriMainSource, /mod c4d_runtime;/);

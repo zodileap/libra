@@ -1,0 +1,5 @@
+libra:
+  title: 需求分析
+  description: 在需求尚不清晰时，拆解目标、范围、边界、风险和可验证验收标准，并严格停留在分析阶段。
+  example_prompt: 帮我把这段需求整理成目标、范围、开放问题、风险和可验证验收标准，先不要开始实现。
+  icon: libra_skill
