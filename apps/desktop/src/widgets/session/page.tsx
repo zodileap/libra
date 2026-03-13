@@ -4474,7 +4474,7 @@ export function SessionPage({
     if (!sessionId || !messagesHydrated || hydratedSessionKey !== sessionStorageKey) {
       return;
     }
-    const promptRaw = String(sessionAiPromptRaw || agentPromptRawRef.current || "");
+    const promptRaw = String(sessionAiPromptRaw || agentPromptRawRef.current || "").trim();
     const responseRaw = String(
       sessionAiResponseRaw
       || agentLlmResponseRawRef.current
