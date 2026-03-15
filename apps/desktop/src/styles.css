@@ -158,6 +158,14 @@ body {
   --desk-sidebar-bg: var(--z-color-bg-opacity-blur);
 }
 
+.desk-platform-windows .desk-sidebar {
+  border-radius: var(--z-border-radius-zero);
+}
+
+.desk-platform-macos .desk-content {
+  border-radius: var(--z-border-radius-container) 0 0 var(--z-border-radius-container) !important;
+}
+
 .desk-app {
   --desk-active-sidebar-width: var(--desk-sidebar-width);
   height: 100%;
@@ -204,20 +212,35 @@ body {
  *
  *   - 标题栏 slot 区域默认全部可拖拽，确保页面头部注入后仍可按住空白区域移动窗口。
  */
-.desk-app-header-slot,
-.desk-app-header-slot * {
-  -webkit-app-region: drag;
-}
 
 /* 描述:
  *
  *   - 仅原生交互元素禁用拖拽，避免过宽的 role 选择器误伤整块标题栏区域。
  */
+.desk-app-header-slot {
+  -webkit-app-region: drag;
+}
+
+/* 描述:
+ *
+ *   - 标题栏交互区及其内部节点必须整体禁用拖拽，避免 Windows 将图标或文字命中识别成窗口拖动。
+ */
+.desk-app-header-leading-actions,
+.desk-app-header-leading-actions *,
+.desk-app-header-global-actions,
+.desk-app-header-global-actions *,
+.desk-app-header-window-controls,
+.desk-app-header-window-controls *,
 .desk-app-header button,
+.desk-app-header button *,
 .desk-app-header a,
+.desk-app-header a *,
 .desk-app-header input,
+.desk-app-header input *,
 .desk-app-header textarea,
-.desk-app-header select {
+.desk-app-header textarea *,
+.desk-app-header select,
+.desk-app-header select * {
   -webkit-app-region: no-drag;
 }
 
@@ -282,7 +305,6 @@ body {
 
 .desk-sidebar {
   height: 100%;
-  border-right: var(--desk-border-width) solid var(--z-color-border-glass);
   background: var(--desk-sidebar-bg);
   padding: calc(var(--z-inset) + var(--desk-app-header-height)) var(--z-inset) var(--z-inset);
   display: flex;
