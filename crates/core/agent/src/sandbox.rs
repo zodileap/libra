@@ -98,10 +98,24 @@ def _invoke_tool(name, args):
     print(f"{_TOOL_CALL_PREFIX}{payload}", flush=True)
     line = sys.stdin.readline()
     if not line:
-        return {"ok": False, "error": "stdin_closed"}
+        return _remember_last_value({"ok": False, "error": "stdin_closed"})
     if line.startswith(_TOOL_RESULT_PREFIX):
-        return json.loads(line[len(_TOOL_RESULT_PREFIX):])
-    return {"ok": False, "error": "invalid_response"}
+        return _remember_last_value(json.loads(line[len(_TOOL_RESULT_PREFIX):]))
+    return _remember_last_value({"ok": False, "error": "invalid_response"})
+
+# 描述：记录最近一次工具或兼容层返回值，兼容模型将上一条结果写成 `_` 的 REPL 风格用法。
+def _remember_last_value(value):
+    try:
+        setattr(builtins, "_", value)
+    except Exception:
+        pass
+    return value
+
+# 描述：为 `_` 提供稳定初始值，避免脚本在首次读取时直接触发 NameError。
+try:
+    setattr(builtins, "_", None)
+except Exception:
+    pass
 
 def finish(message=None, status=None, summary=None, next=None, **kwargs):
     resolved_message = _pick_first_non_none([message, _pop_alias(kwargs, ("text", "value", "body", "TEXT", "VALUE", "BODY", "MESSAGE"))])
@@ -170,6 +184,42 @@ class _DirectoryEntry(str):
     def to_dict(self):
         return dict(self._meta)
 
+# 描述：将 run_shell 默认结果包装为“可按 dict 读字段、也可做基础字符串判断”的兼容对象。
+class _ShellResult(dict):
+    def __getattr__(self, key):
+        if key in self:
+            return self[key]
+        raise AttributeError(key)
+
+    def _as_text(self):
+        text_parts = []
+        if self.get("timed_out"):
+            text_parts.append("timed_out")
+        elif self.get("success") is False or self.get("ok") is False:
+            text_parts.append("failed")
+        for key in ("stdout", "stderr", "error", "message"):
+            value = self.get(key)
+            if isinstance(value, str) and value.strip():
+                text_parts.append(value)
+        if not text_parts:
+            return json.dumps(dict(self), ensure_ascii=False)
+        return "\n".join(text_parts)
+
+    def lower(self):
+        return self._as_text().lower()
+
+    def strip(self, chars=None):
+        return self._as_text().strip(chars)
+
+    def split(self, *args, **kwargs):
+        return self._as_text().split(*args, **kwargs)
+
+    def splitlines(self, *args, **kwargs):
+        return self._as_text().splitlines(*args, **kwargs)
+
+    def __str__(self):
+        return self._as_text()
+
 def _resolve_with_alias(primary, alias_value, default=None):
     if alias_value is not None:
         return alias_value
@@ -220,44 +270,53 @@ def _normalize_dir_entries(entries):
             normalized_entries.append(entry)
     return normalized_entries
 
-def run_shell(command=None, timeout_secs=None, **kwargs):
+def run_shell(command=None, timeout_secs=None, with_meta=False, **kwargs):
     resolved_command = _pick_first_non_none([command, _pop_alias(kwargs, ("cmd", "shell_command"))])
     timeout_alias = _pop_alias(kwargs, ("timeout", "timeout_seconds"))
+    include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, ("include_meta", "raw")), False))
     resolved_timeout = _resolve_with_alias(timeout_secs, timeout_alias, 30)
-    return _invoke_tool(
+    response = _invoke_tool(
         "run_shell",
         {
             "command": _require_arg(resolved_command, "command"),
             "timeout_secs": resolved_timeout if resolved_timeout is not None else 30,
         },
     )
+    if include_meta:
+        return _remember_last_value(response)
+    if isinstance(response, dict):
+        data = response.get("data")
+        if isinstance(data, dict):
+            return _remember_last_value(_ShellResult(data))
+        return _remember_last_value(_ShellResult(response))
+    return _remember_last_value(response)
 
-def run_shell_command(command, timeout_secs=30): return run_shell(command=command, timeout_secs=timeout_secs)
+def run_shell_command(command, timeout_secs=30, with_meta=False): return run_shell(command=command, timeout_secs=timeout_secs, with_meta=with_meta)
 def read_text(path=None, with_meta=False, **kwargs):
     resolved_path = _pick_first_non_none([path, _pop_alias(kwargs, ("file_path", "filename"))])
     include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, ("include_meta", "raw")), False))
     response = _invoke_tool("read_text", {"path": _require_arg(resolved_path, "path")})
     if include_meta:
-        return response
+        return _remember_last_value(response)
     if isinstance(response, dict):
         data = response.get("data")
         if isinstance(data, dict):
             content = data.get("content")
             if isinstance(content, str):
-                return content
-    return response
+                return _remember_last_value(content)
+    return _remember_last_value(response)
 
 def read_json(path=None, with_meta=False, **kwargs):
     resolved_path = _pick_first_non_none([path, _pop_alias(kwargs, ("file_path", "filename"))])
     include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, ("include_meta", "raw")), False))
     response = _invoke_tool("read_json", {"path": _require_arg(resolved_path, "path")})
     if include_meta:
-        return response
+        return _remember_last_value(response)
     if isinstance(response, dict):
         data = response.get("data")
         if isinstance(data, dict) and "data" in data:
-            return data.get("data")
-    return response
+            return _remember_last_value(data.get("data"))
+    return _remember_last_value(response)
 
 def write_text(path=None, content=None, **kwargs):
     resolved_path = _pick_first_non_none([path, _pop_alias(kwargs, ("file_path", "filename"))])
@@ -287,18 +346,18 @@ def list_dir(path=".", with_meta=False, **kwargs):
     resolved_path = _resolve_with_alias(path, path_alias, ".")
     response = _invoke_tool("list_dir", {"path": resolved_path})
     if include_meta:
-        return response
+        return _remember_last_value(response)
     if isinstance(response, dict):
         if response.get("ok") is False:
             # 描述：目录探测是高频探索动作，缺失目录时优先回空列表，
             # 让脚本能够继续创建目录/文件，而不是把错误对象误当列表触发下游 KeyError。
-            return []
+            return _remember_last_value([])
         data = response.get("data")
         if isinstance(data, dict):
             entries = data.get("entries")
             if isinstance(entries, list):
-                return _normalize_dir_entries(entries)
-    return response
+                return _remember_last_value(_normalize_dir_entries(entries))
+    return _remember_last_value(response)
 
 def mkdir(path=None, **kwargs):
     resolved_path = _pick_first_non_none([path, _pop_alias(kwargs, ("dir_path", "file_path"))])
@@ -385,14 +444,14 @@ def todo_read(with_meta=False, **kwargs):
     include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, ("include_meta", "raw")), False))
     response = _invoke_tool("todo_read", {})
     if include_meta:
-        return response
+        return _remember_last_value(response)
     if isinstance(response, dict):
         data = response.get("data")
         if isinstance(data, dict):
             items = data.get("items")
             if isinstance(items, list):
-                return _normalize_todo_list(items)
-    return response
+                return _remember_last_value(_normalize_todo_list(items))
+    return _remember_last_value(response)
 
 def _normalize_todo_items(items, value=None):
     if isinstance(items, list):
@@ -423,6 +482,31 @@ def todo_write(items=None, value=None, **kwargs):
     resolved_value = _pick_first_non_none([value, alias_value])
     normalized_items = _normalize_todo_items(resolved_items, resolved_value)
     return _invoke_tool("todo_write", {"items": _require_arg(normalized_items, "items")})
+
+def _normalize_user_input_questions(questions):
+    if isinstance(questions, list):
+        return questions
+    if isinstance(questions, dict):
+        return [questions]
+    return questions
+
+def request_user_input(questions=None, with_meta=False, **kwargs):
+    resolved_questions = _pick_first_non_none([questions, _pop_alias(kwargs, ("items", "prompts"))])
+    include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, ("include_meta", "raw")), False))
+    normalized_questions = _normalize_user_input_questions(resolved_questions)
+    response = _invoke_tool(
+        "request_user_input",
+        {"questions": _require_arg(normalized_questions, "questions")},
+    )
+    if include_meta:
+        return _remember_last_value(response)
+    if isinstance(response, dict):
+        data = response.get("data")
+        if isinstance(data, dict):
+            flattened = dict(data)
+            flattened.setdefault("ok", bool(response.get("ok", True)))
+            return _remember_last_value(flattened)
+    return _remember_last_value(response)
 
 def apply_patch(patch=None, check_only=False, **kwargs):
     resolved_patch = _pick_first_non_none([patch, _pop_alias(kwargs, ("content", "diff"))])
@@ -539,8 +623,8 @@ def list_directory(dir_path=".", path=None):
                 name = None
             if isinstance(name, str):
                 names.append(name)
-        return names
-    return result
+        return _remember_last_value(names)
+    return _remember_last_value(result)
 
 def _register_gemini_native_tools_alias():
     # 描述：兼容 Gemini 常见脚本习惯，允许 `from gemini_cli_native_tools import ...` 直接工作。
@@ -921,8 +1005,25 @@ mod tests {
         //
         //   - 沙盒预置脚本应暴露 run_shell_command 别名，
         //     兼容模型常见调用习惯并映射到 run_shell。
-        assert!(PERSISTENT_PRELUDE.contains("def run_shell_command(command, timeout_secs=30): return run_shell(command=command, timeout_secs=timeout_secs)"));
+        assert!(PERSISTENT_PRELUDE.contains("def run_shell_command(command, timeout_secs=30, with_meta=False): return run_shell(command=command, timeout_secs=timeout_secs, with_meta=with_meta)"));
         assert!(PERSISTENT_PRELUDE.contains("\"run_shell_command\": run_shell_command"));
+    }
+
+    #[test]
+    fn should_unwrap_run_shell_result_and_expose_string_bridge_in_prelude() {
+        // 描述：
+        //
+        //   - run_shell 默认应解包到命令结果对象本身，避免模型再手写 `response[\"data\"]`。
+        //   - 兼容层还应提供 `_ShellResult.lower()` 等字符串桥，避免模型把结果当字符串时直接抛 AttributeError。
+        assert!(PERSISTENT_PRELUDE.contains("class _ShellResult(dict):"));
+        assert!(PERSISTENT_PRELUDE.contains(
+            "def run_shell(command=None, timeout_secs=None, with_meta=False, **kwargs):"
+        ));
+        assert!(PERSISTENT_PRELUDE.contains("include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, (\"include_meta\", \"raw\")), False))"));
+        assert!(PERSISTENT_PRELUDE.contains("return _ShellResult(data)"));
+        assert!(PERSISTENT_PRELUDE
+            .contains("self.get(\"success\") is False or self.get(\"ok\") is False"));
+        assert!(PERSISTENT_PRELUDE.contains("def lower(self):"));
     }
 
     #[test]
@@ -948,6 +1049,20 @@ mod tests {
     }
 
     #[test]
+    fn should_expose_request_user_input_in_prelude() {
+        // 描述：
+        //
+        //   - 沙盒预置脚本应直接暴露 `request_user_input(...)` 顶层函数，
+        //     让 Python 编排脚本无需 import 就能挂起并等待用户回答。
+        assert!(PERSISTENT_PRELUDE.contains(
+            "def request_user_input(questions=None, with_meta=False, **kwargs):"
+        ));
+        assert!(PERSISTENT_PRELUDE.contains("def _normalize_user_input_questions(questions):"));
+        assert!(PERSISTENT_PRELUDE
+            .contains("\"questions\": _require_arg(normalized_questions, \"questions\")"));
+    }
+
+    #[test]
     fn should_support_finish_keyword_envelope_in_prelude() {
         // 描述：
         //
@@ -956,8 +1071,11 @@ mod tests {
         assert!(PERSISTENT_PRELUDE
             .contains("def finish(message=None, status=None, summary=None, next=None, **kwargs):"));
         assert!(PERSISTENT_PRELUDE.contains("(\"state\", \"STATUS\", \"STATE\")"));
-        assert!(PERSISTENT_PRELUDE.contains("(\"result\", \"content\", \"SUMMARY\", \"RESULT\", \"CONTENT\")"));
-        assert!(PERSISTENT_PRELUDE.contains("(\"next_step\", \"nextStep\", \"NEXT\", \"NEXT_STEP\")"));
+        assert!(PERSISTENT_PRELUDE
+            .contains("(\"result\", \"content\", \"SUMMARY\", \"RESULT\", \"CONTENT\")"));
+        assert!(
+            PERSISTENT_PRELUDE.contains("(\"next_step\", \"nextStep\", \"NEXT\", \"NEXT_STEP\")")
+        );
         assert!(PERSISTENT_PRELUDE.contains("lines.append(f\"STATUS: {resolved_status}\")"));
         assert!(PERSISTENT_PRELUDE.contains("lines.append(f\"SUMMARY: {resolved_summary}\")"));
         assert!(PERSISTENT_PRELUDE.contains("lines.append(f\"NEXT: {resolved_next}\")"));
@@ -970,10 +1088,13 @@ mod tests {
         //
         //   - 兼容层应在执行前修正常见的后缀变量名笔误，例如已定义 `openapi_spec`
         //     却误写成 `openapi`，避免低级 NameError 直接打断整轮工作流。
-        assert!(PERSISTENT_PRELUDE.contains("def _repair_common_undefined_name_suffix_aliases(code):"));
+        assert!(
+            PERSISTENT_PRELUDE.contains("def _repair_common_undefined_name_suffix_aliases(code):")
+        );
         assert!(PERSISTENT_PRELUDE.contains("_COMMON_UNDEFINED_NAME_SUFFIXES = ("));
         assert!(PERSISTENT_PRELUDE.contains("candidate = f\"{name}_{suffix}\""));
-        assert!(PERSISTENT_PRELUDE.contains("code = _repair_common_undefined_name_suffix_aliases(code)"));
+        assert!(PERSISTENT_PRELUDE
+            .contains("code = _repair_common_undefined_name_suffix_aliases(code)"));
     }
 
     #[test]
@@ -1001,5 +1122,20 @@ mod tests {
         assert!(PERSISTENT_PRELUDE.contains("def read_json(path=None, with_meta=False, **kwargs):"));
         assert!(PERSISTENT_PRELUDE.contains("if isinstance(data, dict) and \"data\" in data:"));
         assert!(PERSISTENT_PRELUDE.contains("_pop_alias(kwargs, (\"include_meta\", \"raw\"))"));
+    }
+
+    #[test]
+    fn should_remember_last_tool_result_in_prelude_underscore_alias() {
+        // 描述：
+        //
+        //   - 沙盒兼容层应为 `_` 提供稳定初始值，并在每次工具或兼容层返回值后同步更新，
+        //     兼容模型将上一条结果写成 `content = _` 的 REPL 风格脚本。
+        assert!(PERSISTENT_PRELUDE.contains("def _remember_last_value(value):"));
+        assert!(PERSISTENT_PRELUDE.contains("setattr(builtins, \"_\", None)"));
+        assert!(PERSISTENT_PRELUDE.contains(
+            "return _remember_last_value(json.loads(line[len(_TOOL_RESULT_PREFIX):]))"
+        ));
+        assert!(PERSISTENT_PRELUDE.contains("return _remember_last_value(content)"));
+        assert!(PERSISTENT_PRELUDE.contains("return _remember_last_value(data.get(\"data\"))"));
     }
 }

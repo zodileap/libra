@@ -223,6 +223,25 @@ pub fn call_model_with_policy(
     call_model_with_policy_and_stream(provider, prompt, workdir, policy, None, None, None)
 }
 
+/// 描述：按指定策略与 provider 配置调用模型网关，供桌面端补充“纯模型总结”这类无工具编排场景复用。
+pub fn call_model_with_policy_and_config(
+    provider: LlmProvider,
+    prompt: &str,
+    workdir: Option<&str>,
+    policy: LlmGatewayPolicy,
+    provider_config: Option<&LlmProviderConfig>,
+) -> Result<LlmRunResult, LlmGatewayError> {
+    call_model_with_policy_and_stream(
+        provider,
+        prompt,
+        workdir,
+        policy,
+        provider_config,
+        None,
+        None,
+    )
+}
+
 /// 描述：按指定策略调用模型网关，并可选输出增量文本事件。
 pub(crate) fn call_model_with_policy_and_stream(
     provider: LlmProvider,

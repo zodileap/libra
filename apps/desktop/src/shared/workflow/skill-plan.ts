@@ -16,7 +16,7 @@ export interface AgentWorkflowSkillPlanItem {
   nodeTitle: string;
   skillId: string;
   skillVersion: string;
-  skillName: string;
+  skillTitle: string;
   skillDescription: string;
   skillMarkdownBody: string;
   instruction: string;
@@ -79,7 +79,7 @@ function buildAgentSkillMap(skills: AgentSkillItem[]): Map<string, AgentSkillIte
 //
 //   - 技能说明文本块。
 function buildSkillInstructionBlock(item: AgentWorkflowSkillPlanItem): string {
-  const lines = [`### ${item.skillName} (${item.skillId})`];
+  const lines = [`### ${item.skillTitle} (${item.skillId})`];
   if (item.skillDescription) {
     lines.push(item.skillDescription);
   }
@@ -135,7 +135,7 @@ export function buildAgentWorkflowSkillExecutionPlan(
         nodeTitle,
         skillId: "",
         skillVersion,
-        skillName: "",
+        skillTitle: "",
         skillDescription: "",
         skillMarkdownBody: "",
         instruction,
@@ -150,7 +150,7 @@ export function buildAgentWorkflowSkillExecutionPlan(
         nodeTitle,
         skillId,
         skillVersion,
-        skillName: "",
+        skillTitle: "",
         skillDescription: "",
         skillMarkdownBody: "",
         instruction,
@@ -163,7 +163,7 @@ export function buildAgentWorkflowSkillExecutionPlan(
       nodeTitle,
       skillId,
       skillVersion,
-      skillName: resolvedSkill.name,
+      skillTitle: resolvedSkill.title,
       skillDescription: resolvedSkill.description,
       skillMarkdownBody: resolvedSkill.markdownBody,
       instruction,
@@ -212,7 +212,7 @@ export function buildAgentWorkflowSkillExecutionPlan(
             ? translateDesktopText("；技能说明：{{description}}", { description: item.skillDescription })
             : "";
           const displayIndex = stageScoped ? normalizedStageIndex : index;
-          return `${displayIndex + 1}. ${item.nodeTitle}：${item.skillName} (${item.skillId})${descriptionText}${instructionText}`;
+          return `${displayIndex + 1}. ${item.nodeTitle}：${item.skillTitle} (${item.skillId})${descriptionText}${instructionText}`;
         }),
         stageScoped
           ? translateDesktopText("执行约束：本轮仅执行当前阶段，禁止提前执行后续技能；若当前阶段失败，先输出阻塞原因与修复建议，再决定是否继续。")

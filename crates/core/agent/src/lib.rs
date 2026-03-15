@@ -12,6 +12,7 @@ pub mod tools;
 pub mod workflow;
 
 use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -67,6 +68,86 @@ impl ApprovalRegistry {
 }
 
 pub static APPROVAL_REGISTRY: Lazy<ApprovalRegistry> = Lazy::new(|| ApprovalRegistry {
+    pending: Mutex::new(HashMap::new()),
+});
+
+/// 描述：单个问题选项结构，供智能体向用户发起结构化单选问题时复用。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuestionOption {
+    pub label: String,
+    pub description: String,
+}
+
+/// 描述：单个用户问题结构；一次请求允许批量携带 1-3 个问题。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuestionPrompt {
+    pub id: String,
+    pub header: String,
+    pub question: String,
+    pub options: Vec<QuestionOption>,
+}
+
+/// 描述：用户回答结构，统一兼容“选项回答”和“自由填写”两种结果。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserInputAnswer {
+    pub question_id: String,
+    pub answer_type: String,
+    pub option_index: Option<usize>,
+    pub option_label: Option<String>,
+    pub value: String,
+}
+
+/// 描述：用户提问请求的最终决议结果；answered 表示已回答，ignored 表示已忽略。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserInputResolution {
+    pub resolution: String,
+    pub answers: Vec<UserInputAnswer>,
+}
+
+/// 描述：全局用户提问管理器，管理所有挂起中的“等待用户决定”请求。
+pub struct UserInputRegistry {
+    pending: Mutex<HashMap<String, Arc<Mutex<Option<UserInputResolution>>>>>,
+}
+
+impl UserInputRegistry {
+    /// 描述：创建一个新的用户提问请求并返回可等待的结果信号量。
+    pub fn create_request(&self, id: &str) -> Arc<Mutex<Option<UserInputResolution>>> {
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let outcome = Arc::new(Mutex::new(None));
+        pending.insert(id.to_string(), outcome.clone());
+        outcome
+    }
+
+    /// 描述：提交用户提问结果（已回答或已忽略），并唤醒阻塞中的执行流。
+    pub fn submit_resolution(&self, id: &str, resolution: UserInputResolution) -> bool {
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(signal) = pending.remove(id) {
+            let mut guard = signal
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            *guard = Some(resolution);
+            return true;
+        }
+        false
+    }
+
+    /// 描述：移除挂起中的用户提问请求，避免中断后 pending 表长期残留。
+    pub fn remove_request(&self, id: &str) -> bool {
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        pending.remove(id).is_some()
+    }
+}
+
+pub static USER_INPUT_REGISTRY: Lazy<UserInputRegistry> = Lazy::new(|| UserInputRegistry {
     pending: Mutex::new(HashMap::new()),
 });
 use libra_mcp_common::{
@@ -127,6 +208,7 @@ pub struct AgentRunRequest {
     pub provider: String,
     pub provider_api_key: Option<String>,
     pub provider_model: Option<String>,
+    pub provider_mode: Option<String>,
     pub prompt: String,
     pub project_name: Option<String>,
     pub model_export_enabled: bool,
@@ -139,7 +221,9 @@ pub struct AgentRunRequest {
 #[derive(Debug, Clone)]
 pub struct AgentRunResult {
     pub trace_id: String,
+    pub control: String,
     pub message: String,
+    pub display_message: String,
     pub usage: Option<LlmUsage>,
     pub actions: Vec<String>,
     pub exported_file: Option<String>,
@@ -187,6 +271,11 @@ pub enum AgentStreamEvent {
         tool_name: String,
         tool_args: String,
     },
+    /// 描述：执行过程中需要用户做产品/实现决策时，挂起并请求结构化回答。
+    RequestUserInput {
+        request_id: String,
+        questions: Vec<QuestionPrompt>,
+    },
     /// 描述：执行产生最终答案（通常是 LLM 总结后的文本）。
     Final {
         message: String,
@@ -215,6 +304,7 @@ impl AgentStreamEvent {
             Self::ToolCallFinished { .. } => "tool_call_finished",
             Self::Heartbeat { .. } => "heartbeat",
             Self::RequireApproval { .. } => "require_approval",
+            Self::RequestUserInput { .. } => "request_user_input",
             Self::Final { .. } => "final",
             Self::Cancelled { .. } => "cancelled",
             Self::Error { .. } => "error",

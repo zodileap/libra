@@ -1,5 +1,0 @@
-libra:
-  title: 交付报告
-  description: 基于已验证事实整理结果、验证、风险和后续动作，输出可直接交付的总结说明。
-  example_prompt: 把这次工作的真实结果、验证范围、剩余风险和下一步建议整理成交付说明。
-  icon: libra_skill

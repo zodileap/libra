@@ -25,12 +25,9 @@ import type {
 } from "../services";
 import {
   type McpScope,
-  installApifoxMcpRuntime,
   listMcpOverview,
-  readApifoxMcpRuntimeStatus,
   removeMcpRegistration,
   saveMcpRegistration,
-  uninstallApifoxMcpRuntime,
   validateMcpRegistration,
 } from "../services";
 import {
@@ -85,16 +82,6 @@ const DEFAULT_MCP_DRAFT: McpRegistrationDraft = {
   supportsImport: false,
   supportsExport: false,
 };
-
-// 描述：
-//
-//   - Apifox Runtime 状态结构；页面只消费最小字段，不直接暴露后端协议细节。
-interface ApifoxRuntimeStatus {
-  installed: boolean;
-  version: string;
-  entryPath: string;
-  message: string;
-}
 
 // 描述：
 //
@@ -443,13 +430,11 @@ function RegisteredMcpCard({
 function McpTemplateCard({
   item,
   busy,
-  alreadyRegistered,
   onManage,
   onCreate,
 }: {
   item: McpTemplateItem;
   busy: boolean;
-  alreadyRegistered: boolean;
   onManage: (item: McpTemplateItem) => void;
   onCreate: (item: McpTemplateItem) => void;
 }) {
@@ -467,8 +452,8 @@ function McpTemplateCard({
           <AriButton
             type="text"
             icon="add"
-            aria-label={alreadyRegistered ? t("模板已添加") : t("添加 MCP")}
-            disabled={busy || alreadyRegistered}
+            aria-label={t("添加 MCP")}
+            disabled={busy}
             onClick={() => onCreate(item)}
           />
         </>
@@ -479,7 +464,7 @@ function McpTemplateCard({
 
 // 描述：
 //
-//   - 渲染 MCP 管理页，展示真实注册表、推荐模板与 Apifox Runtime 管理入口。
+//   - 渲染 MCP 管理页，展示真实注册表、推荐模板与 DCC Runtime 管理入口。
 export function McpPage() {
   const { t } = useDesktopI18n();
   const headerSlotElement = useDesktopHeaderSlot();
@@ -489,7 +474,6 @@ export function McpPage() {
   const [loading, setLoading] = useState(true);
   const [busyActionId, setBusyActionId] = useState("");
   const [runtimeBusy, setRuntimeBusy] = useState(false);
-  const [apifoxRuntimeStatus, setApifoxRuntimeStatus] = useState<ApifoxRuntimeStatus | null>(null);
   const [dccRuntimeStatusMap, setDccRuntimeStatusMap] = useState<Record<string, DccRuntimeStatus>>({});
   const [editorVisible, setEditorVisible] = useState(false);
   const [editingDraft, setEditingDraft] = useState<McpRegistrationDraft>(DEFAULT_MCP_DRAFT);
@@ -526,22 +510,11 @@ export function McpPage() {
 
   // 描述：
   //
-  //   - 重新拉取 MCP 总览与 Apifox Runtime 状态，供初始化和所有写操作后复用。
+  //   - 重新拉取 MCP 总览与 DCC Runtime 状态，供初始化和所有写操作后复用。
   const reloadOverview = useCallback(async () => {
-    const [nextOverview, runtimeStatus] = await Promise.all([
-      listMcpOverview(mcpRegistryContext),
-      readApifoxMcpRuntimeStatus(),
-    ]);
+    const nextOverview = await listMcpOverview(mcpRegistryContext);
     const nextDccRuntimeStatusMap = await buildDccRuntimeStatusMap(nextOverview);
     setOverview(nextOverview);
-    setApifoxRuntimeStatus(runtimeStatus
-      ? {
-        installed: runtimeStatus.installed,
-        version: runtimeStatus.version,
-        entryPath: runtimeStatus.entry_path,
-        message: runtimeStatus.message,
-      }
-      : null);
     setDccRuntimeStatusMap(nextDccRuntimeStatusMap);
   }, [mcpRegistryContext]);
 
@@ -553,28 +526,16 @@ export function McpPage() {
     const loadOverview = async () => {
       setLoading(true);
       try {
-        const [nextOverview, runtimeStatus] = await Promise.all([
-          listMcpOverview(mcpRegistryContext),
-          readApifoxMcpRuntimeStatus(),
-        ]);
+        const nextOverview = await listMcpOverview(mcpRegistryContext);
         const nextDccRuntimeStatusMap = await buildDccRuntimeStatusMap(nextOverview);
         if (disposed) {
           return;
         }
         setOverview(nextOverview);
-        setApifoxRuntimeStatus(runtimeStatus
-          ? {
-            installed: runtimeStatus.installed,
-            version: runtimeStatus.version,
-            entryPath: runtimeStatus.entry_path,
-            message: runtimeStatus.message,
-          }
-          : null);
         setDccRuntimeStatusMap(nextDccRuntimeStatusMap);
       } catch (_err) {
         if (!disposed) {
           setOverview(DEFAULT_MCP_OVERVIEW);
-          setApifoxRuntimeStatus(null);
           setDccRuntimeStatusMap({});
           AriMessage.error({
             content: t("加载 MCP 注册表失败，请稍后重试。"),
@@ -599,6 +560,14 @@ export function McpPage() {
   const registeredTemplateIds = useMemo(
     () => new Set(overview.registered.map((item) => item.templateId).filter((item) => item.length > 0)),
     [overview.registered],
+  );
+
+  // 描述：
+  //
+  //   - 基于已注册模板 ID 过滤“未注册”列表，确保模板添加成功后直接从未注册区消失。
+  const unregisteredTemplates = useMemo(
+    () => overview.templates.filter((item) => !registeredTemplateIds.has(item.id)),
+    [overview.templates, registeredTemplateIds],
   );
 
   // 描述：
@@ -662,6 +631,54 @@ export function McpPage() {
 
   // 描述：
   //
+  //   - 从内置模板直接创建 MCP 注册项；模板参数会按当前项目上下文生成最终草稿并写入注册表。
+  const handleCreateTemplate = useCallback(async (item: McpTemplateItem) => {
+    const templateDraft = {
+      ...buildDraftFromTemplate(item),
+      scope: activeWorkspacePath ? "workspace" : "user",
+    } satisfies McpRegistrationDraft;
+    setBusyActionId(item.id);
+    try {
+      const saved = await saveMcpRegistration(templateDraft, mcpRegistryContext);
+      const validation = saved.runtimeKind === "dcc_bridge"
+        ? null
+        : await validateMcpRegistration(buildDraftFromRegistration(saved), mcpRegistryContext);
+      await reloadOverview();
+      setManagingTemplateItem(null);
+      if (validation && !validation.ok) {
+        AriMessage.error({
+          content: t("已注册 {{name}}，但预检失败：{{message}}", {
+            name: saved.name,
+            message: validation.message || t("请稍后重试。"),
+          }),
+          duration: 2800,
+        });
+      } else {
+        AriMessage.success({
+          content: validation?.message
+            ? t("已注册 {{name}}，并完成可用性预检。", { name: saved.name })
+            : t("已注册 {{name}}", { name: saved.name }),
+          duration: 1800,
+        });
+      }
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err || "").trim();
+      AriMessage.error({
+        content: reason || t("保存 MCP 失败，请稍后重试。"),
+        duration: 2200,
+      });
+    } finally {
+      setBusyActionId("");
+    }
+  }, [
+    activeWorkspacePath,
+    mcpRegistryContext,
+    reloadOverview,
+    t,
+  ]);
+
+  // 描述：
+  //
   //   - 执行 MCP 基础环境校验，并将结果映射为用户友好消息。
   const handleValidateMcp = useCallback(async (item: McpRegistrationItem) => {
     setBusyActionId(item.id);
@@ -722,52 +739,6 @@ export function McpPage() {
       setBusyActionId("");
     }
   }, [reloadOverview, removingItem]);
-
-  // 描述：
-  //
-  //   - 安装 Apifox Runtime，并在完成后刷新 Runtime 状态与总览。
-  const handleInstallApifoxRuntime = useCallback(async () => {
-    setRuntimeBusy(true);
-    try {
-      await installApifoxMcpRuntime();
-      await reloadOverview();
-      AriMessage.success({
-        content: t("已安装 Apifox Runtime。"),
-        duration: 1800,
-      });
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err || "").trim();
-      AriMessage.error({
-        content: reason || t("安装 Apifox Runtime 失败，请稍后重试。"),
-        duration: 2200,
-      });
-    } finally {
-      setRuntimeBusy(false);
-    }
-  }, [reloadOverview]);
-
-  // 描述：
-  //
-  //   - 卸载 Apifox Runtime，并在完成后刷新 Runtime 状态与总览。
-  const handleUninstallApifoxRuntime = useCallback(async () => {
-    setRuntimeBusy(true);
-    try {
-      await uninstallApifoxMcpRuntime();
-      await reloadOverview();
-      AriMessage.success({
-        content: t("已卸载 Apifox Runtime。"),
-        duration: 1800,
-      });
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err || "").trim();
-      AriMessage.error({
-        content: reason || t("卸载 Apifox Runtime 失败，请稍后重试。"),
-        duration: 2200,
-      });
-    } finally {
-      setRuntimeBusy(false);
-    }
-  }, [reloadOverview]);
 
   // 描述：
   //
@@ -847,26 +818,13 @@ export function McpPage() {
             options={workspaceOptions}
             onChange={handleWorkspaceSelectionChange}
           />
-          <AriButton
-            color="brand"
-            icon="add"
-            label={t("新增 MCP")}
-            size="sm"
-            disabled={Boolean(busyActionId) || runtimeBusy}
-            onClick={() => openEditor({
-              ...DEFAULT_MCP_DRAFT,
-              scope: activeWorkspacePath ? "workspace" : "user",
-            })}
-          />
         </AriFlex>
       )}
     />
   ), [
     activeProjectWorkspace,
-    activeWorkspacePath,
     busyActionId,
     handleWorkspaceSelectionChange,
-    openEditor,
     overview.registered.length,
     runtimeBusy,
     t,
@@ -894,27 +852,6 @@ export function McpPage() {
         description={managingTemplateItem?.description || t("未填写模板描述")}
         footer={managingTemplateItem ? (
           <AriFlex justify="flex-end" align="center" space={8}>
-            {managingTemplateItem.runtimeKind === "apifox_runtime" ? (
-              apifoxRuntimeStatus?.installed ? (
-                <AriButton
-                  icon="delete"
-                  label={t("卸载 Runtime")}
-                  disabled={runtimeBusy}
-                  onClick={() => {
-                    void handleUninstallApifoxRuntime();
-                  }}
-                />
-              ) : (
-                <AriButton
-                  icon="download"
-                  label={t("安装 Runtime")}
-                  disabled={runtimeBusy}
-                  onClick={() => {
-                    void handleInstallApifoxRuntime();
-                  }}
-                />
-              )
-            ) : null}
             {managingTemplateItem.runtimeKind === "dcc_bridge" ? (
               <AriButton
                 icon={dccRuntimeStatusMap[managingTemplateItem.software]?.available ? "check_circle" : "build"}
@@ -931,10 +868,7 @@ export function McpPage() {
               label={t("添加")}
               disabled={Boolean(busyActionId) || registeredTemplateIds.has(managingTemplateItem.id)}
               onClick={() => {
-                openEditor({
-                  ...buildDraftFromTemplate(managingTemplateItem),
-                  scope: activeWorkspacePath ? "workspace" : "user",
-                });
+                void handleCreateTemplate(managingTemplateItem);
               }}
             />
             <AriButton icon="close" label={t("关闭")} onClick={() => setManagingTemplateItem(null)} />
@@ -965,21 +899,16 @@ export function McpPage() {
             ) : null}
             <DeskOverviewDetailRow
               label={t("接入")}
-              value={managingTemplateItem.runtimeKind === "apifox_runtime"
-                ? t("Runtime：{{status}}{{version}}", {
-                  status: apifoxRuntimeStatus?.installed ? t("已安装") : t("未安装"),
-                  version: apifoxRuntimeStatus?.version ? `（${apifoxRuntimeStatus.version}）` : "",
+              value={managingTemplateItem.runtimeKind === "dcc_bridge"
+                ? t("Runtime：{{status}}{{path}}", {
+                  status: dccRuntimeStatusMap[managingTemplateItem.software]?.available ? t("已就绪") : t("未就绪"),
+                  path: dccRuntimeStatusMap[managingTemplateItem.software]?.resolvedPath
+                    ? `（${dccRuntimeStatusMap[managingTemplateItem.software]?.resolvedPath}）`
+                    : "",
                 })
-                : managingTemplateItem.runtimeKind === "dcc_bridge"
-                  ? t("Runtime：{{status}}{{path}}", {
-                    status: dccRuntimeStatusMap[managingTemplateItem.software]?.available ? t("已就绪") : t("未就绪"),
-                    path: dccRuntimeStatusMap[managingTemplateItem.software]?.resolvedPath
-                      ? `（${dccRuntimeStatusMap[managingTemplateItem.software]?.resolvedPath}）`
-                      : "",
-                  })
-                  : managingTemplateItem.transport === "http"
-                    ? t("示例地址：{{url}}", { url: managingTemplateItem.url || t("无") })
-                    : t("按需填写命令、参数和环境变量。")}
+                : managingTemplateItem.transport === "http"
+                  ? t("示例地址：{{url}}", { url: managingTemplateItem.url || t("无") })
+                  : t("按需填写命令、参数和环境变量。")}
             />
             {managingTemplateItem.runtimeKind === "dcc_bridge" ? (
               <DeskOverviewDetailRow label="Runtime" value={renderDccRuntimeAutoPrepareLabel(dccRuntimeStatusMap[managingTemplateItem.software])} />
@@ -1149,16 +1078,7 @@ export function McpPage() {
             />
           </AriFormItem>
           {editingDraft.transport === "stdio" ? (
-            editingDraft.runtimeKind === "apifox_runtime" ? (
-              <AriFormItem label={t("运行方式")} name="mcp.editor.runtimeKind">
-                <AriTypography
-                  variant="caption"
-                  value={apifoxRuntimeStatus?.installed
-                    ? t("Apifox Runtime 已安装：{{path}}", { path: apifoxRuntimeStatus.entryPath || t("应用私有目录") })
-                    : t("Apifox Runtime 未安装，请先在模板卡片中安装 Runtime。")}
-                />
-              </AriFormItem>
-            ) : editingDraft.runtimeKind === "dcc_bridge" ? (
+            editingDraft.runtimeKind === "dcc_bridge" ? (
               <AriFormItem label={t("运行方式")} name="mcp.editor.runtimeKind">
                 <AriTypography
                   variant="caption"
@@ -1198,7 +1118,7 @@ export function McpPage() {
                   <AriInput.TextArea
                     value={argsText}
                     onChange={setArgsText}
-                    placeholder={t("例如：-y\napifox-mcp-server@latest")}
+                    placeholder={t("例如：--transport\nstdio")}
                     rows={4}
                   />
                 </AriFormItem>
@@ -1249,7 +1169,7 @@ export function McpPage() {
             <AriInput
               value={editingDraft.officialProvider || ""}
               onChange={(value: string) => setEditingDraft((current) => ({ ...current, officialProvider: value }))}
-              placeholder={t("可选，例如 Apifox")}
+              placeholder={t("可选，例如 Blender")}
             />
           </AriFormItem>
           </AriForm>
@@ -1274,7 +1194,7 @@ export function McpPage() {
       <AriContainer className="desk-settings-shell desk-skills-shell">
         <DeskSectionTitle title={t("已注册")} />
         {overview.registered.length === 0 ? (
-          <DeskEmptyState title={t("暂无已注册 MCP")} description={t("可从下方未注册模板新增，或直接创建自定义 MCP。")} />
+          <DeskEmptyState title={t("暂无已注册 MCP")} description={t("可从下方未注册模板新增。")} />
         ) : (
           <AriContainer className="desk-skill-grid">
             {overview.registered.map((item) => (
@@ -1289,21 +1209,19 @@ export function McpPage() {
         )}
 
         <DeskSectionTitle title={t("未注册")} />
-        {overview.templates.length === 0 ? (
+        {unregisteredTemplates.length === 0 ? (
           <DeskEmptyState title={t("暂无未注册 MCP")} description={t("当前应用未提供可直接添加的内置模板。")} />
         ) : (
           <AriContainer className="desk-skill-grid">
-            {overview.templates.map((item) => (
+            {unregisteredTemplates.map((item) => (
               <McpTemplateCard
                 key={item.id}
                 item={item}
                 busy={Boolean(busyActionId) || runtimeBusy}
-                alreadyRegistered={registeredTemplateIds.has(item.id)}
                 onManage={setManagingTemplateItem}
-                onCreate={(target) => openEditor({
-                  ...buildDraftFromTemplate(target),
-                  scope: activeWorkspacePath ? "workspace" : "user",
-                })}
+                onCreate={(target) => {
+                  void handleCreateTemplate(target);
+                }}
               />
             ))}
           </AriContainer>

@@ -11,19 +11,24 @@ mod maya_runtime;
 mod mcp_registry;
 
 use agent_skills::{
-    import_agent_skill_from_path, list_agent_skills, pick_agent_skill_folder,
-    remove_user_agent_skill,
+    import_agent_skill_from_path, list_agent_skill_overview, list_agent_skills,
+    open_builtin_agent_skill_folder, pick_agent_skill_folder, register_builtin_agent_skill,
+    remove_user_agent_skill, unregister_builtin_agent_skill,
 };
 use dcc_runtime::{
-    check_dcc_runtime_status_inner, prepare_dcc_runtime_inner, DccRuntimeStatusResponse,
+    DccRuntimeStatusResponse, check_dcc_runtime_status_inner, prepare_dcc_runtime_inner,
 };
 use libra_agent_core::{
-    llm::LlmUsage,
-    platform::{
-        resolve_codex_command_candidates, resolve_gemini_command_candidates,
-        resolve_python_command_candidates, CommandCandidate,
+    AgentRegisteredMcp, AgentRunRequest, AgentStreamEvent, UserInputAnswer, UserInputResolution,
+    llm::{
+        LlmGatewayPolicy, LlmProviderConfig, LlmUsage, call_model_with_policy_and_config,
+        parse_provider,
     },
-    run_agent_with_protocol_error_stream, AgentRegisteredMcp, AgentRunRequest, AgentStreamEvent,
+    platform::{
+        CommandCandidate, resolve_codex_command_candidates, resolve_gemini_command_candidates,
+        resolve_python_command_candidates,
+    },
+    run_agent_with_protocol_error_stream,
 };
 use libra_mcp_common::{
     ProtocolAssetRecord, ProtocolError, ProtocolEventRecord, ProtocolStepRecord, ProtocolUiHint,
@@ -40,15 +45,15 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::io::{Read, Write};
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
-use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tauri::Emitter;
 use tauri::Manager;
+use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tauri_plugin_updater::UpdaterExt;
 
 // ── Tauri 事件名常量 ──────────────────────────────────────────────────
@@ -196,9 +201,6 @@ fn clear_agent_session_cancelled(session_id: &str) {
     }
 }
 
-const APIFOX_MCP_PACKAGE_NAME: &str = "apifox-mcp-server";
-const APIFOX_MCP_PACKAGE_VERSION: &str = "latest";
-
 #[derive(Serialize)]
 struct AgentRunResponse {
     trace_id: String,
@@ -212,6 +214,12 @@ struct AgentRunResponse {
     events: Vec<ProtocolEventRecord>,
     assets: Vec<ProtocolAssetRecord>,
     ui_hint: Option<ProtocolUiHint>,
+}
+
+#[derive(Serialize)]
+struct AgentSummaryResponse {
+    content: String,
+    usage: Option<LlmUsage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -401,16 +409,6 @@ struct GitCloneResponse {
     message: String,
 }
 
-#[derive(Serialize)]
-struct ApifoxMcpRuntimeStatusResponse {
-    installed: bool,
-    version: String,
-    npm_bin: String,
-    runtime_dir: String,
-    entry_path: String,
-    message: String,
-}
-
 fn resolve_blender_bin(preferred: Option<String>) -> String {
     if let Some(path) = preferred.map(|value| value.trim().to_string()) {
         if !path.is_empty() {
@@ -484,29 +482,6 @@ fn resolve_python_bins() -> Vec<CommandCandidate> {
     resolve_python_command_candidates()
 }
 
-/// 描述：解析可用于执行 npm 命令的候选二进制路径列表。
-fn resolve_npm_bins() -> Vec<String> {
-    let mut bins: Vec<String> = Vec::new();
-    if let Ok(path) = env::var("ZODILEAP_NPM_BIN") {
-        let path = path.trim().to_string();
-        if !path.is_empty() {
-            bins.push(path);
-        }
-    }
-    #[cfg(target_os = "windows")]
-    {
-        bins.push("npm.cmd".to_string());
-        bins.push("npm".to_string());
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        bins.push("npm".to_string());
-    }
-    bins.push("/usr/local/bin/npm".to_string());
-    bins.push("/opt/homebrew/bin/npm".to_string());
-    bins
-}
-
 /// 描述：读取 Git 版本号，命中失败时返回 None。
 fn read_git_version(bin: &str) -> Option<String> {
     let output = Command::new(bin).arg("--version").output().ok()?;
@@ -531,16 +506,6 @@ fn read_python_version(candidate: &CommandCandidate) -> Option<String> {
     extract_semver(&stdout)
 }
 
-/// 描述：读取 npm 版本号，命中失败时返回 None。
-fn read_npm_version(bin: &str) -> Option<String> {
-    let output = Command::new(bin).arg("--version").output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    extract_semver(&stdout)
-}
-
 /// 描述：返回第一个可用 Python 命令候选与版本号。
 fn detect_available_python() -> Option<(CommandCandidate, String)> {
     for candidate in resolve_python_bins() {
@@ -555,16 +520,6 @@ fn detect_available_python() -> Option<(CommandCandidate, String)> {
 fn detect_available_git() -> Option<(String, String)> {
     for bin in resolve_git_bins() {
         if let Some(version) = read_git_version(&bin) {
-            return Some((bin, version));
-        }
-    }
-    None
-}
-
-/// 描述：返回第一个可用 npm 二进制路径与版本号。
-fn detect_available_npm() -> Option<(String, String)> {
-    for bin in resolve_npm_bins() {
-        if let Some(version) = read_npm_version(&bin) {
             return Some((bin, version));
         }
     }
@@ -746,6 +701,34 @@ async fn run_agent_command(
     })?
 }
 
+#[tauri::command]
+async fn call_ai_summary_command(
+    provider: Option<String>,
+    provider_api_key: Option<String>,
+    provider_model: Option<String>,
+    provider_mode: Option<String>,
+    prompt: String,
+    workdir: Option<String>,
+) -> Result<AgentSummaryResponse, DesktopProtocolError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        call_ai_summary_command_inner(
+            provider,
+            provider_api_key,
+            provider_model,
+            provider_mode,
+            prompt,
+            workdir,
+        )
+    })
+    .await
+    .map_err(|err| DesktopProtocolError {
+        code: "core.desktop.agent.summary_task_join_failed".to_string(),
+        message: format!("summary task join failed: {}", err),
+        suggestion: Some("请重试一次；如仍失败请重启应用".to_string()),
+        retryable: true,
+    })?
+}
+
 /// 描述：提取 panic payload 的可读信息，优先返回字符串消息，避免显示 Any 类型噪声。
 fn describe_panic_payload(payload: &(dyn Any + Send)) -> String {
     if let Some(message) = payload.downcast_ref::<&str>() {
@@ -757,7 +740,7 @@ fn describe_panic_payload(payload: &(dyn Any + Send)) -> String {
     "unknown panic payload".to_string()
 }
 
-/// 描述：将桌面端 MCP 注册表转换为 core agent 可直接消费的运行时快照，并补齐 Apifox Runtime 的实际入口。
+/// 描述：将桌面端 MCP 注册表转换为 core agent 可直接消费的运行时快照。
 ///
 /// Params:
 ///
@@ -767,7 +750,7 @@ fn describe_panic_payload(payload: &(dyn Any + Send)) -> String {
 ///
 ///   - 统一智能体可见的 MCP 注册项列表。
 fn build_runtime_registered_mcps(
-    app: &tauri::AppHandle,
+    _app: &tauri::AppHandle,
     workspace_root: Option<&Path>,
 ) -> Result<Vec<AgentRegisteredMcp>, DesktopProtocolError> {
     let registrations = list_enabled_mcp_registrations(
@@ -782,30 +765,13 @@ fn build_runtime_registered_mcps(
 
     let mut runtime_mcps: Vec<AgentRegisteredMcp> = Vec::with_capacity(registrations.len());
     for item in registrations {
-        let mut effective_command = item.command.trim().to_string();
+        let effective_command = item.command.trim().to_string();
+        let effective_args = item.args.clone();
+        let effective_env = item.env.clone();
         let mut runtime_ready = true;
         let mut runtime_hint: Option<String> = None;
 
-        if item.transport == "stdio" && item.runtime_kind == "apifox_runtime" {
-            match resolve_apifox_mcp_runtime_root(app) {
-                Ok(runtime_root) => {
-                    let entry_path = resolve_apifox_mcp_entry_path(&runtime_root);
-                    if entry_path.exists() {
-                        effective_command = entry_path.to_string_lossy().to_string();
-                    } else {
-                        runtime_ready = false;
-                        runtime_hint = Some(
-                            "Apifox Runtime 未安装，请先在 MCP 页面执行“安装 Runtime”。"
-                                .to_string(),
-                        );
-                    }
-                }
-                Err(err) => {
-                    runtime_ready = false;
-                    runtime_hint = Some(err);
-                }
-            }
-        } else if item.transport == "stdio" && effective_command.is_empty() {
+        if item.transport == "stdio" && effective_command.is_empty() {
             runtime_ready = false;
             runtime_hint = Some("Stdio MCP 缺少启动命令，请先在 MCP 页面补齐配置。".to_string());
         } else if item.transport == "http" && item.url.trim().is_empty() {
@@ -824,8 +790,8 @@ fn build_runtime_registered_mcps(
             supports_export: item.supports_export,
             transport: item.transport,
             command: effective_command,
-            args: item.args,
-            env: item.env,
+            args: effective_args,
+            env: effective_env,
             cwd: item.cwd,
             url: item.url,
             headers: item.headers,
@@ -1141,6 +1107,26 @@ fn run_agent_command_inner(
                         },
                     );
                 }
+                AgentStreamEvent::RequestUserInput {
+                    request_id,
+                    questions,
+                } => {
+                    let question_count = questions.len();
+                    emit_agent_text_stream_event(
+                        &app,
+                        AgentTextStreamEvent {
+                            trace_id: trace_id.clone(),
+                            session_id: session_id.clone(),
+                            kind,
+                            message: format!("正在询问 {} 个问题", question_count),
+                            delta: None,
+                            data: Some(json!({
+                                "request_id": request_id,
+                                "questions": questions,
+                            })),
+                        },
+                    );
+                }
                 AgentStreamEvent::Heartbeat { message } => {
                     emit_agent_text_stream_event(
                         &app,
@@ -1297,6 +1283,83 @@ fn run_agent_command_inner(
         events: result.events,
         assets: result.assets,
         ui_hint: result.ui_hint,
+    })
+}
+
+/// 描述：直接调用当前 provider 生成执行总结，避免再经过 agent 编排导致多余的 planning / codegen 噪声。
+fn call_ai_summary_command_inner(
+    provider: Option<String>,
+    provider_api_key: Option<String>,
+    provider_model: Option<String>,
+    provider_mode: Option<String>,
+    prompt: String,
+    workdir: Option<String>,
+) -> Result<AgentSummaryResponse, DesktopProtocolError> {
+    let normalized_prompt = prompt.trim().to_string();
+    if normalized_prompt.is_empty() {
+        return Err(DesktopProtocolError {
+            code: "core.desktop.agent.summary_prompt_empty".to_string(),
+            message: "summary prompt is empty".to_string(),
+            suggestion: Some("请先提供用于总结的执行记录。".to_string()),
+            retryable: false,
+        });
+    }
+
+    let current_dir = env::current_dir().map_err(|err| DesktopProtocolError {
+        code: "core.desktop.agent.current_dir_read_failed".to_string(),
+        message: format!("read current dir failed: {}", err),
+        suggestion: None,
+        retryable: false,
+    })?;
+    let selected_workdir = workdir
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| current_dir.clone());
+    let selected_workdir = if selected_workdir.is_absolute() {
+        selected_workdir
+    } else {
+        current_dir.join(selected_workdir)
+    };
+    if !selected_workdir.exists() || !selected_workdir.is_dir() {
+        return Err(DesktopProtocolError {
+            code: "core.desktop.agent.workdir_invalid".to_string(),
+            message: format!("workdir is invalid: {}", selected_workdir.to_string_lossy()),
+            suggestion: Some("请确认会话绑定的项目目录存在且可访问".to_string()),
+            retryable: false,
+        });
+    }
+
+    let provider_name = provider.unwrap_or_else(|| "codex".to_string());
+    let provider_config = LlmProviderConfig {
+        api_key: provider_api_key
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        model: provider_model
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        mode: provider_mode
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+    };
+    let result = call_model_with_policy_and_config(
+        parse_provider(provider_name.as_str()),
+        normalized_prompt.as_str(),
+        Some(selected_workdir.to_string_lossy().as_ref()),
+        LlmGatewayPolicy::from_env(),
+        Some(&provider_config),
+    )
+    .map_err(|err| DesktopProtocolError {
+        code: err.code,
+        message: err.message,
+        suggestion: err.suggestion,
+        retryable: err.retryable,
+    })?;
+
+    Ok(AgentSummaryResponse {
+        content: result.content.trim().to_string(),
+        usage: Some(result.usage),
     })
 }
 
@@ -1743,7 +1806,7 @@ fn collect_workspace_api_data_models(project_root: &Path) -> Vec<String> {
             push_unique_string(&mut models, stem.as_str());
         }
     }
-    for file in ["openapi.yaml", "openapi.yml", "openapi.json", "apifox.json"] {
+    for file in ["openapi.yaml", "openapi.yml", "openapi.json", "swagger.json"] {
         if project_root.join(file).exists() {
             push_unique_string(&mut models, file);
         }
@@ -2988,38 +3051,6 @@ async fn check_python_cli_health() -> PythonCliHealthResponse {
         })
 }
 
-#[tauri::command]
-async fn check_apifox_mcp_runtime_status(app: tauri::AppHandle) -> ApifoxMcpRuntimeStatusResponse {
-    tauri::async_runtime::spawn_blocking(move || check_apifox_mcp_runtime_status_inner(app))
-        .await
-        .unwrap_or_else(|err| ApifoxMcpRuntimeStatusResponse {
-            installed: false,
-            version: "".to_string(),
-            npm_bin: "".to_string(),
-            runtime_dir: "".to_string(),
-            entry_path: "".to_string(),
-            message: format!("check apifox mcp runtime status task join failed: {}", err),
-        })
-}
-
-#[tauri::command]
-async fn install_apifox_mcp_runtime(
-    app: tauri::AppHandle,
-) -> Result<ApifoxMcpRuntimeStatusResponse, String> {
-    tauri::async_runtime::spawn_blocking(move || install_apifox_mcp_runtime_inner(app))
-        .await
-        .map_err(|err| format!("install apifox mcp runtime task join failed: {}", err))?
-}
-
-#[tauri::command]
-async fn uninstall_apifox_mcp_runtime(
-    app: tauri::AppHandle,
-) -> Result<ApifoxMcpRuntimeStatusResponse, String> {
-    tauri::async_runtime::spawn_blocking(move || uninstall_apifox_mcp_runtime_inner(app))
-        .await
-        .map_err(|err| format!("uninstall apifox mcp runtime task join failed: {}", err))?
-}
-
 /// 描述：执行 Git CLI 健康检查，返回可用性、版本与命中路径。
 fn check_git_cli_health_inner() -> GitCliHealthResponse {
     if let Some((bin, version)) = detect_available_git() {
@@ -3173,182 +3204,6 @@ fn clone_git_repository_inner(
             .to_string(),
         message: format!("已克隆仓库到 {}", destination.to_string_lossy()),
     })
-}
-
-/// 描述：解析 Apifox 官方 MCP Runtime 根目录，固定在应用数据目录下，避免污染系统全局环境。
-fn resolve_apifox_mcp_runtime_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|err| format!("无法定位应用数据目录: {}", err))?;
-    Ok(app_data_dir.join("mcp_runtime").join("apifox_official"))
-}
-
-/// 描述：返回 Apifox MCP 可执行入口路径（跨平台）。
-fn resolve_apifox_mcp_entry_path(runtime_root: &Path) -> PathBuf {
-    #[cfg(target_os = "windows")]
-    {
-        return runtime_root
-            .join("node_modules")
-            .join(".bin")
-            .join("apifox-mcp-server.cmd");
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        return runtime_root
-            .join("node_modules")
-            .join(".bin")
-            .join("apifox-mcp-server");
-    }
-}
-
-/// 描述：确保 Runtime 根目录中的 package.json 存在，便于 npm 安装到应用私有目录。
-fn ensure_apifox_runtime_package_json(runtime_root: &Path) -> Result<(), String> {
-    fs::create_dir_all(runtime_root)
-        .map_err(|err| format!("创建 Apifox MCP runtime 目录失败: {}", err))?;
-    let package_json_path = runtime_root.join("package.json");
-    if package_json_path.exists() {
-        return Ok(());
-    }
-    let package_json = json!({
-        "name": "libra-desktop-apifox-mcp-runtime",
-        "private": true,
-        "version": "0.0.0"
-    });
-    let content = serde_json::to_string_pretty(&package_json)
-        .map_err(|err| format!("构建 Apifox MCP package.json 失败: {}", err))?;
-    fs::write(&package_json_path, format!("{}\n", content))
-        .map_err(|err| format!("写入 Apifox MCP package.json 失败: {}", err))?;
-    Ok(())
-}
-
-/// 描述：读取本地安装的 Apifox MCP 版本，未命中时返回空字符串。
-fn read_apifox_runtime_version(runtime_root: &Path) -> String {
-    let package_json_path = runtime_root
-        .join("node_modules")
-        .join(APIFOX_MCP_PACKAGE_NAME)
-        .join("package.json");
-    let raw = match fs::read_to_string(&package_json_path) {
-        Ok(content) => content,
-        Err(_) => return "".to_string(),
-    };
-    let parsed = match serde_json::from_str::<serde_json::Value>(raw.as_str()) {
-        Ok(value) => value,
-        Err(_) => return "".to_string(),
-    };
-    parsed
-        .get("version")
-        .and_then(|value| value.as_str())
-        .map(|value| value.trim().to_string())
-        .unwrap_or_default()
-}
-
-/// 描述：构建 Apifox MCP Runtime 状态响应，统一前端“是否真实安装”的判定口径。
-fn build_apifox_mcp_runtime_status_response(
-    runtime_root: &Path,
-    npm_bin: String,
-) -> ApifoxMcpRuntimeStatusResponse {
-    let entry_path = resolve_apifox_mcp_entry_path(runtime_root);
-    let installed = entry_path.exists();
-    let version = read_apifox_runtime_version(runtime_root);
-    let message = if installed {
-        let version_text = if version.is_empty() {
-            "unknown".to_string()
-        } else {
-            version.clone()
-        };
-        format!(
-            "Apifox 官方 MCP 已安装（version={}，目录={}）。",
-            version_text,
-            runtime_root.to_string_lossy()
-        )
-    } else {
-        format!(
-            "Apifox 官方 MCP 未安装（目录={}）。",
-            runtime_root.to_string_lossy()
-        )
-    };
-    ApifoxMcpRuntimeStatusResponse {
-        installed,
-        version,
-        npm_bin,
-        runtime_dir: runtime_root.to_string_lossy().to_string(),
-        entry_path: entry_path.to_string_lossy().to_string(),
-        message,
-    }
-}
-
-/// 描述：读取 Apifox MCP Runtime 当前状态，不执行安装动作。
-fn check_apifox_mcp_runtime_status_inner(app: tauri::AppHandle) -> ApifoxMcpRuntimeStatusResponse {
-    let npm_bin = detect_available_npm()
-        .map(|(bin, _)| bin)
-        .unwrap_or_default();
-    match resolve_apifox_mcp_runtime_root(&app) {
-        Ok(runtime_root) => build_apifox_mcp_runtime_status_response(&runtime_root, npm_bin),
-        Err(err) => ApifoxMcpRuntimeStatusResponse {
-            installed: false,
-            version: "".to_string(),
-            npm_bin,
-            runtime_dir: "".to_string(),
-            entry_path: "".to_string(),
-            message: err,
-        },
-    }
-}
-
-/// 描述：将 Apifox 官方 MCP 安装到应用私有目录，避免写入用户全局 Node 环境。
-fn install_apifox_mcp_runtime_inner(
-    app: tauri::AppHandle,
-) -> Result<ApifoxMcpRuntimeStatusResponse, String> {
-    let (npm_bin, _) = detect_available_npm()
-        .ok_or_else(|| "未检测到可用的 npm，请先安装 Node.js（建议 LTS 版本）。".to_string())?;
-    let runtime_root = resolve_apifox_mcp_runtime_root(&app)?;
-    ensure_apifox_runtime_package_json(&runtime_root)?;
-    let output = Command::new(npm_bin.as_str())
-        .arg("install")
-        .arg(format!(
-            "{}@{}",
-            APIFOX_MCP_PACKAGE_NAME, APIFOX_MCP_PACKAGE_VERSION
-        ))
-        .arg("--no-fund")
-        .arg("--no-audit")
-        .arg("--prefix")
-        .arg(runtime_root.as_os_str())
-        .output()
-        .map_err(|err| format!("执行 npm install 失败: {}", err))?;
-    if !output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
-            "安装 Apifox 官方 MCP 失败（code={:?}）：{} {}",
-            output.status.code(),
-            stdout.trim(),
-            stderr.trim()
-        ));
-    }
-    let status = build_apifox_mcp_runtime_status_response(&runtime_root, npm_bin);
-    if !status.installed {
-        return Err("安装完成但未检测到 Apifox MCP 可执行入口，请检查 npm 输出日志。".to_string());
-    }
-    Ok(status)
-}
-
-/// 描述：卸载应用私有目录下的 Apifox MCP Runtime。
-fn uninstall_apifox_mcp_runtime_inner(
-    app: tauri::AppHandle,
-) -> Result<ApifoxMcpRuntimeStatusResponse, String> {
-    let npm_bin = detect_available_npm()
-        .map(|(bin, _)| bin)
-        .unwrap_or_default();
-    let runtime_root = resolve_apifox_mcp_runtime_root(&app)?;
-    if runtime_root.exists() {
-        fs::remove_dir_all(&runtime_root)
-            .map_err(|err| format!("删除 Apifox MCP runtime 目录失败: {}", err))?;
-    }
-    Ok(build_apifox_mcp_runtime_status_response(
-        &runtime_root,
-        npm_bin,
-    ))
 }
 
 fn now_millis() -> u128 {
@@ -3805,6 +3660,56 @@ fn approve_agent_action(id: String, approved: bool) -> Result<bool, String> {
     Ok(ok)
 }
 
+#[tauri::command]
+fn resolve_agent_user_input(
+    id: String,
+    resolution: String,
+    answers: Option<Vec<UserInputAnswer>>,
+) -> Result<bool, String> {
+    let normalized_id = id.trim().to_string();
+    if normalized_id.is_empty() {
+        return Err("用户提问请求 ID 不能为空".to_string());
+    }
+    let normalized_resolution = resolution.trim().to_lowercase();
+    if normalized_resolution != "answered" && normalized_resolution != "ignored" {
+        return Err("用户提问结果必须是 answered 或 ignored".to_string());
+    }
+    let normalized_answers = answers.unwrap_or_default();
+    if normalized_resolution == "answered" && normalized_answers.is_empty() {
+        return Err("answered 状态必须携带至少一个回答".to_string());
+    }
+    for answer in &normalized_answers {
+        if answer.question_id.trim().is_empty() {
+            return Err("用户提问回答缺少 question_id".to_string());
+        }
+        if answer.value.trim().is_empty() {
+            return Err("用户提问回答缺少 value".to_string());
+        }
+        let normalized_answer_type = answer.answer_type.trim();
+        if normalized_answer_type != "option" && normalized_answer_type != "custom" {
+            return Err("用户提问回答的 answer_type 只能是 option 或 custom".to_string());
+        }
+        if normalized_answer_type == "option"
+            && answer
+                .option_label
+                .as_deref()
+                .unwrap_or("")
+                .trim()
+                .is_empty()
+        {
+            return Err("预设选项回答必须携带 option_label".to_string());
+        }
+    }
+    let ok = libra_agent_core::USER_INPUT_REGISTRY.submit_resolution(
+        &normalized_id,
+        UserInputResolution {
+            resolution: normalized_resolution,
+            answers: normalized_answers,
+        },
+    );
+    Ok(ok)
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -3817,6 +3722,10 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             list_agent_skills,
+            list_agent_skill_overview,
+            register_builtin_agent_skill,
+            unregister_builtin_agent_skill,
+            open_builtin_agent_skill_folder,
             pick_agent_skill_folder,
             import_agent_skill_from_path,
             remove_user_agent_skill,
@@ -3827,13 +3736,11 @@ fn main() {
             prepare_dcc_runtime,
             check_dcc_runtime_status,
             run_agent_command,
+            call_ai_summary_command,
             check_codex_cli_health,
             check_gemini_cli_health,
             check_git_cli_health,
             check_python_cli_health,
-            check_apifox_mcp_runtime_status,
-            install_apifox_mcp_runtime,
-            uninstall_apifox_mcp_runtime,
             pick_local_project_folder,
             open_external_url,
             clone_git_repository,
@@ -3841,6 +3748,7 @@ fn main() {
             apply_project_dependency_rule_upgrades,
             inspect_project_workspace_profile_seed,
             approve_agent_action,
+            resolve_agent_user_input,
             get_desktop_runtime_info,
             check_desktop_update,
             start_desktop_update_download,
@@ -3904,4 +3812,5 @@ mod tests {
         assert!(blender_series_supports_extension("4.2"));
         assert!(blender_series_supports_extension("5.0"));
     }
+
 }

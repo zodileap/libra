@@ -4,7 +4,10 @@ use crate::platform::{resolve_python_command_candidates, CommandCandidate};
 use crate::sandbox::{
     BATCH_SIZE_PREFIX, FINAL_RESULT_PREFIX, SANDBOX_ERROR_PREFIX, TOOL_CALL_PREFIX, TURN_END_MARKER,
 };
-use crate::{AgentRegisteredMcp, AgentRunRequest, AgentRunResult, AgentStreamEvent};
+use crate::{
+    AgentRegisteredMcp, AgentRunRequest, AgentRunResult, AgentStreamEvent, QuestionPrompt,
+    UserInputResolution,
+};
 use libra_mcp_common::{
     now_millis, ProtocolAssetRecord, ProtocolError, ProtocolEventRecord, ProtocolStepRecord,
     ProtocolStepStatus,
@@ -13,6 +16,7 @@ use serde_json::{json, Value};
 use std::env;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -71,6 +75,7 @@ const TOOL_ARGS_STREAM_PREVIEW_MAX_CHARS: usize = 1200;
 const TOOL_ARGS_CONTENT_PREVIEW_MAX_CHARS: usize = 240;
 const PLANNING_META_PREFIX: &str = "__libra_planning__:";
 const STREAM_TEXT_MAX_CHARS: usize = 4000;
+static USER_INPUT_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// 描述：执行智能体 Python 编排主流程，包含脚本生成与沙盒执行。
 pub(crate) fn run_agent_with_python_workflow(
@@ -446,16 +451,17 @@ fn build_python_workflow_prompt(
    NEXT: 下一步要做什么（若 STATUS=DONE 则写“无”）\n\
 5. 禁止输出“我将会...”等计划性句子，计划应写成代码注释。\n\
 6. 禁止导入 `gemini_cli_native_tools` / `codex_tools` / `openai_tools` 等外部工具模块，直接调用内置函数（如 list_directory/write_file/run_shell_command）。\n\
-7. 可用内置工具：read_text/read_json/write_text/write_json/list_dir/list_directory/mkdir/stat/glob/search_files/run_shell/run_shell_command/git_status/git_diff/git_log/apply_patch/todo_read/todo_write/web_search/fetch_url/mcp_tool/dcc_tool/tool_search。\n\
+7. 可用内置工具：read_text/read_json/write_text/write_json/list_dir/list_directory/mkdir/stat/glob/search_files/run_shell/run_shell_command/git_status/git_diff/git_log/apply_patch/todo_read/todo_write/request_user_input/web_search/fetch_url/mcp_tool/dcc_tool/tool_search。\n\
 8. 工具调用前若不确定参数，必须先执行 `tool_search(\"工具名\", 1)` 查看签名与示例，再落地调用。\n\
 9. 关键签名示例：\n\
-   - read_text(path)  # 默认返回文件 content 字符串（非原始响应对象）\n\
-   - read_json(path)  # 默认返回 JSON data 对象（非原始响应对象）\n\
+   - read_text(path)  # 默认返回文件 content 字符串；请显式写成 content = read_text(\"README.md\")，不要依赖 _ 接收上一条结果\n\
+   - read_json(path)  # 默认返回 JSON data 对象；请显式写成 data = read_json(\"package.json\")，不要依赖 _ 接收上一条结果\n\
    - write_text(path, content)\n\
    - apply_patch(patch, check_only=False)\n\
    - run_shell(command, timeout_secs=30)  # 默认返回含 stdout/stderr/status/success 的结果对象；优先读取 result.get(\"stdout\")/result.get(\"stderr\")/result.get(\"success\")\n\
    - todo_read()  # 默认返回 items 列表\n\
    - todo_write(items)  # 仅允许一个参数 items（数组）；禁止 todo_write(\"A\", \"B\")\n\
+   - request_user_input(questions=[{{\"id\":\"style\",\"header\":\"展示方式\",\"question\":\"示例提示卡片是否需要提供复制按钮？\",\"options\":[{{\"label\":\"需要复制按钮 (Recommended)\",\"description\":\"保留完整交互能力。\"}},{{\"label\":\"只展示文本\",\"description\":\"界面更简洁，但少一步操作。\"}}]}}])\n\
 10. agent 编排、任务规划、阶段说明、方案草案、阻塞分析、todo 同步等会话过程信息，默认只允许输出到前端消息并保留在会话上下文中；除非用户明确要求导出，否则禁止写入项目文件。\n\
 11. 项目文件只允许写入用户真正需要的交付物（如源码、配置、测试、资源或用户明确要求导出的文档）；禁止用本地过程文件代替前端展示。\n\
 12. 只要需求尚未完全落地（代码/配置/测试未完成），必须返回 STATUS: CONTINUE，禁止提前 DONE。\n\
@@ -1938,6 +1944,14 @@ fn build_tool_result_stream_data(
                 .map(|value| truncate_stream_text(value.as_str(), STREAM_TEXT_MAX_CHARS * 4))
                 .unwrap_or_default(),
         }),
+        "request_user_input" => json!({
+            "ok": true,
+            "request_id": result_data.get("request_id").and_then(|item| item.as_str()).unwrap_or(""),
+            "count": result_data.get("count").and_then(|item| item.as_u64()).unwrap_or(0),
+            "resolution": result_data.get("resolution").and_then(|item| item.as_str()).unwrap_or(""),
+            "questions": result_data.get("questions").cloned().unwrap_or_else(|| json!([])),
+            "answers": result_data.get("answers").cloned().unwrap_or_else(|| json!([])),
+        }),
         "mkdir" => json!({
             "ok": true,
             "path": result_data.get("path").and_then(|item| item.as_str()).unwrap_or(""),
@@ -2042,6 +2056,82 @@ fn synthesize_final_message_from_script(script: &str) -> String {
     format!(
         "脚本执行完成（未产生可见输出，系统自动收尾）：\n{}",
         preview_lines.join("\n")
+    )
+}
+
+/// 描述：校验 request_user_input 的 questions 参数，确保题数、字段与选项数量满足固定约束。
+///
+/// Params:
+///
+///   - args: 工具调用参数。
+///
+/// Returns:
+///
+///   - 合法的问题列表。
+fn validate_request_user_input_questions(
+    args: &Value,
+) -> Result<Vec<QuestionPrompt>, ProtocolError> {
+    let raw_questions = args.get("questions").cloned().unwrap_or(Value::Null);
+    let questions: Vec<QuestionPrompt> = serde_json::from_value(raw_questions).map_err(|err| {
+        ProtocolError::new(
+            "core.agent.python.user_input_questions_invalid",
+            format!("request_user_input 的 questions 参数解析失败: {}", err),
+        )
+    })?;
+    if questions.is_empty() || questions.len() > 3 {
+        return Err(ProtocolError::new(
+            "core.agent.python.user_input_question_count_invalid",
+            "request_user_input 一次只能提交 1-3 个问题",
+        ));
+    }
+    for question in &questions {
+        if question.id.trim().is_empty()
+            || question.header.trim().is_empty()
+            || question.question.trim().is_empty()
+        {
+            return Err(ProtocolError::new(
+                "core.agent.python.user_input_question_field_invalid",
+                "request_user_input 的问题必须提供非空 id/header/question",
+            ));
+        }
+        if question.options.len() < 2 || question.options.len() > 3 {
+            return Err(ProtocolError::new(
+                "core.agent.python.user_input_option_count_invalid",
+                "request_user_input 的每个问题只能提供 2-3 个预设选项",
+            ));
+        }
+        for option in &question.options {
+            if option.label.trim().is_empty() || option.description.trim().is_empty() {
+                return Err(ProtocolError::new(
+                    "core.agent.python.user_input_option_field_invalid",
+                    "request_user_input 的每个选项都必须提供非空 label/description",
+                ));
+            }
+        }
+    }
+    Ok(questions)
+}
+
+/// 描述：生成用户提问请求 ID，追加递增序号避免并发测试与多线程执行在同一毫秒内撞 ID。
+///
+/// Params:
+///
+///   - session_id: 当前会话 ID，仅用于提升可读性与排查性。
+///
+/// Returns:
+///
+///   - 带时间戳与递增序号的唯一请求 ID。
+fn build_user_input_request_id(session_id: &str) -> String {
+    let sequence = USER_INPUT_REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let sanitized_session_id = session_id
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>();
+    format!(
+        "user-input-{}-{}-{}",
+        now_millis(),
+        sanitized_session_id,
+        sequence
     )
 }
 
@@ -2204,22 +2294,82 @@ where
                         }
                     }
 
-                    let context = crate::tools::ToolContext {
-                        trace_id: trace_id.clone(),
-                        session_id: &session_id,
-                        sandbox_root: &sandbox_root,
-                        policy,
-                    };
+                    let tool_response: Result<Value, ProtocolError> = if tool_name
+                        == "request_user_input"
+                    {
+                        match validate_request_user_input_questions(&tool_args) {
+                            Ok(questions) => {
+                                let request_id = build_user_input_request_id(&session_id);
+                                on_stream_event(AgentStreamEvent::RequestUserInput {
+                                    request_id: request_id.clone(),
+                                    questions: questions.clone(),
+                                });
+                                events.push(ProtocolEventRecord {
+                                    event: "user_input_requested".to_string(),
+                                    step_index: None,
+                                    timestamp_ms: now_millis(),
+                                    message: format!(
+                                        "tool=request_user_input user_input_requested id={}",
+                                        request_id
+                                    ),
+                                });
 
-                    let tool_response = if tool_name == "tool_search" {
-                        tool_tool_search(&tool_args)
-                    } else if let Some(tool) = registry.get(&tool_name) {
-                        tool.execute(&tool_args, context)
+                                let signal = crate::USER_INPUT_REGISTRY.create_request(&request_id);
+                                let resolution: UserInputResolution = loop {
+                                    let decision = match signal.lock() {
+                                        Ok(guard) => guard.clone(),
+                                        Err(poisoned) => poisoned.into_inner().clone(),
+                                    };
+                                    if let Some(outcome) = decision {
+                                        break outcome;
+                                    }
+                                    thread::sleep(Duration::from_millis(200));
+                                };
+
+                                let resolution_event_name =
+                                    if resolution.resolution.trim() == "ignored" {
+                                        "user_input_ignored"
+                                    } else {
+                                        "user_input_answered"
+                                    };
+                                events.push(ProtocolEventRecord {
+                                    event: resolution_event_name.to_string(),
+                                    step_index: None,
+                                    timestamp_ms: now_millis(),
+                                    message: format!(
+                                        "tool=request_user_input {} id={}",
+                                        resolution_event_name, request_id
+                                    ),
+                                });
+
+                                Ok(json!({
+                                    "request_id": request_id,
+                                    "count": questions.len(),
+                                    "questions": questions,
+                                    "resolution": resolution.resolution,
+                                    "answers": resolution.answers,
+                                }))
+                            }
+                            Err(err) => Err(err),
+                        }
                     } else {
-                        Err(ProtocolError::new(
-                            "core.agent.python.tool_unsupported",
-                            format!("不支持的工具: {}", tool_name),
-                        ))
+                        let context = crate::tools::ToolContext {
+                            trace_id: trace_id.clone(),
+                            session_id: &session_id,
+                            sandbox_root: &sandbox_root,
+                            policy,
+                        };
+
+                        if tool_name == "tool_search" {
+                            tool_tool_search(&tool_args)
+                        } else if let Some(tool) = registry.get(&tool_name) {
+                            tool.execute(&tool_args, context)
+                        } else {
+                            Err(ProtocolError::new(
+                                "core.agent.python.tool_unsupported",
+                                format!("不支持的工具: {}", tool_name),
+                            ))
+                        }
                     };
 
                     let (ok, result_data, error_detail) = match &tool_response {
@@ -2621,6 +2771,18 @@ fn summarize_tool_result(name: &str, ok: bool, data: &Value) -> String {
             let count = data.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
             format!("已更新任务清单，共 {} 项", count)
         }
+        "request_user_input" => {
+            let count = data.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+            let resolution = data
+                .get("resolution")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            if resolution == "ignored" {
+                format!("已询问 {} 个问题（已忽略）", count)
+            } else {
+                format!("已询问 {} 个问题", count)
+            }
+        }
         _ => {
             let s = data.to_string();
             let mut chars = s.chars();
@@ -2697,14 +2859,14 @@ fn builtin_tool_descriptors() -> &'static [AgentToolDescriptor] {
             description: "读取项目内文本文件",
             params: "path: string",
             tags: &["file", "read", "text"],
-            example: r#"read_text("README.md")"#,
+            example: r#"content = read_text("README.md")"#,
         },
         AgentToolDescriptor {
             name: "read_json",
             description: "读取并解析项目内 JSON 文件",
             params: "path: string",
             tags: &["file", "read", "json"],
-            example: r#"read_json("package.json")"#,
+            example: r#"data = read_json("package.json")"#,
         },
         AgentToolDescriptor {
             name: "write_text",
@@ -2805,6 +2967,13 @@ fn builtin_tool_descriptors() -> &'static [AgentToolDescriptor] {
             example: r#"todo_write([{"id":"1","content":"实现接口","status":"in_progress"}])"#,
         },
         AgentToolDescriptor {
+            name: "request_user_input",
+            description: "向用户发起 1-3 个结构化单选问题，并等待回答或忽略结果",
+            params: "questions: array<object>",
+            tags: &["user", "question", "decision", "interactive"],
+            example: r#"request_user_input(questions=[{"id":"style","header":"展示方式","question":"示例提示卡片是否需要提供复制按钮？","options":[{"label":"需要复制按钮 (Recommended)","description":"保留完整交互能力。"},{"label":"只展示文本","description":"界面更简洁，但少一步操作。"}]}])"#,
+        },
+        AgentToolDescriptor {
             name: "web_search",
             description: "联网搜索公开资料（标题、链接、摘要）",
             params: "query: string, limit?: number",
@@ -2830,7 +2999,7 @@ fn builtin_tool_descriptors() -> &'static [AgentToolDescriptor] {
             description: "调用已注册的 MCP Server；对未知能力可先用 list_tools 探测",
             params: "server?: string, tool: string, arguments?: object",
             tags: &["mcp", "tool", "server", "bridge"],
-            example: r#"mcp_tool(server="apifox-official", tool="list_tools")"#,
+            example: r#"mcp_tool(server="design-docs", tool="list_tools")"#,
         },
         AgentToolDescriptor {
             name: "dcc_tool",
@@ -2850,7 +3019,7 @@ pub(crate) fn tool_tool_search(args: &Value) -> Result<Value, ProtocolError> {
         .map(str::trim)
         .unwrap_or("");
     let limit = parse_positive_usize_arg(args, "limit", 10, 100)?;
-    let normalized_query = query.to_lowercase();
+    let normalized_query = normalize_tool_search_text(query);
     let mut matched: Vec<Value> = Vec::new();
 
     for descriptor in builtin_tool_descriptors() {
@@ -2858,18 +3027,12 @@ pub(crate) fn tool_tool_search(args: &Value) -> Result<Value, ProtocolError> {
             let tag_match = descriptor
                 .tags
                 .iter()
-                .any(|tag| tag.to_lowercase().contains(normalized_query.as_str()));
-            let text_match = descriptor
-                .name
-                .to_lowercase()
+                .any(|tag| normalize_tool_search_text(tag).contains(normalized_query.as_str()));
+            let text_match = normalize_tool_search_text(descriptor.name)
                 .contains(normalized_query.as_str())
-                || descriptor
-                    .description
-                    .to_lowercase()
+                || normalize_tool_search_text(descriptor.description)
                     .contains(normalized_query.as_str())
-                || descriptor
-                    .params
-                    .to_lowercase()
+                || normalize_tool_search_text(descriptor.params)
                     .contains(normalized_query.as_str());
             if !(tag_match || text_match) {
                 continue;
@@ -2894,6 +3057,23 @@ pub(crate) fn tool_tool_search(args: &Value) -> Result<Value, ProtocolError> {
         "total": total,
         "tools": matched,
     }))
+}
+
+/// 描述：归一化工具搜索文本，忽略空格、下划线与连字符差异，提升自然语言检索命中率。
+///
+/// Params:
+///
+///   - value: 用户查询或工具描述文本。
+///
+/// Returns:
+///
+///   - 仅保留可比较字符的小写字符串。
+fn normalize_tool_search_text(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| !ch.is_whitespace() && *ch != '_' && *ch != '-')
+        .flat_map(|ch| ch.to_lowercase())
+        .collect()
 }
 
 /// 描述：解析并返回可用 Python 命令候选，兼容 Windows `py -3` 启动器。
@@ -2951,6 +3131,7 @@ mod tests {
     use std::env;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
 
     // 从 tools 模块导入公共类型
     use super::*;
@@ -3901,6 +4082,60 @@ finish("read_text/read_json default unwrap ok")
         assert!(result.actions.iter().any(|item| item == "read_json"));
     }
 
+    /// 描述：验证沙盒会将最近一次工具返回值同步到 `_`，兼容模型使用 REPL 风格的 `content = _` 写法。
+    #[test]
+    fn should_expose_last_tool_result_through_underscore_alias() {
+        if resolve_python_command().is_err() {
+            return;
+        }
+        let root = build_unique_test_root();
+        fs::create_dir_all(&root).expect("create temp root");
+        fs::write(root.join("note.txt"), "underscore bridge\n").expect("prepare note fixture");
+        fs::write(root.join("meta.json"), r#"{"stage":"underscore","count":1}"#)
+            .expect("prepare meta fixture");
+        let script = r##"
+read_text("note.txt")
+text_content = _
+if not isinstance(text_content, str):
+    raise RuntimeError(f"underscore alias should hold latest text payload: {text_content}")
+if "underscore bridge" not in text_content:
+    raise RuntimeError(f"underscore text payload mismatch: {text_content}")
+
+read_json("meta.json")
+json_payload = _
+if not isinstance(json_payload, dict):
+    raise RuntimeError(f"underscore alias should hold latest json payload: {json_payload}")
+if json_payload.get("stage") != "underscore" or json_payload.get("count") != 1:
+    raise RuntimeError(f"underscore json payload mismatch: {json_payload}")
+
+finish("underscore alias bridge ok")
+"##;
+        let result = execute_python_script(
+            PythonScriptExecutionRequest {
+                user_script: script,
+                workdir: root.to_str(),
+                dcc_provider_addr: None,
+                available_mcps: &[],
+                policy: &crate::policy::AgentPolicy::default(),
+                trace_id: "test-trace".to_string(),
+                session_id: "test-session-last-tool-result-underscore-alias".to_string(),
+            },
+            &mut |event| {
+                if let AgentStreamEvent::RequireApproval { approval_id, .. } = event {
+                    thread::spawn(move || {
+                        thread::sleep(Duration::from_millis(20));
+                        let _ = crate::APPROVAL_REGISTRY
+                            .submit_decision(&approval_id, crate::ApprovalOutcome::Approved);
+                    });
+                }
+            },
+        )
+        .expect("underscore alias script should execute successfully");
+        assert_eq!(result.message, "underscore alias bridge ok");
+        assert!(result.actions.iter().any(|item| item == "read_text"));
+        assert!(result.actions.iter().any(|item| item == "read_json"));
+    }
+
     /// 描述：验证当脚本既未输出 finish 结果也未执行工具调用时，会触发“源码摘要兜底”而非直接失败。
     #[test]
     fn should_fallback_when_script_has_no_result_and_no_actions() {
@@ -4147,6 +4382,24 @@ run()
             item.get("name")
                 .and_then(|value| value.as_str())
                 .map(|name| name == "dcc_tool")
+                .unwrap_or(false)
+        }));
+    }
+
+    /// 描述：验证工具目录可检索到 `request_user_input`，确保模型可以发现新的用户提问入口。
+    #[test]
+    fn should_search_request_user_input_tool_descriptor() {
+        let result =
+            tool_tool_search(&json!({"query":"user input","limit":10})).expect("tool search ok");
+        let tools = result
+            .get("tools")
+            .and_then(|value| value.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert!(tools.iter().any(|item| {
+            item.get("name")
+                .and_then(|value| value.as_str())
+                .map(|name| name == "request_user_input")
                 .unwrap_or(false)
         }));
     }
@@ -4742,16 +4995,98 @@ NEXT: 进入接口建模
         assert!(prompt.contains("plan_transfer"));
         assert!(prompt.contains("list_tools"));
         assert!(prompt.contains("read_text(path)  # 默认返回文件 content 字符串"));
+        assert!(prompt.contains("content = read_text(\"README.md\")"));
+        assert!(prompt.contains("不要依赖 _ 接收上一条结果"));
+        assert!(prompt.contains("data = read_json(\"package.json\")"));
         assert!(prompt.contains("run_shell(command, timeout_secs=30)  # 默认返回含 stdout/stderr/status/success 的结果对象"));
         assert!(prompt
             .contains("result.get(\"stdout\")/result.get(\"stderr\")/result.get(\"success\")"));
         assert!(prompt.contains("todo_write(items)"));
+        assert!(prompt.contains("request_user_input(questions=["));
         assert!(prompt.contains("禁止 todo_write(\"A\", \"B\")"));
         assert!(prompt.contains("会话过程信息，默认只允许输出到前端消息并保留在会话上下文中"));
         assert!(prompt.contains("禁止写入项目文件"));
         assert!(prompt.contains("项目文件只允许写入用户真正需要的交付物"));
         assert!(prompt.contains("STATUS 只表示“当前阶段”是否完成"));
         assert!(prompt.contains("当前阶段节点要求已满足时返回 DONE"));
+    }
+
+    /// 描述：验证 request_user_input 参数校验会拒绝空问题列表，避免生成无意义的挂起请求。
+    #[test]
+    fn should_reject_request_user_input_with_zero_questions() {
+        let result = validate_request_user_input_questions(&json!({ "questions": [] }));
+        assert!(result.is_err());
+        let error = result.expect_err("empty question list should fail");
+        assert_eq!(
+            error.code,
+            "core.agent.python.user_input_question_count_invalid"
+        );
+    }
+
+    /// 描述：验证 request_user_input 参数校验会拒绝超过 3 题的批量提问，确保前端交互复杂度可控。
+    #[test]
+    fn should_reject_request_user_input_with_too_many_questions() {
+        let result = validate_request_user_input_questions(&json!({
+            "questions": [
+                { "id": "q1", "header": "Q1", "question": "1?", "options": [{ "label": "A", "description": "a" }, { "label": "B", "description": "b" }] },
+                { "id": "q2", "header": "Q2", "question": "2?", "options": [{ "label": "A", "description": "a" }, { "label": "B", "description": "b" }] },
+                { "id": "q3", "header": "Q3", "question": "3?", "options": [{ "label": "A", "description": "a" }, { "label": "B", "description": "b" }] },
+                { "id": "q4", "header": "Q4", "question": "4?", "options": [{ "label": "A", "description": "a" }, { "label": "B", "description": "b" }] }
+            ]
+        }));
+        assert!(result.is_err());
+        let error = result.expect_err("too many questions should fail");
+        assert_eq!(
+            error.code,
+            "core.agent.python.user_input_question_count_invalid"
+        );
+    }
+
+    /// 描述：验证 request_user_input 参数校验会拒绝选项数不足的问题，避免前端无法形成有效决策。
+    #[test]
+    fn should_reject_request_user_input_with_too_few_options() {
+        let result = validate_request_user_input_questions(&json!({
+            "questions": [
+                {
+                    "id": "style",
+                    "header": "展示方式",
+                    "question": "是否需要复制按钮？",
+                    "options": [{ "label": "需要", "description": "保留复制能力" }]
+                }
+            ]
+        }));
+        assert!(result.is_err());
+        let error = result.expect_err("too few options should fail");
+        assert_eq!(
+            error.code,
+            "core.agent.python.user_input_option_count_invalid"
+        );
+    }
+
+    /// 描述：验证 request_user_input 参数校验会拒绝超过 3 个预设选项的问题，避免突破前端固定布局约束。
+    #[test]
+    fn should_reject_request_user_input_with_too_many_options() {
+        let result = validate_request_user_input_questions(&json!({
+            "questions": [
+                {
+                    "id": "style",
+                    "header": "展示方式",
+                    "question": "是否需要复制按钮？",
+                    "options": [
+                        { "label": "1", "description": "a" },
+                        { "label": "2", "description": "b" },
+                        { "label": "3", "description": "c" },
+                        { "label": "4", "description": "d" }
+                    ]
+                }
+            ]
+        }));
+        assert!(result.is_err());
+        let error = result.expect_err("too many options should fail");
+        assert_eq!(
+            error.code,
+            "core.agent.python.user_input_option_count_invalid"
+        );
     }
 
     /// 描述：验证工作流按阶段执行时，core 会识别“仅执行当前阶段”的外层契约，
@@ -4806,14 +5141,14 @@ NEXT: 进入接口建模
     #[test]
     fn should_include_registered_mcp_context_in_prompt() {
         let prompt = build_python_workflow_prompt(
-            "同步 Apifox 接口",
+            "维护项目 OpenAPI 契约",
             Some("demo"),
             1,
             6,
             &[],
             &[AgentRegisteredMcp {
-                id: "apifox-official".to_string(),
-                name: "Apifox 官方 MCP".to_string(),
+                id: "openapi-docs".to_string(),
+                name: "OpenAPI Docs".to_string(),
                 domain: "general".to_string(),
                 software: "".to_string(),
                 capabilities: Vec::new(),
@@ -4821,21 +5156,21 @@ NEXT: 进入接口建模
                 supports_import: false,
                 supports_export: false,
                 transport: "stdio".to_string(),
-                command: "/tmp/apifox-mcp".to_string(),
+                command: "/tmp/openapi-docs".to_string(),
                 args: Vec::new(),
                 env: std::collections::HashMap::new(),
                 cwd: "".to_string(),
                 url: "".to_string(),
                 headers: std::collections::HashMap::new(),
-                runtime_kind: "apifox_runtime".to_string(),
-                official_provider: "Apifox".to_string(),
+                runtime_kind: "".to_string(),
+                official_provider: "OpenAPI".to_string(),
                 runtime_ready: true,
                 runtime_hint: None,
             }],
         );
         assert!(prompt.contains("当前已启用的 MCP"));
-        assert!(prompt.contains("apifox-official"));
-        assert!(prompt.contains("Apifox 官方 MCP"));
+        assert!(prompt.contains("openapi-docs"));
+        assert!(prompt.contains("OpenAPI Docs"));
     }
 
     /// 描述：验证未闭合三引号字符串会在顶层 finish(...) 前自动补齐，避免 finish 被吞进字符串导致 SyntaxError。
@@ -5015,5 +5350,204 @@ finish("STATUS: DONE\nSUMMARY: 第二轮完成\nNEXT: 无")
             stream_data.get("success").and_then(|item| item.as_bool()),
             Some(true)
         );
+    }
+
+    /// 描述：验证 request_user_input 结果流会保留问题与回答，供桌面端直接渲染结构化提问轨迹。
+    #[test]
+    fn should_include_request_user_input_payload_in_result_stream_data() {
+        let result_data = json!({
+            "request_id": "user-input-123",
+            "count": 1,
+            "resolution": "answered",
+            "questions": [{
+                "id": "style",
+                "header": "展示方式",
+                "question": "是否需要复制按钮？",
+                "options": [
+                    { "label": "需要复制按钮 (Recommended)", "description": "保留完整交互能力。" },
+                    { "label": "只展示文本", "description": "界面更简洁。" }
+                ]
+            }],
+            "answers": [{
+                "question_id": "style",
+                "answer_type": "option",
+                "option_index": 0,
+                "option_label": "需要复制按钮 (Recommended)",
+                "value": "需要复制按钮 (Recommended)"
+            }]
+        });
+        let stream_data = build_tool_result_stream_data(
+            "request_user_input",
+            true,
+            &result_data,
+            &json!({}),
+            None,
+        );
+        assert_eq!(
+            stream_data
+                .get("request_id")
+                .and_then(|value| value.as_str()),
+            Some("user-input-123")
+        );
+        assert_eq!(
+            stream_data.get("count").and_then(|value| value.as_u64()),
+            Some(1)
+        );
+        assert_eq!(
+            stream_data
+                .get("resolution")
+                .and_then(|value| value.as_str()),
+            Some("answered")
+        );
+        assert_eq!(
+            stream_data
+                .get("questions")
+                .and_then(|value| value.as_array())
+                .map(|items| items.len()),
+            Some(1)
+        );
+        assert_eq!(
+            stream_data
+                .get("answers")
+                .and_then(|value| value.as_array())
+                .map(|items| items.len()),
+            Some(1)
+        );
+    }
+
+    /// 描述：验证 Python 编排脚本调用 request_user_input 后会等待 answered 结果，并向外派发 RequestUserInput 事件。
+    #[test]
+    fn should_execute_request_user_input_and_resume_with_answered_resolution() {
+        if resolve_python_command().is_err() {
+            return;
+        }
+        let root = build_unique_test_root();
+        fs::create_dir_all(&root).expect("create temp root");
+        let seen_events = Arc::new(Mutex::new(Vec::<AgentStreamEvent>::new()));
+        let seen_events_ref = Arc::clone(&seen_events);
+        let script = r##"
+result = request_user_input(questions=[{
+    "id": "style",
+    "header": "展示方式",
+    "question": "示例提示卡片是否需要提供复制按钮？",
+    "options": [
+        {"label": "需要复制按钮 (Recommended)", "description": "保留完整交互能力。"},
+        {"label": "只展示文本", "description": "界面更简洁，但少一步操作。"}
+    ]
+}])
+if result.get("resolution") != "answered":
+    raise RuntimeError(f"resolution mismatch: {result}")
+answers = result.get("answers") or []
+if len(answers) != 1:
+    raise RuntimeError(f"answers mismatch: {answers}")
+first = answers[0]
+if first.get("value") != "需要复制按钮 (Recommended)":
+    raise RuntimeError(f"answer value mismatch: {first}")
+finish("request_user_input answered ok")
+"##;
+        let result = execute_python_script(
+            PythonScriptExecutionRequest {
+                user_script: script,
+                workdir: root.to_str(),
+                dcc_provider_addr: None,
+                available_mcps: &[],
+                policy: &crate::policy::AgentPolicy::default(),
+                trace_id: "test-trace".to_string(),
+                session_id: "test-session-request-user-input-answered".to_string(),
+            },
+            &mut move |event| {
+                seen_events_ref
+                    .lock()
+                    .expect("lock seen events")
+                    .push(event.clone());
+                if let AgentStreamEvent::RequestUserInput { request_id, .. } = event {
+                    thread::spawn(move || {
+                        thread::sleep(Duration::from_millis(20));
+                        let _ = crate::USER_INPUT_REGISTRY.submit_resolution(
+                            &request_id,
+                            crate::UserInputResolution {
+                                resolution: "answered".to_string(),
+                                answers: vec![crate::UserInputAnswer {
+                                    question_id: "style".to_string(),
+                                    answer_type: "option".to_string(),
+                                    option_index: Some(0),
+                                    option_label: Some("需要复制按钮 (Recommended)".to_string()),
+                                    value: "需要复制按钮 (Recommended)".to_string(),
+                                }],
+                            },
+                        );
+                    });
+                }
+            },
+        )
+        .expect("request_user_input answered script should execute successfully");
+        assert_eq!(result.message, "request_user_input answered ok");
+        assert!(result
+            .actions
+            .iter()
+            .any(|item| item == "request_user_input"));
+        let events = seen_events.lock().expect("lock seen events");
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentStreamEvent::RequestUserInput { request_id, questions }
+            if request_id.starts_with("user-input-") && questions.len() == 1
+        )));
+    }
+
+    /// 描述：验证 Python 编排脚本调用 request_user_input 后会接受 ignored 结果，并继续返回空 answers。
+    #[test]
+    fn should_execute_request_user_input_and_resume_with_ignored_resolution() {
+        if resolve_python_command().is_err() {
+            return;
+        }
+        let root = build_unique_test_root();
+        fs::create_dir_all(&root).expect("create temp root");
+        let script = r##"
+result = request_user_input(questions=[{
+    "id": "style",
+    "header": "展示方式",
+    "question": "示例提示卡片是否需要提供复制按钮？",
+    "options": [
+        {"label": "需要复制按钮 (Recommended)", "description": "保留完整交互能力。"},
+        {"label": "只展示文本", "description": "界面更简洁，但少一步操作。"}
+    ]
+}])
+if result.get("resolution") != "ignored":
+    raise RuntimeError(f"resolution mismatch: {result}")
+if result.get("answers") != []:
+    raise RuntimeError(f"ignored answers should be empty: {result}")
+finish("request_user_input ignored ok")
+"##;
+        let result = execute_python_script(
+            PythonScriptExecutionRequest {
+                user_script: script,
+                workdir: root.to_str(),
+                dcc_provider_addr: None,
+                available_mcps: &[],
+                policy: &crate::policy::AgentPolicy::default(),
+                trace_id: "test-trace".to_string(),
+                session_id: "test-session-request-user-input-ignored".to_string(),
+            },
+            &mut |event| {
+                if let AgentStreamEvent::RequestUserInput { request_id, .. } = event {
+                    thread::spawn(move || {
+                        thread::sleep(Duration::from_millis(20));
+                        let _ = crate::USER_INPUT_REGISTRY.submit_resolution(
+                            &request_id,
+                            crate::UserInputResolution {
+                                resolution: "ignored".to_string(),
+                                answers: Vec::new(),
+                            },
+                        );
+                    });
+                }
+            },
+        )
+        .expect("request_user_input ignored script should execute successfully");
+        assert_eq!(result.message, "request_user_input ignored ok");
+        assert!(result
+            .actions
+            .iter()
+            .any(|item| item == "request_user_input"));
     }
 }

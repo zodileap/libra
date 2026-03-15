@@ -122,3 +122,27 @@ test("TestDesktopStylesContainsThemeAndLayoutStabilityRules", () => {
     );
   }
 });
+
+test("TestDesktopScrollbarsUseBrandInsteadOfPrimary", () => {
+  const css = readDesktopStyles();
+
+  // 描述:
+  //
+  //   - Desktop 通用滚动条应统一走 brand 语义，避免会话区与主内容区继续出现 primary 蓝色滚动条。
+  assert.match(
+    css,
+    /\.desk-main,\s*\.desk-session-thread-wrap\s*\{[^}]*scrollbar-color:\s*color-mix\(in srgb,\s*var\(--z-color-border-brand\)\s*44%,\s*var\(--z-color-border-glass\)\)[^}]*\}/
+  );
+  assert.match(
+    css,
+    /\.desk-main::-webkit-scrollbar-thumb,\s*\.desk-session-thread-wrap::-webkit-scrollbar-thumb\s*\{[^}]*background:\s*color-mix\(in srgb,\s*var\(--z-color-border-brand\)\s*48%,\s*var\(--z-color-border-glass\)\);[^}]*\}/
+  );
+  assert.doesNotMatch(
+    css,
+    /\.desk-main,\s*\.desk-session-thread-wrap\s*\{[^}]*var\(--z-color-primary\)[^}]*\}/
+  );
+  assert.doesNotMatch(
+    css,
+    /\.desk-main::-webkit-scrollbar-thumb,\s*\.desk-session-thread-wrap::-webkit-scrollbar-thumb\s*\{[^}]*var\(--z-color-primary\)[^}]*\}/
+  );
+});

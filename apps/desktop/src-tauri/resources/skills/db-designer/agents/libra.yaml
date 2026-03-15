@@ -1,5 +1,0 @@
-libra:
-  title: 数据库设计
-  description: 设计实体、字段、索引、约束、迁移和回滚方案，并识别兼容性与一致性风险。
-  example_prompt: 根据这份业务需求给我数据库设计，包含实体字段、索引、迁移步骤、回滚策略和风险说明。
-  icon: libra_skill

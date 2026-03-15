@@ -2,4 +2,5 @@ libra:
   title: 建模执行
   description: 通过已注册 DCC MCP 选择软件并执行建模、编辑、导入导出或跨软件迁移，且如实反馈结果。
   example_prompt: 通过已注册的 DCC MCP 执行这次建模任务，先确认使用的软件、关键参数和验证步骤。
+  group: 建模
   icon: libra_skill

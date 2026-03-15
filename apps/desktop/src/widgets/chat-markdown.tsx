@@ -34,21 +34,6 @@ const LIST_REGEX = /^([-*]|\d+\.)\s+(.+)$/;
 
 // 描述:
 //
-//   - 匹配行内链接语法 [text](url)。
-const LINK_REGEX = /\[([^\]]+)\]\(([^)]+)\)/;
-
-// 描述:
-//
-//   - 匹配整段加粗语法 **text**。
-const BOLD_REGEX = /^\*\*([\s\S]+)\*\*$/;
-
-// 描述:
-//
-//   - 匹配整段斜体语法 *text*。
-const ITALIC_REGEX = /^\*([\s\S]+)\*$/;
-
-// 描述:
-//
 //   - 将原始 Markdown 按代码块切分，供后续分别走文本渲染与代码渲染流程。
 //
 // Params:
@@ -104,50 +89,97 @@ function splitMarkdownBlocks(content: string): MarkdownBlock[] {
 //
 //   - React 可渲染的节点列表。
 function renderInlineMarkdown(text: string): ReactNode[] {
-  const parts = text.split(/(`[^`]+`)/g);
   const nodes: ReactNode[] = [];
+  let buffer = "";
+  let cursor = 0;
+  let nodeIndex = 0;
 
-  parts.forEach((part, index) => {
-    if (!part) return;
-    if (part.startsWith("`") && part.endsWith("`") && part.length >= 2) {
-      nodes.push(
-        <code key={`inline-code-${index}`} className="desk-md-inline-code">
-          {part.slice(1, -1)}
-        </code>
-      );
+  const flushTextBuffer = () => {
+    if (!buffer) {
       return;
     }
+    nodes.push(<Fragment key={`inline-text-${nodeIndex}`}>{buffer}</Fragment>);
+    nodeIndex += 1;
+    buffer = "";
+  };
 
-    const linkMatch = part.match(LINK_REGEX);
-    if (linkMatch && linkMatch[0] === part) {
-      nodes.push(
-        <a
-          key={`inline-link-${index}`}
-          className="desk-md-link"
-          href={linkMatch[2]}
-          target="_blank"
-          rel="noreferrer noopener"
-        >
-          {linkMatch[1]}
-        </a>
-      );
-      return;
+  while (cursor < text.length) {
+    if (text.startsWith("`", cursor)) {
+      const codeEnd = text.indexOf("`", cursor + 1);
+      if (codeEnd > cursor + 1) {
+        flushTextBuffer();
+        nodes.push(
+          <code key={`inline-code-${nodeIndex}`} className="desk-md-inline-code">
+            {text.slice(cursor + 1, codeEnd)}
+          </code>,
+        );
+        nodeIndex += 1;
+        cursor = codeEnd + 1;
+        continue;
+      }
     }
 
-    const boldMatch = part.match(BOLD_REGEX);
-    if (boldMatch) {
-      nodes.push(<strong key={`inline-strong-${index}`}>{boldMatch[1]}</strong>);
-      return;
+    if (text.startsWith("**", cursor)) {
+      const boldEnd = text.indexOf("**", cursor + 2);
+      if (boldEnd > cursor + 2) {
+        flushTextBuffer();
+        nodes.push(
+          <strong key={`inline-strong-${nodeIndex}`}>
+            {renderInlineMarkdown(text.slice(cursor + 2, boldEnd))}
+          </strong>,
+        );
+        nodeIndex += 1;
+        cursor = boldEnd + 2;
+        continue;
+      }
     }
 
-    const italicMatch = part.match(ITALIC_REGEX);
-    if (italicMatch) {
-      nodes.push(<em key={`inline-em-${index}`}>{italicMatch[1]}</em>);
-      return;
+    if (text.startsWith("*", cursor)) {
+      const italicEnd = text.indexOf("*", cursor + 1);
+      if (italicEnd > cursor + 1) {
+        flushTextBuffer();
+        nodes.push(
+          <em key={`inline-em-${nodeIndex}`}>
+            {renderInlineMarkdown(text.slice(cursor + 1, italicEnd))}
+          </em>,
+        );
+        nodeIndex += 1;
+        cursor = italicEnd + 1;
+        continue;
+      }
     }
 
-    nodes.push(<Fragment key={`inline-text-${index}`}>{part}</Fragment>);
-  });
+    if (text.startsWith("[", cursor)) {
+      const labelEnd = text.indexOf("]", cursor + 1);
+      if (labelEnd > cursor + 1 && text[labelEnd + 1] === "(") {
+        const hrefEnd = text.indexOf(")", labelEnd + 2);
+        if (hrefEnd > labelEnd + 2) {
+          flushTextBuffer();
+          const label = text.slice(cursor + 1, labelEnd);
+          const href = text.slice(labelEnd + 2, hrefEnd);
+          nodes.push(
+            <a
+              key={`inline-link-${nodeIndex}`}
+              className="desk-md-link"
+              href={href}
+              target="_blank"
+              rel="noreferrer noopener"
+            >
+              {renderInlineMarkdown(label)}
+            </a>,
+          );
+          nodeIndex += 1;
+          cursor = hrefEnd + 1;
+          continue;
+        }
+      }
+    }
+
+    buffer += text[cursor];
+    cursor += 1;
+  }
+
+  flushTextBuffer();
 
   return nodes;
 }
@@ -206,11 +238,18 @@ function renderTextBlock(text: string, blockIndex: number): ReactNode {
 
   const flushParagraph = () => {
     if (paragraphLines.length === 0) return;
-    const content = paragraphLines.join(" ").trim();
-    if (content) {
+    const normalizedLines = paragraphLines
+      .map((item) => String(item || "").trim())
+      .filter((item) => item.length > 0);
+    if (normalizedLines.length > 0) {
       nodes.push(
         <p key={`p-${blockIndex}-${lineIndex}`} className="desk-md-paragraph">
-          {renderInlineMarkdown(content)}
+          {normalizedLines.map((item, index) => (
+            <Fragment key={`p-line-${blockIndex}-${lineIndex}-${index}`}>
+              {index > 0 ? <br /> : null}
+              {renderInlineMarkdown(item)}
+            </Fragment>
+          ))}
         </p>
       );
     }
@@ -264,6 +303,7 @@ function renderTextBlock(text: string, blockIndex: number): ReactNode {
       flushParagraph();
       const ordered = /^\d+\./.test(listMatch[1]);
       const items: string[] = [];
+      const orderedStart = ordered ? Number.parseInt(listMatch[1], 10) || 1 : undefined;
       while (lineIndex < lines.length) {
         const itemLine = lines[lineIndex].trim();
         const itemMatch = itemLine.match(LIST_REGEX);
@@ -273,7 +313,11 @@ function renderTextBlock(text: string, blockIndex: number): ReactNode {
       }
       const ListTag = ordered ? "ol" : "ul";
       nodes.push(
-        <ListTag key={`list-${blockIndex}-${lineIndex}`} className="desk-md-list">
+        <ListTag
+          key={`list-${blockIndex}-${lineIndex}`}
+          className="desk-md-list"
+          start={orderedStart}
+        >
           {items.map((item, idx) => (
             <li key={`li-${idx}`}>{renderInlineMarkdown(item)}</li>
           ))}

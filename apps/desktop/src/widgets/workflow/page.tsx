@@ -473,7 +473,7 @@ function resolveNewNodePosition(count: number): { x: number; y: number } {
 function buildSkillSelectOptions(availableSkills: AgentSkillItem[], selectedSkillId: string) {
   const options = availableSkills.map((item) => ({
     value: item.id,
-    label: translateDesktopText("{{name}}（{{id}}）", { name: item.name, id: item.id }),
+    label: translateDesktopText("{{name}}（{{id}}）", { name: item.title, id: item.id }),
   }));
   const normalizedSkillId = String(selectedSkillId || "").trim();
   if (!normalizedSkillId) {
@@ -758,39 +758,6 @@ export function WorkflowCanvasPage() {
           description: "",
           instruction: "",
           nodeType: "action",
-          skillId: "",
-          skillVersion: "",
-        },
-      },
-    ]);
-    setSelectedNodeId(nodeId);
-    setSelectedEdgeId("");
-  };
-
-  // 描述：
-  //
-  //   - 新增技能节点，默认保留空技能位，便于后续从已安装目录中选择 skill@version。
-  const addSkillNode = () => {
-    if (!canEditWorkflow) {
-      return;
-    }
-    const nextIndex = nodes.length + 1;
-    const position = resolveNewNodePosition(nodes.length);
-    const nodeId = `skill-node-${Date.now()}`;
-
-    setNodes((currentNodes) => [
-      ...currentNodes,
-      {
-        id: nodeId,
-        type: WORKFLOW_NODE_TYPE,
-        position,
-        className: "desk-workflow-flow-node",
-        data: {
-          label: t("技能节点 {{index}}", { index: nextIndex }),
-          title: t("技能节点 {{index}}", { index: nextIndex }),
-          description: t("绑定并执行指定技能。"),
-          instruction: "",
-          nodeType: "skill",
           skillId: "",
           skillVersion: "",
         },
@@ -1389,7 +1356,6 @@ export function WorkflowCanvasPage() {
                     className="desk-workflow-editor-canvas-toolbar-divider"
                   />
                   <AriButton ghost icon="add" onClick={addNode} disabled={!canEditWorkflow} />
-                  <AriButton ghost icon="new_releases" onClick={addSkillNode} disabled={!canEditWorkflow} />
                 </AriFlex>
               </AriContainer>
 

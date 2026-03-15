@@ -101,7 +101,7 @@ export function buildSessionSkillPrompt(selectedSkills: AgentSkillItem[]): strin
     return "";
   }
   const blocks = selectedSkills.map((item) => {
-    const lines = [`### ${item.name} (${item.id})`];
+    const lines = [`### ${item.title} (${item.id})`];
     if (item.description) {
       lines.push(item.description);
     }
@@ -637,6 +637,81 @@ export function upsertAssistantMessageById(messages: MessageItem[], messageId: s
     text,
   };
   return next;
+}
+
+// 描述：按消息 ID 写入助手消息，并在命中锚点消息时插入到其前方。
+//   - 用于工作流阶段正文这类“应固定在后续执行过程之前展示”的消息，避免被同一条运行消息的后续步骤压到下方。
+//
+// Params:
+//
+//   - messages: 当前会话消息列表。
+//   - messageId: 目标助手消息 ID。
+//   - text: 要写入的消息正文。
+//   - anchorMessageId: 锚点助手消息 ID；命中时将目标消息放在该消息之前。
+//
+// Returns:
+//
+//   - 更新后的会话消息列表。
+export function upsertAssistantMessageBeforeAnchorById(
+  messages: MessageItem[],
+  messageId: string,
+  text: string,
+  anchorMessageId: string,
+): MessageItem[] {
+  if (!messageId) {
+    return upsertAssistantMessageById(messages, messageId, text);
+  }
+  const nextMessage: MessageItem = {
+    id: messageId,
+    role: "assistant",
+    text,
+  };
+  const normalizedAnchorMessageId = String(anchorMessageId || "").trim();
+  const nextMessages = messages.filter((item) => String(item.id || "").trim() !== messageId);
+  if (!normalizedAnchorMessageId) {
+    return [...nextMessages, nextMessage];
+  }
+  const anchorIndex = nextMessages.findIndex((item) => String(item.id || "").trim() === normalizedAnchorMessageId);
+  if (anchorIndex < 0) {
+    return [...nextMessages, nextMessage];
+  }
+  return [
+    ...nextMessages.slice(0, anchorIndex),
+    nextMessage,
+    ...nextMessages.slice(anchorIndex),
+  ];
+}
+
+// 描述：
+//
+//   - 判断消息 ID 是否属于工作流阶段上下文消息；这类消息只用于 agent context，
+//   - 不应进入前端 transcript，否则会被渲染成“突然置顶”的独立助手消息。
+//
+// Params:
+//
+//   - messageId: 待判断的消息 ID。
+//
+// Returns:
+//
+//   - true: 工作流阶段上下文消息。
+export function isWorkflowStageContextMessageId(messageId: string): boolean {
+  return /-stage-\d+$/.test(String(messageId || "").trim());
+}
+
+// 描述：
+//
+//   - 过滤 transcript 中的工作流阶段上下文消息，避免 agent 专用上下文误渲染到前端消息流。
+//
+// Params:
+//
+//   - messages: 原始消息列表。
+//
+// Returns:
+//
+//   - 去除阶段上下文后的消息列表。
+export function filterWorkflowStageContextMessages(messages: MessageItem[]): MessageItem[] {
+  return messages.filter((item) =>
+    item.role !== "assistant" || !isWorkflowStageContextMessageId(String(item.id || "").trim()));
 }
 
 // 描述：按目标助手消息索引清理其后的“同轮助手尾部消息”，用于重试时覆盖旧结果。

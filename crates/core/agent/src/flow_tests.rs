@@ -6,6 +6,8 @@ fn should_build_unified_prompt() {
     let prompt = build_system_prompt();
     assert!(prompt.contains("统一智能体"));
     assert!(prompt.contains("工作流"));
+    assert!(prompt.contains("会话上下文与前端消息"));
+    assert!(prompt.contains("不要写入项目文件"));
 }
 
 /// 描述：验证系统提示词包含统一智能体关键约束。

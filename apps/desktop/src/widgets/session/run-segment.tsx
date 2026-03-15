@@ -1,6 +1,11 @@
 import { AriCode, AriContainer, AriTypography } from "@aries-kit/react";
 import type { KeyboardEvent as ReactKeyboardEvent, JSX } from "react";
 import { translateDesktopText } from "../../shared/i18n";
+import type {
+  AgentUserInputAnswer,
+  AgentUserInputQuestionPrompt,
+} from "../../shared/types";
+import { ChatMarkdown } from "../chat-markdown";
 
 // 描述：
 //
@@ -33,11 +38,22 @@ export type SessionRunSegmentRichMeta = null | (
     prefix: string;
     suffix: string;
   } | {
+    type: "terminal";
+    label: string;
+    suffix: string;
+  } | {
     type: "approval";
     leading: string;
     label: string;
     suffix: string;
     tone: "approved" | "rejected" | "neutral";
+  } | {
+    type: "user_input";
+    label: string;
+    suffix: string;
+    tone: "pending" | "answered" | "ignored";
+    questions: AgentUserInputQuestionPrompt[];
+    answers: AgentUserInputAnswer[];
   }
 );
 
@@ -224,6 +240,103 @@ const RUN_SEGMENT_REJECTED_PATTERNS = buildRunSegmentTemplatePatterns([
     tool: RUN_SEGMENT_TEMPLATE_CAPTURE_TOKEN,
   }, "en-US"),
 ]);
+
+// 描述：
+//
+//   - 规整运行片段中的用户提问问题列表，过滤空字段，避免旧数据或异常 payload 破坏展开详情。
+function resolveRunSegmentUserInputQuestions(
+  value: unknown,
+): AgentUserInputQuestionPrompt[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const raw = item as Record<string, unknown>;
+      const id = String(raw.id || "").trim();
+      const header = String(raw.header || "").trim();
+      const question = String(raw.question || "").trim();
+      const options = Array.isArray(raw.options)
+        ? raw.options
+          .map((option) => {
+            if (!option || typeof option !== "object") {
+              return null;
+            }
+            const rawOption = option as Record<string, unknown>;
+            const label = String(rawOption.label || "").trim();
+            const description = String(rawOption.description || "").trim();
+            if (!label || !description) {
+              return null;
+            }
+            return { label, description };
+          })
+          .filter((option): option is AgentUserInputQuestionPrompt["options"][number] => Boolean(option))
+        : [];
+      if (!id || !header || !question || options.length === 0) {
+        return null;
+      }
+      return { id, header, question, options };
+    })
+    .filter((item): item is AgentUserInputQuestionPrompt => Boolean(item));
+}
+
+// 描述：
+//
+//   - 规整运行片段中的用户提问回答列表，兼容预设选项与自定义回答两种结果。
+function resolveRunSegmentUserInputAnswers(
+  value: unknown,
+): AgentUserInputAnswer[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const raw = item as Record<string, unknown>;
+      const questionId = String(raw.question_id || "").trim();
+      const answerType = String(raw.answer_type || "").trim();
+      const normalizedAnswerType = answerType === "custom"
+        ? "custom"
+        : answerType === "option"
+          ? "option"
+          : "";
+      const valueText = String(raw.value || "").trim();
+      if (!questionId || !normalizedAnswerType || !valueText) {
+        return null;
+      }
+      const answer: AgentUserInputAnswer = {
+        question_id: questionId,
+        answer_type: normalizedAnswerType,
+        value: valueText,
+      };
+      if (Number.isFinite(Number(raw.option_index))) {
+        answer.option_index = Math.max(0, Math.floor(Number(raw.option_index)));
+      }
+      if (typeof raw.option_label === "string" && String(raw.option_label || "").trim()) {
+        answer.option_label = String(raw.option_label || "").trim();
+      }
+      return answer;
+    })
+    .filter((item): item is AgentUserInputAnswer => Boolean(item));
+}
+
+// 描述：
+//
+//   - 从结构化 data 中解析用户提问数量，优先采用显式 question_count，回退到问题数组长度。
+function resolveRunSegmentUserInputQuestionCount(
+  stepData: Record<string, unknown>,
+  questions: AgentUserInputQuestionPrompt[],
+): number {
+  if (Number.isFinite(Number(stepData.question_count))) {
+    return Math.max(0, Math.floor(Number(stepData.question_count)));
+  }
+  return questions.length;
+}
 
 // 描述：
 //
@@ -658,6 +771,22 @@ export function resolveRunSegmentRichMeta(segment: SessionRunSegmentStep): Sessi
     };
   }
 
+  if (stepType === "terminal") {
+    const terminalCommand = String(
+      (typeof stepData.terminal_command === "string"
+        ? stepData.terminal_command
+        : "") || "",
+    ).trim();
+    if (!terminalCommand) {
+      return null;
+    }
+    return {
+      type: "terminal",
+      label: translateDesktopText("已执行命令"),
+      suffix: translateDesktopText(" {{command}}", { command: terminalCommand }),
+    };
+  }
+
   if (stepType === "approval_decision" || RUN_SEGMENT_APPROVAL_KEYWORDS.some((keyword) => normalizedStepText.includes(keyword))) {
     const approvalDecision = typeof stepData.approval_decision === "string"
       ? String(stepData.approval_decision || "").trim()
@@ -745,6 +874,31 @@ export function resolveRunSegmentRichMeta(segment: SessionRunSegmentStep): Sessi
     }
   }
 
+  if (stepType === "user_input_request") {
+    const questions = resolveRunSegmentUserInputQuestions(stepData.questions);
+    const answers = resolveRunSegmentUserInputAnswers(stepData.answers);
+    const questionCount = resolveRunSegmentUserInputQuestionCount(stepData, questions);
+    const resolution = typeof stepData.resolution === "string"
+      ? String(stepData.resolution || "").trim()
+      : "";
+    return {
+      type: "user_input",
+      label: segment.status === "running"
+        ? translateDesktopText("正在询问")
+        : translateDesktopText("已询问"),
+      suffix: resolution === "ignored"
+        ? translateDesktopText(" {{count}} 个问题（已忽略）", { count: questionCount })
+        : translateDesktopText(" {{count}} 个问题", { count: questionCount }),
+      tone: segment.status === "running"
+        ? "pending"
+        : resolution === "ignored"
+          ? "ignored"
+          : "answered",
+      questions,
+      answers,
+    };
+  }
+
   return null;
 }
 
@@ -772,83 +926,433 @@ function handleFilePathKeyDown(
 
 // 描述：
 //
-//   - 渲染步骤文本主体：普通步骤保持原样，编辑/浏览/授权步骤采用结构化高亮样式。
+//   - 渲染运行日志中的“正文”内容。
+//   - 这类内容与普通助手消息正文属于同一展示类型，统一走 ChatMarkdown，避免同一段文本在 transcript 与日志中出现两套排版口径。
 //
 // Params:
 //
-//   - segment: 当前分组步骤。
+//   - text: 步骤正文。
+//   - runningClass: 运行中动画类名。
+//
+// Returns:
+//
+//   - 运行日志正文节点。
+function renderRunSegmentBodyContent(text: string, runningClass: string): JSX.Element {
+  return (
+    <ChatMarkdown
+      className={`desk-run-step-body ${runningClass}`.trim()}
+      content={text}
+    />
+  );
+}
+
+// 描述：
+//
+//   - 定义结构化运行片段的统一展示模型，避免不同结构化类型继续各自拼装 DOM。
+//
+interface StructuredRunSegmentViewModel {
+  title: string;
+  titleTone: "default" | "muted" | "rejected";
+  content: JSX.Element;
+  detail: JSX.Element | null;
+}
+
+// 描述：
+//
+//   - 定义统一结构化运行片段组件入参。
+interface StructuredRunSegmentShellProps {
+  title: string;
+  titleTone: StructuredRunSegmentViewModel["titleTone"];
+  content: JSX.Element;
+  detail: JSX.Element | null;
+  detailExpanded: boolean;
+  onToggleDetail: () => void;
+}
+
+// 描述：
+//
+//   - 解析结构化标题的展示类名，统一处理拒绝态与弱化态文本颜色。
+//
+// Params:
+//
+//   - titleTone: 标题视觉语义。
+//
+// Returns:
+//
+//   - 对应的标题类名。
+function resolveStructuredRunSegmentTitleClassName(
+  titleTone: StructuredRunSegmentViewModel["titleTone"],
+): string {
+  if (titleTone === "rejected") {
+    return "desk-run-segment-detail-title is-rejected";
+  }
+  if (titleTone === "muted") {
+    return "desk-run-segment-detail-title is-muted";
+  }
+  return "desk-run-segment-detail-title";
+}
+
+// 描述：
+//
+//   - 生成结构化运行片段中的文件路径链接，保持键盘与点击复制行为一致。
+//
+// Params:
+//
+//   - filePath: 文件路径。
 //   - onCopyFilePath: 文件复制回调。
 //
 // Returns:
 //
-//   - 可直接嵌入执行流步骤容器的节点。
-function renderRunSegmentStepContent(
-  segment: SessionRunSegmentStep,
-  onCopyFilePath: (filePath: string) => void | Promise<void>,
-  detailExpanded = false,
+//   - 可直接放入结构化摘要内容区的文件链接节点。
+function renderStructuredRunSegmentFileLink(
+  filePath: string,
+  onCopyFilePath: (path: string) => void | Promise<void>,
 ): JSX.Element {
-  const richMeta = resolveRunSegmentRichMeta(segment);
-  const runningClass = segment.status === "running" ? "desk-run-step-running" : "";
-  if (!richMeta) {
-    return (
-      <AriTypography
-        className={`desk-run-step ${runningClass}`}
-        variant="caption"
-        value={segment.text}
-      />
-    );
-  }
-  if (richMeta.type === "edit") {
-    if (detailExpanded) {
-      return (
-        <AriContainer className={`desk-run-step desk-run-step-rich ${runningClass}`} padding={0}>
-          <span className="desk-run-step-prefix">{translateDesktopText("已编辑的文件")}</span>
-          <span className="desk-run-step-count-add">+{richMeta.added}</span>
-          <span className="desk-run-step-count-remove">-{richMeta.removed}</span>
-        </AriContainer>
-      );
-    }
-    return (
-      <AriContainer className={`desk-run-step desk-run-step-rich ${runningClass}`} padding={0}>
-        <span className="desk-run-step-prefix">{richMeta.prefix}</span>
-        <span
-          className="desk-run-step-file-link"
+  return (
+    <span
+      className="desk-run-step-file-link"
+      title={filePath}
+      role="button"
+      tabIndex={0}
+      onClick={(event) => {
+        event.stopPropagation();
+        void onCopyFilePath(filePath);
+      }}
+      onKeyDown={(event) => {
+        handleFilePathKeyDown(event, filePath, onCopyFilePath);
+      }}
+    >
+      {filePath}
+    </span>
+  );
+}
+
+// 描述：
+//
+//   - 渲染结构化运行片段的统一壳层。
+//   - 所有“已执行命令 / 已浏览 / 已编辑 / 已批准 / 已询问”都必须经过该组件，保证 DOM 结构完全一致。
+//
+// Params:
+//
+//   - props: 结构化壳层入参。
+//
+// Returns:
+//
+//   - 结构化运行片段节点。
+function StructuredRunSegmentShell(props: StructuredRunSegmentShellProps): JSX.Element {
+  const {
+    title,
+    titleTone,
+    content,
+    detail,
+    detailExpanded,
+    onToggleDetail,
+  } = props;
+  const canExpand = Boolean(detail);
+  const titleClassName = resolveStructuredRunSegmentTitleClassName(titleTone);
+  const rowChildren = (
+    <>
+      <span className={titleClassName}>
+        {title}
+      </span>
+      <AriContainer className="desk-run-segment-detail-summary" padding={0}>
+        {content}
+      </AriContainer>
+      {canExpand ? (
+        <span className={`desk-run-segment-detail-arrow ${detailExpanded ? "open" : ""}`}>
+          ▸
+        </span>
+      ) : null}
+    </>
+  );
+  return (
+    <AriContainer className="desk-run-segment-detail-shell" padding={0}>
+      {canExpand ? (
+        <AriContainer
+          className="desk-run-segment-detail-row"
+          data-expandable="true"
           role="button"
           tabIndex={0}
-          onClick={(event) => {
-            event.stopPropagation();
-            void onCopyFilePath(richMeta.filePath);
+          padding={0}
+          onClick={() => {
+            onToggleDetail();
           }}
           onKeyDown={(event) => {
-            handleFilePathKeyDown(event, richMeta.filePath, onCopyFilePath);
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              onToggleDetail();
+            }
           }}
         >
-          {richMeta.filePath}
-        </span>
-        <span className="desk-run-step-count-add">+{richMeta.added}</span>
-        <span className="desk-run-step-count-remove">-{richMeta.removed}</span>
-      </AriContainer>
-    );
-  }
-  if (richMeta.type === "browse") {
-    return (
-      <AriContainer className={`desk-run-step desk-run-step-rich ${runningClass}`} padding={0}>
-        <span className="desk-run-step-prefix">{richMeta.prefix}</span>
-        <span>{richMeta.suffix}</span>
-      </AriContainer>
-    );
-  }
-  return (
-    <AriContainer className={`desk-run-step desk-run-step-rich ${runningClass}`} padding={0}>
-      {richMeta.leading ? <span>{richMeta.leading}</span> : null}
-      <span
-        className={`desk-run-step-approval-label ${richMeta.tone === "rejected" ? "desk-run-step-approval-label-rejected" : ""}`}
-      >
-        {richMeta.label}
-      </span>
-      <span>{richMeta.suffix}</span>
+          {rowChildren}
+        </AriContainer>
+      ) : (
+        <AriContainer className="desk-run-segment-detail-row" data-expandable="false" padding={0}>
+          {rowChildren}
+        </AriContainer>
+      )}
+      {canExpand && detailExpanded ? (
+        <AriContainer className="desk-run-segment-detail-panel" padding={0}>
+          {detail}
+        </AriContainer>
+      ) : null}
     </AriContainer>
   );
+}
+
+// 描述：
+//
+//   - 将结构化运行片段元信息统一转换为标题、摘要内容和展开详情。
+//   - 结构化类型只在这里做一次映射，避免 JSX 层继续散落 terminal / approval / browse 等特殊分支。
+//
+// Params:
+//
+//   - segment: 当前分组步骤。
+//   - richMeta: 已解析的结构化元信息。
+//   - onCopyFilePath: 文件复制回调。
+//
+// Returns:
+//
+//   - 统一结构化展示模型。
+function resolveStructuredRunSegmentViewModel(
+  segment: SessionRunSegmentStep,
+  richMeta: SessionRunSegmentRichMeta,
+  onCopyFilePath: (filePath: string) => void | Promise<void>,
+): StructuredRunSegmentViewModel {
+  const segmentData = segment.data && typeof segment.data === "object"
+    ? (segment.data as Record<string, unknown>)
+    : {};
+  const detailPayload = String(segment.detail || "").trim();
+  const editDiffPayload = typeof segmentData.edit_diff_preview === "string"
+    ? String(segmentData.edit_diff_preview || "").trim()
+    : "";
+  const editContentPayload = typeof segmentData.edit_content_preview === "string"
+    ? String(segmentData.edit_content_preview || "").trim()
+    : "";
+  const effectiveEditDetailPayload = editDiffPayload || editContentPayload || detailPayload;
+  const detailCodeLanguage = resolveRunSegmentDetailLanguage(detailPayload, segment.text);
+  const diffDetailPayload = richMeta.type === "edit"
+    ? (editDiffPayload || detailPayload)
+    : detailPayload;
+  const shouldUseDiffCode = resolveRunSegmentDetailLanguage(diffDetailPayload, segment.text) === "diff"
+    && diffDetailPayload.length > 0;
+  const detailCodePreview = shouldUseDiffCode
+    ? resolveRunSegmentDiffPreview(diffDetailPayload)
+    : {
+      value: richMeta.type === "edit"
+        ? effectiveEditDetailPayload
+        : detailPayload,
+      diffLines: undefined,
+      customLineNumbers: undefined,
+    };
+  const detailCodeValue = detailCodePreview.value;
+  const detailCodePath = richMeta.type === "edit" ? richMeta.filePath : undefined;
+  const resolvedDetailCodeLanguage = detailCodePath
+    ? resolveRunSegmentCodeLanguageByPath(detailCodePath)
+    : (shouldUseDiffCode ? resolveRunSegmentDetailLanguage(detailCodeValue, segment.text) : detailCodeLanguage);
+  const detailCodeDiffLines = shouldUseDiffCode
+    ? detailCodePreview.diffLines
+    : undefined;
+  const detailCodeCustomLineNumbers = shouldUseDiffCode
+    ? detailCodePreview.customLineNumbers
+    : undefined;
+  const detailCodeAddedCount = richMeta.type === "edit" ? richMeta.added : undefined;
+  const detailCodeRemovedCount = richMeta.type === "edit" ? richMeta.removed : undefined;
+  const segmentStepType = typeof segmentData.__step_type === "string"
+    ? String(segmentData.__step_type || "").trim()
+    : "";
+  const shouldRenderPlainBrowseDetail = segmentStepType === "browse";
+
+  if (richMeta.type === "user_input") {
+    const userInputQuestions = richMeta.questions;
+    const userInputAnswers = richMeta.answers;
+    const userInputAnswerMap = new Map(userInputAnswers.map((item) => [item.question_id, item]));
+    const detail = (userInputQuestions.length > 0 || userInputAnswers.length > 0) ? (
+      <AriContainer className="desk-run-segment-detail desk-run-segment-detail-user-input" padding={0}>
+        {richMeta.tone === "ignored" ? (
+          <AriTypography
+            className="desk-run-user-input-detail-status"
+            variant="caption"
+            value={translateDesktopText("本次提问已忽略，Agent 会按 ignored 结果继续处理。")}
+          />
+        ) : null}
+        <AriContainer className="desk-run-user-input-detail-list" padding={0}>
+          {userInputQuestions.map((question, index) => {
+            const answer = userInputAnswerMap.get(question.id);
+            const answerValue = !answer
+              ? (richMeta.tone === "pending"
+                ? translateDesktopText("等待回答")
+                : translateDesktopText("无回答"))
+              : answer.answer_type === "custom"
+                ? translateDesktopText("自定义：{{value}}", { value: answer.value })
+                : translateDesktopText("已选：{{label}}", {
+                  label: answer.option_label || answer.value,
+                });
+            return (
+              <AriContainer
+                key={`${segment.key}-user-input-${question.id}`}
+                className="desk-run-user-input-detail-item"
+                padding={0}
+              >
+                <AriTypography
+                  className="desk-run-user-input-detail-header"
+                  variant="caption"
+                  value={translateDesktopText("问题 {{index}}", { index: index + 1 })}
+                />
+                <AriTypography
+                  className="desk-run-user-input-detail-question"
+                  variant="body"
+                  value={question.question}
+                />
+                <AriTypography
+                  className="desk-run-user-input-detail-answer"
+                  variant="caption"
+                  value={translateDesktopText("回答：{{answer}}", { answer: answerValue })}
+                />
+              </AriContainer>
+            );
+          })}
+        </AriContainer>
+      </AriContainer>
+    ) : null;
+    return {
+      title: richMeta.label,
+      titleTone: richMeta.tone === "ignored" ? "muted" : "default",
+      content: (
+        <span className="desk-run-segment-detail-summary-text">
+          {richMeta.suffix}
+        </span>
+      ),
+      detail,
+    };
+  }
+
+  if (richMeta.type === "edit") {
+    return {
+      title: richMeta.prefix,
+      titleTone: "default",
+      content: (
+        <>
+          {renderStructuredRunSegmentFileLink(richMeta.filePath, onCopyFilePath)}
+          <span className="desk-run-step-count-add">+{richMeta.added}</span>
+          <span className="desk-run-step-count-remove">-{richMeta.removed}</span>
+        </>
+      ),
+      detail: detailCodeValue ? (
+        <AriContainer className="desk-run-segment-detail desk-run-segment-detail-code" padding={0}>
+          <AriCode
+            language={resolvedDetailCodeLanguage}
+            path={detailCodePath}
+            addedCount={detailCodeAddedCount}
+            removedCount={detailCodeRemovedCount}
+            diffLines={detailCodeDiffLines}
+            customLineNumbers={detailCodeCustomLineNumbers}
+            value={detailCodeValue}
+            editable={false}
+            showToolbar={false}
+            showCopyButton
+            showLanguageTag={false}
+            showLineNumbers={resolvedDetailCodeLanguage !== "text" || Boolean(detailCodeCustomLineNumbers)}
+            fontSize="sm"
+            height={resolveRunSegmentCodeHeight(detailCodeValue)}
+          />
+        </AriContainer>
+      ) : null,
+    };
+  }
+
+  if (richMeta.type === "browse") {
+    return {
+      title: richMeta.prefix,
+      titleTone: "default",
+      content: (
+        <span className="desk-run-segment-detail-summary-text">
+          {richMeta.suffix}
+        </span>
+      ),
+      detail: shouldRenderPlainBrowseDetail && detailPayload ? (
+        <AriContainer className="desk-run-segment-detail desk-run-segment-detail-plain" padding={0}>
+          {detailPayload.split("\n").map((line, index) => (
+            <AriTypography
+              key={`${segment.key}-detail-line-${index}`}
+              className="desk-run-step"
+              variant="caption"
+              value={line}
+            />
+          ))}
+        </AriContainer>
+      ) : null,
+    };
+  }
+
+  if (richMeta.type === "terminal") {
+    return {
+      title: richMeta.label,
+      titleTone: "default",
+      content: (
+        <span className="desk-run-segment-detail-summary-text">
+          {richMeta.suffix}
+        </span>
+      ),
+      detail: detailCodeValue ? (
+        <AriContainer className="desk-run-segment-detail desk-run-segment-detail-code" padding={0}>
+          <AriCode
+            language={resolvedDetailCodeLanguage}
+            path={detailCodePath}
+            addedCount={detailCodeAddedCount}
+            removedCount={detailCodeRemovedCount}
+            diffLines={detailCodeDiffLines}
+            customLineNumbers={detailCodeCustomLineNumbers}
+            value={detailCodeValue}
+            editable={false}
+            showToolbar={false}
+            showCopyButton
+            showLanguageTag={false}
+            showLineNumbers={resolvedDetailCodeLanguage !== "text" || Boolean(detailCodeCustomLineNumbers)}
+            fontSize="sm"
+            height={resolveRunSegmentCodeHeight(detailCodeValue)}
+          />
+        </AriContainer>
+      ) : null,
+    };
+  }
+
+  return {
+    title: richMeta.label,
+    titleTone: richMeta.tone === "rejected"
+      ? "rejected"
+      : richMeta.tone === "neutral"
+        ? "muted"
+        : "default",
+    content: (
+      <>
+        {richMeta.leading ? (
+          <span className="desk-run-segment-detail-summary-text">{richMeta.leading}</span>
+        ) : null}
+        <span className="desk-run-segment-detail-summary-text">{richMeta.suffix}</span>
+      </>
+    ),
+    detail: detailCodeValue ? (
+      <AriContainer className="desk-run-segment-detail desk-run-segment-detail-code" padding={0}>
+        <AriCode
+          language={resolvedDetailCodeLanguage}
+          path={detailCodePath}
+          addedCount={detailCodeAddedCount}
+          removedCount={detailCodeRemovedCount}
+          diffLines={detailCodeDiffLines}
+          customLineNumbers={detailCodeCustomLineNumbers}
+          value={detailCodeValue}
+          editable={false}
+          showToolbar={false}
+          showCopyButton
+          showLanguageTag={false}
+          showLineNumbers={resolvedDetailCodeLanguage !== "text" || Boolean(detailCodeCustomLineNumbers)}
+          fontSize="sm"
+          height={resolveRunSegmentCodeHeight(detailCodeValue)}
+        />
+      </AriContainer>
+    ) : null,
+  };
 }
 
 // 描述：
@@ -870,110 +1374,26 @@ export function SessionRunSegmentItem(props: SessionRunSegmentItemProps): JSX.El
     onCopyFilePath,
   } = props;
   const richMeta = resolveRunSegmentRichMeta(segment);
-  const segmentData = segment.data && typeof segment.data === "object"
-    ? (segment.data as Record<string, unknown>)
-    : {};
-  const detailPayload = String(segment.detail || "").trim();
-  const editDiffPayload = typeof segmentData.edit_diff_preview === "string"
-    ? String(segmentData.edit_diff_preview || "").trim()
-    : "";
-  const editContentPayload = typeof segmentData.edit_content_preview === "string"
-    ? String(segmentData.edit_content_preview || "").trim()
-    : "";
-  const effectiveEditDetailPayload = editDiffPayload || editContentPayload || detailPayload;
-  const detailCodeLanguage = resolveRunSegmentDetailLanguage(detailPayload, segment.text);
-  const diffDetailPayload = richMeta?.type === "edit"
-    ? (editDiffPayload || detailPayload)
-    : detailPayload;
-  const shouldUseDiffCode = resolveRunSegmentDetailLanguage(diffDetailPayload, segment.text) === "diff"
-    && diffDetailPayload.length > 0;
-  const detailCodePreview = shouldUseDiffCode
-    ? resolveRunSegmentDiffPreview(diffDetailPayload)
-    : {
-      value: richMeta?.type === "edit"
-        ? effectiveEditDetailPayload
-        : detailPayload,
-      diffLines: undefined,
-      customLineNumbers: undefined,
-    };
-  const detailCodeValue = detailCodePreview.value;
-  const detailCodePath = richMeta?.type === "edit" ? richMeta.filePath : undefined;
-  const resolvedDetailCodeLanguage = detailCodePath
-    ? resolveRunSegmentCodeLanguageByPath(detailCodePath)
-    : (shouldUseDiffCode ? resolveRunSegmentDetailLanguage(detailCodeValue, segment.text) : detailCodeLanguage);
-  const detailCodeDiffLines = shouldUseDiffCode
-    ? detailCodePreview.diffLines
-    : undefined;
-  const detailCodeCustomLineNumbers = shouldUseDiffCode
-    ? detailCodePreview.customLineNumbers
-    : undefined;
-  const detailCodeAddedCount = richMeta?.type === "edit" ? richMeta.added : undefined;
-  const detailCodeRemovedCount = richMeta?.type === "edit" ? richMeta.removed : undefined;
-  const segmentStepType = typeof segmentData.__step_type === "string"
-    ? String(segmentData.__step_type || "").trim()
-    : "";
-  const shouldRenderPlainBrowseDetail = segmentStepType === "browse";
-  const detailLines = shouldRenderPlainBrowseDetail
-    ? detailPayload.split("\n")
-    : [];
-  const canExpand = Boolean(detailPayload);
+  if (!richMeta) {
+    return (
+      <AriContainer className="desk-run-segment" padding={0}>
+        <AriContainer className="desk-run-segment-static-step" padding={0}>
+          {renderRunSegmentBodyContent(segment.text, segment.status === "running" ? "desk-run-step-running" : "")}
+        </AriContainer>
+      </AriContainer>
+    );
+  }
+  const structuredViewModel = resolveStructuredRunSegmentViewModel(segment, richMeta, onCopyFilePath);
   return (
     <AriContainer className="desk-run-segment" padding={0}>
-      {canExpand ? (
-        <button
-          type="button"
-          className="desk-run-segment-detail-toggle"
-          onClick={() => {
-            onToggleDetail();
-          }}
-        >
-          <AriContainer className="desk-run-segment-detail-toggle-content" padding={0}>
-            {renderRunSegmentStepContent(segment, onCopyFilePath, detailExpanded)}
-          </AriContainer>
-          <span className={`desk-run-segment-detail-arrow ${detailExpanded ? "open" : ""}`}>
-            ▸
-          </span>
-        </button>
-      ) : (
-        <AriContainer className="desk-run-segment-static-step" padding={0}>
-          {renderRunSegmentStepContent(segment, onCopyFilePath, false)}
-        </AriContainer>
-      )}
-      {canExpand && detailExpanded ? (
-        <AriContainer className="desk-run-segment-detail-panel" padding={0}>
-          {shouldRenderPlainBrowseDetail ? (
-            <AriContainer className="desk-run-segment-detail-plain" padding={0}>
-              {detailLines.map((line, index) => (
-                <AriTypography
-                  key={`${segment.key}-detail-line-${index}`}
-                  className="desk-run-step"
-                  variant="caption"
-                  value={line}
-                />
-              ))}
-            </AriContainer>
-          ) : (
-            <AriContainer className="desk-run-segment-detail-code" padding={0}>
-              <AriCode
-                language={resolvedDetailCodeLanguage}
-                path={detailCodePath}
-                addedCount={detailCodeAddedCount}
-                removedCount={detailCodeRemovedCount}
-                diffLines={detailCodeDiffLines}
-                customLineNumbers={detailCodeCustomLineNumbers}
-                value={detailCodeValue}
-                editable={false}
-                showToolbar={false}
-                showCopyButton
-                showLanguageTag={false}
-                showLineNumbers={resolvedDetailCodeLanguage !== "text" || Boolean(detailCodeCustomLineNumbers)}
-                fontSize="sm"
-                height={resolveRunSegmentCodeHeight(detailCodeValue)}
-              />
-            </AriContainer>
-          )}
-        </AriContainer>
-      ) : null}
+      <StructuredRunSegmentShell
+        title={structuredViewModel.title}
+        titleTone={structuredViewModel.titleTone}
+        content={structuredViewModel.content}
+        detail={structuredViewModel.detail}
+        detailExpanded={detailExpanded}
+        onToggleDetail={onToggleDetail}
+      />
     </AriContainer>
   );
 }

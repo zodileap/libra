@@ -119,18 +119,6 @@ export interface McpValidationResult {
 
 // 描述：
 //
-//   - Apifox 官方 MCP Runtime 状态结构，用于页面展示“是否已安装到应用私有目录”。
-interface ApifoxMcpRuntimeStatusResponse {
-  installed: boolean;
-  version: string;
-  npm_bin: string;
-  runtime_dir: string;
-  entry_path: string;
-  message: string;
-}
-
-// 描述：
-//
 //   - MCP 注册表上下文；workspaceRoot 存在时，后端将自动读取 workspace 级覆盖配置。
 export interface McpRegistryContext {
   workspaceRoot?: string;
@@ -423,48 +411,6 @@ function buildMcpContextPayload(context?: McpRegistryContext) {
 
 // 描述：
 //
-//   - 读取 Apifox Runtime 状态；调用失败时返回 null，避免阻塞 MCP 页面主流程。
-//
-// Returns:
-//
-//   - Runtime 状态；失败时返回 null。
-export async function readApifoxMcpRuntimeStatus(): Promise<ApifoxMcpRuntimeStatusResponse | null> {
-  if (!IS_BROWSER) {
-    return null;
-  }
-  try {
-    return await invoke<ApifoxMcpRuntimeStatusResponse>(COMMANDS.CHECK_APIFOX_MCP_RUNTIME_STATUS);
-  } catch (_err) {
-    return null;
-  }
-}
-
-// 描述：
-//
-//   - 安装 Apifox 官方 MCP Runtime；失败时抛出用户友好错误。
-export async function installApifoxMcpRuntime() {
-  try {
-    await invoke<ApifoxMcpRuntimeStatusResponse>(COMMANDS.INSTALL_APIFOX_MCP_RUNTIME);
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err || "").trim();
-    throw new Error(reason || translateDesktopText("安装 Apifox Runtime 失败，请检查 Node.js/npm 环境后重试。"));
-  }
-}
-
-// 描述：
-//
-//   - 卸载 Apifox 官方 MCP Runtime；失败时抛出用户友好错误。
-export async function uninstallApifoxMcpRuntime() {
-  try {
-    await invoke<ApifoxMcpRuntimeStatusResponse>(COMMANDS.UNINSTALL_APIFOX_MCP_RUNTIME);
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err || "").trim();
-    throw new Error(reason || translateDesktopText("卸载 Apifox Runtime 失败，请稍后重试。"));
-  }
-}
-
-// 描述：
-//
 //   - 获取 MCP 注册表总览。
 //
 // Returns:
@@ -527,7 +473,7 @@ export async function removeMcpRegistration(
 
 // 描述：
 //
-//   - 执行 MCP 基础校验；Apifox Runtime 走独立状态检测，其余 MCP 走通用校验命令。
+//   - 执行 MCP 基础校验；DCC Runtime 走桌面端状态检测，其余 MCP 走通用校验命令。
 //
 // Params:
 //
@@ -541,21 +487,6 @@ export async function validateMcpRegistration(
   context?: McpRegistryContext,
 ): Promise<McpValidationResult> {
   const payload = buildMcpRegistrationPayload(draft);
-  if (payload.runtimeKind === "apifox_runtime") {
-    const runtimeStatus = await readApifoxMcpRuntimeStatus();
-    if (runtimeStatus?.installed) {
-      return {
-        ok: true,
-        message: runtimeStatus.message,
-        resolvedPath: runtimeStatus.entry_path,
-      };
-    }
-    return {
-      ok: false,
-      message: runtimeStatus?.message || translateDesktopText("Apifox Runtime 未安装，请先安装 Runtime。"),
-      resolvedPath: runtimeStatus?.entry_path || "",
-    };
-  }
   if (payload.runtimeKind === "dcc_bridge") {
     if (!payload.software) {
       return {

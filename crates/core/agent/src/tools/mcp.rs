@@ -3,8 +3,8 @@ use super::{AgentTool, RiskLevel, ToolContext};
 use crate::AgentRegisteredMcp;
 use libra_mcp_common::ProtocolError;
 use reqwest::blocking::Client;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
-use serde_json::{json, Value};
+use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
+use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
@@ -284,6 +284,31 @@ fn execute_registered_mcp_tool(
             format!("不支持的 MCP 传输方式: {}", registration.transport),
         )),
     }
+}
+
+/// 描述：探测已注册 MCP 的工具列表，供桌面端在正式执行前完成真实握手校验与错误诊断。
+///
+/// Params:
+///
+///   - registration: 目标 MCP 注册项。
+///   - sandbox_root: 当前工作目录。
+///
+/// Returns:
+///
+///   - MCP `tools/list` 结果。
+pub fn probe_registered_mcp_tools(
+    registration: &AgentRegisteredMcp,
+    sandbox_root: &Path,
+) -> Result<Value, ProtocolError> {
+    execute_registered_mcp_tool(
+        registration,
+        &McpToolCallRequest {
+            server: registration.id.clone(),
+            tool: "list_tools".to_string(),
+            arguments: json!({}),
+        },
+        sandbox_root,
+    )
 }
 
 /// 描述：在已注册 MCP 列表中查找目标服务，支持按 `id` 或 `name` 匹配。
@@ -1141,7 +1166,12 @@ fn execute_stdio_mcp_worker(
             }
         }),
     )?;
-    let initialize_response = read_jsonrpc_response_for_id(&mut reader, MCP_INITIALIZE_REQUEST_ID)?;
+    let initialize_response = read_jsonrpc_response_for_id_with_diagnostic(
+        &mut reader,
+        MCP_INITIALIZE_REQUEST_ID,
+        "initialize",
+        &stderr_rx,
+    )?;
     extract_jsonrpc_result(&initialize_response, "initialize", &stderr_rx)?;
 
     write_jsonrpc_message(
@@ -1165,7 +1195,12 @@ fn execute_stdio_mcp_worker(
                 "params": {}
             }),
         )?;
-        let response = read_jsonrpc_response_for_id(&mut reader, MCP_TOOL_REQUEST_ID)?;
+        let response = read_jsonrpc_response_for_id_with_diagnostic(
+            &mut reader,
+            MCP_TOOL_REQUEST_ID,
+            "tools/list",
+            &stderr_rx,
+        )?;
         let result = extract_jsonrpc_result(&response, "tools/list", &stderr_rx)?;
         return Ok(json!({
             "server": registration.id,
@@ -1197,7 +1232,12 @@ fn execute_stdio_mcp_worker(
             }
         }),
     )?;
-    let response = read_jsonrpc_response_for_id(&mut reader, MCP_TOOL_REQUEST_ID)?;
+    let response = read_jsonrpc_response_for_id_with_diagnostic(
+        &mut reader,
+        MCP_TOOL_REQUEST_ID,
+        "tools/call",
+        &stderr_rx,
+    )?;
     let result = extract_jsonrpc_result(&response, "tools/call", &stderr_rx)?;
     Ok(json!({
         "server": registration.id,
@@ -1213,7 +1253,6 @@ fn execute_stdio_mcp_worker(
 ///
 ///   - stdin: MCP 子进程标准输入。
 ///   - payload: 待发送的 JSON-RPC 对象。
-///
 /// Returns:
 ///
 ///   - 0: 写入成功。
@@ -1275,6 +1314,28 @@ fn read_jsonrpc_response_for_id<R: Read>(
     }
 }
 
+/// 描述：读取目标 JSON-RPC 响应并在失败时附带 stderr 摘要，避免 stdio MCP 只暴露空泛的 EOF。
+///
+/// Params:
+///
+///   - reader: MCP stdout 读取器。
+///   - target_id: 期望响应的 JSON-RPC id。
+///   - method: 当前方法名。
+///   - stderr_rx: stderr 接收端。
+///
+/// Returns:
+///
+///   - 命中的 JSON-RPC 消息对象。
+fn read_jsonrpc_response_for_id_with_diagnostic<R: Read>(
+    reader: &mut BufReader<R>,
+    target_id: u64,
+    method: &str,
+    stderr_rx: &mpsc::Receiver<String>,
+) -> Result<Value, ProtocolError> {
+    read_jsonrpc_response_for_id(reader, target_id)
+        .map_err(|err| attach_protocol_error_diagnostic(err, method, stderr_rx))
+}
+
 /// 描述：从 stdio 流中读取单条 MCP JSON-RPC 消息，按 Content-Length 头做精准截断。
 ///
 /// Params:
@@ -1285,7 +1346,6 @@ fn read_jsonrpc_response_for_id<R: Read>(
 ///
 ///   - 反序列化后的 JSON 值。
 fn read_jsonrpc_message<R: Read>(reader: &mut BufReader<R>) -> Result<Value, ProtocolError> {
-    let mut content_length: Option<usize> = None;
     let mut line = String::new();
     loop {
         line.clear();
@@ -1303,31 +1363,62 @@ fn read_jsonrpc_message<R: Read>(reader: &mut BufReader<R>) -> Result<Value, Pro
         }
         let trimmed = line.trim();
         if trimmed.is_empty() {
-            break;
+            continue;
         }
+        if trimmed.starts_with('{') {
+            return serde_json::from_str::<Value>(trimmed).map_err(|err| {
+                ProtocolError::new(
+                    "core.agent.mcp.response_invalid",
+                    format!("解析行分隔 MCP 响应 JSON 失败: {}", err),
+                )
+            });
+        }
+        let mut content_length: Option<usize> = None;
         if let Some(value) = trimmed.strip_prefix("Content-Length:") {
             content_length = value.trim().parse::<usize>().ok();
         }
+        loop {
+            line.clear();
+            let read_bytes = reader.read_line(&mut line).map_err(|err| {
+                ProtocolError::new(
+                    "core.agent.mcp.read_failed",
+                    format!("读取 MCP 响应头失败: {}", err),
+                )
+            })?;
+            if read_bytes == 0 {
+                return Err(ProtocolError::new(
+                    "core.agent.mcp.eof",
+                    "MCP 进程提前结束，未返回完整响应。",
+                ));
+            }
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                break;
+            }
+            if let Some(value) = trimmed.strip_prefix("Content-Length:") {
+                content_length = value.trim().parse::<usize>().ok();
+            }
+        }
+        let body_length = content_length.ok_or_else(|| {
+            ProtocolError::new(
+                "core.agent.mcp.content_length_missing",
+                "MCP 响应缺少 Content-Length 头。",
+            )
+        })?;
+        let mut body = vec![0u8; body_length];
+        reader.read_exact(body.as_mut_slice()).map_err(|err| {
+            ProtocolError::new(
+                "core.agent.mcp.read_failed",
+                format!("读取 MCP 响应体失败: {}", err),
+            )
+        })?;
+        return serde_json::from_slice::<Value>(body.as_slice()).map_err(|err| {
+            ProtocolError::new(
+                "core.agent.mcp.response_invalid",
+                format!("解析 MCP 响应 JSON 失败: {}", err),
+            )
+        });
     }
-    let body_length = content_length.ok_or_else(|| {
-        ProtocolError::new(
-            "core.agent.mcp.content_length_missing",
-            "MCP 响应缺少 Content-Length 头。",
-        )
-    })?;
-    let mut body = vec![0u8; body_length];
-    reader.read_exact(body.as_mut_slice()).map_err(|err| {
-        ProtocolError::new(
-            "core.agent.mcp.read_failed",
-            format!("读取 MCP 响应体失败: {}", err),
-        )
-    })?;
-    serde_json::from_slice::<Value>(body.as_slice()).map_err(|err| {
-        ProtocolError::new(
-            "core.agent.mcp.response_invalid",
-            format!("解析 MCP 响应 JSON 失败: {}", err),
-        )
-    })
 }
 
 /// 描述：从 JSON-RPC 响应中提取 result 字段，并在 error 分支上拼接 stderr 摘要，方便快速定位问题。
@@ -1346,15 +1437,63 @@ fn extract_jsonrpc_result(
     method: &str,
     stderr_rx: &mpsc::Receiver<String>,
 ) -> Result<Value, ProtocolError> {
-    extract_jsonrpc_result_with_diagnostic(
-        response,
-        method,
-        stderr_rx
-            .try_recv()
-            .ok()
-            .map(|text| truncate_stderr(text.as_str()))
-            .filter(|text| !text.is_empty()),
-    )
+    extract_jsonrpc_result_with_diagnostic(response, method, take_stderr_diagnostic(stderr_rx))
+}
+
+/// 描述：为底层协议错误附带 stderr 摘要，减少 `spawn/eof/read_failed` 这类错误的排查成本。
+///
+/// Params:
+///
+///   - error: 原始协议错误。
+///   - method: 当前调用的方法名。
+///   - stderr_rx: stderr 接收端。
+///
+/// Returns:
+///
+///   - 合并诊断信息后的协议错误。
+fn attach_protocol_error_diagnostic(
+    error: ProtocolError,
+    method: &str,
+    stderr_rx: &mpsc::Receiver<String>,
+) -> ProtocolError {
+    let diagnostic = take_stderr_diagnostic(stderr_rx);
+    let Some(diagnostic_text) = diagnostic else {
+        return error;
+    };
+    let mut next = ProtocolError::new(
+        error.code.as_str(),
+        format!(
+            "MCP {} 交互失败: {}；诊断: {}",
+            method, error.message, diagnostic_text
+        ),
+    );
+    if let Some(suggestion) = error.suggestion {
+        next = next.with_suggestion(suggestion.as_str());
+    }
+    next
+}
+
+/// 描述：尝试读取一次 stderr 摘要；若子进程刚退出，会短暂等待诊断线程把 stderr 送入通道，避免偶发丢失关键信息。
+///
+/// Params:
+///
+///   - stderr_rx: stderr 接收端。
+///
+/// Returns:
+///
+///   - 命中时返回截断后的 stderr 摘要。
+fn take_stderr_diagnostic(stderr_rx: &mpsc::Receiver<String>) -> Option<String> {
+    let raw_stderr = match stderr_rx.try_recv() {
+        Ok(text) => Some(text),
+        Err(mpsc::TryRecvError::Empty) => stderr_rx.recv_timeout(Duration::from_millis(80)).ok(),
+        Err(mpsc::TryRecvError::Disconnected) => None,
+    }?;
+    let normalized = truncate_stderr(raw_stderr.as_str());
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
 }
 
 /// 描述：从 JSON-RPC 响应中提取 result 字段，并允许附加诊断信息，供 stdio/HTTP 两种传输复用。
@@ -1422,14 +1561,15 @@ fn truncate_stderr(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_cross_dcc_transfer_plan, build_http_headers, build_http_mcp_payload,
-        parse_dcc_tool_request, parse_http_mcp_response, parse_mcp_tool_request,
-        read_jsonrpc_message, select_dcc_provider, select_registered_mcp, AgentRegisteredMcp,
-        DccToolCallRequest, McpToolCallRequest,
+        AgentRegisteredMcp, DccToolCallRequest, McpToolCallRequest, build_cross_dcc_transfer_plan,
+        build_http_headers, build_http_mcp_payload, parse_dcc_tool_request,
+        parse_http_mcp_response, parse_mcp_tool_request, read_jsonrpc_message, select_dcc_provider,
+        select_registered_mcp,
     };
     use serde_json::json;
     use std::collections::HashMap;
     use std::io::{BufReader, Cursor};
+    use std::path::Path;
 
     /// 描述：构建最小 MCP 注册项样例，避免每个测试重复手写字段。
     fn build_registered_mcp(id: &str, name: &str) -> AgentRegisteredMcp {
@@ -1507,15 +1647,33 @@ mod tests {
     #[test]
     fn should_match_registered_mcp_by_id_or_name() {
         let items = vec![
-            build_registered_mcp("apifox-official", "Apifox 官方 MCP"),
+            build_registered_mcp("openapi-docs", "OpenAPI Docs"),
             build_registered_mcp("design-tools", "Design Tools"),
         ];
         let by_id =
-            select_registered_mcp(items.as_slice(), "apifox-official").expect("match by id");
+            select_registered_mcp(items.as_slice(), "openapi-docs").expect("match by id");
         let by_name =
             select_registered_mcp(items.as_slice(), "Design Tools").expect("match by name");
-        assert_eq!(by_id.id, "apifox-official");
+        assert_eq!(by_id.id, "openapi-docs");
         assert_eq!(by_name.id, "design-tools");
+    }
+
+    /// 描述：验证 stdio MCP 在子进程提前退出时会把 stderr 摘要拼进错误消息，避免只剩空泛 EOF。
+    #[test]
+    fn should_attach_stderr_when_stdio_probe_hits_eof() {
+        let registration = AgentRegisteredMcp {
+            command: "/bin/sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "echo stdio mcp exploded >&2; exit 1".to_string(),
+            ],
+            ..build_registered_mcp("broken-stdio", "Broken Stdio MCP")
+        };
+
+        let error = super::probe_registered_mcp_tools(&registration, Path::new("."))
+            .expect_err("stdio probe should fail");
+
+        assert!(error.message.contains("stdio mcp exploded"));
     }
 
     /// 描述：验证 DCC provider 选择会在同一软件下按 priority 选中最佳 MCP，避免 provider 歧义导致结果不稳定。
@@ -1618,6 +1776,21 @@ mod tests {
             Some("2.0")
         );
         assert_eq!(message.get("id").and_then(|value| value.as_u64()), Some(1));
+    }
+
+    /// 描述：验证 MCP stdio 响应解析兼容按行输出 JSON 的实现，避免非标准 server 握手时被误判为无响应。
+    #[test]
+    fn should_parse_line_delimited_jsonrpc_message() {
+        let source = br#"{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}
+"#
+        .to_vec();
+        let mut reader = BufReader::new(Cursor::new(source));
+        let message = read_jsonrpc_message(&mut reader).expect("parse line message");
+        assert_eq!(
+            message.get("jsonrpc").and_then(|value| value.as_str()),
+            Some("2.0")
+        );
+        assert_eq!(message.get("id").and_then(|value| value.as_u64()), Some(2));
     }
 
     /// 描述：验证 HTTP MCP 请求头会透传自定义 Header，并补齐 JSON Content-Type。

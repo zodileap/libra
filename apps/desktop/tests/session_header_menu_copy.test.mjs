@@ -51,10 +51,12 @@ test("TestSessionCopyShouldBeMovedToDevDebugPanel", () => {
   assert.match(sessionSource, /## 四、运行片段/);
   assert.match(sessionSource, /## 五、执行过程/);
   assert.match(sessionSource, /### 消息 \{\{index\}\} · \{\{role\}\}/);
-  assert.match(sessionSource, /#### 原始消息/);
+  assert.match(sessionSource, /if \(item\.role === "user"\) \{/);
+  assert.match(sessionSource, /t\("#### 原始消息"\)/);
   assert.match(sessionSource, /#### AI 原始收发/);
   assert.match(sessionSource, /##### 请求 \{\{index\}\}/);
   assert.match(sessionSource, /##### 响应 \{\{index\}\}/);
+  assert.match(sessionSource, /t\("- （未记录 AI 原始收发）"\)/);
   assert.doesNotMatch(sessionSource, /### 4\.1 全链路调试/);
   assert.doesNotMatch(sessionSource, /### 4\.2 Trace 记录/);
   assert.doesNotMatch(sessionSource, /###### 请求（Prompt，原始）/);
@@ -88,6 +90,9 @@ test("TestSessionCopyShouldBeMovedToDevDebugPanel", () => {
   assert.match(sessionSource, /buildSessionAiRawExchangeText\(\s*assistantMessageId,/);
   assert.match(sessionSource, /setSessionAiRawByMessage\(\(prev\) => \(\{/);
   assert.match(sessionSource, /buildSessionAiRawByMessageItem\(/);
+  assert.match(sessionSource, /runMeta\.summarySource === "ai" && String\(runMeta\.summary \|\| ""\)\.trim\(\)/);
+  assert.match(sessionSource, /visible_summary: visibleSummary,/);
+  assert.match(sessionSource, /data: step\.data,/);
   assert.match(sessionSource, /upsertSessionDebugArtifact\(\{/);
   assert.match(sessionSource, /getSessionDebugArtifact\(normalizedAgentKey, sessionId\)/);
   assert.match(sessionSource, /setSessionCallRecords\(Array\.isArray\(debugArtifact\.callRecords\) \? debugArtifact\.callRecords : \[\]\);/);
@@ -119,8 +124,14 @@ test("TestSessionCopyShouldBeMovedToDevDebugPanel", () => {
   assert.match(sharedDataSource, /export interface SessionAiRawExchangeSnapshot/);
   assert.match(sharedDataSource, /export interface SessionAiRawByMessageSnapshot/);
   assert.match(sharedDataSource, /export interface SessionCallRecordSnapshot/);
+  assert.match(sharedDataSource, /summarySource\?: "ai" \| "system" \| "failure";/);
   assert.match(sharedDataSource, /aiRawByMessage\?: Record<string, SessionAiRawByMessageSnapshot>;/);
   assert.match(sharedDataSource, /callRecords\?: SessionCallRecordSnapshot\[];/);
+  assert.match(sharedDataSource, /if \(typeof data\.request_id === "string"\) \{\s*next\.request_id = truncateRunStateText\(data\.request_id, 120\);\s*\}/s);
+  assert.match(sharedDataSource, /if \(typeof data\.resolution === "string"\) \{\s*next\.resolution = truncateRunStateText\(data\.resolution, 32\);\s*\}/s);
+  assert.match(sharedDataSource, /if \(Number\.isFinite\(Number\(data\.question_count\)\)\) \{\s*next\.question_count = Math\.max\(0, Math\.floor\(Number\(data\.question_count\)\)\);\s*\}/s);
+  assert.match(sharedDataSource, /const questions = sanitizeRunSegmentUserInputQuestions\(data\.questions\);/);
+  assert.match(sharedDataSource, /const answers = sanitizeRunSegmentUserInputAnswers\(data\.answers\);/);
   assert.match(sharedDataSource, /const normalizedExchanges: SessionAiRawExchangeSnapshot\[] = exchanges\.length > 0/);
   assert.match(sharedDataSource, /callRecords = Array\.isArray\(item\.callRecords\)/);
   assert.match(sharedDataSource, /callRecords: \(input\.callRecords \|\| \[\]\)/);

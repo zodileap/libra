@@ -9,6 +9,7 @@ fn build_base_request() -> AgentRunRequest {
         provider: "unknown".to_string(),
         provider_api_key: None,
         provider_model: None,
+        provider_mode: None,
         prompt: "hello".to_string(),
         project_name: None,
         model_export_enabled: false,
@@ -79,6 +80,60 @@ fn should_remove_pending_approval_request() {
     let _signal = registry.create_request("approval-test-1");
     assert!(registry.remove_request("approval-test-1"));
     assert!(!registry.remove_request("approval-test-1"));
+}
+
+/// 描述：验证用户提问请求可被正常提交 answered 结果，避免执行流等待后无法恢复。
+#[test]
+fn should_submit_answered_user_input_resolution() {
+    let registry = UserInputRegistry {
+        pending: std::sync::Mutex::new(std::collections::HashMap::new()),
+    };
+    let signal = registry.create_request("user-input-test-1");
+    let ok = registry.submit_resolution(
+        "user-input-test-1",
+        UserInputResolution {
+            resolution: "answered".to_string(),
+            answers: vec![UserInputAnswer {
+                question_id: "q1".to_string(),
+                answer_type: "option".to_string(),
+                option_index: Some(0),
+                option_label: Some("需要复制按钮 (Recommended)".to_string()),
+                value: "需要复制按钮 (Recommended)".to_string(),
+            }],
+        },
+    );
+    assert!(ok);
+    let guard = signal
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let resolution = guard.clone().expect("resolution should be present");
+    assert_eq!(resolution.resolution, "answered");
+    assert_eq!(resolution.answers.len(), 1);
+    assert_eq!(resolution.answers[0].question_id, "q1");
+}
+
+/// 描述：验证用户提问请求支持 ignored 结果，并且重复提交会被拒绝。
+#[test]
+fn should_ignore_user_input_only_once() {
+    let registry = UserInputRegistry {
+        pending: std::sync::Mutex::new(std::collections::HashMap::new()),
+    };
+    let _signal = registry.create_request("user-input-test-2");
+    assert!(registry.submit_resolution(
+        "user-input-test-2",
+        UserInputResolution {
+            resolution: "ignored".to_string(),
+            answers: Vec::new(),
+        },
+    ));
+    assert!(!registry.submit_resolution(
+        "user-input-test-2",
+        UserInputResolution {
+            resolution: "ignored".to_string(),
+            answers: Vec::new(),
+        },
+    ));
+    assert!(!registry.remove_request("user-input-test-2"));
 }
 
 /// 描述：验证旧 key 仍可进入统一执行链，并返回与未知 provider 一致的错误。

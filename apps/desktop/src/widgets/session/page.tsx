@@ -74,6 +74,8 @@ import type {
   AgentAssetRecord,
   AgentEventRecord,
   AgentStepRecord,
+  AgentUserInputAnswer as SharedAgentUserInputAnswer,
+  AgentUserInputQuestionPrompt as SharedAgentUserInputQuestionPrompt,
   AiKeyItem,
   LoginUser,
   DccMcpCapabilities,
@@ -199,6 +201,18 @@ interface AgentRunResponse {
   events: AgentEventRecord[];
   assets: AgentAssetRecord[];
   ui_hint?: ProtocolUiHint;
+}
+
+// 描述：
+//
+//   - 定义纯模型总结调用的返回结构；仅返回最终文本与 token 使用量，不附带工具执行轨迹。
+interface AgentSummaryResponse {
+  content: string;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
 }
 
 // 描述:
@@ -351,6 +365,22 @@ interface AgentRequireApprovalEventData {
   tool_name?: string;
 }
 
+// 描述：
+//
+//   - 定义文本流用户提问事件 data 的最小字段结构，统一承接 request_user_input 的请求体。
+interface AgentRequestUserInputEventData {
+  request_id?: string;
+  questions?: SharedAgentUserInputQuestionPrompt[];
+}
+
+// 描述：
+//
+//   - 定义单题草稿状态；同一题只能二选一：预设选项或自由填写。
+interface AgentUserInputDraftAnswer {
+  selectedOptionIndex?: number;
+  customValue: string;
+}
+
 const APPROVAL_TOOL_ARGS_PREVIEW_MAX_CHARS = 2000;
 const PLANNING_META_PREFIX = "__libra_planning__:";
 const INITIAL_THINKING_SEGMENT_ROLE = "initial_thinking";
@@ -437,7 +467,7 @@ function resolveWorkflowStageRequirementText(item: AgentWorkflowSkillPlanItem | 
   return [
     item.nodeTitle,
     item.skillId,
-    item.skillName,
+    item.skillTitle,
     item.skillDescription,
     item.instruction,
     item.skillMarkdownBody,
@@ -755,7 +785,7 @@ function sanitizeWorkflowStageDisplayMessage(
 
 // 描述：
 //
-//   - 从当前运行轨迹与最后阶段摘要中汇总出最终可见的工作流总结正文，避免只展示“执行过程已完成”这类占位句。
+//   - 从当前运行轨迹与最后阶段摘要中提取按阶段排序的摘要列表，供总结 Prompt 与内部诊断复用。
 //
 // Params:
 //
@@ -766,13 +796,13 @@ function sanitizeWorkflowStageDisplayMessage(
 //
 // Returns:
 //
-//   - 适合显示在根消息顶部的最终总结正文。
-function buildWorkflowCompletionSummary(
+//   - 按阶段排序的摘要项列表。
+function collectWorkflowStageSummaryItems(
   runMeta: AssistantRunMeta | undefined,
   finalStageIndex: number,
   finalStageTitle: string,
   finalStageSummary: string,
-): string {
+): WorkflowStageSummaryItem[] {
   const stageSummaryMap = new Map<number, WorkflowStageSummaryItem>();
   (runMeta?.segments || []).forEach((segment) => {
     const stepType = segment.data && typeof segment.data.__step_type === "string"
@@ -808,15 +838,87 @@ function buildWorkflowCompletionSummary(
     });
   }
 
-  const orderedStageSummaries = Array.from(stageSummaryMap.values())
+  return Array.from(stageSummaryMap.values())
     .sort((left, right) => left.index - right.index);
+}
+
+// 描述：
+//
+//   - 将工作流阶段摘要列表拼接为诊断文本，供内部总结 Prompt 使用；不直接作为最终前端摘要展示。
+//
+// Params:
+//
+//   - runMeta: 当前运行消息元数据。
+//   - finalStageIndex: 最后阶段索引。
+//   - finalStageTitle: 最后阶段标题。
+//   - finalStageSummary: 最后阶段摘要。
+//
+// Returns:
+//
+//   - 按阶段组织的摘要文本。
+function buildWorkflowCompletionSummary(
+  runMeta: AssistantRunMeta | undefined,
+  finalStageIndex: number,
+  finalStageTitle: string,
+  finalStageSummary: string,
+): string {
+  const orderedStageSummaries = collectWorkflowStageSummaryItems(
+    runMeta,
+    finalStageIndex,
+    finalStageTitle,
+    finalStageSummary,
+  );
   if (orderedStageSummaries.length === 0) {
+    const normalizedFinalSummary = resolveWorkflowStageSummaryPreview(finalStageSummary);
     return normalizedFinalSummary || translateDesktopText("执行过程已完成。");
   }
   return [
     translateDesktopText("本次执行总结："),
     ...orderedStageSummaries.map((item) => `${item.index + 1}. ${item.title}：${item.summary}`),
   ].join("\n");
+}
+
+// 描述：
+//
+//   - 构建工作流最终执行总结 Prompt，只把真实阶段摘要与验证信息交给模型归纳，避免把前端拼接文本直接冒充最终结论。
+//
+// Params:
+//
+//   - workflowName: 工作流名称。
+//   - stageSummaryDigest: 阶段摘要文本。
+//   - actionText: 本轮动作摘要。
+//   - exportedFile: 导出文件路径。
+//
+// Returns:
+//
+//   - 发给纯模型总结接口的 Prompt。
+function buildWorkflowExecutionSummaryPrompt(
+  workflowName: string,
+  stageSummaryDigest: string,
+  actionText: string,
+  exportedFile?: string,
+): string {
+  const normalizedWorkflowName = String(workflowName || "").trim() || "未命名工作流";
+  const normalizedStageSummaryDigest = String(stageSummaryDigest || "").trim();
+  const normalizedActionText = String(actionText || "").trim() || "无";
+  const normalizedExportedFile = String(exportedFile || "").trim();
+  return [
+    "你是桌面端会话执行总结助手。",
+    "请基于以下真实执行记录，输出一段面向用户的中文总结。",
+    "输出要求：",
+    "1. 仅输出自然语言，不要 Markdown 围栏。",
+    "2. 用 2-4 句话完成总结，不要改写成流水账。",
+    "3. 必须说明已经完成了什么。",
+    "4. 必须说明当前不足、未验证项或阻塞；如果暂时没有明确阻塞，也要指出仍建议补充的验证或风险点。",
+    "5. 必须给出继续处理时的下一步建议。",
+    "",
+    `工作流：${normalizedWorkflowName}`,
+    `动作汇总：${normalizedActionText}`,
+    normalizedExportedFile ? `导出文件：${normalizedExportedFile}` : "",
+    "",
+    "阶段执行摘要：",
+    normalizedStageSummaryDigest,
+  ].filter((item) => Boolean(item)).join("\n");
 }
 
 // 描述：
@@ -1217,6 +1319,7 @@ interface AssistantRunMeta {
   finishedAt?: number;
   collapsed: boolean;
   summary: string;
+  summarySource?: "ai" | "system" | "failure";
   segments: AssistantRunSegment[];
 }
 
@@ -1646,6 +1749,122 @@ function resolveApprovalEventData(payload: AgentTextStreamEvent): AgentRequireAp
 
 // 描述：
 //
+//   - 规整单个用户提问问题，过滤掉缺字段或空白项，避免前端交互卡片渲染非法数据。
+function normalizeUserInputQuestionPrompt(
+  value: unknown,
+): SharedAgentUserInputQuestionPrompt | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const raw = value as Record<string, unknown>;
+  const options = Array.isArray(raw.options)
+    ? raw.options
+      .map((option) => {
+        if (!option || typeof option !== "object") {
+          return null;
+        }
+        const rawOption = option as Record<string, unknown>;
+        const label = String(rawOption.label || "").trim();
+        const description = String(rawOption.description || "").trim();
+        if (!label || !description) {
+          return null;
+        }
+        return { label, description };
+      })
+      .filter((option): option is SharedAgentUserInputQuestionPrompt["options"][number] => Boolean(option))
+    : [];
+  const id = String(raw.id || "").trim();
+  const header = String(raw.header || "").trim();
+  const question = String(raw.question || "").trim();
+  if (!id || !header || !question || options.length === 0) {
+    return null;
+  }
+  return {
+    id,
+    header,
+    question,
+    options,
+  };
+}
+
+// 描述：
+//
+//   - 规整单个用户提问回答，过滤空值并收敛 answer_type，避免运行片段与提交状态出现脏数据。
+function normalizeUserInputAnswer(
+  value: unknown,
+): SharedAgentUserInputAnswer | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const raw = value as Record<string, unknown>;
+  const questionId = String(raw.question_id || "").trim();
+  const answerType = String(raw.answer_type || "").trim();
+  const normalizedAnswerType = answerType === "custom" ? "custom" : answerType === "option" ? "option" : "";
+  const valueText = String(raw.value || "").trim();
+  if (!questionId || !normalizedAnswerType || !valueText) {
+    return null;
+  }
+  const answer: SharedAgentUserInputAnswer = {
+    question_id: questionId,
+    answer_type: normalizedAnswerType,
+    value: valueText,
+  };
+  if (Number.isFinite(Number(raw.option_index))) {
+    answer.option_index = Math.max(0, Math.floor(Number(raw.option_index)));
+  }
+  if (typeof raw.option_label === "string" && String(raw.option_label || "").trim()) {
+    answer.option_label = String(raw.option_label || "").trim();
+  }
+  return answer;
+}
+
+// 描述：
+//
+//   - 解析文本流中的用户提问 data 结构，提取请求 ID 与问题列表供底部卡片和运行流复用。
+function resolveUserInputEventData(payload: AgentTextStreamEvent): AgentRequestUserInputEventData {
+  if (!payload.data || typeof payload.data !== "object") {
+    return {};
+  }
+  const data = payload.data as Record<string, unknown>;
+  return {
+    request_id: typeof data.request_id === "string" ? data.request_id : undefined,
+    questions: Array.isArray(data.questions)
+      ? data.questions
+        .map((item) => normalizeUserInputQuestionPrompt(item))
+        .filter((item): item is SharedAgentUserInputQuestionPrompt => Boolean(item))
+      : undefined,
+  };
+}
+
+// 描述：
+//
+//   - 构建用户提问片段 data，只保留跨页面恢复与导出所需关键字段。
+function buildUserInputSegmentData(payload: AgentTextStreamEvent): Record<string, unknown> {
+  const resolved = resolveUserInputEventData(payload);
+  return {
+    __segment_kind: payload.kind,
+    __step_type: "user_input_request",
+    request_id: String(resolved.request_id || "").trim(),
+    question_count: Array.isArray(resolved.questions) ? resolved.questions.length : 0,
+    questions: resolved.questions || [],
+  };
+}
+
+// 描述：
+//
+//   - 从用户提问片段 data 中解析问题数量，优先读取显式计数，再回退到 questions 数组长度。
+function resolveUserInputQuestionCount(data: Record<string, unknown> | undefined): number {
+  if (data && Number.isFinite(Number(data.question_count))) {
+    return Math.max(0, Math.floor(Number(data.question_count)));
+  }
+  if (data && Array.isArray(data.questions)) {
+    return data.questions.length;
+  }
+  return 0;
+}
+
+// 描述：
+//
 //   - 裁剪长文本，避免执行流/授权卡片渲染超长字符串导致主线程卡顿。
 function truncateRunText(value: string, maxChars: number): string {
   const normalized = String(value || "").trim();
@@ -1973,6 +2192,10 @@ function mapAgentTextStreamToRunSegment(
     const argsData = data.args_data || {};
     const resultData = data.result_data || {};
 
+    if (toolName === "request_user_input") {
+      return null;
+    }
+
     if (isTodoTool(toolName)) {
       const parsedResultRecord = parseJsonRecord(data.result);
       const parsedRawRecord = parseJsonRecord(resultData.raw);
@@ -2230,6 +2453,18 @@ function mapAgentTextStreamToRunSegment(
     };
   }
 
+  if (payload.kind === STREAM_KINDS.REQUEST_USER_INPUT) {
+    const data = resolveUserInputEventData(payload);
+    const questionCount = Array.isArray(data.questions) ? data.questions.length : 0;
+    return {
+      key: segmentKey,
+      intro: translateDesktopText("需要用户决定"),
+      step: translateDesktopText("正在询问 {{count}} 个问题", { count: questionCount }),
+      status: "running",
+      data: buildUserInputSegmentData(payload),
+    };
+  }
+
   if (payload.kind === STREAM_KINDS.ERROR) {
     const errorCode = resolveStreamErrorCode(payload);
     return {
@@ -2321,6 +2556,21 @@ function isApprovalPendingSegment(segment: AssistantRunSegment): boolean {
     ? segment.data.__segment_kind
     : "";
   return segment.intro === translateDesktopText("需要人工授权") || segmentKind === STREAM_KINDS.REQUIRE_APPROVAL;
+}
+
+// 描述：
+//
+//   - 判断运行片段是否属于“待用户决定”片段，供底部提问卡片与运行流恢复时复用。
+function isUserInputPendingSegment(segment: AssistantRunSegment): boolean {
+  const segmentKind = segment.data && typeof segment.data.__segment_kind === "string"
+    ? segment.data.__segment_kind
+    : "";
+  const stepType = segment.data && typeof segment.data.__step_type === "string"
+    ? segment.data.__step_type
+    : "";
+  return segment.intro === translateDesktopText("需要用户决定")
+    || segmentKind === STREAM_KINDS.REQUEST_USER_INPUT
+    || stepType === "user_input_request";
 }
 
 // 描述：
@@ -3133,6 +3383,13 @@ function normalizePersistedRunMeta(input: PersistedSessionRunMeta): AssistantRun
     finishedAt: input.finishedAt ? Number(input.finishedAt) : undefined,
     collapsed: Boolean(input.collapsed),
     summary: String(input.summary || ""),
+    summarySource: input.summarySource === "ai"
+      ? "ai"
+      : input.summarySource === "failure"
+        ? "failure"
+        : input.summarySource === "system"
+          ? "system"
+          : undefined,
     segments,
   };
 }
@@ -3323,6 +3580,10 @@ export function SessionPage({
   const [messages, setMessages] = useState<MessageItem[]>([]);
   const [agentContextMessages, setAgentContextMessages] = useState<MessageItem[]>([]);
   const [assistantRunMetaMap, setAssistantRunMetaMap] = useState<Record<string, AssistantRunMeta>>({});
+  const [userInputDraftMap, setUserInputDraftMap] = useState<
+    Record<string, Record<string, AgentUserInputDraftAnswer>>
+  >({});
+  const [userInputSubmittingRequestId, setUserInputSubmittingRequestId] = useState("");
   const [sessionApprovedToolNames, setSessionApprovedToolNames] = useState<string[]>([]);
   const [workflowPhaseCursor, setWorkflowPhaseCursor] = useState<SessionWorkflowPhaseCursorSnapshot | null>(null);
   const [expandedRunSegmentDetailMap, setExpandedRunSegmentDetailMap] = useState<Record<string, boolean>>({});
@@ -3572,7 +3833,7 @@ export function SessionPage({
   );
   const workflowSkillSelectorLabel = useMemo(() => {
     if (selectedSessionSkills.length > 0) {
-      return selectedSessionSkills[0]?.name || t("技能");
+      return selectedSessionSkills[0]?.title || t("技能");
     }
     return selectedWorkflow?.name || resolvedSessionUiConfig.workflowFallbackLabel;
   }, [
@@ -3841,7 +4102,7 @@ export function SessionPage({
       const incomingSegmentKind = segment.data && typeof segment.data.__segment_kind === "string"
         ? segment.data.__segment_kind
         : "";
-      const shouldResolveApprovalPending = incomingSegmentKind === STREAM_KINDS.TOOL_CALL_FINISHED
+      const shouldResolvePendingInteractiveSegment = incomingSegmentKind === STREAM_KINDS.TOOL_CALL_FINISHED
         || incomingSegmentKind === STREAM_KINDS.ERROR
         || incomingSegmentKind === STREAM_KINDS.CANCELLED
         || incomingSegmentKind === STREAM_KINDS.FINISHED
@@ -3856,54 +4117,96 @@ export function SessionPage({
           || incomingStepText.includes(t("拒绝"))
           || incomingStepText.toLowerCase().includes("reject")
         );
+      const isCancellationLikeError = incomingSegmentKind === STREAM_KINDS.ERROR
+        && isCancelErrorCode(incomingErrorCode);
+      const hasPendingInteractiveSegment = baseSegments.some(
+        (item) => item.status === "running" && (isApprovalPendingSegment(item) || isUserInputPendingSegment(item)),
+      );
+      if (hasPendingInteractiveSegment && incomingSegmentKind === STREAM_KINDS.HEARTBEAT) {
+        return prev;
+      }
       const normalizedSegments = baseSegments.map((item) => {
         if (item.status !== "running") {
           return item;
         }
-        if (!isApprovalPendingSegment(item)) {
+        if (!isApprovalPendingSegment(item) && !isUserInputPendingSegment(item)) {
           return { ...item, status: "finished" as const };
         }
-        if (!shouldResolveApprovalPending) {
-          return item;
-        }
-        const toolName = String(
-          item.data && typeof item.data.tool_name === "string" ? item.data.tool_name : "",
-        ).trim();
-        if (isHumanRefusedError) {
+        if (isApprovalPendingSegment(item)) {
+          if (!shouldResolvePendingInteractiveSegment) {
+            return item;
+          }
+          const toolName = String(
+            item.data && typeof item.data.tool_name === "string" ? item.data.tool_name : "",
+          ).trim();
+          if (isHumanRefusedError) {
+            return {
+              ...item,
+              status: "failed" as const,
+              step: t("已拒绝 {{tool}} 的执行请求。", { tool: toolName || t("该工具") }),
+              data: {
+                ...(item.data && typeof item.data === "object" ? item.data : {}),
+                __step_type: "approval_decision",
+                approval_decision: "rejected",
+                approval_tool_name: toolName || t("该工具"),
+              },
+            };
+          }
+          if (incomingSegmentKind === STREAM_KINDS.CANCELLED) {
+            return {
+              ...item,
+              status: "finished" as const,
+              step: t("授权流程已取消，未执行 {{tool}}。", { tool: toolName || t("该工具") }),
+              data: {
+                ...(item.data && typeof item.data === "object" ? item.data : {}),
+                __step_type: "approval_decision",
+                approval_decision: "cancelled",
+                approval_tool_name: toolName || t("该工具"),
+              },
+            };
+          }
           return {
             ...item,
-            status: "failed" as const,
-            step: t("已拒绝 {{tool}} 的执行请求。", { tool: toolName || t("该工具") }),
+            status: "finished" as const,
+            step: t("已处理 {{tool}} 的授权请求。", { tool: toolName || t("该工具") }),
             data: {
               ...(item.data && typeof item.data === "object" ? item.data : {}),
               __step_type: "approval_decision",
-              approval_decision: "rejected",
+              approval_decision: "handled",
               approval_tool_name: toolName || t("该工具"),
             },
           };
         }
-        if (incomingSegmentKind === STREAM_KINDS.CANCELLED) {
+        if (!isUserInputPendingSegment(item) || !shouldResolvePendingInteractiveSegment) {
+          return item;
+        }
+        const stepData = item.data && typeof item.data === "object" ? item.data : {};
+        const questionCount = resolveUserInputQuestionCount(stepData);
+        const ignoredStepText = t("已询问 {{count}} 个问题（已忽略）", {
+          count: questionCount,
+        });
+        if (incomingSegmentKind === STREAM_KINDS.CANCELLED || isCancellationLikeError) {
           return {
             ...item,
             status: "finished" as const,
-            step: t("授权流程已取消，未执行 {{tool}}。", { tool: toolName || t("该工具") }),
+            step: ignoredStepText,
             data: {
-              ...(item.data && typeof item.data === "object" ? item.data : {}),
-              __step_type: "approval_decision",
-              approval_decision: "cancelled",
-              approval_tool_name: toolName || t("该工具"),
+              ...stepData,
+              __step_type: "user_input_request",
+              resolution: "ignored",
+              answers: [],
             },
           };
         }
         return {
           ...item,
           status: "finished" as const,
-          step: t("已处理 {{tool}} 的授权请求。", { tool: toolName || t("该工具") }),
+          step: ignoredStepText,
           data: {
-            ...(item.data && typeof item.data === "object" ? item.data : {}),
-            __step_type: "approval_decision",
-            approval_decision: "handled",
-            approval_tool_name: toolName || t("该工具"),
+            ...stepData,
+            __step_type: "user_input_request",
+            resolution: "ignored",
+            answers: [],
           },
         };
       });
@@ -4013,6 +4316,7 @@ export function SessionPage({
     messageId: string,
     status: "finished" | "failed",
     summary: string,
+    summarySource?: AssistantRunMeta["summarySource"],
   ) => {
     if (!messageId) {
       return;
@@ -4034,6 +4338,7 @@ export function SessionPage({
           finishedAt,
           collapsed: status === "finished",
           summary: summary.trim(),
+          summarySource,
         },
       };
     });
@@ -4152,6 +4457,203 @@ export function SessionPage({
         detail: debugRecord.detail,
       },
     });
+  };
+
+  // 描述：请求工作流最终 AI 总结；该总结必须来自真实模型响应，缺失时保持为空，不再用前端拼接结果冒充。
+  //
+  // Params:
+  //
+  //   - messageId: 当前助手消息 ID。
+  //   - traceId: 当前执行链路 Trace ID。
+  //   - workflowName: 工作流名称。
+  //   - stageSummaryDigest: 阶段摘要文本。
+  //   - contextMessages: 当前上下文消息列表。
+  //   - actionText: 动作摘要。
+  //   - exportedFile: 导出文件路径。
+  //
+  // Returns:
+  //
+  //   - 总结文本、来源与更新后的上下文消息。
+  const requestWorkflowExecutionSummary = async (
+    messageId: string,
+    traceId: string,
+    workflowName: string,
+    stageSummaryDigest: string,
+    contextMessages: MessageItem[],
+    actionText: string,
+    exportedFile?: string,
+  ): Promise<{
+    summary: string;
+    summarySource?: AssistantRunMeta["summarySource"];
+    contextMessages: MessageItem[];
+  }> => {
+    const normalizedMessageId = String(messageId || "").trim();
+    const normalizedDigest = String(stageSummaryDigest || "").trim();
+    if (!normalizedMessageId || !normalizedDigest) {
+      return {
+        summary: "",
+        summarySource: undefined,
+        contextMessages,
+      };
+    }
+
+    const provider = selectedAi?.provider || "codex";
+    const providerApiKey = provider === "codex" || provider === "gemini-cli"
+      ? undefined
+      : String(selectedAi?.keyValue || "").trim() || undefined;
+    const providerModel = supportsProviderModelConfig(provider)
+      ? String(selectedModelName || "").trim() || undefined
+      : undefined;
+    const providerMode = supportsProviderModeConfig(provider)
+      ? String(selectedModeName || "").trim() || undefined
+      : undefined;
+    const summaryPrompt = buildWorkflowExecutionSummaryPrompt(
+      workflowName,
+      normalizedDigest,
+      actionText,
+      exportedFile,
+    );
+    const requestTimestamp = Date.now();
+
+    clearAssistantRunHeartbeatTimer();
+    assistantRunLastActivityAtRef.current = requestTimestamp;
+    appendSessionCallRecord({
+      id: `call-summary-request-${requestTimestamp}-${Math.random().toString(36).slice(2, 8)}`,
+      kind: "summary_request",
+      timestamp: requestTimestamp,
+      messageId: normalizedMessageId,
+      traceId,
+      payload: {
+        workflow_name: workflowName,
+        provider,
+        provider_model: providerModel || "",
+        provider_mode: providerMode || "",
+        prompt: summaryPrompt,
+      },
+    });
+    appendDebugFlowRecord("ui", "ai_summary_prompt", t("执行总结 Prompt"), summaryPrompt);
+
+    try {
+      const summaryResponse = await invoke<AgentSummaryResponse>(COMMANDS.CALL_AI_SUMMARY_COMMAND, {
+        provider,
+        providerApiKey,
+        providerModel,
+        providerMode,
+        prompt: summaryPrompt,
+        workdir: String(activeWorkspace?.path || "").trim() || undefined,
+      });
+      const summaryText = String(summaryResponse.content || "").trim();
+      const responseTimestamp = Date.now();
+      const totalTokens = Number(summaryResponse.usage?.total_tokens || 0);
+      appendSessionCallRecord({
+        id: `call-summary-response-${responseTimestamp}-${Math.random().toString(36).slice(2, 8)}`,
+        kind: "summary_response",
+        timestamp: responseTimestamp,
+        messageId: normalizedMessageId,
+        traceId,
+        payload: {
+          content: summaryText,
+          usage: summaryResponse.usage || null,
+        },
+      });
+      appendDebugFlowRecord(
+        "ui",
+        "ai_summary_raw",
+        t("执行总结原始返回"),
+        JSON.stringify(
+          {
+            content: summaryText,
+            usage: summaryResponse.usage || null,
+          },
+          null,
+          2,
+        ),
+      );
+      if (sessionId && Number.isFinite(totalTokens) && totalTokens > 0) {
+        setSessionCumulativeTokenUsage(
+          increaseAgentSessionCumulativeTokenUsage(sessionId, totalTokens),
+        );
+      }
+
+      setSessionAiPromptRaw(summaryPrompt);
+      setSessionAiResponseRaw(summaryText);
+      setSessionAiRawByMessage((prev) => {
+        const current = buildSessionAiRawByMessageItem(prev[normalizedMessageId]);
+        return {
+          ...prev,
+          [normalizedMessageId]: buildSessionAiRawByMessageItem({
+            promptRaw: current.promptRaw || summaryPrompt,
+            responseRaw: summaryText || current.responseRaw,
+            exchanges: [
+              ...current.exchanges,
+              {
+                requestRaw: summaryPrompt,
+                responseRaw: summaryText,
+                stepCode: "ai_execution_summary",
+                stepSummary: t("执行总结"),
+                turnIndex: current.exchanges.length + 1,
+                capturedAt: responseTimestamp,
+              },
+            ],
+          }),
+        };
+      });
+
+      if (!summaryText) {
+        return {
+          summary: "",
+          summarySource: undefined,
+          contextMessages,
+        };
+      }
+
+      if (streamMessageIdRef.current === normalizedMessageId) {
+        setStreamingAssistantTarget(summaryText, { immediate: true });
+      } else {
+        setMessages((prev) => upsertAssistantMessageById(prev, normalizedMessageId, summaryText));
+      }
+      const summarizedContextMessages = upsertAssistantMessageById(
+        contextMessages,
+        normalizedMessageId,
+        summaryText,
+      );
+      setAgentContextMessages(summarizedContextMessages);
+      return {
+        summary: summaryText,
+        summarySource: "ai",
+        contextMessages: summarizedContextMessages,
+      };
+    } catch (error) {
+      const reason = normalizeInvokeError(error);
+      const errorTimestamp = Date.now();
+      appendSessionCallRecord({
+        id: `call-summary-error-${errorTimestamp}-${Math.random().toString(36).slice(2, 8)}`,
+        kind: "summary_error",
+        timestamp: errorTimestamp,
+        messageId: normalizedMessageId,
+        traceId,
+        payload: {
+          message: reason,
+        },
+      });
+      appendDebugFlowRecord(
+        "ui",
+        "ai_summary_error",
+        t("执行总结失败"),
+        JSON.stringify(
+          {
+            message: reason,
+          },
+          null,
+          2,
+        ),
+      );
+      return {
+        summary: "",
+        summarySource: undefined,
+        contextMessages,
+      };
+    }
   };
 
   useEffect(() => {
@@ -4774,6 +5276,25 @@ export function SessionPage({
             return;
           }
         }
+        if (payload.kind === STREAM_KINDS.TOOL_CALL_FINISHED) {
+          const toolData = resolveToolCallEventData(payload);
+          const toolName = String(toolData.name || "").trim();
+          if (toolName === "request_user_input") {
+            const resultData = toolData.result_data || {};
+            const requestId = String(resultData.request_id || "").trim();
+            const resolution = String(resultData.resolution || "").trim() === "ignored"
+              ? "ignored"
+              : "answered";
+            const answers = Array.isArray(resultData.answers)
+              ? resultData.answers
+                .map((item) => normalizeUserInputAnswer(item))
+                .filter((item): item is SharedAgentUserInputAnswer => Boolean(item))
+              : [];
+            if (requestId) {
+              markUserInputSegmentResolved(requestId, resolution, answers);
+            }
+          }
+        }
         const runSegment = mapAgentTextStreamToRunSegment(payload, segmentKey);
         if (runSegment) {
           appendAssistantRunSegment(streamMessageIdRef.current, runSegment);
@@ -4865,7 +5386,7 @@ export function SessionPage({
         if (hasPendingWorkflowStages()) {
           return;
         }
-        finishAssistantRunMessage(streamMessageIdRef.current, "finished", finalSummary);
+        finishAssistantRunMessage(streamMessageIdRef.current, "finished", finalSummary, "ai");
         setStatus(t("执行完成"));
         setSending(false);
         activeAgentStreamTraceRef.current = "";
@@ -4887,7 +5408,7 @@ export function SessionPage({
           ),
         );
         setStreamingAssistantTarget(cancelledSummary);
-        finishAssistantRunMessage(streamMessageIdRef.current, "finished", cancelledSummary);
+        finishAssistantRunMessage(streamMessageIdRef.current, "finished", cancelledSummary, "system");
         setStatus(cancelledSummary);
         setSending(false);
         activeAgentStreamTraceRef.current = "";
@@ -4911,7 +5432,7 @@ export function SessionPage({
             reason: String(payload.message || "").trim() || t("未知原因"),
           });
           setStreamingAssistantTarget(cancelledSummary);
-          finishAssistantRunMessage(streamMessageIdRef.current, "finished", cancelledSummary);
+          finishAssistantRunMessage(streamMessageIdRef.current, "finished", cancelledSummary, "system");
           setStatus(cancelledSummary);
           setSending(false);
           activeAgentStreamTraceRef.current = "";
@@ -4921,7 +5442,7 @@ export function SessionPage({
           reason: String(payload.message || "").trim() || t("未知错误"),
         });
         setStreamingAssistantTarget(errorSummary);
-        finishAssistantRunMessage(streamMessageIdRef.current, "failed", errorSummary);
+        finishAssistantRunMessage(streamMessageIdRef.current, "failed", errorSummary, "failure");
         setStatus(errorSummary);
         setSending(false);
         activeAgentStreamTraceRef.current = "";
@@ -5355,6 +5876,7 @@ export function SessionPage({
               finishedAt: undefined,
               collapsed: false,
               summary: "",
+              summarySource: undefined,
               segments,
             },
           };
@@ -5564,7 +6086,7 @@ export function SessionPage({
           );
           setAgentContextMessages(nextContextMessages);
         } else {
-          finishAssistantRunMessage(streamMessageId, "finished", effectiveResponseDisplayMessage);
+          finishAssistantRunMessage(streamMessageId, "finished", effectiveResponseDisplayMessage, "ai");
           nextContextMessages = upsertAssistantMessageById(nextContextMessages, streamMessageId, effectiveResponseDisplayMessage);
           setAgentContextMessages(nextContextMessages);
         }
@@ -5598,15 +6120,44 @@ export function SessionPage({
           continue;
         }
         if (hasWorkflowStages) {
-          finishAssistantRunMessage(
-            streamMessageId,
-            "finished",
-            buildWorkflowCompletionSummary(
+          const stageSummaryItems = collectWorkflowStageSummaryItems(
+            assistantRunMetaMapRef.current[streamMessageId],
+            currentStageIndex,
+            String(currentStageItem?.nodeTitle || "").trim(),
+            String(response.message || "").trim() || effectiveResponseDisplayMessage,
+          );
+          const workflowCompletionDigest = stageSummaryItems.length > 0
+            ? buildWorkflowCompletionSummary(
               assistantRunMetaMapRef.current[streamMessageId],
               currentStageIndex,
               String(currentStageItem?.nodeTitle || "").trim(),
               String(response.message || "").trim() || effectiveResponseDisplayMessage,
-            ),
+            )
+            : "";
+          if (workflowCompletionDigest) {
+            setStatus(t("正在整理执行总结..."));
+          }
+          const workflowSummaryResult = workflowCompletionDigest
+            ? await requestWorkflowExecutionSummary(
+              streamMessageId,
+              String(response.trace_id || stageTraceId || "").trim() || `summary-${Date.now()}`,
+              activeWorkflowName,
+              workflowCompletionDigest,
+              nextContextMessages,
+              actionText,
+              response.exported_file,
+            )
+            : {
+              summary: "",
+              summarySource: undefined,
+              contextMessages: nextContextMessages,
+            };
+          nextContextMessages = workflowSummaryResult.contextMessages;
+          finishAssistantRunMessage(
+            streamMessageId,
+            "finished",
+            workflowSummaryResult.summary,
+            workflowSummaryResult.summarySource,
           );
         }
         setStatus(
@@ -5645,7 +6196,7 @@ export function SessionPage({
         );
         if (streamMessageIdRef.current) {
           setStreamingAssistantTarget(cancelledSummary);
-          finishAssistantRunMessage(streamMessageIdRef.current, "finished", cancelledSummary);
+          finishAssistantRunMessage(streamMessageIdRef.current, "finished", cancelledSummary, "system");
         }
         setStatus(cancelledSummary);
         setUiHint(null);
@@ -5696,7 +6247,12 @@ export function SessionPage({
       }
       if (streamMessageIdRef.current) {
         setStreamingAssistantTarget(t("执行失败：{{reason}}", { reason }));
-        finishAssistantRunMessage(streamMessageIdRef.current, "failed", t("执行失败：{{reason}}", { reason }));
+        finishAssistantRunMessage(
+          streamMessageIdRef.current,
+          "failed",
+          t("执行失败：{{reason}}", { reason }),
+          "failure",
+        );
       } else {
         setMessages((prev) => [
           ...prev,
@@ -5938,7 +6494,7 @@ export function SessionPage({
       const cancelledSummary = t("任务已取消（用户主动终止）");
       if (streamMessageIdRef.current) {
         setStreamingAssistantTarget(cancelledSummary);
-        finishAssistantRunMessage(streamMessageIdRef.current, "finished", cancelledSummary);
+        finishAssistantRunMessage(streamMessageIdRef.current, "finished", cancelledSummary, "system");
       }
       setStatus(cancelledSummary);
       setUiHint(null);
@@ -6034,6 +6590,62 @@ export function SessionPage({
     );
   };
 
+  // 描述：按 request_id 乐观更新用户提问片段，确保提交/忽略后卡片立即消失并同步展示最终回答。
+  const markUserInputSegmentResolved = (
+    requestId: string,
+    resolution: "answered" | "ignored",
+    answers: SharedAgentUserInputAnswer[],
+  ) => {
+    const normalizedRequestId = String(requestId || "").trim();
+    if (!normalizedRequestId) {
+      return;
+    }
+    setAssistantRunMetaMap((prev) =>
+      Object.fromEntries(
+        Object.entries(prev).map(([messageId, meta]) => {
+          const nextSegments = (meta.segments || []).map((segment) => {
+            const segmentRequestId = segment.data && typeof segment.data.request_id === "string"
+              ? String(segment.data.request_id || "").trim()
+              : "";
+            if (!segmentRequestId || segmentRequestId !== normalizedRequestId || !isUserInputPendingSegment(segment)) {
+              return segment;
+            }
+            const stepData = segment.data && typeof segment.data === "object" ? segment.data : {};
+            const questionCount = resolveUserInputQuestionCount(stepData);
+            return {
+              ...segment,
+              status: "finished" as const,
+              step: resolution === "ignored"
+                ? t("已询问 {{count}} 个问题（已忽略）", { count: questionCount })
+                : t("已询问 {{count}} 个问题", { count: questionCount }),
+              data: {
+                ...stepData,
+                __step_type: "user_input_request",
+                resolution,
+                answers,
+              },
+            };
+          });
+          return [
+            messageId,
+            {
+              ...meta,
+              segments: nextSegments,
+            },
+          ] as const;
+        }),
+      ),
+    );
+    setUserInputDraftMap((prev) => {
+      if (!(normalizedRequestId in prev)) {
+        return prev;
+      }
+      const next = { ...prev };
+      delete next[normalizedRequestId];
+      return next;
+    });
+  };
+
   // 描述：提交人工授权决策，支持“本次批准 / 会话内批准 / 拒绝”三种交互语义。
   const handleApproveAgentAction = async (
     id: string,
@@ -6083,6 +6695,142 @@ export function SessionPage({
       }
     } catch (err) {
       setStatus(t("授权操作失败，请重试"));
+    }
+  };
+
+  // 描述：选中某题的预设选项，并清空对应的自定义填写内容，保持单题单选约束。
+  const handleSelectUserInputOption = (
+    requestId: string,
+    questionId: string,
+    optionIndex: number,
+  ) => {
+    const normalizedRequestId = String(requestId || "").trim();
+    const normalizedQuestionId = String(questionId || "").trim();
+    if (!normalizedRequestId || !normalizedQuestionId) {
+      return;
+    }
+    setUserInputDraftMap((prev) => ({
+      ...prev,
+      [normalizedRequestId]: {
+        ...(prev[normalizedRequestId] || {}),
+        [normalizedQuestionId]: {
+          selectedOptionIndex: optionIndex,
+          customValue: "",
+        },
+      },
+    }));
+  };
+
+  // 描述：更新某题的自由填写内容；一旦有文本输入，自动取消当前题目的预设选项选中状态。
+  const handleChangeUserInputCustomValue = (
+    requestId: string,
+    questionId: string,
+    value: string,
+  ) => {
+    const normalizedRequestId = String(requestId || "").trim();
+    const normalizedQuestionId = String(questionId || "").trim();
+    if (!normalizedRequestId || !normalizedQuestionId) {
+      return;
+    }
+    setUserInputDraftMap((prev) => ({
+      ...prev,
+      [normalizedRequestId]: {
+        ...(prev[normalizedRequestId] || {}),
+        [normalizedQuestionId]: {
+          selectedOptionIndex: undefined,
+          customValue: value,
+        },
+      },
+    }));
+  };
+
+  // 描述：提交当前用户提问卡片答案，成功后不新增 transcript 消息，只恢复原执行流。
+  const handleSubmitAgentUserInput = async (
+    requestId: string,
+    questions: SharedAgentUserInputQuestionPrompt[],
+  ) => {
+    const normalizedRequestId = String(requestId || "").trim();
+    if (!normalizedRequestId || questions.length === 0) {
+      return;
+    }
+    const drafts = userInputDraftMap[normalizedRequestId] || {};
+    const answers = questions.map<SharedAgentUserInputAnswer | null>((question) => {
+      const draft = drafts[question.id];
+      const selectedOptionIndex = typeof draft?.selectedOptionIndex === "number"
+        ? draft.selectedOptionIndex
+        : undefined;
+      if (
+        typeof selectedOptionIndex === "number"
+        && selectedOptionIndex >= 0
+        && selectedOptionIndex < question.options.length
+      ) {
+        const option = question.options[selectedOptionIndex];
+        return {
+          question_id: question.id,
+          answer_type: "option",
+          option_index: selectedOptionIndex,
+          option_label: option.label,
+          value: option.label,
+        };
+      }
+      const customValue = String(draft?.customValue || "").trim();
+      if (customValue) {
+        return {
+          question_id: question.id,
+          answer_type: "custom",
+          value: customValue,
+        };
+      }
+      return null;
+    });
+    if (answers.some((item) => !item)) {
+      AriMessage.warning({
+        content: t("请先回答全部问题。"),
+        duration: 1800,
+      });
+      return;
+    }
+    const normalizedAnswers = answers.filter((item): item is SharedAgentUserInputAnswer => Boolean(item));
+    setUserInputSubmittingRequestId(normalizedRequestId);
+    try {
+      await invoke(COMMANDS.RESOLVE_AGENT_USER_INPUT, {
+        id: normalizedRequestId,
+        resolution: "answered",
+        answers: normalizedAnswers,
+      });
+      markUserInputSegmentResolved(
+        normalizedRequestId,
+        "answered",
+        normalizedAnswers,
+      );
+    } catch (_error) {
+      setStatus(t("提交问题回答失败，请重试"));
+    } finally {
+      setUserInputSubmittingRequestId((current) => (
+        current === normalizedRequestId ? "" : current
+      ));
+    }
+  };
+
+  // 描述：忽略当前用户提问卡片，不中断整轮执行，只把本次提问按 ignored 结果返回给 Agent。
+  const handleIgnoreAgentUserInput = async (requestId: string) => {
+    const normalizedRequestId = String(requestId || "").trim();
+    if (!normalizedRequestId) {
+      return;
+    }
+    setUserInputSubmittingRequestId(normalizedRequestId);
+    try {
+      await invoke(COMMANDS.RESOLVE_AGENT_USER_INPUT, {
+        id: normalizedRequestId,
+        resolution: "ignored",
+      });
+      markUserInputSegmentResolved(normalizedRequestId, "ignored", []);
+    } catch (_error) {
+      setStatus(t("忽略提问失败，请重试"));
+    } finally {
+      setUserInputSubmittingRequestId((current) => (
+        current === normalizedRequestId ? "" : current
+      ));
     }
   };
 
@@ -6186,6 +6934,55 @@ export function SessionPage({
     typeof activeApprovalData.tool_args === "string"
       ? truncateRunText(activeApprovalData.tool_args, APPROVAL_TOOL_ARGS_PREVIEW_MAX_CHARS)
       : "";
+  const activeUserInputSegment = (() => {
+    const runningMessageIds = Object.entries(assistantRunMetaMap)
+      .filter(([, meta]) => meta.status === "running")
+      .map(([messageId]) => messageId);
+    if (runningMessageIds.length === 0) {
+      return null;
+    }
+    const preferredMessageId = String(streamMessageIdRef.current || "").trim();
+    const orderedMessageIds = preferredMessageId && runningMessageIds.includes(preferredMessageId)
+      ? [preferredMessageId, ...runningMessageIds.filter((id) => id !== preferredMessageId)]
+      : runningMessageIds;
+    for (const messageId of orderedMessageIds) {
+      const meta = assistantRunMetaMap[messageId];
+      if (!meta) {
+        continue;
+      }
+      const hit = [...meta.segments].reverse().find(
+        (segment) => segment.status === "running" && isUserInputPendingSegment(segment),
+      );
+      if (hit) {
+        return hit;
+      }
+    }
+    return null;
+  })();
+  const activeUserInputData = activeUserInputSegment?.data && typeof activeUserInputSegment.data === "object"
+    ? activeUserInputSegment.data
+    : {};
+  const activeUserInputRequestId = typeof activeUserInputData.request_id === "string"
+    ? activeUserInputData.request_id
+    : "";
+  const activeUserInputQuestions = Array.isArray(activeUserInputData.questions)
+    ? activeUserInputData.questions
+      .map((item) => normalizeUserInputQuestionPrompt(item))
+      .filter((item): item is SharedAgentUserInputQuestionPrompt => Boolean(item))
+    : [];
+  const activeUserInputDrafts = activeUserInputRequestId
+    ? (userInputDraftMap[activeUserInputRequestId] || {})
+    : {};
+  const hasActiveUserInput = activeUserInputQuestions.length > 0;
+  const isUserInputSubmitDisabled = !hasActiveUserInput
+    || activeUserInputQuestions.some((question) => {
+      const draft = activeUserInputDrafts[question.id];
+      const hasOption = typeof draft?.selectedOptionIndex === "number"
+        && draft.selectedOptionIndex >= 0
+        && draft.selectedOptionIndex < question.options.length;
+      const hasCustom = String(draft?.customValue || "").trim().length > 0;
+      return !hasOption && !hasCustom;
+    });
   const activeTodoDockSnapshot = useMemo(
     () => resolveAssistantTodoDockSnapshot(
       messages,
@@ -6197,6 +6994,23 @@ export function SessionPage({
   const activeTodoDockItems = activeTodoDockSnapshot?.items || [];
   const shouldShowTodoDock = activeTodoDockItems.length > 0;
   const completedTodoCount = activeTodoDockItems.filter((item) => item.status === "completed").length;
+
+  useEffect(() => {
+    if (!activeUserInputRequestId) {
+      return undefined;
+    }
+    const handleWindowKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+      event.preventDefault();
+      void handleIgnoreAgentUserInput(activeUserInputRequestId);
+    };
+    window.addEventListener("keydown", handleWindowKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleWindowKeyDown);
+    };
+  }, [activeUserInputRequestId]);
   const todoDockProgressText = activeTodoDockItems.length > 0
     ? t("已完成 {{done}} / {{total}}", {
       done: completedTodoCount,
@@ -6668,20 +7482,28 @@ const handleConfirmWorkflowSkillModal = () => {
             index: index + 1,
             role: roleLabel,
           }),
-          t("#### 原始消息"),
-          wrapMarkdownCodeFencePreserveContent(String(item.text ?? ""), "text"),
         ];
-        if (item.role === "assistant") {
-          assistantMessageIndex += 1;
-          const assistantMessageId = String(item.id || "").trim();
-          const aiRawText = buildSessionAiRawExchangeText(
-            assistantMessageId,
-            assistantMessageIndex,
-            assistantMessageCount,
+        if (item.role === "user") {
+          blocks.push(
+            t("#### 原始消息"),
+            wrapMarkdownCodeFencePreserveContent(String(item.text ?? ""), "text"),
           );
-          if (aiRawText) {
-            blocks.push(aiRawText);
-          }
+          return blocks.join("\n\n");
+        }
+        assistantMessageIndex += 1;
+        const assistantMessageId = String(item.id || "").trim();
+        const aiRawText = buildSessionAiRawExchangeText(
+          assistantMessageId,
+          assistantMessageIndex,
+          assistantMessageCount,
+        );
+        if (aiRawText) {
+          blocks.push(aiRawText);
+        } else {
+          blocks.push(
+            t("#### AI 原始收发"),
+            t("- （未记录 AI 原始收发）"),
+          );
         }
         return blocks.join("\n\n");
       })
@@ -6717,7 +7539,7 @@ const handleConfirmWorkflowSkillModal = () => {
   //   - 会话执行配置文本。
   const buildSessionExecutionConfigText = () => {
     const configuredSkillItems = selectedSessionSkills.map((item) => {
-      const name = String(item.name || "").trim() || item.id;
+      const name = String(item.title || "").trim() || item.id;
       return `${name} (${item.id})`;
     });
     const workflowSummary = selectedWorkflow
@@ -6950,6 +7772,10 @@ const handleConfirmWorkflowSkillModal = () => {
         && runSegmentsForRender.some(
           (segment) => segment.status === "running" && isApprovalPendingSegment(segment),
         );
+      const hasPendingUserInputInRender = runMeta.status === "running"
+        && runSegmentsForRender.some(
+          (segment) => segment.status === "running" && isUserInputPendingSegment(segment),
+        );
       const runSegmentGroups = buildRunSegmentGroups(runSegmentsForRender);
       const runningIndicatorText = resolveRunningIndicatorText(message.text, runMeta);
       const visibleGroups = runMeta.status === "running" || !runMeta.collapsed
@@ -6971,6 +7797,7 @@ const handleConfirmWorkflowSkillModal = () => {
                 key: step.key,
                 status: step.status,
                 text: step.text,
+                data: step.data,
                 detail_expanded: detailExpanded,
                 detail: detailExpanded ? step.detail : undefined,
               };
@@ -6978,6 +7805,20 @@ const handleConfirmWorkflowSkillModal = () => {
           };
         })
         : [];
+      const visibleSummary = runMeta.status === "failed" && failureSummary
+        ? {
+          type: "failure" as const,
+          title: t("执行失败"),
+          detail: failureSummary.detail,
+          hint: failureSummary.hint,
+          action_label: t("重试本轮"),
+        }
+        : runMeta.summarySource === "ai" && String(runMeta.summary || "").trim()
+          ? {
+            type: "markdown" as const,
+            content: runMeta.summary,
+          }
+          : undefined;
       return [{
         message_index: index + 1,
         message_id: message.id,
@@ -6987,19 +7828,10 @@ const handleConfirmWorkflowSkillModal = () => {
         divider_title: runMeta.status === "running" ? undefined : dividerTitle,
         collapsed: runMeta.status === "running" ? undefined : runMeta.collapsed,
         visible_groups: visibleGroups,
-        running_indicator: runMeta.status === "running" && !hasPendingApprovalInRender ? runningIndicatorText : undefined,
-        visible_summary: runMeta.status === "failed" && failureSummary
-          ? {
-            type: "failure",
-            title: t("执行失败"),
-            detail: failureSummary.detail,
-            hint: failureSummary.hint,
-            action_label: t("重试本轮"),
-          }
-          : {
-            type: "markdown",
-            content: runMeta.summary || message.text,
-          },
+        running_indicator: runMeta.status === "running" && !hasPendingApprovalInRender && !hasPendingUserInputInRender
+          ? runningIndicatorText
+          : undefined,
+        visible_summary: visibleSummary,
       }];
     });
   };
@@ -7419,7 +8251,7 @@ const handleConfirmWorkflowSkillModal = () => {
                     <AriIcon name={item.icon} />
                   </AriContainer>
                   <AriContainer className="desk-session-strategy-item-text" padding={0}>
-                    <AriTypography variant="h4" value={item.name} />
+                    <AriTypography variant="h4" value={item.title} />
                     <AriTypography variant="caption" value={item.description} />
                   </AriContainer>
                 </AriFlex>
@@ -7476,6 +8308,9 @@ const handleConfirmWorkflowSkillModal = () => {
               const failureSummary = runMeta?.status === "failed"
                 ? buildAssistantFailureSummary(runMeta.summary || message.text)
                 : null;
+              const visibleRunSummaryText = runMeta?.summarySource === "ai"
+                ? String(runMeta.summary || "").trim()
+                : "";
               const runSegmentsForRender: AssistantRunSegment[] = runMeta
                 ? (() => {
                   const normalizedRenderSegments = normalizeAssistantRunSegments(runMeta.segments);
@@ -7516,6 +8351,10 @@ const handleConfirmWorkflowSkillModal = () => {
               const hasPendingApprovalInRender = runMeta?.status === "running"
                 && runSegmentsForRender.some(
                   (segment) => segment.status === "running" && isApprovalPendingSegment(segment),
+                );
+              const hasPendingUserInputInRender = runMeta?.status === "running"
+                && runSegmentsForRender.some(
+                  (segment) => segment.status === "running" && isUserInputPendingSegment(segment),
                 );
               const runSegmentGroups = buildRunSegmentGroups(runSegmentsForRender);
               const runningIndicatorText = resolveRunningIndicatorText(message.text, runMeta);
@@ -7573,7 +8412,7 @@ const handleConfirmWorkflowSkillModal = () => {
                   {runMeta.status === "running" ? (
                     <AriContainer className="desk-run-segments" padding={0}>
                       {runSegmentGroups.map((group) => renderRunSegmentGroup(group))}
-                      {!hasPendingApprovalInRender ? (
+                      {!hasPendingApprovalInRender && !hasPendingUserInputInRender ? (
                         <AriContainer className="desk-run-thinking-indicator" padding={0}>
                           <AriTypography
                             className="desk-run-step desk-run-step-running"
@@ -7610,8 +8449,9 @@ const handleConfirmWorkflowSkillModal = () => {
                           {runSegmentGroups.map((group) => renderRunSegmentGroup(group, "collapsed-"))}
                         </AriContainer>
                       ) : null}
-                      <AriContainer className={`desk-run-summary ${runMeta.status === "failed" ? "desk-run-summary-failed" : ""}`} padding={0}>
-                        {runMeta.status === "failed" && failureSummary ? (
+                      {(runMeta.status === "failed" && failureSummary) || visibleRunSummaryText ? (
+                        <AriContainer className={`desk-run-summary ${runMeta.status === "failed" ? "desk-run-summary-failed" : ""}`} padding={0}>
+                          {runMeta.status === "failed" && failureSummary ? (
                           <AriContainer className="desk-run-failure-card">
                             <AriFlex className="desk-run-failure-head" align="center" space={8}>
                               <AriIcon name="error" />
@@ -7641,10 +8481,11 @@ const handleConfirmWorkflowSkillModal = () => {
                           </AriContainer>
                         ) : (
                           <ChatMarkdown
-                            content={runMeta.summary || message.text}
+                            content={visibleRunSummaryText}
                           />
                         )}
-                      </AriContainer>
+                        </AriContainer>
+                      ) : null}
                     </>
                   )}
                 </AriContainer>
@@ -7795,6 +8636,123 @@ const handleConfirmWorkflowSkillModal = () => {
                       },
                     )
                   }
+                />
+              </AriFlex>
+            </AriCard>
+          ) : activeUserInputSegment ? (
+            <AriCard className="desk-action-slot desk-action-slot-info desk-action-slot-user-input">
+              <AriFlex align="center" space={8}>
+                <AriIcon name="help" />
+                <AriTypography variant="h4" value={t("需要你做几个决定")} />
+              </AriFlex>
+              <AriTypography
+                variant="caption"
+                value={t("这些问题会直接影响当前实现方向；提交后智能体会继续执行。")}
+              />
+              <AriContainer className="desk-user-input-question-list" padding={0}>
+                {activeUserInputQuestions.map((question, questionIndex) => {
+                  const draft = activeUserInputDrafts[question.id];
+                  const customValue = String(draft?.customValue || "");
+                  return (
+                    <AriContainer
+                      key={`${activeUserInputRequestId}-${question.id}`}
+                      className="desk-user-input-question"
+                      padding={0}
+                    >
+                      <AriTypography
+                        variant="caption"
+                        value={`${questionIndex + 1}. ${question.header}`}
+                      />
+                      <AriTypography
+                        variant="body"
+                        value={question.question}
+                      />
+                      <AriContainer className="desk-user-input-option-list" padding={0}>
+                        {question.options.map((option, optionIndex) => {
+                          const isActive = draft?.selectedOptionIndex === optionIndex && !customValue.trim();
+                          return (
+                            <button
+                              key={`${question.id}-option-${optionIndex}`}
+                              type="button"
+                              className={`desk-user-input-option ${isActive ? "is-active" : ""}`.trim()}
+                              onClick={() => {
+                                handleSelectUserInputOption(
+                                  activeUserInputRequestId,
+                                  question.id,
+                                  optionIndex,
+                                );
+                              }}
+                            >
+                              <AriContainer className="desk-user-input-option-main" padding={0}>
+                                <AriTypography
+                                  className="desk-user-input-option-index"
+                                  value={`${optionIndex + 1}.`}
+                                />
+                                <AriContainer className="desk-user-input-option-copy" padding={0}>
+                                  <AriTypography
+                                    className="desk-user-input-option-label"
+                                    variant="body"
+                                    value={option.label}
+                                  />
+                                  <AriTypography
+                                    className="desk-user-input-option-description"
+                                    variant="caption"
+                                    value={option.description}
+                                  />
+                                </AriContainer>
+                              </AriContainer>
+                            </button>
+                          );
+                        })}
+                        <AriContainer className="desk-user-input-custom" padding={0}>
+                          <AriTypography
+                            className="desk-user-input-option-index"
+                            value="4."
+                          />
+                          <AriInput.TextArea
+                            className="desk-user-input-custom-input"
+                            value={customValue}
+                            onChange={(value: unknown) => {
+                              handleChangeUserInputCustomValue(
+                                activeUserInputRequestId,
+                                question.id,
+                                String(value || ""),
+                              );
+                            }}
+                            variant="borderless"
+                            rows={2}
+                            autoSize={{ minRows: 2, maxRows: 5 }}
+                            placeholder={t("其他，请告知 Codex 如何调整")}
+                            enableHoverFocusEffect={false}
+                          />
+                        </AriContainer>
+                      </AriContainer>
+                    </AriContainer>
+                  );
+                })}
+              </AriContainer>
+              <AriFlex align="center" space={8} className="desk-action-slot-actions">
+                <AriButton
+                  ghost
+                  icon="close"
+                  label={t("忽略")}
+                  disabled={!activeUserInputRequestId || userInputSubmittingRequestId === activeUserInputRequestId}
+                  onClick={() => {
+                    void handleIgnoreAgentUserInput(activeUserInputRequestId);
+                  }}
+                />
+                <AriButton
+                  color="primary"
+                  icon="check"
+                  label={t("提交")}
+                  disabled={
+                    !activeUserInputRequestId
+                    || isUserInputSubmitDisabled
+                    || userInputSubmittingRequestId === activeUserInputRequestId
+                  }
+                  onClick={() => {
+                    void handleSubmitAgentUserInput(activeUserInputRequestId, activeUserInputQuestions);
+                  }}
                 />
               </AriFlex>
             </AriCard>

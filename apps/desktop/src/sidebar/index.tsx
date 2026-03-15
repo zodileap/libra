@@ -50,7 +50,11 @@ import type {
   DesktopUpdateState,
   LoginUser,
 } from "@/shell/types";
-import type { AgentTextStreamEvent } from "../shared/types";
+import type {
+  AgentTextStreamEvent,
+  AgentUserInputAnswer as SharedAgentUserInputAnswer,
+  AgentUserInputQuestionPrompt as SharedAgentUserInputQuestionPrompt,
+} from "../shared/types";
 import {
   AGENT_WORKFLOWS_UPDATED_EVENT,
   EVENT_AGENT_TEXT_STREAM,
@@ -126,6 +130,9 @@ interface AgentToolCallEventData {
   name?: string;
   ok?: boolean;
   result?: string;
+  args_preview?: string;
+  args_data?: Record<string, unknown>;
+  result_data?: Record<string, unknown>;
   args?: {
     command?: string;
     path?: string;
@@ -137,6 +144,14 @@ interface AgentToolCallEventData {
 //   - 定义人工授权事件 data 字段的最小结构，用于跨页面恢复后继续授权。
 interface AgentRequireApprovalEventData {
   tool_name?: string;
+}
+
+// 描述：
+//
+//   - 定义用户提问事件 data 字段的最小结构，用于侧边栏恢复提问片段与回答结果。
+interface AgentRequestUserInputEventData {
+  request_id?: string;
+  questions?: SharedAgentUserInputQuestionPrompt[];
 }
 
 const APPROVAL_TOOL_ARGS_PREVIEW_MAX_CHARS = 2000;
@@ -151,14 +166,24 @@ function resolveToolCallEventData(payload: AgentTextStreamEvent): AgentToolCallE
     return {};
   }
   const data = payload.data as Record<string, unknown>;
-  const rawArgs = data.args;
+  const rawArgs = data.args_data ?? data.args;
+  const argsPreview = typeof data.args === "string"
+    ? data.args
+    : (typeof rawArgs === "string" ? rawArgs : "");
   const args = rawArgs && typeof rawArgs === "object"
     ? (rawArgs as Record<string, unknown>)
+    : undefined;
+  const rawResult = data.result_data;
+  const resultData = rawResult && typeof rawResult === "object"
+    ? (rawResult as Record<string, unknown>)
     : undefined;
   return {
     name: typeof data.name === "string" ? data.name : undefined,
     ok: typeof data.ok === "boolean" ? data.ok : undefined,
     result: typeof data.result === "string" ? data.result : undefined,
+    args_preview: truncateRunText(argsPreview, 1200),
+    args_data: args,
+    result_data: resultData,
     args: {
       command: typeof args?.command === "string" ? args.command : undefined,
       path: typeof args?.path === "string" ? args.path : undefined,
@@ -177,6 +202,126 @@ function resolveApprovalEventData(payload: AgentTextStreamEvent): AgentRequireAp
   return {
     tool_name: typeof data.tool_name === "string" ? data.tool_name : undefined,
   };
+}
+
+// 描述：
+//
+//   - 规整单个用户提问问题，过滤空字段，避免侧边栏恢复出非法卡片数据。
+function normalizeUserInputQuestionPrompt(
+  value: unknown,
+): SharedAgentUserInputQuestionPrompt | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const raw = value as Record<string, unknown>;
+  const options = Array.isArray(raw.options)
+    ? raw.options
+      .map((option) => {
+        if (!option || typeof option !== "object") {
+          return null;
+        }
+        const rawOption = option as Record<string, unknown>;
+        const label = String(rawOption.label || "").trim();
+        const description = String(rawOption.description || "").trim();
+        if (!label || !description) {
+          return null;
+        }
+        return { label, description };
+      })
+      .filter((option): option is SharedAgentUserInputQuestionPrompt["options"][number] => Boolean(option))
+    : [];
+  const id = String(raw.id || "").trim();
+  const header = String(raw.header || "").trim();
+  const question = String(raw.question || "").trim();
+  if (!id || !header || !question || options.length === 0) {
+    return null;
+  }
+  return {
+    id,
+    header,
+    question,
+    options,
+  };
+}
+
+// 描述：
+//
+//   - 规整单个用户提问回答，统一兼容预设选项与自由填写两种提交结果。
+function normalizeUserInputAnswer(
+  value: unknown,
+): SharedAgentUserInputAnswer | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const raw = value as Record<string, unknown>;
+  const questionId = String(raw.question_id || "").trim();
+  const answerType = String(raw.answer_type || "").trim();
+  const normalizedAnswerType = answerType === "custom"
+    ? "custom"
+    : answerType === "option"
+      ? "option"
+      : "";
+  const valueText = String(raw.value || "").trim();
+  if (!questionId || !normalizedAnswerType || !valueText) {
+    return null;
+  }
+  const answer: SharedAgentUserInputAnswer = {
+    question_id: questionId,
+    answer_type: normalizedAnswerType,
+    value: valueText,
+  };
+  if (Number.isFinite(Number(raw.option_index))) {
+    answer.option_index = Math.max(0, Math.floor(Number(raw.option_index)));
+  }
+  if (typeof raw.option_label === "string" && String(raw.option_label || "").trim()) {
+    answer.option_label = String(raw.option_label || "").trim();
+  }
+  return answer;
+}
+
+// 描述：
+//
+//   - 解析文本流中的用户提问 data 结构，提取 request_id 和题目列表供侧边栏运行片段复用。
+function resolveUserInputEventData(payload: AgentTextStreamEvent): AgentRequestUserInputEventData {
+  if (!payload.data || typeof payload.data !== "object") {
+    return {};
+  }
+  const data = payload.data as Record<string, unknown>;
+  return {
+    request_id: typeof data.request_id === "string" ? data.request_id : undefined,
+    questions: Array.isArray(data.questions)
+      ? data.questions
+        .map((item) => normalizeUserInputQuestionPrompt(item))
+        .filter((item): item is SharedAgentUserInputQuestionPrompt => Boolean(item))
+      : undefined,
+  };
+}
+
+// 描述：
+//
+//   - 构建用户提问片段 data，仅保留跨页面恢复所需的请求 ID、问题与数量统计。
+function buildUserInputSegmentData(payload: AgentTextStreamEvent): Record<string, unknown> {
+  const resolved = resolveUserInputEventData(payload);
+  return {
+    __segment_kind: payload.kind,
+    __step_type: "user_input_request",
+    request_id: String(resolved.request_id || "").trim(),
+    question_count: Array.isArray(resolved.questions) ? resolved.questions.length : 0,
+    questions: resolved.questions || [],
+  };
+}
+
+// 描述：
+//
+//   - 解析用户提问片段中的问题数量，优先读取显式 question_count，回退到题目数组长度。
+function resolveUserInputQuestionCount(data: Record<string, unknown> | undefined): number {
+  if (data && Number.isFinite(Number(data.question_count))) {
+    return Math.max(0, Math.floor(Number(data.question_count)));
+  }
+  if (data && Array.isArray(data.questions)) {
+    return data.questions.length;
+  }
+  return 0;
 }
 
 // 描述：
@@ -950,6 +1095,9 @@ function AgentSidebar({
       const toolName = String(data.name || "").trim();
       const runOk = data.ok !== false;
       const stepText = String(data.result || "").trim() || text || t("任务步骤执行完成");
+      if (toolName === "request_user_input") {
+        return null;
+      }
       return {
         key,
         intro: t("工具完成：{{tool}}", { tool: toolName || "unknown" }),
@@ -984,6 +1132,17 @@ function AgentSidebar({
         step: t("正在请求执行 {{tool}}", { tool: approvalToolName }),
         status: "running" as const,
         data: buildApprovalSegmentData(payload),
+      };
+    }
+    if (payload.kind === STREAM_KINDS.REQUEST_USER_INPUT) {
+      const data = resolveUserInputEventData(payload);
+      const questionCount = Array.isArray(data.questions) ? data.questions.length : 0;
+      return {
+        key,
+        intro: t("需要用户决定"),
+        step: t("正在询问 {{count}} 个问题", { count: questionCount }),
+        status: "running" as const,
+        data: buildUserInputSegmentData(payload),
       };
     }
     if (payload.kind === STREAM_KINDS.ERROR) {
@@ -1032,6 +1191,21 @@ function AgentSidebar({
     return segment.intro === t("需要人工授权") || segmentKind === STREAM_KINDS.REQUIRE_APPROVAL;
   };
 
+  // 描述：
+  //
+  //   - 判断运行片段是否属于“待用户决定”片段，供侧边栏跨页面恢复时保持提问状态。
+  const isUserInputPendingSegment = (segment: SessionRunMeta["segments"][number]) => {
+    const segmentKind = segment.data && typeof segment.data.__segment_kind === "string"
+      ? segment.data.__segment_kind
+      : "";
+    const stepType = segment.data && typeof segment.data.__step_type === "string"
+      ? segment.data.__step_type
+      : "";
+    return segment.intro === t("需要用户决定")
+      || segmentKind === STREAM_KINDS.REQUEST_USER_INPUT
+      || stepType === "user_input_request";
+  };
+
   // 描述：将片段追加到运行元数据，并保证同一时刻仅有一个 running 片段。
   //
   // Params:
@@ -1052,16 +1226,16 @@ function AgentSidebar({
     const incomingSegmentKind = segment.data && typeof segment.data.__segment_kind === "string"
       ? segment.data.__segment_kind
       : "";
-    const hasPendingApproval = (current.segments || []).some(
-      (item) => item.status === "running" && isApprovalPendingSegment(item),
+    const hasPendingInteractiveSegment = (current.segments || []).some(
+      (item) => item.status === "running" && (isApprovalPendingSegment(item) || isUserInputPendingSegment(item)),
     );
     // 描述：
     //
-    //   - 授权等待期间忽略心跳片段，避免“需要人工授权”被覆盖后页面返回看不到授权卡片。
-    if (hasPendingApproval && incomingSegmentKind === STREAM_KINDS.HEARTBEAT) {
+    //   - 交互等待期间忽略心跳片段，避免“需要人工授权/需要用户决定”被覆盖后页面返回看不到交互卡片。
+    if (hasPendingInteractiveSegment && incomingSegmentKind === STREAM_KINDS.HEARTBEAT) {
       return current;
     }
-    const shouldResolveApprovalPending = incomingSegmentKind === STREAM_KINDS.TOOL_CALL_FINISHED
+    const shouldResolvePendingInteractiveSegment = incomingSegmentKind === STREAM_KINDS.TOOL_CALL_FINISHED
       || incomingSegmentKind === STREAM_KINDS.ERROR
       || incomingSegmentKind === STREAM_KINDS.CANCELLED
       || incomingSegmentKind === STREAM_KINDS.FINISHED
@@ -1070,67 +1244,144 @@ function AgentSidebar({
     const incomingErrorCode = segment.data && typeof segment.data.__error_code === "string"
       ? String(segment.data.__error_code || "").trim()
       : "";
-      const isHumanRefusedError = incomingSegmentKind === STREAM_KINDS.ERROR
-        && (
-          incomingErrorCode === "core.agent.human_refused"
-          || incomingStepText.includes(t("拒绝"))
-          || incomingStepText.toLowerCase().includes("reject")
-        );
+    const isHumanRefusedError = incomingSegmentKind === STREAM_KINDS.ERROR
+      && (
+        incomingErrorCode === "core.agent.human_refused"
+        || incomingStepText.includes(t("拒绝"))
+        || incomingStepText.toLowerCase().includes("reject")
+      );
+    const isCancellationLikeError = incomingSegmentKind === STREAM_KINDS.ERROR
+      && isCancelErrorCode(incomingErrorCode);
     const normalizedSegments = (current.segments || []).map((item) => {
       if (item.status !== "running") {
         return item;
       }
-      if (!isApprovalPendingSegment(item)) {
+      if (!isApprovalPendingSegment(item) && !isUserInputPendingSegment(item)) {
         return { ...item, status: "finished" as const };
       }
-      if (!shouldResolveApprovalPending) {
-        return item;
-      }
-      const toolName = String(
-        item.data && typeof item.data.tool_name === "string" ? item.data.tool_name : "",
-      ).trim();
-      const stepData = item.data && typeof item.data === "object" ? item.data : {};
-      if (isHumanRefusedError) {
+      if (isApprovalPendingSegment(item)) {
+        if (!shouldResolvePendingInteractiveSegment) {
+          return item;
+        }
+        const toolName = String(
+          item.data && typeof item.data.tool_name === "string" ? item.data.tool_name : "",
+        ).trim();
+        const stepData = item.data && typeof item.data === "object" ? item.data : {};
+        if (isHumanRefusedError) {
+          return {
+            ...item,
+            status: "failed" as const,
+            step: t("已拒绝 {{tool}} 的执行请求。", { tool: toolName || t("该工具") }),
+            data: {
+              ...stepData,
+              __step_type: "approval_decision",
+              approval_decision: "rejected",
+              approval_tool_name: toolName || t("该工具"),
+            },
+          };
+        }
+        if (incomingSegmentKind === STREAM_KINDS.CANCELLED) {
+          return {
+            ...item,
+            status: "finished" as const,
+            step: t("授权流程已取消，未执行 {{tool}}。", { tool: toolName || t("该工具") }),
+            data: {
+              ...stepData,
+              __step_type: "approval_decision",
+              approval_decision: "cancelled",
+              approval_tool_name: toolName || t("该工具"),
+            },
+          };
+        }
         return {
           ...item,
-          status: "failed" as const,
-          step: t("已拒绝 {{tool}} 的执行请求。", { tool: toolName || t("该工具") }),
+          status: "finished" as const,
+          step: t("已处理 {{tool}} 的授权请求。", { tool: toolName || t("该工具") }),
           data: {
             ...stepData,
             __step_type: "approval_decision",
-            approval_decision: "rejected",
+            approval_decision: "handled",
             approval_tool_name: toolName || t("该工具"),
           },
         };
       }
-      if (incomingSegmentKind === STREAM_KINDS.CANCELLED) {
+      if (!isUserInputPendingSegment(item) || !shouldResolvePendingInteractiveSegment) {
+        return item;
+      }
+      const stepData = item.data && typeof item.data === "object" ? item.data : {};
+      const questionCount = resolveUserInputQuestionCount(stepData);
+      const ignoredStepText = t("已询问 {{count}} 个问题（已忽略）", {
+        count: questionCount,
+      });
+      if (incomingSegmentKind === STREAM_KINDS.CANCELLED || isCancellationLikeError) {
         return {
           ...item,
           status: "finished" as const,
-          step: t("授权流程已取消，未执行 {{tool}}。", { tool: toolName || t("该工具") }),
+          step: ignoredStepText,
           data: {
             ...stepData,
-            __step_type: "approval_decision",
-            approval_decision: "cancelled",
-            approval_tool_name: toolName || t("该工具"),
+            __step_type: "user_input_request",
+            resolution: "ignored",
+            answers: [],
           },
         };
       }
       return {
         ...item,
         status: "finished" as const,
-        step: t("已处理 {{tool}} 的授权请求。", { tool: toolName || t("该工具") }),
+        step: ignoredStepText,
         data: {
           ...stepData,
-          __step_type: "approval_decision",
-          approval_decision: "handled",
-          approval_tool_name: toolName || t("该工具"),
+          __step_type: "user_input_request",
+          resolution: "ignored",
+          answers: [],
         },
       };
     });
     return {
       ...current,
       segments: [...normalizedSegments, segment].slice(-160),
+    };
+  };
+
+  // 描述：
+  //
+  //   - 按 request_id 乐观更新用户提问片段，确保切页恢复时也能看到问题回答与忽略结果。
+  const markUserInputSegmentResolvedInMeta = (
+    current: SessionRunMeta,
+    requestId: string,
+    resolution: "answered" | "ignored",
+    answers: SharedAgentUserInputAnswer[],
+  ): SessionRunMeta => {
+    const normalizedRequestId = String(requestId || "").trim();
+    if (!normalizedRequestId) {
+      return current;
+    }
+    return {
+      ...current,
+      segments: (current.segments || []).map((segment) => {
+        const segmentRequestId = segment.data && typeof segment.data.request_id === "string"
+          ? String(segment.data.request_id || "").trim()
+          : "";
+        if (!segmentRequestId || segmentRequestId !== normalizedRequestId || !isUserInputPendingSegment(segment)) {
+          return segment;
+        }
+        const stepData = segment.data && typeof segment.data === "object" ? segment.data : {};
+        const questionCount = resolveUserInputQuestionCount(stepData);
+        return {
+          ...segment,
+          status: "finished" as const,
+          step: resolution === "ignored"
+            ? t("已询问 {{count}} 个问题（已忽略）", { count: questionCount })
+            : t("已询问 {{count}} 个问题", { count: questionCount }),
+          data: {
+            ...stepData,
+            __step_type: "user_input_request",
+            resolution,
+            answers,
+          },
+        };
+      }),
     };
   };
 
@@ -1803,6 +2054,25 @@ function AgentSidebar({
         summary: String(baseMeta.summary || ""),
         segments: Array.isArray(baseMeta.segments) ? baseMeta.segments : [],
       };
+      if (payload.kind === STREAM_KINDS.TOOL_CALL_FINISHED) {
+        const toolData = resolveToolCallEventData(payload);
+        const toolName = String(toolData.name || "").trim();
+        if (toolName === "request_user_input") {
+          const resultData = toolData.result_data || {};
+          const requestId = String(resultData.request_id || "").trim();
+          const resolution = String(resultData.resolution || "").trim() === "ignored"
+            ? "ignored"
+            : "answered";
+          const answers = Array.isArray(resultData.answers)
+            ? resultData.answers
+              .map((item) => normalizeUserInputAnswer(item))
+              .filter((item): item is SharedAgentUserInputAnswer => Boolean(item))
+            : [];
+          if (requestId) {
+            nextMeta = markUserInputSegmentResolvedInMeta(nextMeta, requestId, resolution, answers);
+          }
+        }
+      }
       let nextSending = snapshot?.sending ?? true;
       const segment = mapCodeStreamToRunSegment(payload, `stream:${payload.kind}:${payload.message}:${now}`);
       if (segment) {

@@ -203,6 +203,7 @@ export interface SessionRunMeta {
   finishedAt?: number;
   collapsed: boolean;
   summary: string;
+  summarySource?: "ai" | "system" | "failure";
   segments: SessionRunSegment[];
 }
 
@@ -2435,6 +2436,95 @@ function truncateRunStateText(value: string, maxChars: number): string {
 
 // 描述：
 //
+//   - 规整用户提问问题列表，按白名单保留前端恢复所需字段并裁剪超长文本。
+function sanitizeRunSegmentUserInputQuestions(
+  value: unknown,
+): Array<Record<string, unknown>> | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const questions = value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const raw = item as Record<string, unknown>;
+      const options = Array.isArray(raw.options)
+        ? raw.options
+          .map((option) => {
+            if (!option || typeof option !== "object") {
+              return null;
+            }
+            const rawOption = option as Record<string, unknown>;
+            const label = truncateRunStateText(String(rawOption.label || ""), 120);
+            const description = truncateRunStateText(String(rawOption.description || ""), 240);
+            if (!label || !description) {
+              return null;
+            }
+            return { label, description };
+          })
+          .filter((option): option is Record<string, unknown> => Boolean(option))
+        : [];
+      const id = truncateRunStateText(String(raw.id || ""), 120);
+      const header = truncateRunStateText(String(raw.header || ""), 120);
+      const question = truncateRunStateText(String(raw.question || ""), 400);
+      if (!id || !header || !question || options.length === 0) {
+        return null;
+      }
+      return {
+        id,
+        header,
+        question,
+        options,
+      };
+    })
+    .filter((question): question is Record<string, unknown> => Boolean(question));
+  return questions.length > 0 ? questions : undefined;
+}
+
+// 描述：
+//
+//   - 规整用户提问回答列表，保证切页恢复与导出时都保留稳定结构。
+function sanitizeRunSegmentUserInputAnswers(
+  value: unknown,
+): Array<Record<string, unknown>> | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const answers = value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const raw = item as Record<string, unknown>;
+      const questionId = truncateRunStateText(String(raw.question_id || ""), 120);
+      const answerType = truncateRunStateText(String(raw.answer_type || ""), 32);
+      const optionLabel = typeof raw.option_label === "string"
+        ? truncateRunStateText(raw.option_label, 120)
+        : undefined;
+      const valueText = truncateRunStateText(String(raw.value || ""), 400);
+      if (!questionId || !answerType || !valueText) {
+        return null;
+      }
+      const nextAnswer: Record<string, unknown> = {
+        question_id: questionId,
+        answer_type: answerType,
+        value: valueText,
+      };
+      if (Number.isFinite(Number(raw.option_index))) {
+        nextAnswer.option_index = Math.max(0, Math.floor(Number(raw.option_index)));
+      }
+      if (optionLabel) {
+        nextAnswer.option_label = optionLabel;
+      }
+      return nextAnswer;
+    })
+    .filter((answer): answer is Record<string, unknown> => Boolean(answer));
+  return answers.length > 0 ? answers : undefined;
+}
+
+// 描述：
+//
 //   - 规范化运行片段 data，按白名单保留关键字段并裁剪超长文本。
 function sanitizeRunSegmentDataForStorage(
   data: Record<string, unknown> | undefined,
@@ -2454,6 +2544,9 @@ function sanitizeRunSegmentDataForStorage(
   }
   if (typeof data.approval_id === "string") {
     next.approval_id = truncateRunStateText(data.approval_id, 120);
+  }
+  if (typeof data.request_id === "string") {
+    next.request_id = truncateRunStateText(data.request_id, 120);
   }
   if (typeof data.tool_name === "string") {
     next.tool_name = truncateRunStateText(data.tool_name, 120);
@@ -2481,6 +2574,20 @@ function sanitizeRunSegmentDataForStorage(
   }
   if (Number.isFinite(Number(data.browse_search_count))) {
     next.browse_search_count = Math.max(0, Math.floor(Number(data.browse_search_count)));
+  }
+  if (typeof data.resolution === "string") {
+    next.resolution = truncateRunStateText(data.resolution, 32);
+  }
+  if (Number.isFinite(Number(data.question_count))) {
+    next.question_count = Math.max(0, Math.floor(Number(data.question_count)));
+  }
+  const questions = sanitizeRunSegmentUserInputQuestions(data.questions);
+  if (questions) {
+    next.questions = questions;
+  }
+  const answers = sanitizeRunSegmentUserInputAnswers(data.answers);
+  if (answers) {
+    next.answers = answers;
   }
   return Object.keys(next).length > 0 ? next : undefined;
 }
@@ -2527,6 +2634,13 @@ function sanitizeRunMetaMapForStorage(
             finishedAt: meta.finishedAt ? Number(meta.finishedAt) : undefined,
             collapsed: Boolean(meta.collapsed),
             summary: truncateRunStateText(String(meta.summary || ""), RUN_STATE_SUMMARY_MAX_CHARS),
+            summarySource: meta.summarySource === "ai"
+              ? "ai"
+              : meta.summarySource === "failure"
+                ? "failure"
+                : meta.summarySource === "system"
+                  ? "system"
+                  : undefined,
             segments,
           } as SessionRunMeta,
         ] as const;

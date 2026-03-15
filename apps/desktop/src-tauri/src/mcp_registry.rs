@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use tauri::Manager;
 
 /// 描述：前端可消费的 MCP 注册项结构，统一输出注册配置、运行时模式与可移除能力。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -223,66 +225,31 @@ fn ensure_registry_parent(registry_path: &Path) -> Result<(), String> {
 fn builtin_mcp_templates() -> Vec<McpTemplateRecord> {
     vec![
         McpTemplateRecord {
-            id: "apifox-official".to_string(),
-            name: "Apifox 接口工具".to_string(),
-            description: "通过内置运行时接入 Apifox。".to_string(),
+            id: "playwright-mcp".to_string(),
+            name: "Playwright 浏览器自动化".to_string(),
+            description: "连接 Microsoft Playwright MCP，提供页面浏览、交互和自动化测试能力。".to_string(),
             domain: "general".to_string(),
-            software: "".to_string(),
-            capabilities: Vec::new(),
-            priority: 0,
+            software: "playwright".to_string(),
+            capabilities: vec![
+                "browser.navigate".to_string(),
+                "browser.snapshot".to_string(),
+                "browser.click".to_string(),
+                "browser.type".to_string(),
+                "browser.wait".to_string(),
+                "browser.screenshot".to_string(),
+            ],
+            priority: 70,
             supports_import: false,
             supports_export: false,
             transport: "stdio".to_string(),
-            command: "".to_string(),
-            args: Vec::new(),
+            command: "npx".to_string(),
+            args: vec!["-y".to_string(), "@playwright/mcp@latest".to_string()],
             env: HashMap::new(),
             cwd: "".to_string(),
             url: "".to_string(),
             headers: HashMap::new(),
-            docs_url: "https://docs.apifox.com/apifox-mcp-server".to_string(),
-            official_provider: "Apifox".to_string(),
-            runtime_kind: "apifox_runtime".to_string(),
-        },
-        McpTemplateRecord {
-            id: "generic-stdio".to_string(),
-            name: "本地命令 MCP".to_string(),
-            description: "适合通过本地命令启动的 MCP 服务。".to_string(),
-            domain: "general".to_string(),
-            software: "".to_string(),
-            capabilities: Vec::new(),
-            priority: 0,
-            supports_import: false,
-            supports_export: false,
-            transport: "stdio".to_string(),
-            command: "".to_string(),
-            args: Vec::new(),
-            env: HashMap::new(),
-            cwd: "".to_string(),
-            url: "".to_string(),
-            headers: HashMap::new(),
-            docs_url: "".to_string(),
-            official_provider: "".to_string(),
-            runtime_kind: "".to_string(),
-        },
-        McpTemplateRecord {
-            id: "generic-http".to_string(),
-            name: "HTTP 地址 MCP".to_string(),
-            description: "适合通过 HTTP 地址接入的 MCP 服务。".to_string(),
-            domain: "general".to_string(),
-            software: "".to_string(),
-            capabilities: Vec::new(),
-            priority: 0,
-            supports_import: false,
-            supports_export: false,
-            transport: "http".to_string(),
-            command: "".to_string(),
-            args: Vec::new(),
-            env: HashMap::new(),
-            cwd: "".to_string(),
-            url: "http://127.0.0.1:3000/mcp".to_string(),
-            headers: HashMap::new(),
-            docs_url: "".to_string(),
-            official_provider: "".to_string(),
+            docs_url: "https://github.com/microsoft/playwright-mcp".to_string(),
+            official_provider: "Microsoft".to_string(),
             runtime_kind: "".to_string(),
         },
         McpTemplateRecord {
@@ -378,6 +345,87 @@ fn builtin_mcp_templates() -> Vec<McpTemplateRecord> {
     ]
 }
 
+/// 描述：按模板 ID 查找桌面端允许使用的内置 MCP 模板。
+///
+/// Params:
+///
+///   - template_id: 模板标识。
+///
+/// Returns:
+///
+///   - 命中的内置模板；未命中时返回 None。
+fn find_builtin_mcp_template(template_id: &str) -> Option<McpTemplateRecord> {
+    let normalized_template_id = template_id.trim();
+    if normalized_template_id.is_empty() {
+        return None;
+    }
+    builtin_mcp_templates()
+        .into_iter()
+        .find(|item| item.id == normalized_template_id)
+}
+
+/// 描述：将已持久化的注册项重新投影到内置模板定义，避免桌面端继续暴露外部或被篡改的 MCP 配置。
+///
+/// Params:
+///
+///   - record: 已持久化的注册项。
+///
+/// Returns:
+///
+///   - 命中的安全注册项；未匹配内置模板时返回 None。
+fn normalize_builtin_registration_record(
+    record: McpRegistrationRecord,
+) -> Option<McpRegistrationRecord> {
+    let template = find_builtin_mcp_template(record.template_id.as_str())?;
+    Some(McpRegistrationRecord {
+        id: record.id,
+        template_id: template.id,
+        name: template.name,
+        description: template.description,
+        domain: template.domain,
+        software: template.software,
+        capabilities: template.capabilities,
+        priority: template.priority,
+        supports_import: template.supports_import,
+        supports_export: template.supports_export,
+        transport: template.transport,
+        scope: if record.scope.trim() == "workspace" {
+            "workspace".to_string()
+        } else {
+            "user".to_string()
+        },
+        enabled: record.enabled,
+        command: template.command,
+        args: template.args,
+        env: template.env,
+        cwd: template.cwd,
+        url: template.url,
+        headers: template.headers,
+        docs_url: template.docs_url,
+        official_provider: template.official_provider,
+        runtime_kind: template.runtime_kind,
+        removable: true,
+    })
+}
+
+/// 描述：过滤并规整注册项，仅保留桌面端允许启用的内置 MCP 模板实例。
+///
+/// Params:
+///
+///   - records: 原始注册项列表。
+///
+/// Returns:
+///
+///   - 仅包含内置模板实例的注册项列表。
+fn filter_supported_registration_records(
+    records: Vec<McpRegistrationRecord>,
+) -> Vec<McpRegistrationRecord> {
+    records
+        .into_iter()
+        .filter_map(normalize_builtin_registration_record)
+        .collect()
+}
+
 /// 描述：从指定路径读取 MCP 注册表；文件不存在时返回空列表，便于首启直接进入新增流程。
 ///
 /// Params:
@@ -398,8 +446,10 @@ fn read_mcp_registry_from_path(registry_path: &Path) -> Result<Vec<McpRegistrati
             err
         )
     })?;
-    let mut records: Vec<McpRegistrationRecord> = serde_json::from_str(raw.as_str())
-        .map_err(|err| format!("解析 MCP 注册表失败：{}", err))?;
+    let mut records: Vec<McpRegistrationRecord> = filter_supported_registration_records(
+        serde_json::from_str(raw.as_str())
+            .map_err(|err| format!("解析 MCP 注册表失败：{}", err))?,
+    );
     records.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
     Ok(records)
 }
@@ -618,50 +668,6 @@ fn ensure_unique_registration_id(
     }
 }
 
-/// 描述：清理键值映射，移除空键和空值，避免将无效环境变量或 Header 持久化到注册表。
-///
-/// Params:
-///
-///   - source: 原始键值映射。
-///
-/// Returns:
-///
-///   - 归一化后的键值映射。
-fn normalize_string_map(source: HashMap<String, String>) -> HashMap<String, String> {
-    source
-        .into_iter()
-        .filter_map(|(key, value)| {
-            let normalized_key = key.trim().to_string();
-            let normalized_value = value.trim().to_string();
-            if normalized_key.is_empty() || normalized_value.is_empty() {
-                return None;
-            }
-            Some((normalized_key, normalized_value))
-        })
-        .collect()
-}
-
-/// 描述：清理字符串列表，移除空值与重复项，保持能力列表可预测且便于运行时消费。
-///
-/// Params:
-///
-///   - source: 原始字符串列表。
-///
-/// Returns:
-///
-///   - 规整后的字符串列表。
-fn normalize_string_list(source: Vec<String>) -> Vec<String> {
-    let mut normalized: Vec<String> = Vec::new();
-    for item in source {
-        let value = item.trim().to_string();
-        if value.is_empty() || normalized.iter().any(|existing| existing == &value) {
-            continue;
-        }
-        normalized.push(value);
-    }
-    normalized
-}
-
 /// 描述：基础校验 MCP 草稿，确保传输方式、必填字段和 URL/命令格式满足最小要求。
 ///
 /// Params:
@@ -673,71 +679,39 @@ fn normalize_string_list(source: Vec<String>) -> Vec<String> {
 ///   - 规整后的字段元组。
 fn normalize_registration_payload(
     payload: McpRegistrationPayload,
+    _workspace_root: Option<&str>,
 ) -> Result<McpRegistrationPayload, String> {
-    let normalized_name = payload.name.trim().to_string();
-    if normalized_name.is_empty() {
-        return Err("MCP 名称不能为空。".to_string());
-    }
-    let normalized_transport = payload.transport.trim().to_lowercase();
-    if normalized_transport != "stdio" && normalized_transport != "http" {
-        return Err("MCP 传输方式仅支持 stdio 或 http。".to_string());
-    }
-    let normalized_runtime_kind = payload.runtime_kind.trim().to_string();
-    let normalized_command = payload.command.trim().to_string();
-    let normalized_url = payload.url.trim().to_string();
-    if normalized_transport == "stdio"
-        && normalized_runtime_kind != "apifox_runtime"
-        && normalized_command.is_empty()
-    {
-        return Err("Stdio MCP 必须填写启动命令。".to_string());
-    }
-    if normalized_transport == "http"
-        && !(normalized_url.starts_with("http://") || normalized_url.starts_with("https://"))
-    {
-        return Err("HTTP MCP 地址必须以 http:// 或 https:// 开头。".to_string());
-    }
+    let template = find_builtin_mcp_template(payload.template_id.as_str()).ok_or_else(|| {
+        "当前版本仅允许添加应用内置 MCP，暂不支持自定义命令或外部 HTTP MCP。".to_string()
+    })?;
     let normalized_scope = match payload.scope.trim() {
         "" | "user" => "user".to_string(),
         "workspace" => "workspace".to_string(),
         _ => return Err("MCP 作用域仅支持 user 或 workspace。".to_string()),
     };
-    let normalized_domain = match payload.domain.trim().to_lowercase().as_str() {
-        "" | "general" => "general".to_string(),
-        "dcc" => "dcc".to_string(),
-        _ => return Err("MCP 领域仅支持 general 或 dcc。".to_string()),
-    };
-    let normalized_software = payload.software.trim().to_lowercase();
-    if normalized_domain == "dcc" && normalized_software.is_empty() {
-        return Err("DCC MCP 必须填写软件标识（例如 blender、maya、c4d）。".to_string());
-    }
     Ok(McpRegistrationPayload {
         id: payload.id.trim().to_string(),
-        template_id: payload.template_id.trim().to_string(),
-        name: normalized_name,
-        description: payload.description.trim().to_string(),
-        domain: normalized_domain,
-        software: normalized_software,
-        capabilities: normalize_string_list(payload.capabilities),
-        priority: payload.priority,
-        supports_import: payload.supports_import,
-        supports_export: payload.supports_export,
-        transport: normalized_transport,
+        template_id: template.id,
+        name: template.name,
+        description: template.description,
+        domain: template.domain,
+        software: template.software,
+        capabilities: template.capabilities,
+        priority: template.priority,
+        supports_import: template.supports_import,
+        supports_export: template.supports_export,
+        transport: template.transport,
         scope: normalized_scope,
         enabled: payload.enabled,
-        command: normalized_command,
-        args: payload
-            .args
-            .into_iter()
-            .map(|item| item.trim().to_string())
-            .filter(|item| !item.is_empty())
-            .collect(),
-        env: normalize_string_map(payload.env),
-        cwd: payload.cwd.trim().to_string(),
-        url: normalized_url,
-        headers: normalize_string_map(payload.headers),
-        docs_url: payload.docs_url.trim().to_string(),
-        official_provider: payload.official_provider.trim().to_string(),
-        runtime_kind: normalized_runtime_kind,
+        command: template.command,
+        args: template.args,
+        env: template.env,
+        cwd: template.cwd,
+        url: template.url,
+        headers: template.headers,
+        docs_url: template.docs_url,
+        official_provider: template.official_provider,
+        runtime_kind: template.runtime_kind,
     })
 }
 
@@ -836,6 +810,119 @@ fn resolve_local_command_path(command: &str) -> Option<PathBuf> {
     None
 }
 
+/// 描述：判断当前内置模板是否需要在校验阶段执行真实的 stdio 预检命令。
+///
+/// Params:
+///
+///   - payload: 已归一化的 MCP 注册草稿。
+///
+/// Returns:
+///
+///   - 需要执行的预检参数；当前仅对 Playwright 模板返回参数。
+fn resolve_stdio_probe_args(payload: &McpRegistrationPayload) -> Option<Vec<String>> {
+    if payload.transport != "stdio" {
+        return None;
+    }
+    if payload.template_id.trim() != "playwright-mcp" {
+        return None;
+    }
+    let mut probe_args = payload.args.clone();
+    if !probe_args
+        .iter()
+        .any(|item| item == "--help" || item == "-h")
+    {
+        probe_args.push("--help".to_string());
+    }
+    Some(probe_args)
+}
+
+/// 描述：构建 stdio MCP 预检命令的缓存目录，避免 `npx` 首次拉包时写入不可控的默认用户缓存目录。
+///
+/// Params:
+///
+///   - app: Tauri 应用句柄。
+///   - template_id: 模板标识。
+///
+/// Returns:
+///
+///   - 预检缓存目录路径。
+fn resolve_stdio_probe_cache_dir(
+    app: &tauri::AppHandle,
+    template_id: &str,
+) -> Result<PathBuf, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|err| format!("无法定位应用数据目录：{}", err))?;
+    let template_segment = slugify_identifier(template_id);
+    Ok(app_data_dir
+        .join("mcp_runtime_probe")
+        .join(if template_segment.is_empty() {
+            "generic".to_string()
+        } else {
+            template_segment
+        }))
+}
+
+/// 描述：执行 stdio MCP 的真实预检命令，用于确认模板在当前环境下可以被正确拉起。
+///
+/// Params:
+///
+///   - app: Tauri 应用句柄。
+///   - payload: 已归一化的 MCP 注册草稿。
+///   - command_path: 已解析出的本地命令路径。
+///   - probe_args: 预检命令参数。
+///
+/// Returns:
+///
+///   - 成功时返回面向用户的友好提示。
+fn probe_stdio_registration_command(
+    app: &tauri::AppHandle,
+    payload: &McpRegistrationPayload,
+    command_path: &Path,
+    probe_args: &[String],
+) -> Result<String, String> {
+    let cache_dir = resolve_stdio_probe_cache_dir(app, payload.template_id.as_str())?;
+    fs::create_dir_all(cache_dir.as_path())
+        .map_err(|err| format!("创建 MCP 预检缓存目录失败：{}", err))?;
+
+    let mut command = Command::new(command_path);
+    command.args(probe_args);
+    if !payload.cwd.trim().is_empty() {
+        command.current_dir(payload.cwd.trim());
+    }
+    for (key, value) in payload.env.iter() {
+        command.env(key, value);
+    }
+    command.env("npm_config_cache", cache_dir.as_os_str());
+
+    let output = command
+        .output()
+        .map_err(|err| format!("执行 MCP 预检命令失败：{}", err))?;
+    if output.status.success() {
+        let package_name = payload
+            .args
+            .iter()
+            .find(|item| !item.trim().starts_with('-'))
+            .cloned()
+            .unwrap_or_else(|| payload.name.clone());
+        return Ok(format!(
+            "已通过运行预检，可自动拉起 {}。",
+            package_name
+        ));
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let detail = if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        "未返回额外输出。".to_string()
+    };
+    Err(format!("执行 MCP 预检失败：{}", detail))
+}
+
 /// 描述：构建前端可消费的 MCP 注册表总览。
 ///
 /// Params:
@@ -877,12 +964,12 @@ pub async fn save_mcp_registration(
     payload: McpRegistrationPayload,
     workspace_root: Option<String>,
 ) -> Result<McpRegistrationRecord, String> {
-    let normalized_payload = normalize_registration_payload(payload)?;
-    let target_scope = normalized_payload.scope.clone();
     let normalized_workspace_root = workspace_root
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
+    let normalized_payload = normalize_registration_payload(payload, normalized_workspace_root)?;
+    let target_scope = normalized_payload.scope.clone();
     let user_registry_path = resolve_user_mcp_registry_path()?;
     let mut user_records = read_user_mcp_registry()?;
     let mut workspace_records = read_workspace_mcp_registry(normalized_workspace_root)?;
@@ -915,7 +1002,7 @@ pub async fn save_mcp_registration(
     Ok(record)
 }
 
-/// 描述：移除指定 MCP 注册项；仅允许移除用户自定义注册。
+/// 描述：移除指定 MCP 注册项；当前仅处理已保存的内置模板实例。
 ///
 /// Params:
 ///
@@ -970,7 +1057,7 @@ pub async fn remove_mcp_registration(
     Ok(removed)
 }
 
-/// 描述：执行 MCP 注册项的基础环境校验；stdio 校验本地命令是否可解析，http 校验 URL 格式。
+/// 描述：执行内置 MCP 注册项的基础环境校验；DCC 模板走内置参数校验，其余内置模板走命令或地址检查。
 ///
 /// Params:
 ///
@@ -981,23 +1068,17 @@ pub async fn remove_mcp_registration(
 ///   - MCP 校验结果。
 #[tauri::command]
 pub async fn validate_mcp_registration(
+    app: tauri::AppHandle,
     payload: McpRegistrationPayload,
     workspace_root: Option<String>,
 ) -> Result<McpValidationResult, String> {
-    let normalized_payload = normalize_registration_payload(payload)?;
-    if normalized_payload.scope == "workspace"
-        && workspace_root.as_deref().unwrap_or("").trim().is_empty()
-    {
+    let normalized_workspace_root = workspace_root
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let normalized_payload = normalize_registration_payload(payload, normalized_workspace_root)?;
+    if normalized_payload.scope == "workspace" && normalized_workspace_root.is_none() {
         return Err("校验 workspace 级 MCP 时必须绑定项目目录。".to_string());
-    }
-    if normalized_payload.runtime_kind == "apifox_runtime" {
-        return Ok(McpValidationResult {
-            ok: true,
-            message:
-                "Apifox Runtime 由独立安装器管理，请在页面中使用“安装 Runtime”按钮完成运行时准备。"
-                    .to_string(),
-            resolved_path: "".to_string(),
-        });
     }
     if normalized_payload.transport == "http" {
         return Ok(McpValidationResult {
@@ -1007,6 +1088,25 @@ pub async fn validate_mcp_registration(
         });
     }
     if let Some(path) = resolve_local_command_path(normalized_payload.command.as_str()) {
+        if let Some(probe_args) = resolve_stdio_probe_args(&normalized_payload) {
+            return match probe_stdio_registration_command(
+                &app,
+                &normalized_payload,
+                path.as_path(),
+                probe_args.as_slice(),
+            ) {
+                Ok(message) => Ok(McpValidationResult {
+                    ok: true,
+                    message,
+                    resolved_path: path.to_string_lossy().to_string(),
+                }),
+                Err(message) => Ok(McpValidationResult {
+                    ok: false,
+                    message,
+                    resolved_path: path.to_string_lossy().to_string(),
+                }),
+            };
+        }
         return Ok(McpValidationResult {
             ok: true,
             message: format!("已找到可执行命令：{}", path.to_string_lossy()),
@@ -1023,8 +1123,8 @@ pub async fn validate_mcp_registration(
 #[cfg(test)]
 mod tests {
     use super::{
-        merge_registry_records, normalize_registration_payload, slugify_identifier,
-        McpRegistrationPayload, McpRegistrationRecord,
+        McpRegistrationPayload, McpRegistrationRecord, merge_registry_records,
+        normalize_registration_payload, resolve_stdio_probe_args, slugify_identifier,
     };
     use std::collections::HashMap;
 
@@ -1032,12 +1132,12 @@ mod tests {
     #[test]
     fn slugify_identifier_should_normalize_common_input() {
         assert_eq!(slugify_identifier("  My_Custom MCP  "), "my-custom-mcp");
-        assert_eq!(slugify_identifier("apifox-official"), "apifox-official");
+        assert_eq!(slugify_identifier("blender-local-bridge"), "blender-local-bridge");
     }
 
-    /// 描述：验证 stdio MCP 在缺少命令时会被拦截，避免写入无法运行的注册项。
+    /// 描述：验证桌面端会拒绝非内置模板的 MCP 草稿，避免把任意外部命令写入注册表。
     #[test]
-    fn normalize_registration_payload_should_reject_stdio_without_command() {
+    fn normalize_registration_payload_should_reject_non_builtin_template() {
         let payload = McpRegistrationPayload {
             id: "".to_string(),
             template_id: "generic-stdio".to_string(),
@@ -1062,8 +1162,120 @@ mod tests {
             official_provider: "".to_string(),
             runtime_kind: "".to_string(),
         };
-        let error = normalize_registration_payload(payload).unwrap_err();
-        assert!(error.contains("启动命令"));
+        let error = normalize_registration_payload(payload, None).unwrap_err();
+        assert!(error.contains("应用内置 MCP"));
+    }
+
+    /// 描述：验证内置模板保存时会回退到模板定义，避免前端篡改 transport、command 等安全字段。
+    #[test]
+    fn normalize_registration_payload_should_project_to_builtin_template() {
+        let payload = McpRegistrationPayload {
+            id: "".to_string(),
+            template_id: "blender-local-bridge".to_string(),
+            name: "Custom Name".to_string(),
+            description: "custom desc".to_string(),
+            domain: "dcc".to_string(),
+            software: "maya".to_string(),
+            capabilities: vec!["custom.capability".to_string()],
+            priority: 99,
+            supports_import: true,
+            supports_export: true,
+            transport: "http".to_string(),
+            scope: "workspace".to_string(),
+            enabled: true,
+            command: "custom-command".to_string(),
+            args: vec!["--custom".to_string()],
+            env: HashMap::from([("TOKEN".to_string(), "123".to_string())]),
+            cwd: "/tmp/custom".to_string(),
+            url: "https://example.com/mcp".to_string(),
+            headers: HashMap::from([("Authorization".to_string(), "Bearer demo".to_string())]),
+            docs_url: "https://example.com/docs".to_string(),
+            official_provider: "Custom".to_string(),
+            runtime_kind: "custom_runtime".to_string(),
+        };
+
+        let normalized = normalize_registration_payload(payload, Some("/tmp/workspace"))
+            .expect("builtin template");
+
+        assert_eq!(normalized.template_id, "blender-local-bridge");
+        assert_eq!(normalized.name, "Blender 建模桥接");
+        assert_eq!(normalized.transport, "stdio");
+        assert_eq!(normalized.scope, "workspace");
+        assert_eq!(normalized.command, "");
+        assert!(normalized.args.is_empty());
+        assert!(normalized.env.is_empty());
+        assert!(normalized.headers.is_empty());
+        assert_eq!(normalized.runtime_kind, "dcc_bridge");
+    }
+
+    /// 描述：验证 Playwright 模板会派生真实运行预检参数，避免新增模板时只检查 `npx` 是否存在。
+    #[test]
+    fn resolve_stdio_probe_args_should_enable_playwright_runtime_probe() {
+        let payload = McpRegistrationPayload {
+            id: "".to_string(),
+            template_id: "playwright-mcp".to_string(),
+            name: "Playwright 浏览器自动化".to_string(),
+            description: "".to_string(),
+            domain: "general".to_string(),
+            software: "playwright".to_string(),
+            capabilities: Vec::new(),
+            priority: 0,
+            supports_import: false,
+            supports_export: false,
+            transport: "stdio".to_string(),
+            scope: "user".to_string(),
+            enabled: true,
+            command: "npx".to_string(),
+            args: vec!["-y".to_string(), "@playwright/mcp@latest".to_string()],
+            env: HashMap::new(),
+            cwd: "".to_string(),
+            url: "".to_string(),
+            headers: HashMap::new(),
+            docs_url: "".to_string(),
+            official_provider: "Microsoft".to_string(),
+            runtime_kind: "".to_string(),
+        };
+
+        let probe_args = resolve_stdio_probe_args(&payload).expect("playwright probe args");
+        assert_eq!(
+            probe_args,
+            vec![
+                "-y".to_string(),
+                "@playwright/mcp@latest".to_string(),
+                "--help".to_string()
+            ]
+        );
+    }
+
+    /// 描述：验证非 Playwright 模板不会触发真实预检，避免影响其他 MCP 的校验口径。
+    #[test]
+    fn resolve_stdio_probe_args_should_ignore_other_templates() {
+        let payload = McpRegistrationPayload {
+            id: "".to_string(),
+            template_id: "blender-local-bridge".to_string(),
+            name: "Blender".to_string(),
+            description: "".to_string(),
+            domain: "dcc".to_string(),
+            software: "blender".to_string(),
+            capabilities: Vec::new(),
+            priority: 0,
+            supports_import: false,
+            supports_export: false,
+            transport: "stdio".to_string(),
+            scope: "user".to_string(),
+            enabled: true,
+            command: "".to_string(),
+            args: Vec::new(),
+            env: HashMap::new(),
+            cwd: "".to_string(),
+            url: "".to_string(),
+            headers: HashMap::new(),
+            docs_url: "".to_string(),
+            official_provider: "".to_string(),
+            runtime_kind: "dcc_bridge".to_string(),
+        };
+
+        assert!(resolve_stdio_probe_args(&payload).is_none());
     }
 
     /// 描述：验证 workspace 级注册项会覆盖同名 user 级注册项，确保运行时和管理页看到的是最终生效结果。
@@ -1071,27 +1283,27 @@ mod tests {
     fn merge_registry_records_should_prefer_workspace_scope() {
         let user = McpRegistrationRecord {
             id: "design-tools".to_string(),
-            template_id: "".to_string(),
+            template_id: "blender-local-bridge".to_string(),
             name: "Design Tools User".to_string(),
-            description: "".to_string(),
-            domain: "general".to_string(),
-            software: "".to_string(),
-            capabilities: Vec::new(),
-            priority: 0,
-            supports_import: false,
-            supports_export: false,
-            transport: "http".to_string(),
+            description: "bridge".to_string(),
+            domain: "dcc".to_string(),
+            software: "blender".to_string(),
+            capabilities: vec!["scene.inspect".to_string()],
+            priority: 100,
+            supports_import: true,
+            supports_export: true,
+            transport: "stdio".to_string(),
             scope: "user".to_string(),
             enabled: true,
             command: "".to_string(),
             args: Vec::new(),
             env: HashMap::new(),
             cwd: "".to_string(),
-            url: "http://127.0.0.1:3000/mcp".to_string(),
+            url: "".to_string(),
             headers: HashMap::new(),
-            docs_url: "".to_string(),
-            official_provider: "".to_string(),
-            runtime_kind: "".to_string(),
+            docs_url: "https://www.blender.org/download/".to_string(),
+            official_provider: "Blender".to_string(),
+            runtime_kind: "dcc_bridge".to_string(),
             removable: true,
         };
         let workspace = McpRegistrationRecord {

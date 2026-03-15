@@ -227,6 +227,7 @@ interface DeskOverviewDetailsModalProps {
   description?: string;
   children?: ReactNode;
   footer?: ReactNode;
+  width?: string;
   onClose: () => void;
 }
 
@@ -241,6 +242,7 @@ interface DeskOverviewDetailsModalProps {
 //   - description: 详情摘要说明。
 //   - children: 详情主体。
 //   - footer: 详情弹窗底部动作。
+//   - width: 详情弹窗宽度；未提供时使用默认宽度。
 //   - onClose: 关闭回调。
 export function DeskOverviewDetailsModal({
   visible,
@@ -248,6 +250,7 @@ export function DeskOverviewDetailsModal({
   description,
   children,
   footer,
+  width,
   onClose,
 }: DeskOverviewDetailsModalProps) {
   const { t } = useDesktopI18n();
@@ -255,7 +258,7 @@ export function DeskOverviewDetailsModal({
     <AriModal
       visible={visible}
       title={title}
-      width="calc(var(--z-inset) * 36)"
+      width={width || "calc(var(--z-inset) * 36)"}
       onClose={onClose}
       footer={
         footer ?? (

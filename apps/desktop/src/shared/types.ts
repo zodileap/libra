@@ -321,6 +321,35 @@ export interface AgentTextStreamEvent {
   data?: Record<string, unknown>;
 }
 
+// 描述：
+//
+//   - 定义用户提问选项结构，供桌面端渲染 Agent 决策卡片与运行片段详情。
+export interface AgentUserInputOption {
+  label: string;
+  description: string;
+}
+
+// 描述：
+//
+//   - 定义单个用户提问问题结构；每次请求允许携带 1-3 个问题。
+export interface AgentUserInputQuestionPrompt {
+  id: string;
+  header: string;
+  question: string;
+  options: AgentUserInputOption[];
+}
+
+// 描述：
+//
+//   - 定义用户提问回答结构，统一兼容预设选项与自由填写两种结果。
+export interface AgentUserInputAnswer {
+  question_id: string;
+  answer_type: "option" | "custom";
+  option_index?: number;
+  option_label?: string;
+  value: string;
+}
+
 // 描述:
 //
 //   - 定义模型调试轨迹事件结构，供调试面板展示。

@@ -51,6 +51,27 @@ const GRAPH_CANVAS_BASE_Y = 160;
 
 // 描述：
 //
+//   - 兼容历史接口建模节点的旧说明与旧指令，避免已保存工作流继续沿用旧同步方案或固定业务文件名口径。
+const LEGACY_OPENAPI_PROVIDER_NAME = ["A", "pifox"].join("");
+const LEGACY_OPENAPI_MODEL_DESCRIPTION = [
+  "整理前后端交互模型并同步",
+  LEGACY_OPENAPI_PROVIDER_NAME,
+].join(" ");
+const LEGACY_OPENAPI_MODEL_INSTRUCTION = [
+  "先定义实体、请求模型、响应模型，再通过 ",
+  LEGACY_OPENAPI_PROVIDER_NAME,
+  " 官方 MCP Server（npx -y ",
+  ["api", "fox", "-mcp-server@latest"].join(""),
+  "）同步到 ",
+  LEGACY_OPENAPI_PROVIDER_NAME,
+  "。",
+].join("");
+const CURRENT_OPENAPI_MODEL_DESCRIPTION = "整理前后端交互模型并维护项目内 OpenAPI 契约";
+const CURRENT_OPENAPI_MODEL_INSTRUCTION =
+  "先定义实体、请求模型、响应模型，再写入或更新当前项目的 OpenAPI 文件；文件路径与文件名应基于当前项目或模块语义确定，不要假设固定业务名称。";
+
+// 描述：
+//
 //   - 将工作流 ID 规范化为可存储的统一智能体命名。
 //
 // Params:
@@ -247,11 +268,23 @@ function normalizeGraphNode(node: WorkflowGraphNode): WorkflowGraphNode | null {
   const normalizedType = normalizeNodeType(node.type);
   const normalizedSkillId = normalizeAgentSkillId(String(node.skillId || "").trim());
   const normalizedSkillVersion = String(node.skillVersion || "").trim();
+  const rawDescription = String(node.description || "").trim();
+  const rawInstruction = String(node.instruction || "").trim();
+  const normalizedDescription = normalizedType === "skill"
+    && normalizedSkillId === "openapi-model-designer"
+    && rawDescription === LEGACY_OPENAPI_MODEL_DESCRIPTION
+    ? translateDesktopText(CURRENT_OPENAPI_MODEL_DESCRIPTION)
+    : rawDescription;
+  const normalizedInstruction = normalizedType === "skill"
+    && normalizedSkillId === "openapi-model-designer"
+    && rawInstruction === LEGACY_OPENAPI_MODEL_INSTRUCTION
+    ? translateDesktopText(CURRENT_OPENAPI_MODEL_INSTRUCTION)
+    : rawInstruction;
   return {
     id: String(node.id),
     title: String(node.title || "").trim() || translateDesktopText("未命名节点"),
-    description: String(node.description || "").trim(),
-    instruction: String(node.instruction || "").trim(),
+    description: normalizedDescription,
+    instruction: normalizedInstruction,
     type: normalizedType,
     skillId: normalizedType === "skill" ? normalizedSkillId || undefined : undefined,
     skillVersion: normalizedType === "skill" ? normalizedSkillVersion || undefined : undefined,

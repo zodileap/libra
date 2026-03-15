@@ -1,5 +1,0 @@
-libra:
-  title: 测试执行
-  description: 根据改动范围选择合适测试集合执行，输出结果、失败归因、回归范围和未验证风险。
-  example_prompt: 根据这次改动选择最相关的测试并执行，告诉我结果、失败原因和还需要补跑的回归范围。
-  icon: libra_skill

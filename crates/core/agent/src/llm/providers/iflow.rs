@@ -90,7 +90,9 @@ fn call_once(
                 "core.agent.llm.iflow_request_failed",
                 format!("[{}] request iflow api failed: {}", LLM_RUNTIME_TAG, err),
             )
-            .with_suggestion("请检查网络连通性、iFlow API Key 是否有效，以及账号是否具备对应模型权限。")
+            .with_suggestion(
+                "请检查网络连通性、iFlow API Key 是否有效，以及账号是否具备对应模型权限。",
+            )
             .with_retryable(true)
             .with_attempts(attempt)
         })?;
@@ -119,16 +121,14 @@ fn call_once(
         let summary = extract_iflow_error_message(&parsed)
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| format!("HTTP {}", status.as_u16()));
-        return Err(
-            LlmGatewayError::new(
-                provider,
-                "core.agent.llm.iflow_failed",
-                format!("iFlow API 调用失败：{}", summary),
-            )
-            .with_suggestion("请检查 iFlow API Key、模型名配置与账号权限是否正确。")
-            .with_retryable(status.as_u16() >= 500 || status.as_u16() == 429)
-            .with_attempts(attempt),
-        );
+        return Err(LlmGatewayError::new(
+            provider,
+            "core.agent.llm.iflow_failed",
+            format!("iFlow API 调用失败：{}", summary),
+        )
+        .with_suggestion("请检查 iFlow API Key、模型名配置与账号权限是否正确。")
+        .with_retryable(status.as_u16() >= 500 || status.as_u16() == 429)
+        .with_attempts(attempt));
     }
 
     let content = extract_iflow_response_content(&parsed).ok_or_else(|| {
@@ -147,7 +147,8 @@ fn call_once(
     }
 
     Ok(LlmRunResult {
-        usage: extract_iflow_usage(&parsed).unwrap_or_else(|| LlmUsage::estimate(prompt, content.as_str())),
+        usage: extract_iflow_usage(&parsed)
+            .unwrap_or_else(|| LlmUsage::estimate(prompt, content.as_str())),
         content,
     })
 }

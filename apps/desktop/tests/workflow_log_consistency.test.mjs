@@ -85,6 +85,7 @@ test("TestTauriHealthChecksShouldRunInSpawnBlocking", () => {
 test("TestSessionLayoutShouldAlignUserRightAndAssistantLeft", () => {
   const source = readDesktopSource("src/styles.css");
   const markdownSource = readDesktopSource("src/widgets/chat-markdown.tsx");
+  const runSegmentSource = readDesktopSource("src/widgets/session/run-segment.tsx");
 
   // 描述:
   //
@@ -95,22 +96,22 @@ test("TestSessionLayoutShouldAlignUserRightAndAssistantLeft", () => {
   assert.match(source, /--desk-run-text-secondary:\s*color-mix/);
   assert.match(source, /--desk-run-text-tertiary:\s*color-mix/);
   assert.match(source, /\.desk-run-intro\s*\{[\s\S]*color:\s*var\(--desk-run-text-primary\)/);
-  assert.match(source, /\.desk-run-step-body\s*\{[\s\S]*font-size:\s*var\(--z-font-size-sm\);[\s\S]*color:\s*var\(--desk-run-text-primary\);/);
+  assert.match(source, /\.desk-run-step-body\s*\{[\s\S]*font-size:\s*var\(--desk-run-step-font-size\);[\s\S]*line-height:\s*var\(--desk-run-step-line-height\);[\s\S]*color:\s*var\(--desk-run-text-primary\);/);
   assert.match(source, /\.desk-run-step-body \.desk-md-list\s*\{[\s\S]*list-style-position:\s*inside;[\s\S]*padding-inline-start:\s*0;/);
   assert.match(source, /\.desk-run-step-body \.desk-md-quote\s*\{[\s\S]*border-radius:\s*0;/);
   assert.match(markdownSource, /{index > 0 \? <br \/> : null}/);
   assert.match(markdownSource, /const orderedStart = ordered \? Number\.parseInt\(listMatch\[1\], 10\) \|\| 1 : undefined;/);
   assert.match(markdownSource, /<ListTag[\s\S]*start=\{orderedStart\}/s);
   assert.match(source, /\.desk-run-step-rich\s*\{[\s\S]*color:\s*var\(--desk-run-text-tertiary\)/);
-  assert.match(source, /\.desk-run-step-prefix\s*\{[\s\S]*min-inline-size:/);
-  assert.match(source, /\.desk-run-step-prefix\s*\{[\s\S]*color:\s*var\(--desk-run-text-secondary\)/);
-  assert.match(source, /\.desk-run-step-approval-label\s*\{[\s\S]*min-inline-size:/);
-  assert.match(source, /\.desk-run-step-approval-label\s*\{[\s\S]*color:\s*var\(--desk-run-text-secondary\)/);
-  assert.match(source, /\.desk-run-step-suffix\s*\{[\s\S]*color:\s*var\(--desk-run-text-tertiary\)/);
+  assert.match(source, /\.desk-run-step-file-link\s*\{[\s\S]*max-inline-size:\s*min\(100%,\s*calc\(var\(--z-inset\)\s*\*\s*24\)\);/);
+  assert.match(source, /\.desk-run-step-file-link\s*\{[\s\S]*text-overflow:\s*ellipsis;/);
+  assert.match(source, /\.desk-run-step-file-link\s*\{[\s\S]*white-space:\s*nowrap;/);
+  assert.match(source, /\.desk-run-segment-detail-title\s*\{[\s\S]*min-inline-size:/);
+  assert.match(source, /\.desk-run-segment-detail-title\s*\{[\s\S]*color:\s*var\(--desk-run-text-secondary\)/);
+  assert.match(source, /\.desk-run-segment-detail-summary\s*\{[\s\S]*color:\s*var\(--desk-run-text-tertiary\)/);
   assert.match(source, /\.desk-run-step-rich\s*\{[\s\S]*padding:\s*var\(--z-inset-sm\);/);
-  assert.match(source, /\.desk-run-segment-detail-toggle-rich\s*\{[\s\S]*padding:\s*0;/);
-  assert.match(source, /\.desk-run-segment-static-step-rich\s*\{[\s\S]*padding:\s*0;/);
-  assert.match(source, /\.desk-run-segment-static-step-rich\s*\{[\s\S]*display:\s*flex;/);
+  assert.match(source, /\.desk-run-segment-detail-shell\s*\{[\s\S]*padding-left:\s*var\(--z-inset\)\s*!important;/);
+  assert.match(source, /\.desk-run-segment-detail-row\s*\{[\s\S]*display:\s*grid;/);
 });
 
 test("TestRepositoryAgentsShouldDefineDesktopMessageTaxonomy", () => {
@@ -128,7 +129,8 @@ test("TestRepositoryAgentsShouldDefineDesktopMessageTaxonomy", () => {
   assert.match(source, /4\.\s*状态卡片/);
   assert.match(source, /禁止额外发明第五种消息形态/);
   assert.match(runSegmentSource, /function renderRunSegmentBodyContent\(/);
-  assert.match(runSegmentSource, /return renderRunSegmentBodyContent\(segment\.text, runningClass\);/);
+  assert.match(runSegmentSource, /className="desk-run-segment-static-step"/);
+  assert.match(runSegmentSource, /\{renderRunSegmentBodyContent\(segment\.text, segment\.status === "running" \? "desk-run-step-running" : ""\)\}/);
   assert.doesNotMatch(runSegmentSource, /AriTypography[\s\S]*value=\{segment\.text\}/);
 });
 
@@ -159,12 +161,17 @@ test("TestSessionPageShouldRenderCollapsibleRunDividerAndSummary", () => {
   assert.match(source, /messages: filterWorkflowStageContextMessages\(messages\)/);
   assert.doesNotMatch(source, /setMessages\(\(prev\) => upsertAssistantMessageBeforeAnchorById\(\s*prev,\s*stageContextMessageId,\s*responseDisplayMessage,\s*streamMessageId,\s*\)\)/s);
   assert.match(source, /function buildWorkflowCompletionSummary\(/);
+  assert.match(source, /function collectWorkflowStageSummaryItems\(/);
+  assert.match(source, /function buildWorkflowExecutionSummaryPrompt\(/);
+  assert.match(source, /const requestWorkflowExecutionSummary = async \(/);
   assert.match(source, /function sanitizeWorkflowStageDisplayMessage\(/);
   assert.match(source, /const WORKFLOW_STAGE_AUTO_COMPLETION_LEAD_LINE_PATTERNS = \[/);
   assert.match(source, /function stripWorkflowStageAutoCompletionPlaceholder\(/);
   assert.match(source, /stripWorkflowStageAutoCompletionPlaceholder\(String\(value \|\| ""\)\)/);
   assert.match(source, /normalizedValue\.startsWith\("脚本执行完成（自动补全结果）："\)/);
   assert.match(source, /const WORKFLOW_STAGE_DIAGNOSTIC_LINE_PATTERNS = \[/);
+  assert.match(styleSource, /\.desk-run-divider-line \{[^}]*background:\s*color-mix\(in srgb,\s*var\(--z-color-border-brand\)\s*72%,\s*var\(--z-color-border-glass\)\);[^}]*\}/);
+  assert.doesNotMatch(styleSource, /\.desk-run-divider-line \{[^}]*var\(--z-color-primary\)[^}]*\}/);
   assert.match(source, /const explicitCommand = String\(\s*typeof segmentData\.terminal_command === "string" \? segmentData\.terminal_command : "",\s*\)\.trim\(\);/s);
   assert.match(source, /return translateDesktopText\("已记录当前阶段结果。"\);/);
   assert.match(source, /groups\.push\(\{\s*key: `run-group-\$\{groups\.length\}-default`,\s*title: "",\s*kind: "default",/s);
@@ -172,7 +179,11 @@ test("TestSessionPageShouldRenderCollapsibleRunDividerAndSummary", () => {
   assert.match(source, /function resolveFinalAssistantRunSummary\(/);
   assert.match(source, /const finalSummary = resolveFinalAssistantRunSummary\(/);
   assert.match(messagesSource, /"已记录当前阶段结果。": "已记录当前阶段结果。"/);
-  assert.match(source, /finishAssistantRunMessage\(\s*streamMessageId,\s*"finished",\s*buildWorkflowCompletionSummary\(/s);
+  assert.match(source, /const workflowSummaryResult = workflowCompletionDigest\s*\?\s*await requestWorkflowExecutionSummary\(/s);
+  assert.match(source, /finishAssistantRunMessage\(\s*streamMessageId,\s*"finished",\s*workflowSummaryResult\.summary,\s*workflowSummaryResult\.summarySource,\s*\)/s);
+  assert.match(source, /const visibleRunSummaryText = runMeta\?\.summarySource === "ai"\s*\?\s*String\(runMeta\.summary \|\| ""\)\.trim\(\)\s*:\s*"";/s);
+  assert.match(source, /content=\{visibleRunSummaryText\}/);
+  assert.doesNotMatch(source, /visible_summary:\s*\{\s*type:\s*"markdown",\s*content:\s*runMeta\.summary \|\| message\.text/s);
   assert.doesNotMatch(source, /finishAssistantRunMessage\(streamMessageId, "finished", t\("执行过程已完成。"\)\);/);
   assert.match(styleSource, /\.desk-run-stage-divider/);
   assert.match(styleSource, /\.desk-run-divider-static/);

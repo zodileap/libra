@@ -30,57 +30,45 @@ function builtinSkillPackageAssertions() {
   return [
     {
       id: "requirements-analyst",
-      title: "需求分析",
+      title: "代码需求分析",
+      group: "代码",
       heading: "# Requirements Analysis",
       references: ["references/acceptance-checklist.md"],
     },
     {
       id: "frontend-architect",
       title: "前端架构",
+      group: "代码",
       heading: "# Frontend Architecture",
       references: ["references/desktop-frontend-rules.md"],
     },
     {
       id: "frontend-page-builder",
-      title: "页面实现",
+      title: "前端页面实现",
+      group: "代码",
       heading: "# Frontend Page Build",
       references: ["references/page-implementation-checklist.md"],
     },
     {
-      id: "test-runner",
-      title: "测试执行",
-      heading: "# Test Execution",
-      references: ["references/desktop-test-matrix.md"],
-    },
-    {
-      id: "api-codegen",
-      title: "接口开发",
-      heading: "# API Code Generation",
-      references: ["references/output-contract.md"],
-    },
-    {
-      id: "apifox-model-designer",
+      id: "openapi-model-designer",
       title: "接口建模",
-      heading: "# Apifox Model Design",
-      references: ["references/apifox-sync-checklist.md"],
-    },
-    {
-      id: "db-designer",
-      title: "数据库设计",
-      heading: "# Database Design",
-      references: ["references/schema-review-checklist.md"],
+      group: "代码",
+      heading: "# OpenAPI Model Design",
+      references: ["references/openapi-model-checklist.md"],
     },
     {
       id: "dcc-modeling",
       title: "建模执行",
+      group: "建模",
       heading: "# DCC Modeling",
       references: ["references/dcc-routing-rules.md", "runtime/requirements.json"],
     },
     {
-      id: "report-builder",
-      title: "交付报告",
-      heading: "# Delivery Report",
-      references: ["references/delivery-structure.md"],
+      id: "playwright-interactive",
+      title: "Playwright Interactive",
+      group: "代码",
+      heading: "# Playwright Interactive",
+      references: ["references/playwright-session-checklist.md"],
     },
   ];
 }
@@ -178,12 +166,20 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
 
   // 描述：
   //
-  //   - 技能页应恢复“已注册 / 未注册”分区，并将标题与详情统一挂到标题栏 slot。
+  //   - 技能页应恢复“已注册 / 未注册”分区，并在每个分区下继续按 group 分类展示技能卡片。
   assert.match(skillsPageSource, /DeskSectionTitle title=\{t\("已注册"\)\}/);
   assert.match(skillsPageSource, /DeskSectionTitle title=\{t\("未注册"\)\}/);
   assert.match(skillsPageSource, /DeskPageHeader/);
   assert.match(skillsPageSource, /DeskOverviewCard/);
   assert.match(skillsPageSource, /function SkillIcon/);
+  assert.match(skillsPageSource, /function buildSkillGroupSections\(skills: AgentSkillItem\[\]\): SkillGroupSection\[\]/);
+  assert.match(skillsPageSource, /function SkillGroupList\(/);
+  assert.match(skillsPageSource, /const registeredSkillSections = useMemo/);
+  assert.match(skillsPageSource, /const unregisteredSkillSections = useMemo/);
+  assert.match(skillsPageSource, /className="desk-skill-group-stack"/);
+  assert.match(skillsPageSource, /className="desk-skill-group-title"/);
+  assert.doesNotMatch(skillsPageSource, /DeskSectionLabel/);
+  assert.doesNotMatch(skillsPageSource, /className="desk-skill-subgroup-section"/);
   assert.match(skillsPageSource, /resolveAgentSkillIconName/);
   assert.match(skillsPageSource, /<AriIcon/);
   assert.match(skillsPageSource, /name=\{iconName\}/);
@@ -236,6 +232,7 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   assert.match(skillServiceSource, /export interface AgentSkillItem/);
   assert.match(skillServiceSource, /title: string;/);
   assert.match(skillServiceSource, /examplePrompt: string;/);
+  assert.match(skillServiceSource, /group: string;/);
   assert.match(skillServiceSource, /icon: string;/);
   assert.match(skillServiceSource, /markdownBody: string;/);
   assert.match(skillServiceSource, /runtimeRequirements: Record<string, unknown>;/);
@@ -245,6 +242,7 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   assert.match(skillServiceSource, /const AGENT_SKILL_ICON_NAMES = \{/);
   assert.match(skillServiceSource, /libra_skill: "new_releases"/);
   assert.match(skillServiceSource, /const DEFAULT_AGENT_SKILL_ICON_KEY = "libra_skill" as const;/);
+  assert.match(skillServiceSource, /function normalizeSkillCategoryLabel\(rawValue: unknown, fallbackLabel: string\): string/);
   assert.match(skillServiceSource, /function normalizeSkillIconKey\(rawIcon: string\): keyof typeof AGENT_SKILL_ICON_NAMES/);
   assert.match(skillServiceSource, /export function resolveAgentSkillIconName\(iconKey: string\): string/);
   assert.match(skillServiceSource, /invoke<unknown\[]>\(COMMANDS\.LIST_AGENT_SKILLS\)/);
@@ -260,6 +258,7 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   assert.match(skillServiceSource, /const title = String\(source\.title \|\| ""\)\.trim\(\);/);
   assert.match(skillServiceSource, /title,/);
   assert.match(skillServiceSource, /examplePrompt: String\(source\.example_prompt \|\| ""\)\.trim\(\),/);
+  assert.match(skillServiceSource, /group: normalizeSkillCategoryLabel\(source\.group, "未分组"\),/);
   assert.match(skillServiceSource, /icon: normalizeSkillIconKey\(String\(source\.icon \|\| ""\)\.trim\(\)\),/);
   assert.doesNotMatch(skillServiceSource, /SKILL_CATALOG/);
   assert.doesNotMatch(skillServiceSource, /localStorage/);
@@ -301,6 +300,7 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   assert.match(tauriSkillRegistrySource, /serde_yaml::from_str/);
   assert.match(tauriSkillRegistrySource, /pub title: String,/);
   assert.match(tauriSkillRegistrySource, /pub example_prompt: String,/);
+  assert.match(tauriSkillRegistrySource, /pub group: String,/);
   assert.match(tauriSkillRegistrySource, /pub icon: String,/);
   assert.match(tauriSkillRegistrySource, /struct AgentSkillLibraMetadata/);
   assert.match(tauriSkillRegistrySource, /struct AgentSkillLibraMetadataDocument/);
@@ -308,6 +308,7 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   assert.match(tauriSkillRegistrySource, /fn read_skill_libra_metadata\(skill_root: &Path\) -> Result<AgentSkillLibraMetadata, String>/);
   assert.match(tauriSkillRegistrySource, /let parsed: AgentSkillLibraMetadataDocument = serde_yaml::from_str\(metadata\)/);
   assert.match(tauriSkillRegistrySource, /let parsed = parsed\.libra;/);
+  assert.match(tauriSkillRegistrySource, /if parsed\.group\.trim\(\)\.is_empty\(\) \{/);
   assert.match(tauriSkillRegistrySource, /fn resolve_skill_description\(/);
   assert.match(tauriSkillRegistrySource, /read_optional_runtime_requirements/);
   assert.match(tauriSkillRegistrySource, /resolve_agent_skill_registry_path/);
@@ -351,7 +352,6 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
     .sort();
   const expectedSkillDirectories = builtinSkillPackages.map((item) => item.id).sort();
   assert.deepEqual(visibleSkillDirectories, expectedSkillDirectories);
-  assert.ok(!fs.existsSync(path.resolve(skillResourceRoot, ".DS_Store")));
   for (const skillPackage of builtinSkillPackages) {
     const skillSource = readBuiltinSkillResource(skillPackage.id, "SKILL.md");
     const metadataSource = readBuiltinSkillResource(skillPackage.id, "agents/libra.yaml");
@@ -385,6 +385,8 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
     assert.match(metadataSource, new RegExp(`^  title: ${skillPackage.title}$`, "m"));
     assert.match(metadataSource, /^  description: .+$/m);
     assert.match(metadataSource, /^  example_prompt: .+$/m);
+    assert.match(metadataSource, new RegExp(`^  group: ${skillPackage.group}$`, "m"));
+    assert.doesNotMatch(metadataSource, /^  subgroup: .+$/m);
     assert.match(metadataSource, /^  icon: libra_skill$/m);
   }
   assert.match(dccSkillRuntimeSource, /"domain": "dcc-modeling"/);
@@ -395,6 +397,11 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   //
   //   - 样式层应补齐技能图标、示例提示卡片与详情页编排所需的变量和结构类。
   assert.match(styleSource, /\.desk-skills-shell/);
+  assert.match(styleSource, /\.desk-skill-group-stack \{/);
+  assert.match(styleSource, /\.desk-skill-group-section \{/);
+  assert.match(styleSource, /\.desk-skill-group-title \{/);
+  assert.doesNotMatch(styleSource, /\.desk-skill-subgroup-stack \{/);
+  assert.doesNotMatch(styleSource, /\.desk-skill-subgroup-section \{/);
   assert.match(styleSource, /\.desk-skill-grid \{\s*display: grid;\s*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);\s*gap: calc\(var\(--z-inset\) \* 1\.125\);\s*align-items: start;/s);
   assert.match(styleSource, /--desk-skill-details-modal-width: calc\(var\(--z-inset\) \* 56\);/);
   assert.match(styleSource, /--desk-skill-details-hero-size: calc\(var\(--z-inset\) \* 4\.75\);/);
@@ -445,8 +452,6 @@ test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
   assert.match(mcpPageSource, /saveMcpRegistration/);
   assert.match(mcpPageSource, /validateMcpRegistration/);
   assert.match(mcpPageSource, /removeMcpRegistration/);
-  assert.match(mcpPageSource, /installApifoxMcpRuntime/);
-  assert.match(mcpPageSource, /uninstallApifoxMcpRuntime/);
   assert.match(mcpPageSource, /prepareDccRuntime/);
   assert.match(mcpPageSource, /buildDccRuntimeStatusMap/);
   assert.match(mcpPageSource, /renderDccRuntimeAutoPrepareLabel/);
@@ -455,15 +460,12 @@ test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
   assert.match(mcpPageSource, /环境变量：C4D_BIN/);
   assert.doesNotMatch(mcpPageSource, /label=\{t\("新增 MCP"\)\}/);
   assert.match(mcpPageSource, /createPortal\(headerNode, headerSlotElement\)/);
-  assert.match(mcpPageSource, /t\("安装 Runtime"\)/);
   assert.match(mcpPageSource, /label=\{t\("文档"\)\}/);
   assert.match(mcpPageSource, /type="text"/);
   assert.match(mcpPageSource, /content=\{t\("管理"\)\}/);
   assert.match(mcpPageSource, /aria-label=\{t\("管理 MCP"\)\}/);
   assert.doesNotMatch(mcpPageSource, /label="刷新"/);
   assert.match(mcpPageSource, /aria-label=\{t\("管理模板"\)\}/);
-  assert.match(mcpPageSource, /label=\{t\("安装 Runtime"\)\}/);
-  assert.match(mcpPageSource, /label=\{t\("卸载 Runtime"\)\}/);
   assert.match(mcpPageSource, /label=\{dccRuntimeStatusMap\[managingTemplateItem\.software\]\?\.available \? t\("校验 Runtime"\) : t\("准备 Runtime"\)\}/);
   assert.match(mcpPageSource, /aria-label=\{t\("添加 MCP"\)\}/);
   assert.match(mcpPageSource, /<AriButton\s*type="text"\s*icon="add"\s*aria-label=\{t\("添加 MCP"\)\}/s);
@@ -471,9 +473,12 @@ test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
   assert.match(mcpPageSource, /const unregisteredTemplates = useMemo/);
   assert.match(mcpPageSource, /overview\.templates\.filter\(\(item\) => !registeredTemplateIds\.has\(item\.id\)\)/);
   assert.match(mcpPageSource, /const handleCreateTemplate = useCallback/);
-  assert.match(mcpPageSource, /item\.runtimeKind === "apifox_runtime" && !apifoxRuntimeStatus\?\.managedByApp/);
   assert.match(mcpPageSource, /void handleCreateTemplate\(managingTemplateItem\)/);
   assert.match(mcpPageSource, /void handleCreateTemplate\(target\)/);
+  assert.match(mcpPageSource, /const validation = saved\.runtimeKind === "dcc_bridge"/);
+  assert.match(mcpPageSource, /await validateMcpRegistration\(buildDraftFromRegistration\(saved\), mcpRegistryContext\)/);
+  assert.match(mcpPageSource, /已注册 \{\{name\}\}，并完成可用性预检。/);
+  assert.match(mcpPageSource, /已注册 \{\{name\}\}，但预检失败：\{\{message\}\}/);
   assert.match(mcpPageSource, /value=\{workspaceId\}/);
   assert.match(mcpPageSource, /label: t\("全局（User）"\)/);
   assert.match(mcpPageSource, /label=\{t\("作用域"\)\}/);
@@ -481,6 +486,10 @@ test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
   assert.match(mcpPageSource, /t\("已注册 \{\{count\}\} 个；当前显示全局 user 级 MCP。"/);
   assert.match(mcpPageSource, /buildDraftFromRegistration/);
   assert.match(mcpPageSource, /可从下方未注册模板新增。/);
+  assert.doesNotMatch(mcpPageSource, /Apifox/);
+  assert.doesNotMatch(mcpPageSource, /apifox_runtime/);
+  assert.doesNotMatch(mcpPageSource, /apifoxOasPath/);
+  assert.doesNotMatch(mcpPageSource, /buildDefaultApifoxOasPath/);
 
   // 描述：
   //
@@ -509,12 +518,14 @@ test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
   assert.match(mcpServiceSource, /COMMANDS\.SAVE_MCP_REGISTRATION/);
   assert.match(mcpServiceSource, /COMMANDS\.REMOVE_MCP_REGISTRATION/);
   assert.match(mcpServiceSource, /COMMANDS\.VALIDATE_MCP_REGISTRATION/);
-  assert.match(mcpServiceSource, /COMMANDS\.CHECK_APIFOX_MCP_RUNTIME_STATUS/);
   assert.match(mcpServiceSource, /checkDccRuntimeStatus/);
   assert.match(mcpServiceSource, /payload\.runtimeKind === "dcc_bridge"/);
   assert.doesNotMatch(mcpServiceSource, /MCP_CATALOG/);
   assert.doesNotMatch(mcpServiceSource, /localStorage/);
   assert.doesNotMatch(mcpServiceSource, /VITE_MCP_CATALOG_URL/);
+  assert.doesNotMatch(mcpServiceSource, /Apifox/);
+  assert.doesNotMatch(mcpServiceSource, /apifoxOasPath/);
+  assert.doesNotMatch(mcpServiceSource, /apifoxSourceMode/);
 
   // 描述：
   //   - Tauri 注册表模块应持久化 MCP 配置，并提供列出、保存、删除和校验命令。
@@ -528,14 +539,23 @@ test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
   assert.match(mcpRegistrySource, /builtin_mcp_templates/);
   assert.match(mcpRegistrySource, /slugify_identifier/);
   assert.match(mcpRegistrySource, /normalize_registration_payload/);
-  assert.match(mcpRegistrySource, /Apifox 接口工具/);
   assert.doesNotMatch(mcpRegistrySource, /本地命令 MCP/);
   assert.doesNotMatch(mcpRegistrySource, /HTTP 地址 MCP/);
+  assert.match(mcpRegistrySource, /Playwright 浏览器自动化/);
   assert.match(mcpRegistrySource, /Blender 建模桥接/);
   assert.match(mcpRegistrySource, /Maya 建模桥接/);
   assert.match(mcpRegistrySource, /C4D 建模桥接/);
+  assert.match(mcpRegistrySource, /playwright-mcp/);
   assert.match(mcpRegistrySource, /maya-local-bridge/);
   assert.match(mcpRegistrySource, /c4d-local-bridge/);
+  assert.match(mcpRegistrySource, /command: "npx"/);
+  assert.match(mcpRegistrySource, /"@playwright\/mcp@latest"/);
+  assert.match(mcpRegistrySource, /official_provider: "Microsoft"/);
+  assert.match(mcpRegistrySource, /docs_url: "https:\/\/github\.com\/microsoft\/playwright-mcp"/);
+  assert.match(mcpRegistrySource, /domain: "general"/);
+  assert.match(mcpRegistrySource, /resolve_stdio_probe_args/);
+  assert.match(mcpRegistrySource, /probe_stdio_registration_command/);
+  assert.match(mcpRegistrySource, /已通过运行预检，可自动拉起/);
   assert.match(mcpRegistrySource, /docs_url: "https:\/\/www\.blender\.org\/download\/"/);
   assert.match(mcpRegistrySource, /docs_url: "https:\/\/www\.autodesk\.com\/products\/maya\/buy"/);
   assert.match(mcpRegistrySource, /docs_url: "https:\/\/www\.maxon\.net\/en\/cinema-4d"/);
@@ -545,40 +565,37 @@ test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
   assert.match(mcpRegistrySource, /当前版本仅允许添加应用内置 MCP/);
   assert.match(mcpRegistrySource, /find_builtin_mcp_template/);
   assert.match(mcpRegistrySource, /filter_supported_registration_records/);
+  assert.doesNotMatch(mcpRegistrySource, /Apifox/);
+  assert.doesNotMatch(mcpRegistrySource, /apifox_oas_path/);
+  assert.doesNotMatch(mcpRegistrySource, /derive_apifox_runtime_args/);
+  assert.doesNotMatch(mcpRegistrySource, /validate_apifox_oas_file/);
   assert.match(tauriMainSource, /mod blender_runtime;/);
   assert.match(tauriMainSource, /mod maya_runtime;/);
   assert.match(tauriMainSource, /mod c4d_runtime;/);
 
   // 描述：
   //
-  //   - 常量与 Tauri 后端必须同时暴露 MCP 注册表命令和 Apifox Runtime 安装能力。
+  //   - 常量与 Tauri 后端必须同时暴露 MCP 注册表命令和 DCC Runtime 能力，且不再保留已移除的 Apifox Runtime 命令。
   assert.match(constantsSource, /LIST_REGISTERED_MCPS: "list_registered_mcps"/);
   assert.match(constantsSource, /SAVE_MCP_REGISTRATION: "save_mcp_registration"/);
   assert.match(constantsSource, /REMOVE_MCP_REGISTRATION: "remove_mcp_registration"/);
   assert.match(constantsSource, /VALIDATE_MCP_REGISTRATION: "validate_mcp_registration"/);
-  assert.match(constantsSource, /CHECK_APIFOX_MCP_RUNTIME_STATUS: "check_apifox_mcp_runtime_status"/);
-  assert.match(constantsSource, /INSTALL_APIFOX_MCP_RUNTIME: "install_apifox_mcp_runtime"/);
-  assert.match(constantsSource, /UNINSTALL_APIFOX_MCP_RUNTIME: "uninstall_apifox_mcp_runtime"/);
   assert.match(tauriMainSource, /mod mcp_registry;/);
   assert.match(tauriMainSource, /list_registered_mcps,/);
   assert.match(tauriMainSource, /save_mcp_registration,/);
   assert.match(tauriMainSource, /remove_mcp_registration,/);
   assert.match(tauriMainSource, /validate_mcp_registration,/);
-  assert.match(tauriMainSource, /async fn check_apifox_mcp_runtime_status\(/);
-  assert.match(tauriMainSource, /async fn install_apifox_mcp_runtime\(/);
-  assert.match(tauriMainSource, /async fn uninstall_apifox_mcp_runtime\(/);
-  assert.match(tauriMainSource, /check_apifox_mcp_runtime_status,/);
-  assert.match(tauriMainSource, /install_apifox_mcp_runtime,/);
-  assert.match(tauriMainSource, /uninstall_apifox_mcp_runtime,/);
   assert.match(constantsSource, /CHECK_DCC_RUNTIME_STATUS: "check_dcc_runtime_status"/);
   assert.match(constantsSource, /PREPARE_DCC_RUNTIME: "prepare_dcc_runtime"/);
   assert.match(tauriMainSource, /prepare_dcc_runtime,/);
   assert.match(tauriMainSource, /check_dcc_runtime_status,/);
-  assert.match(tauriMainSource, /resolve_apifox_mcp_runtime_root/);
   assert.match(tauriMainSource, /app_data_dir\(\)/);
-  assert.match(tauriMainSource, /npm install/);
   assert.doesNotMatch(constantsSource, /MCP_INSTALLED_IDS/);
   assert.doesNotMatch(envSource, /VITE_MCP_CATALOG_URL/);
+  assert.doesNotMatch(constantsSource, /APIFOX/);
+  assert.doesNotMatch(tauriMainSource, /Apifox/);
+  assert.doesNotMatch(tauriMainSource, /apifox_runtime/);
+  assert.doesNotMatch(tauriMainSource, /validate_apifox_oas_file/);
 });
 
 test("TestMcpRegistryShouldInjectRuntimeIntoUnifiedAgentAndPromptGuidance", () => {

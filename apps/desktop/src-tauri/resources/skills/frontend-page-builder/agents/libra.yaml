@@ -1,5 +1,6 @@
 libra:
-  title: 页面实现
+  title: 前端页面实现
   description: 在方案明确后落地 Desktop 页面实现，补齐布局、交互、状态绑定、错误提示和测试。
   example_prompt: 按这个页面方案实现 Desktop 界面，并补齐交互状态、错误提示和相关测试。
+  group: 代码
   icon: libra_skill

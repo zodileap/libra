@@ -33,6 +33,32 @@ fn should_reject_unknown_provider() {
     assert!(!err.retryable);
 }
 
+/// 描述：验证带 provider 配置的直接模型调用接口在 provider 非法时仍返回统一错误码。
+#[test]
+fn should_reject_unknown_provider_for_configured_call() {
+    let result = call_model_with_policy_and_config(
+        LlmProvider::Unknown,
+        "hello",
+        None,
+        LlmGatewayPolicy {
+            timeout_secs: 1,
+            retry_policy: WorkflowRetryPolicy {
+                max_retries: 0,
+                backoff_millis: 0,
+            },
+        },
+        Some(&LlmProviderConfig {
+            api_key: Some("test-key".to_string()),
+            model: Some("test-model".to_string()),
+            mode: Some("test-mode".to_string()),
+        }),
+    );
+    assert!(result.is_err());
+    let err = result.err().expect("must have error");
+    assert_eq!(err.code, "core.agent.llm.provider_unknown");
+    assert!(!err.retryable);
+}
+
 /// 描述：验证 Gemini provider 已接入网关，不再返回“未实现”错误码。
 #[test]
 fn should_route_gemini_provider_without_not_implemented_error() {

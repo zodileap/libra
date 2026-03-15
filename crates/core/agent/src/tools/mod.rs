@@ -25,6 +25,7 @@ pub enum RiskLevel {
 /// 描述：工具执行上下文，携带链路追踪 ID、沙盒路径及执行策略。
 pub struct ToolContext<'a> {
     pub trace_id: String,
+    pub session_id: &'a str,
     pub sandbox_root: &'a Path,
     pub policy: &'a AgentPolicy,
 }

@@ -43,12 +43,13 @@ test("TestWorkflowSkillNodeShouldBeSupportedInTypesStorageAndEditor", () => {
 
   // 描述：
   //
-  //   - 工作流画布应提供 SkillNode 创建入口，并通过 Agent Skills 下拉维护技能编码，不再暴露版本选择器。
+  //   - 工作流画布工具栏只保留普通节点新增入口；技能节点需通过节点类型切换创建，并继续通过 Agent Skills 下拉维护技能编码。
   assert.match(editorSource, /nodeType: WorkflowGraphNodeType;/);
   assert.match(editorSource, /skillId: string;/);
   assert.match(editorSource, /skillVersion: string;/);
-  assert.match(editorSource, /const addSkillNode = \(\) => \{/);
-  assert.match(editorSource, /<AriButton[\s\S]*icon="new_releases"[\s\S]*onClick=\{addSkillNode\}[\s\S]*disabled=\{!canEditWorkflow\}[\s\S]*\/>/);
+  assert.doesNotMatch(editorSource, /const addSkillNode = \(\) => \{/);
+  assert.doesNotMatch(editorSource, /<AriButton[\s\S]*icon="new_releases"[\s\S]*onClick=\{addSkillNode\}[\s\S]*disabled=\{!canEditWorkflow\}[\s\S]*\/>/);
+  assert.match(editorSource, /<AriButton ghost icon="add" onClick=\{addNode\} disabled=\{!canEditWorkflow\} \/>/);
   assert.match(editorSource, /listAgentSkills/);
   assert.match(editorSource, /label=\{t\("节点类型"\)\}/);
   assert.match(editorSource, /label=\{t\("技能编码"\)\}/);
@@ -77,8 +78,9 @@ test("TestFrontendWorkflowShouldUseAgentSkillNames", () => {
   assert.match(templateSource, /title: translateDesktopText\("前端架构"\)/);
   assert.match(templateSource, /title: translateDesktopText\("页面实现"\)/);
   assert.match(templateSource, /title: translateDesktopText\("测试交付"\)/);
-  assert.match(templateSource, /apifox-mcp-server@latest/);
-  assert.match(templateSource, /skillId: "apifox-model-designer"/);
+  assert.match(templateSource, /OpenAPI 文件/);
+  assert.match(templateSource, /不要假设固定业务名称/);
+  assert.match(templateSource, /skillId: "openapi-model-designer"/);
   assert.match(templateSource, /skillId: "frontend-architect"/);
   assert.match(templateSource, /skillId: "frontend-page-builder"/);
   assert.doesNotMatch(templateSource, /name: "完整项目开发（结构化信息）"/);

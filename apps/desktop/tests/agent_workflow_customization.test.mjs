@@ -256,12 +256,19 @@ test("TestAgentSettingsPageShouldSeparateWorkflowManagement", () => {
 
   // 描述：
   //
-  //   - 统一智能体设置页应仅保留执行偏好与工作流入口，不再承载工作流 CRUD。
+  //   - 统一智能体设置页应保留执行偏好、工作流入口与全局会话沙盒维护，不再承载工作流 CRUD。
   assert.match(source, /title=\{t\("智能体设置"\)\}/);
   assert.match(source, /label=\{t\("进入工作流设置"\)\}/);
   assert.match(source, /label=\{t\("打开工作流设置"\)\}/);
   assert.match(source, /navigate\("\/workflows"\)/);
   assert.match(source, /title=\{t\("执行偏好"\)\}/);
+  assert.match(source, /title=\{t\("会话沙盒"\)\}/);
+  assert.match(source, /title=\{t\("目标会话"\)\}/);
+  assert.match(source, /placeholder=\{t\("请选择会话"\)\}/);
+  assert.match(source, /await invoke\(COMMANDS\.RESET_AGENT_SANDBOX, \{ sessionId: normalizedSessionId \}\);/);
+  assert.match(source, /title=\{t\("重置选中会话沙盒"\)\}/);
+  assert.match(source, /label=\{t\("重置沙盒"\)\}/);
+  assert.match(source, /getAgentSessions\("agent"\)/);
   assert.match(source, /AriSwitch/);
   assert.doesNotMatch(source, /createAgentWorkflowFromTemplate/);
   assert.doesNotMatch(source, /deleteAgentWorkflow/);

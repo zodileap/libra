@@ -7,8 +7,11 @@ import { translateDesktopText } from "../../../shared/i18n";
 //   - 定义单个 Agent Skill 结构，统一承载标准技能包的元信息、正文与来源。
 export interface AgentSkillItem {
   id: string;
-  name: string;
+  title: string;
   description: string;
+  examplePrompt: string;
+  group: string;
+  icon: string;
   source: "builtin" | "external" | string;
   rootPath: string;
   skillFilePath: string;
@@ -19,17 +22,20 @@ export interface AgentSkillItem {
 
 // 描述：
 //
-//   - 定义技能页总览结构，按“应用内置 / 外部技能”分组返回。
+//   - 定义技能页总览结构，按“已注册 / 未注册 / 全量内置”三组数据返回。
 export interface SkillOverview {
-  builtin: AgentSkillItem[];
-  external: AgentSkillItem[];
+  registered: AgentSkillItem[];
+  unregistered: AgentSkillItem[];
   all: AgentSkillItem[];
 }
 
 interface RawAgentSkillItem {
   id?: unknown;
-  name?: unknown;
+  title?: unknown;
   description?: unknown;
+  example_prompt?: unknown;
+  group?: unknown;
+  icon?: unknown;
   source?: unknown;
   root_path?: unknown;
   skill_file_path?: unknown;
@@ -38,37 +44,39 @@ interface RawAgentSkillItem {
   removable?: unknown;
 }
 
-interface SkillDisplayPreset {
-  name: string;
-  description: string;
+interface RawSkillOverview {
+  registered?: unknown;
+  unregistered?: unknown;
+  all?: unknown;
 }
 
-function resolveExternalSkillDisplayPreset(skillId: string): SkillDisplayPreset | null {
-  if (skillId === "doc") {
-    return {
-      name: translateDesktopText("文档处理"),
-      description: translateDesktopText("读取、创建或编辑 Word 文档，适合排版和格式要求较高的文档任务。"),
-    };
-  }
-  if (skillId === "repo-readme") {
-    return {
-      name: translateDesktopText("仓库说明"),
-      description: translateDesktopText("编写和维护仓库 README，适合整理项目简介、快速开始和使用说明。"),
-    };
-  }
-  if (skillId === "skill-creator") {
-    return {
-      name: translateDesktopText("技能创建"),
-      description: translateDesktopText("创建或更新 Codex 技能，适合沉淀专用流程、提示词和工具约束。"),
-    };
-  }
-  if (skillId === "skill-installer") {
-    return {
-      name: translateDesktopText("技能安装"),
-      description: translateDesktopText("安装或同步 Codex 技能，适合从列表或仓库导入技能包。"),
-    };
-  }
-  return null;
+// 描述：
+//
+//   - 定义桌面端允许消费的技能图标白名单，仅允许映射到应用内置图标名，避免元数据注入任意资源路径。
+const AGENT_SKILL_ICON_NAMES = {
+  libra_skill: "new_releases",
+} as const;
+
+// 描述：
+//
+//   - 定义技能图标兜底键，确保旧数据或异常数据仍能渲染应用内置图标。
+const DEFAULT_AGENT_SKILL_ICON_KEY = "libra_skill" as const;
+
+// 描述：
+//
+//   - 规整技能分组名称；若后端缺失该字段则回退为稳定的中文兜底值，避免页面分组标题出现空白。
+//
+// Params:
+//
+//   - rawValue: Tauri 返回的原始分组值。
+//   - fallbackLabel: 兜底分组文案。
+//
+// Returns:
+//
+//   - 归一化后的分组名称。
+function normalizeSkillCategoryLabel(rawValue: unknown, fallbackLabel: string): string {
+  const normalizedValue = String(rawValue || "").trim();
+  return normalizedValue || translateDesktopText(fallbackLabel);
 }
 
 // 描述：
@@ -91,36 +99,37 @@ function normalizeRuntimeRequirements(rawValue: unknown): Record<string, unknown
 
 // 描述：
 //
-//   - 解析技能展示名称。对于外部通用技能，统一输出中文友好名称，避免直接暴露英文目录名。
+//   - 规整技能图标键，仅允许白名单中的内置图标名；未知值统一回退默认图标键。
 //
 // Params:
 //
-//   - skillId: 技能唯一标识。
-//   - rawName: Tauri 返回的原始技能名称。
+//   - rawIcon: Tauri 返回的原始图标键。
 //
 // Returns:
 //
-//   - 前端用于展示的技能名称。
-function resolveSkillDisplayName(skillId: string, rawName: string): string {
-  const preset = resolveExternalSkillDisplayPreset(skillId);
-  return preset?.name || rawName;
+//   - 白名单内的技能图标键。
+function normalizeSkillIconKey(rawIcon: string): keyof typeof AGENT_SKILL_ICON_NAMES {
+  const normalizedIcon = rawIcon.trim() as keyof typeof AGENT_SKILL_ICON_NAMES;
+  if (normalizedIcon && normalizedIcon in AGENT_SKILL_ICON_NAMES) {
+    return normalizedIcon;
+  }
+  return DEFAULT_AGENT_SKILL_ICON_KEY;
 }
 
 // 描述：
 //
-//   - 解析技能展示说明。对于外部通用技能，统一输出简短中文说明，避免直接展示英文长描述。
+//   - 将技能图标键解析为前端可直接渲染的图标名，默认复用侧边栏“技能”入口同款图标。
 //
 // Params:
 //
-//   - skillId: 技能唯一标识。
-//   - rawDescription: Tauri 返回的原始技能说明。
+//   - iconKey: 技能元数据中的图标键。
 //
 // Returns:
 //
-//   - 前端用于展示的技能说明。
-function resolveSkillDisplayDescription(skillId: string, rawDescription: string): string {
-  const preset = resolveExternalSkillDisplayPreset(skillId);
-  return preset?.description || rawDescription;
+//   - 图标名。
+export function resolveAgentSkillIconName(iconKey: string): string {
+  const normalizedIconKey = normalizeSkillIconKey(iconKey);
+  return AGENT_SKILL_ICON_NAMES[normalizedIconKey];
 }
 
 // 描述：
@@ -140,15 +149,18 @@ function normalizeAgentSkillItem(rawItem: unknown): AgentSkillItem | null {
   }
   const source = rawItem as RawAgentSkillItem;
   const id = String(source.id || "").trim();
-  const name = String(source.name || "").trim();
+  const title = String(source.title || "").trim();
   const skillFilePath = String(source.skill_file_path || "").trim();
-  if (!id || !name || !skillFilePath) {
+  if (!id || !title || !skillFilePath) {
     return null;
   }
   return {
     id,
-    name: resolveSkillDisplayName(id, name),
-    description: resolveSkillDisplayDescription(id, String(source.description || "").trim()),
+    title,
+    description: String(source.description || "").trim(),
+    examplePrompt: String(source.example_prompt || "").trim(),
+    group: normalizeSkillCategoryLabel(source.group, "未分组"),
+    icon: normalizeSkillIconKey(String(source.icon || "").trim()),
     source: String(source.source || "builtin").trim() || "builtin",
     rootPath: String(source.root_path || "").trim(),
     skillFilePath,
@@ -160,11 +172,41 @@ function normalizeAgentSkillItem(rawItem: unknown): AgentSkillItem | null {
 
 // 描述：
 //
-//   - 统一通过 Tauri 拉取 Agent Skills 注册表，确保技能发现来源于真实 `SKILL.md` 包目录。
+//   - 将 Tauri 返回的原始技能总览归一化为前端稳定结构，避免后端字段缺失时页面渲染报错。
+//
+// Params:
+//
+//   - rawOverview: 原始技能总览对象。
 //
 // Returns:
 //
-//   - 按后端排序返回的技能列表。
+//   - 归一化后的技能总览结构。
+function normalizeSkillOverview(rawOverview: unknown): SkillOverview {
+  if (!rawOverview || typeof rawOverview !== "object") {
+    return {
+      registered: [],
+      unregistered: [],
+      all: [],
+    };
+  }
+  const source = rawOverview as RawSkillOverview;
+  const normalizeItems = (rawItems: unknown): AgentSkillItem[] => (Array.isArray(rawItems) ? rawItems : [])
+    .map((item) => normalizeAgentSkillItem(item))
+    .filter((item): item is AgentSkillItem => Boolean(item));
+  return {
+    registered: normalizeItems(source.registered),
+    unregistered: normalizeItems(source.unregistered),
+    all: normalizeItems(source.all),
+  };
+}
+
+// 描述：
+//
+//   - 统一通过 Tauri 拉取“已注册技能”列表，供会话和工作流只消费真正已生效的技能集合。
+//
+// Returns:
+//
+//   - 按后端排序返回的已注册技能列表。
 export async function listAgentSkills(): Promise<AgentSkillItem[]> {
   const payload = await invoke<unknown[]>(COMMANDS.LIST_AGENT_SKILLS);
   return (Array.isArray(payload) ? payload : [])
@@ -174,18 +216,67 @@ export async function listAgentSkills(): Promise<AgentSkillItem[]> {
 
 // 描述：
 //
-//   - 生成技能页总览结构，统一按来源分组，供页面层直接渲染。
+//   - 拉取技能页总览，统一返回“已注册 / 未注册 / 全量内置”结构，供页面层直接渲染。
 //
 // Returns:
 //
 //   - 技能总览结构。
 export async function listSkillOverview(): Promise<SkillOverview> {
-  const all = await listAgentSkills();
-  return {
-    builtin: all.filter((item) => item.source === "builtin"),
-    external: all.filter((item) => item.source !== "builtin"),
-    all,
-  };
+  const payload = await invoke<unknown>(COMMANDS.LIST_AGENT_SKILL_OVERVIEW);
+  return normalizeSkillOverview(payload);
+}
+
+// 描述：
+//
+//   - 注册指定内置技能，并返回最新技能总览，供页面层同步刷新已注册/未注册分区。
+//
+// Params:
+//
+//   - skillId: 待注册的技能 ID。
+//
+// Returns:
+//
+//   - 注册后的技能总览。
+export async function registerBuiltinAgentSkill(skillId: string): Promise<SkillOverview> {
+  const payload = await invoke<unknown>(COMMANDS.REGISTER_BUILTIN_AGENT_SKILL, {
+    skillId,
+  });
+  return normalizeSkillOverview(payload);
+}
+
+// 描述：
+//
+//   - 取消注册指定内置技能，并返回最新技能总览，供页面层同步刷新已注册/未注册分区。
+//
+// Params:
+//
+//   - skillId: 待取消注册的技能 ID。
+//
+// Returns:
+//
+//   - 取消注册后的技能总览。
+export async function unregisterBuiltinAgentSkill(skillId: string): Promise<SkillOverview> {
+  const payload = await invoke<unknown>(COMMANDS.UNREGISTER_BUILTIN_AGENT_SKILL, {
+    skillId,
+  });
+  return normalizeSkillOverview(payload);
+}
+
+// 描述：
+//
+//   - 打开指定内置技能所在目录，供用户直接查看 `SKILL.md` 所在文件夹与相关资源文件。
+//
+// Params:
+//
+//   - skillId: 待打开目录的技能 ID。
+//
+// Returns:
+//
+//   - true 表示系统打开命令已成功发起。
+export async function openBuiltinAgentSkillFolder(skillId: string): Promise<boolean> {
+  return invoke<boolean>(COMMANDS.OPEN_BUILTIN_AGENT_SKILL_FOLDER, {
+    skillId,
+  });
 }
 
 // 描述：
