@@ -1,6 +1,7 @@
 import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AriApp, AriMessage, setAppConfig, setColorTheme } from "@aries-kit/react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { HashRouter } from "react-router-dom";
 import { DesktopRouter } from "./router";
 import { SetupRequiredPage } from "./modules/common/pages/setup-required-page";
@@ -405,6 +406,45 @@ const appConfig = setAppConfig({
 
 // 描述:
 //
+//   - 根据主题模式解析当前前端应使用的浅/深色主题。
+//   - 当用户选择“跟随系统”时，始终读取最新系统配色偏好，避免界面与原生窗口材质脱节。
+//
+// Params:
+//
+//   - colorThemeMode: 用户当前选择的主题模式。
+//
+// Returns:
+//
+//   - "light": 当前应使用浅色主题。
+//   - "dark": 当前应使用深色主题。
+function resolveDesktopColorTheme(colorThemeMode: ColorThemeMode): "light" | "dark" {
+	if (colorThemeMode === "system") {
+		return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+	}
+	return colorThemeMode;
+}
+
+// 描述:
+//
+//   - 将前端主题设置同步到 Tauri 原生窗口主题，确保 macOS 原生毛玻璃材质跟随设置页而不是只跟随系统。
+//   - “跟随系统”模式使用 null 交给系统托管，浅色/深色模式则显式覆盖窗口外观。
+//
+// Params:
+//
+//   - colorThemeMode: 用户当前选择的主题模式。
+async function syncDesktopWindowTheme(colorThemeMode: ColorThemeMode): Promise<void> {
+	if (!isTauri()) {
+		return;
+	}
+	try {
+		await getCurrentWindow().setTheme(colorThemeMode === "system" ? null : colorThemeMode);
+	} catch (err) {
+		console.warn("sync desktop window theme failed:", err);
+	}
+}
+
+// 描述:
+//
 //   - 渲染桌面端应用根组件，负责认证恢复、主题同步与全局能力注入。
 export default function App() {
 	const desktopI18n = useDesktopI18nController();
@@ -529,21 +569,20 @@ export default function App() {
 	useEffect(() => {
 		localStorage.setItem(STORAGE_KEYS.COLOR_THEME_MODE, colorThemeMode);
 
-		// 描述：根据当前主题模式应用实际色彩主题。
+		// 描述：根据当前主题模式同步网页主题与原生窗口主题，避免 macOS 毛玻璃继续跟随系统外观。
 		const applyMode = () => {
-			if (colorThemeMode === "system") {
-				const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-				setColorTheme(isDark ? "dark" : "light");
-				return;
-			}
-			setColorTheme(colorThemeMode);
+			setColorTheme(resolveDesktopColorTheme(colorThemeMode));
+			void syncDesktopWindowTheme(colorThemeMode);
 		};
 
 		applyMode();
 
-		if (colorThemeMode !== "system") {
+		if (colorThemeMode === "system") {
 			const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-			const handleChange = () => setColorTheme(colorThemeMode);
+			const handleChange = () => {
+				setColorTheme(resolveDesktopColorTheme("system"));
+				void syncDesktopWindowTheme("system");
+			};
 			mediaQuery.addEventListener("change", handleChange);
 			return () => mediaQuery.removeEventListener("change", handleChange);
 		}

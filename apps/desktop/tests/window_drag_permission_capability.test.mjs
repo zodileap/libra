@@ -23,12 +23,18 @@ test("TestDesktopCapabilityShouldAllowWindowStartDraggingAndWindowControls", () 
   // 描述：
   //
   //   - 自定义标题栏既依赖拖拽命令，也依赖最小化、最大化/还原与关闭命令。
+  //   - 主题设置还需要原生窗口主题切换权限，保证 macOS 毛玻璃跟随设置页同步变化。
   //   - 缺失任一权限时，前端点击按钮会触发 not allowed 异常。
   assert.equal(Array.isArray(permissions), true, "default capability permissions 必须是数组");
   assert.equal(
     permissions.includes("core:window:allow-start-dragging"),
     true,
     "default capability 必须包含 core:window:allow-start-dragging"
+  );
+  assert.equal(
+    permissions.includes("core:window:allow-set-theme"),
+    true,
+    "default capability 必须包含 core:window:allow-set-theme"
   );
   assert.equal(
     permissions.includes("core:window:allow-minimize"),

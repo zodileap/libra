@@ -51,6 +51,18 @@ function readDesktopTauriMainSource() {
   return fs.readFileSync(sourcePath, "utf8");
 }
 
+// 描述:
+//
+//   - 读取 Desktop 应用根组件源码，校验主题模式与 Tauri 原生窗口主题同步逻辑。
+//
+// Returns:
+//
+//   - 应用根组件源码文本。
+function readDesktopAppSource() {
+  const sourcePath = path.resolve(process.cwd(), "src/app.tsx");
+  return fs.readFileSync(sourcePath, "utf8");
+}
+
 test("TestDesktopThemeOverrideShouldSetBorderRadiusToRem", () => {
   const css = readThemeOverrideSource();
   assert.equal(
@@ -123,17 +135,52 @@ test("TestDesktopShouldEnableMacOsTitlebarSafeInset", () => {
   );
 });
 
-test("TestDesktopMacosWindowEffectShouldUseSidebarMaterial", () => {
+test("TestDesktopMacosWindowEffectShouldUseWindowBackgroundMaterial", () => {
   const rustSource = readDesktopTauriMainSource();
 
   assert.match(
     rustSource,
+    /effect\(Effect::WindowBackground\)/,
+    "macOS 主窗口应使用 WindowBackground 原生材质，避免 Sidebar 材质带来过重的发暗效果"
+  );
+  assert.doesNotMatch(
+    rustSource,
     /effect\(Effect::Sidebar\)/,
-    "macOS 主窗口应使用 Sidebar 原生材质，保持侧边栏毛玻璃观感"
+    "macOS 主窗口不应继续使用 Sidebar 原生材质"
   );
   assert.doesNotMatch(
     rustSource,
     /effect\(Effect::HudWindow\)/,
     "macOS 主窗口不应继续使用 HudWindow 原生材质"
+  );
+});
+
+test("TestDesktopThemeModeShouldSyncNativeWindowTheme", () => {
+  const appSource = readDesktopAppSource();
+
+  assert.match(
+    appSource,
+    /import\s+\{\s*getCurrentWindow\s*\}\s+from\s+"@tauri-apps\/api\/window"/,
+    "app.tsx 需引入 getCurrentWindow，才能同步原生窗口主题"
+  );
+  assert.match(
+    appSource,
+    /import\s+\{\s*invoke,\s*isTauri\s*\}\s+from\s+"@tauri-apps\/api\/core"/,
+    "app.tsx 需引入 isTauri，避免浏览器预览环境误调用原生窗口 API"
+  );
+  assert.match(
+    appSource,
+    /async function syncDesktopWindowTheme\(colorThemeMode: ColorThemeMode\): Promise<void>/,
+    "app.tsx 需定义原生窗口主题同步函数"
+  );
+  assert.match(
+    appSource,
+    /getCurrentWindow\(\)\.setTheme\(colorThemeMode === "system" \? null : colorThemeMode\)/,
+    "app.tsx 需在浅色、深色与跟随系统模式间同步切换原生窗口主题"
+  );
+  assert.match(
+    appSource,
+    /if \(colorThemeMode === "system"\) \{[\s\S]*matchMedia\("\(prefers-color-scheme: dark\)"\)[\s\S]*addEventListener\("change", handleChange\)/,
+    "app.tsx 需在跟随系统模式下监听系统主题变化"
   );
 });
