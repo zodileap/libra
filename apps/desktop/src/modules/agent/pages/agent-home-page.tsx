@@ -335,6 +335,7 @@ export function AgentHomePage(props: AgentHomePageProps) {
               <AriButton
                 className="desk-agent-home-source-button"
                 color="brand"
+                useColorText={false}
                 icon="folder_open"
                 label={folderPickLoading ? t("打开中...") : sessionCreating ? t("开启中...") : t("选择本地文件夹")}
                 disabled={homeBusy}
