@@ -209,6 +209,7 @@ test("TestAgentHomeShouldRenderProjectBindingCardsOnly", () => {
   assert.doesNotMatch(source, /className=\"desk-agent-home-source-helper\"/);
   assert.match(source, /className=\"desk-agent-home-source-action-row\"/);
   assert.match(source, /className=\"desk-agent-home-source-button\"/);
+  assert.match(source, /className=\"desk-agent-home-source-button\"[\s\S]*useColorText=\{false\}/);
   assert.match(source, /value=\{t\("选择当前机器上的目录后，会直接进入新的项目会话。"\)\}/);
   assert.match(source, /label=\{folderPickLoading \? t\("打开中\.\.\."\) : sessionCreating \? t\("开启中\.\.\."\) : t\("选择本地文件夹"\)\}/);
   assert.match(source, /invoke<string \| null>\(\"pick_local_project_folder\"\)/);

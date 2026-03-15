@@ -42,6 +42,7 @@ test("TestAgentOnboardingShouldRenderMethodCardsInVerticalOrder", () => {
   assert.match(source, /description=\{t\("本地优先，支持现有仓库与任意本地工作目录。"\)\}/);
   assert.match(source, /value=\{t\("选择当前机器上的目录后，会直接进入新的项目会话。"\)\}/);
   assert.match(source, /className=\"desk-agent-home-source-button\"/);
+  assert.match(source, /className=\"desk-agent-home-source-button\"[\s\S]*useColorText=\{false\}/);
   assert.doesNotMatch(source, /className=\"desk-agent-home-source-kicker\"/);
   assert.doesNotMatch(source, /className=\"desk-agent-home-source-helper\"/);
   assert.match(source, /label=\{folderPickLoading \? t\("打开中\.\.\."\) : sessionCreating \? t\("开启中\.\.\."\) : t\("选择本地文件夹"\)\}/);

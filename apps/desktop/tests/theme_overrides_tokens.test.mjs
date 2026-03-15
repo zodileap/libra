@@ -39,6 +39,18 @@ function readDesktopStyleSource() {
   return fs.readFileSync(sourcePath, "utf8");
 }
 
+// 描述:
+//
+//   - 读取 Desktop Tauri 主进程源码，校验 macOS 原生窗口材质选择。
+//
+// Returns:
+//
+//   - Tauri 主进程源码文本。
+function readDesktopTauriMainSource() {
+  const sourcePath = path.resolve(process.cwd(), "src-tauri/src/main.rs");
+  return fs.readFileSync(sourcePath, "utf8");
+}
+
 test("TestDesktopThemeOverrideShouldSetBorderRadiusToRem", () => {
   const css = readThemeOverrideSource();
   assert.equal(
@@ -108,5 +120,20 @@ test("TestDesktopShouldEnableMacOsTitlebarSafeInset", () => {
     styleSource,
     /padding-top:\s*env\(titlebar-area-height,\s*calc\(var\(--z-inset\)\s*\*\s*2\.25\)\);/,
     "macOS 标题栏覆盖模式需为应用内容预留顶部安全区"
+  );
+});
+
+test("TestDesktopMacosWindowEffectShouldUseSidebarMaterial", () => {
+  const rustSource = readDesktopTauriMainSource();
+
+  assert.match(
+    rustSource,
+    /effect\(Effect::Sidebar\)/,
+    "macOS 主窗口应使用 Sidebar 原生材质，保持侧边栏毛玻璃观感"
+  );
+  assert.doesNotMatch(
+    rustSource,
+    /effect\(Effect::HudWindow\)/,
+    "macOS 主窗口不应继续使用 HudWindow 原生材质"
   );
 });
