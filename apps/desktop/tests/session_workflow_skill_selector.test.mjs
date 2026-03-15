@@ -32,8 +32,15 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   //   - 会话页应加载已安装技能并支持本地持久化“工作流/技能”选择，且只保留统一智能体持久化键。
   assert.match(sessionSource, /listAgentSkills/);
   assert.match(sessionSource, /listMcpOverview/);
+  assert.match(sessionSource, /AGENT_EXECUTION_SELECTION_KEY/);
   assert.match(sessionSource, /AGENT_SKILL_SELECTED_KEY/);
   assert.doesNotMatch(sessionSource, /MODEL_SKILL_SELECTED_KEY/);
+  assert.match(sessionSource, /type SessionExecutionSelection =/);
+  assert.match(sessionSource, /readSessionExecutionSelection\(/);
+  assert.match(sessionSource, /writeSessionExecutionSelection\(/);
+  assert.match(sessionSource, /EMPTY_SESSION_EXECUTION_SELECTION/);
+  assert.match(sessionSource, /buildWorkflowExecutionSelection\(/);
+  assert.match(sessionSource, /buildSkillExecutionSelection\(/);
   assert.match(sessionSource, /readSelectedSkillIds/);
   assert.match(sessionSource, /buildSessionSkillPrompt/);
   assert.match(sessionSource, /resolveAgentSessionSelectedAiProvider/);
@@ -109,6 +116,8 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.doesNotMatch(sessionSource, /label=\{workflowSkillSelectorLabel\}/);
   assert.doesNotMatch(sessionSource, /onClick=\{handleOpenWorkflowSkillModal\}/);
   assert.match(sessionSource, /title=\{t\("选择执行策略"\)\}/);
+  assert.match(sessionSource, /value=\{t\("模式"\)\}/);
+  assert.match(sessionSource, /value=\{t\("不使用流程"\)\}/);
   assert.match(sessionSource, /value=\{t\("工作流"\)\}/);
   assert.match(sessionSource, /value=\{t\("技能"\)\}/);
   assert.match(sessionSource, /<AriList/);
@@ -117,6 +126,7 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(sessionSource, /extra=/);
   assert.doesNotMatch(sessionSource, /value="工作流\/技能"/);
   assert.match(sessionSource, /handleConfirmWorkflowSkillModal/);
+  assert.match(sessionSource, /handleSelectDraftExecutionNone/);
   assert.match(sessionSource, /handleToggleDraftSkill/);
   assert.match(sessionSource, /return Array\.from\(new Set\(normalized\)\)\.slice\(0, 1\);/);
   assert.match(sessionSource, /if \(current\.includes\(skillId\)\) \{\s*return \[\];\s*\}/s);
@@ -168,11 +178,14 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(sessionSource, /setStreamingAssistantTarget\(heartbeatText,\s*\{\s*immediate: assistantRunHeartbeatCountRef\.current > 1,\s*\}\);/s);
   assert.match(sessionSource, /if \(\s*payload\.kind === STREAM_KINDS\.DELTA[\s\S]*payload\.kind === STREAM_KINDS\.STARTED[\s\S]*payload\.kind === STREAM_KINDS\.LLM_STARTED[\s\S]*payload\.kind === STREAM_KINDS\.LLM_FINISHED[\s\S]*return null;\s*\}/s);
   assert.match(sessionSource, /buildSessionContextPrompt\(/);
-  assert.match(sessionSource, /if \(normalizedSkillIds\.length > 0\) \{\s*setDraftWorkflowId\(""\);\s*setDraftSkillIds\(normalizedSkillIds\);/s);
+  assert.match(sessionSource, /const \[executionSelection, setExecutionSelection\] = useState<SessionExecutionSelection>\(\(\) =>/);
+  assert.match(sessionSource, /const \[draftExecutionSelection, setDraftExecutionSelection\] = useState<SessionExecutionSelection>\(/);
+  assert.match(sessionSource, /if \(executionSelection\.kind === "skill"\) \{\s*setDraftExecutionSelection\(buildSkillExecutionSelection\(activeSelectedSkillIds\)\);/s);
+  assert.match(sessionSource, /if \(executionSelection\.kind === "workflow"\) \{\s*setDraftExecutionSelection\(buildWorkflowExecutionSelection\(activeSelectedWorkflowId\)\);/s);
+  assert.match(sessionSource, /setDraftExecutionSelection\(EMPTY_SESSION_EXECUTION_SELECTION\);/);
   assert.match(sessionSource, /setDraftWorkflowId\(item\.key\);\s*setDraftSkillIds\(\[\]\);/s);
   assert.match(sessionSource, /setDraftWorkflowId\(""\);/);
-  assert.match(sessionSource, /if \(!nextWorkflowId && nextSkillIds\.length === 0\) \{/);
-  assert.match(sessionSource, /content: t\("请选择一个执行策略。"\)/);
+  assert.match(sessionSource, /setExecutionSelection\(EMPTY_SESSION_EXECUTION_SELECTION\);/);
   assert.match(sessionSource, /\{uiHint \? \(/);
   assert.doesNotMatch(sessionSource, /\{uiHint \|\| compactActionSlotStatus \? \(/);
   assert.match(sessionSource, /handleCopyMessageContent/);
@@ -191,7 +204,7 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(sessionSource, /const baseContextMessages = options\?\.contextMessages\?\.length/);
   assert.match(sessionSource, /: agentContextMessages\.length > 0/);
   assert.match(sessionSource, /: buildPromptContextMessages\(\s*baseDisplayMessages,\s*assistantRunMetaMapRef\.current,\s*\)/s);
-  assert.match(sessionSource, /const dccPreflight = await resolveDccPreflight\(normalizedContent, baseDisplayMessages, baseContextMessages, options\);/);
+  assert.match(sessionSource, /const dccPreflight = await resolveDccPreflight\(\s*normalizedContent,\s*baseDisplayMessages,\s*baseContextMessages,\s*effectiveUsesDccModelingSkill,\s*options,\s*\);/s);
   assert.match(sessionSource, /if \(dccPreflight\.blocked\) \{\s*return;\s*\}/s);
   assert.match(sessionSource, /dccPreflight\.promptBlock/);
   assert.match(sessionSource, /function buildSessionContextPrompt\(/);

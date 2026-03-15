@@ -62,8 +62,10 @@ fn should_reject_unknown_provider_for_configured_call() {
 /// 描述：验证 Gemini provider 已接入网关，不再返回“未实现”错误码。
 #[test]
 fn should_route_gemini_provider_without_not_implemented_error() {
-    let result = call_model_with_policy(
-        LlmProvider::Gemini,
+    let bins = [crate::platform::CommandCandidate::new(
+        "__missing_gemini_bin__",
+    )];
+    let result = crate::llm::providers::gemini::call_with_retry_and_bins(
         "hello",
         None,
         LlmGatewayPolicy {
@@ -73,6 +75,10 @@ fn should_route_gemini_provider_without_not_implemented_error() {
                 backoff_millis: 0,
             },
         },
+        None,
+        None,
+        None,
+        &bins,
     );
     match result {
         Ok(res) => {
@@ -80,6 +86,7 @@ fn should_route_gemini_provider_without_not_implemented_error() {
         }
         Err(err) => {
             assert_ne!(err.code, "core.agent.llm.provider_not_implemented");
+            assert_eq!(err.code, "core.agent.llm.gemini_spawn_failed");
         }
     }
 }

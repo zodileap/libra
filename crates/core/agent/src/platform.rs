@@ -105,6 +105,19 @@ pub fn resolve_python_command_candidates() -> Vec<CommandCandidate> {
     )
 }
 
+/// 描述：解析 Node.js 命令候选列表，供原生 Playwright 浏览器工具探测与执行复用。
+///
+/// Returns:
+///
+///   - 0: 按优先级排序后的命令候选。
+pub fn resolve_node_command_candidates() -> Vec<CommandCandidate> {
+    resolve_node_command_candidates_with(
+        env::var("ZODILEAP_NODE_BIN").ok().as_deref(),
+        env::var("HOME").ok().as_deref(),
+        current_platform_target(),
+    )
+}
+
 /// 描述：按平台生成 CLI 候选列表，统一 Codex/Gemini 的探测与执行口径。
 fn resolve_cli_command_candidates(env_path: &str, bin_name: &str) -> Vec<CommandCandidate> {
     resolve_cli_command_candidates_with(
@@ -245,6 +258,74 @@ fn resolve_python_command_candidates_with(
     candidates
 }
 
+/// 描述：按给定输入生成 Node.js 候选列表，兼容图形界面未继承 shell PATH 的安装场景。
+fn resolve_node_command_candidates_with(
+    env_path: Option<&str>,
+    home: Option<&str>,
+    target: PlatformTarget,
+) -> Vec<CommandCandidate> {
+    let mut candidates: Vec<CommandCandidate> = Vec::new();
+    if let Some(path) = env_path.map(str::trim).filter(|value| !value.is_empty()) {
+        push_unique_candidate(&mut candidates, CommandCandidate::new(path.to_string()));
+    }
+
+    match target {
+        PlatformTarget::Windows => {
+            push_unique_candidate(
+                &mut candidates,
+                CommandCandidate::new("node.exe".to_string()),
+            );
+            push_unique_candidate(&mut candidates, CommandCandidate::new("node".to_string()));
+        }
+        PlatformTarget::MacOs => {
+            push_unique_candidate(&mut candidates, CommandCandidate::new("node".to_string()));
+            push_unique_candidate(
+                &mut candidates,
+                CommandCandidate::new("/opt/homebrew/bin/node".to_string()),
+            );
+            push_unique_candidate(
+                &mut candidates,
+                CommandCandidate::new("/usr/local/bin/node".to_string()),
+            );
+            if let Some(home) = home.map(str::trim).filter(|value| !value.is_empty()) {
+                push_unique_candidate(
+                    &mut candidates,
+                    CommandCandidate::new(
+                        Path::new(home)
+                            .join(".volta")
+                            .join("bin")
+                            .join("node")
+                            .to_string_lossy()
+                            .to_string(),
+                    ),
+                );
+            }
+        }
+        PlatformTarget::Unix => {
+            push_unique_candidate(&mut candidates, CommandCandidate::new("node".to_string()));
+            push_unique_candidate(
+                &mut candidates,
+                CommandCandidate::new("/usr/local/bin/node".to_string()),
+            );
+            if let Some(home) = home.map(str::trim).filter(|value| !value.is_empty()) {
+                push_unique_candidate(
+                    &mut candidates,
+                    CommandCandidate::new(
+                        Path::new(home)
+                            .join(".volta")
+                            .join("bin")
+                            .join("node")
+                            .to_string_lossy()
+                            .to_string(),
+                    ),
+                );
+            }
+        }
+    }
+
+    candidates
+}
+
 /// 描述：向候选列表中追加唯一命令，避免同一路径重复探测。
 fn push_unique_candidate(candidates: &mut Vec<CommandCandidate>, candidate: CommandCandidate) {
     if candidates.iter().any(|item| item == &candidate) {
@@ -350,5 +431,25 @@ mod tests {
     fn should_display_command_candidate_with_fixed_args() {
         let candidate = CommandCandidate::with_args("py", &["-3"]);
         assert_eq!(candidate.display(), "py -3");
+    }
+
+    /// 描述：验证 macOS Node.js 候选会包含 Homebrew 与 Volta 默认安装路径。
+    #[test]
+    fn should_include_macos_specific_node_locations() {
+        let candidates = resolve_node_command_candidates_with(
+            Some(" /custom/bin/node "),
+            Some("/Users/demo"),
+            PlatformTarget::MacOs,
+        );
+        assert_eq!(
+            candidates,
+            vec![
+                CommandCandidate::new("/custom/bin/node".to_string()),
+                CommandCandidate::new("node".to_string()),
+                CommandCandidate::new("/opt/homebrew/bin/node".to_string()),
+                CommandCandidate::new("/usr/local/bin/node".to_string()),
+                CommandCandidate::new("/Users/demo/.volta/bin/node".to_string()),
+            ]
+        );
     }
 }

@@ -17,6 +17,7 @@ fn build_base_request() -> AgentRunRequest {
         output_dir: None,
         workdir: None,
         available_mcps: Vec::new(),
+        runtime_capabilities: AgentRuntimeCapabilities::default(),
     }
 }
 

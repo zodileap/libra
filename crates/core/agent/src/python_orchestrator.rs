@@ -1,6 +1,7 @@
 use crate::flow::build_system_prompt;
 use crate::llm::{parse_provider, LlmUsage};
 use crate::platform::{resolve_python_command_candidates, CommandCandidate};
+use crate::runtime_capabilities::{AgentInteractiveMode, AgentRuntimeCapabilities};
 use crate::sandbox::{
     BATCH_SIZE_PREFIX, FINAL_RESULT_PREFIX, SANDBOX_ERROR_PREFIX, TOOL_CALL_PREFIX, TURN_END_MARKER,
 };
@@ -84,6 +85,15 @@ pub(crate) fn run_agent_with_python_workflow(
     _profile: crate::profile::AgentProfile,
     on_stream_event: &mut dyn FnMut(AgentStreamEvent),
 ) -> Result<AgentRunResult, ProtocolError> {
+    if should_skip_playwright_interactive_stage(
+        request.prompt.as_str(),
+        &request.runtime_capabilities,
+    ) {
+        return Ok(build_skipped_playwright_interactive_result(
+            &request,
+            on_stream_event,
+        ));
+    }
     let should_stop_after_single_turn =
         should_stop_after_current_workflow_stage(request.prompt.as_str());
     let provider = parse_provider(&request.provider);
@@ -166,6 +176,7 @@ pub(crate) fn run_agent_with_python_workflow(
             max_turns,
             &turn_records,
             request.available_mcps.as_slice(),
+            &request.runtime_capabilities,
         );
         let llm_started_at = now_millis();
         let run_result = {
@@ -429,6 +440,7 @@ fn build_python_workflow_prompt(
     max_turns: usize,
     turn_records: &[AgentTurnRecord],
     available_mcps: &[AgentRegisteredMcp],
+    runtime_capabilities: &AgentRuntimeCapabilities,
 ) -> String {
     let project_name_text = project_name
         .map(str::trim)
@@ -437,6 +449,21 @@ fn build_python_workflow_prompt(
     let system_prompt = build_system_prompt();
     let turn_context = build_turn_context(turn_records);
     let registered_mcp_context = build_registered_mcp_context(available_mcps);
+    let toolset_block = build_python_toolset_prompt_block(runtime_capabilities);
+    let playwright_runtime_block =
+        build_python_playwright_runtime_prompt_block(user_prompt, runtime_capabilities);
+    let native_browser_examples = if runtime_capabilities.interactive_mode
+        == AgentInteractiveMode::Native
+    {
+        "   - js_repl(source)  # 仅在 native 模式注入；在持久化 Node/Playwright 会话中执行 JavaScript\n\
+   - browser_navigate(url=\"http://127.0.0.1:3000\")  # 仅在 native 模式注入；打开真实 Chromium 页面\n\
+   - browser_click(selector=\"button[data-testid='submit']\") / browser_type(selector=\"input[name='email']\", text=\"demo@example.com\")\n\
+   - browser_wait_for(text=\"保存成功\") / browser_snapshot() / browser_take_screenshot(path=\"artifacts/ui.png\")\n\
+   - browser_tabs(action=\"list\") / browser_close() / js_repl_reset(close_browser=True)\n\
+".to_string()
+    } else {
+        String::new()
+    };
 
     format!(
         "{system_prompt}\n\
@@ -451,17 +478,18 @@ fn build_python_workflow_prompt(
    NEXT: 下一步要做什么（若 STATUS=DONE 则写“无”）\n\
 5. 禁止输出“我将会...”等计划性句子，计划应写成代码注释。\n\
 6. 禁止导入 `gemini_cli_native_tools` / `codex_tools` / `openai_tools` 等外部工具模块，直接调用内置函数（如 list_directory/write_file/run_shell_command）。\n\
-7. 可用内置工具：read_text/read_json/write_text/write_json/list_dir/list_directory/mkdir/stat/glob/search_files/run_shell/run_shell_command/git_status/git_diff/git_log/apply_patch/todo_read/todo_write/request_user_input/web_search/fetch_url/mcp_tool/dcc_tool/tool_search。\n\
+7. 可用内置工具：{toolset_block}\n\
 8. 工具调用前若不确定参数，必须先执行 `tool_search(\"工具名\", 1)` 查看签名与示例，再落地调用。\n\
 9. 关键签名示例：\n\
    - read_text(path)  # 默认返回文件 content 字符串；请显式写成 content = read_text(\"README.md\")，不要依赖 _ 接收上一条结果\n\
    - read_json(path)  # 默认返回 JSON data 对象；请显式写成 data = read_json(\"package.json\")，不要依赖 _ 接收上一条结果\n\
    - write_text(path, content)\n\
-   - apply_patch(patch, check_only=False)\n\
-   - run_shell(command, timeout_secs=30)  # 默认返回含 stdout/stderr/status/success 的结果对象；优先读取 result.get(\"stdout\")/result.get(\"stderr\")/result.get(\"success\")\n\
-   - todo_read()  # 默认返回 items 列表\n\
-   - todo_write(items)  # 仅允许一个参数 items（数组）；禁止 todo_write(\"A\", \"B\")\n\
-   - request_user_input(questions=[{{\"id\":\"style\",\"header\":\"展示方式\",\"question\":\"示例提示卡片是否需要提供复制按钮？\",\"options\":[{{\"label\":\"需要复制按钮 (Recommended)\",\"description\":\"保留完整交互能力。\"}},{{\"label\":\"只展示文本\",\"description\":\"界面更简洁，但少一步操作。\"}}]}}])\n\
+    - apply_patch(patch, check_only=False)\n\
+    - run_shell(command, timeout_secs=30)  # 默认返回含 stdout/stderr/status/success 的结果对象；优先读取 result.get(\"stdout\")/result.get(\"stderr\")/result.get(\"success\")\n\
+    - todo_read()  # 默认返回 items 列表\n\
+    - todo_write(items)  # 仅允许一个参数 items（数组）；禁止 todo_write(\"A\", \"B\")\n\
+    - request_user_input(questions=[{{\"id\":\"style\",\"header\":\"展示方式\",\"question\":\"示例提示卡片是否需要提供复制按钮？\",\"options\":[{{\"label\":\"需要复制按钮 (Recommended)\",\"description\":\"保留完整交互能力。\"}},{{\"label\":\"只展示文本\",\"description\":\"界面更简洁，但少一步操作。\"}}]}}])\n\
+{native_browser_examples}\
 10. agent 编排、任务规划、阶段说明、方案草案、阻塞分析、todo 同步等会话过程信息，默认只允许输出到前端消息并保留在会话上下文中；除非用户明确要求导出，否则禁止写入项目文件。\n\
 11. 项目文件只允许写入用户真正需要的交付物（如源码、配置、测试、资源或用户明确要求导出的文档）；禁止用本地过程文件代替前端展示。\n\
 12. 只要需求尚未完全落地（代码/配置/测试未完成），必须返回 STATUS: CONTINUE，禁止提前 DONE。\n\
@@ -479,9 +507,123 @@ fn build_python_workflow_prompt(
 {turn_context}\n\
 当前已启用的 MCP：\n\
 {registered_mcp_context}\n\
+{playwright_runtime_block}\n\
 用户需求：\n\
 {user_prompt}"
     )
+}
+
+/// 描述：构建 Python 编排提示词中的工具清单，按运行时能力动态注入 Playwright 原生浏览器工具。
+fn build_python_toolset_prompt_block(runtime_capabilities: &AgentRuntimeCapabilities) -> String {
+    let mut groups = vec![
+        "read_text/read_json/write_text/write_json/list_dir/list_directory/mkdir/stat/glob/search_files".to_string(),
+        "run_shell/run_shell_command/git_status/git_diff/git_log".to_string(),
+        "apply_patch/todo_read/todo_write/request_user_input".to_string(),
+        "web_search/fetch_url/mcp_tool/dcc_tool/tool_search".to_string(),
+    ];
+    if runtime_capabilities.interactive_mode == AgentInteractiveMode::Native {
+        groups.push(
+            "js_repl/js_repl_reset/browser_navigate/browser_snapshot/browser_click/browser_type/browser_wait_for/browser_take_screenshot/browser_tabs/browser_close"
+                .to_string(),
+        );
+    }
+    groups.join("；")
+}
+
+/// 描述：当请求涉及 `playwright-interactive` 技能时，按运行时模式追加稳定执行契约。
+fn build_python_playwright_runtime_prompt_block(
+    user_prompt: &str,
+    runtime_capabilities: &AgentRuntimeCapabilities,
+) -> String {
+    if !prompt_mentions_playwright_interactive(user_prompt) {
+        return String::new();
+    }
+    match runtime_capabilities.interactive_mode {
+        AgentInteractiveMode::Native => format!(
+            "Playwright Interactive 执行模式：native\n\
+当前环境已注入 js_repl 与 browser_* 原生工具，必须通过真实 Chromium 窗口交互完成验证；\
+禁止回退到 `playwright.config.ts`、`e2e/*.spec.ts` 或 `npx playwright test`。"
+        ),
+        AgentInteractiveMode::Mcp => format!(
+            "Playwright Interactive 执行模式：mcp\n\
+当前环境未注入原生 browser_* 工具，但已解析可用 Playwright MCP：server=`{}` name=`{}`。\n\
+执行前必须先调用 `mcp_tool(server=\"{}\", tool=\"list_tools\")` 探测能力，再通过该 MCP 完成真实浏览器交互；\
+禁止回退到 `playwright.config.ts`、`e2e/*.spec.ts` 或 `npx playwright test`。",
+            runtime_capabilities.playwright_mcp_server_id,
+            runtime_capabilities.playwright_mcp_name,
+            runtime_capabilities.playwright_mcp_server_id,
+        ),
+        AgentInteractiveMode::None => format!(
+            "Playwright Interactive 执行模式：none\n\
+跳过原因：{}\n\
+当前阶段必须标记为“已跳过”，禁止生成 `playwright.config.ts`、`e2e/*.spec.ts`，也禁止执行 `npx playwright test`。",
+            runtime_capabilities.skip_reason
+        ),
+    }
+}
+
+/// 描述：判断当前请求是否涉及 `playwright-interactive` 技能阶段。
+fn prompt_mentions_playwright_interactive(prompt: &str) -> bool {
+    let normalized = prompt.trim();
+    if normalized.is_empty() {
+        return false;
+    }
+    normalized.contains("playwright-interactive") || normalized.contains("Playwright Interactive")
+}
+
+/// 描述：在缺少原生与 MCP 交互能力时，判断是否需要短路跳过 Playwright Interactive 阶段。
+fn should_skip_playwright_interactive_stage(
+    prompt: &str,
+    runtime_capabilities: &AgentRuntimeCapabilities,
+) -> bool {
+    runtime_capabilities.interactive_mode == AgentInteractiveMode::None
+        && prompt_mentions_playwright_interactive(prompt)
+}
+
+/// 描述：构建 Playwright Interactive 阶段的显式跳过结果，避免错误回退到 CLI Playwright 脚本。
+fn build_skipped_playwright_interactive_result(
+    request: &AgentRunRequest,
+    on_stream_event: &mut dyn FnMut(AgentStreamEvent),
+) -> AgentRunResult {
+    let display_message = if request.runtime_capabilities.skip_reason.trim().is_empty() {
+        "当前环境无原生交互工具且无已启用 Playwright MCP，测试阶段已跳过。".to_string()
+    } else {
+        request.runtime_capabilities.skip_reason.clone()
+    };
+    let message = format!("STATUS: DONE\nSUMMARY: {}\nNEXT: 无", display_message);
+    on_stream_event(AgentStreamEvent::Final {
+        message: display_message.clone(),
+    });
+    AgentRunResult {
+        trace_id: request.trace_id.clone(),
+        control: "done".to_string(),
+        message,
+        display_message: display_message.clone(),
+        usage: Some(LlmUsage::default()),
+        actions: Vec::new(),
+        exported_file: None,
+        steps: vec![ProtocolStepRecord {
+            index: 0,
+            code: "playwright_interactive_skipped".to_string(),
+            status: ProtocolStepStatus::Skipped,
+            elapsed_ms: 0,
+            summary: display_message.clone(),
+            error: None,
+            data: Some(json!({
+                "interactive_mode": request.runtime_capabilities.interactive_mode.as_str(),
+                "skip_reason": request.runtime_capabilities.skip_reason,
+                "runtime_capabilities": request.runtime_capabilities,
+            })),
+        }],
+        events: vec![ProtocolEventRecord {
+            event: "playwright_interactive_skipped".to_string(),
+            step_index: Some(0),
+            timestamp_ms: now_millis(),
+            message: display_message.clone(),
+        }],
+        assets: Vec::new(),
+        ui_hint: None,
+    }
 }
 
 /// 描述：判断当前请求是否属于“工作流单阶段执行”。
@@ -1804,6 +1946,61 @@ fn build_tool_result_stream_data(
         });
     }
     match tool_name {
+        "js_repl" => json!({
+            "ok": true,
+            "value": result_data.get("value").cloned().unwrap_or(Value::Null),
+        }),
+        "js_repl_reset" => json!({
+            "ok": true,
+            "reset": result_data.get("reset").and_then(|item| item.as_bool()).unwrap_or(false),
+            "reset_count": result_data.get("resetCount").and_then(|item| item.as_u64()).unwrap_or(0),
+        }),
+        "browser_navigate" => json!({
+            "ok": true,
+            "browser_started": result_data.get("browserStarted").and_then(|item| item.as_bool()).unwrap_or(false),
+            "title": result_data.get("title").and_then(|item| item.as_str()).unwrap_or(""),
+            "url": result_data.get("url").and_then(|item| item.as_str()).unwrap_or(""),
+        }),
+        "browser_snapshot" => json!({
+            "ok": true,
+            "title": result_data.get("title").and_then(|item| item.as_str()).unwrap_or(""),
+            "url": result_data.get("url").and_then(|item| item.as_str()).unwrap_or(""),
+            "text": truncate_stream_text(
+                result_data.get("text").and_then(|item| item.as_str()).unwrap_or(""),
+                STREAM_TEXT_MAX_CHARS,
+            ),
+            "elements": result_data
+                .get("elements")
+                .and_then(|item| item.as_array())
+                .map(|items| items.iter().take(40).cloned().collect::<Vec<Value>>())
+                .unwrap_or_default(),
+        }),
+        "browser_click" | "browser_type" | "browser_wait_for" => json!({
+            "ok": true,
+            "clicked": result_data.get("clicked").and_then(|item| item.as_bool()).unwrap_or(false),
+            "typed": result_data.get("typed").and_then(|item| item.as_bool()).unwrap_or(false),
+            "waited": result_data.get("waited").and_then(|item| item.as_bool()).unwrap_or(false),
+            "snapshot": result_data.get("snapshot").cloned().unwrap_or_else(|| json!({})),
+        }),
+        "browser_take_screenshot" => json!({
+            "ok": true,
+            "saved": result_data.get("saved").and_then(|item| item.as_bool()).unwrap_or(false),
+            "path": result_data.get("path").and_then(|item| item.as_str()).unwrap_or(""),
+        }),
+        "browser_tabs" => json!({
+            "ok": true,
+            "current_url": result_data.get("currentUrl").and_then(|item| item.as_str()).unwrap_or(""),
+            "active_index": result_data.get("activeIndex").and_then(|item| item.as_u64()).unwrap_or(0),
+            "tabs": result_data
+                .get("tabs")
+                .and_then(|item| item.as_array())
+                .map(|items| items.iter().take(20).cloned().collect::<Vec<Value>>())
+                .unwrap_or_default(),
+        }),
+        "browser_close" => json!({
+            "ok": true,
+            "closed": result_data.get("closed").and_then(|item| item.as_bool()).unwrap_or(false),
+        }),
         "run_shell" => json!({
             "ok": true,
             "status": result_data.get("status").cloned().unwrap_or(Value::Null),
@@ -2588,6 +2785,10 @@ fn resolve_approval_reject_payload() -> (&'static str, &'static str, &'static st
     )
 }
 
+use crate::tools::browser::{
+    BrowserClickTool, BrowserCloseTool, BrowserNavigateTool, BrowserSnapshotTool, BrowserTabsTool,
+    BrowserTakeScreenshotTool, BrowserTypeTool, BrowserWaitTool, JsReplResetTool, JsReplTool,
+};
 use crate::tools::file::{
     GlobTool, ListDirTool, MkdirTool, ReadJsonTool, ReadTextTool, SearchFilesTool, StatTool,
     WriteJsonTool, WriteTextTool,
@@ -2609,6 +2810,97 @@ fn summarize_tool_result(name: &str, ok: bool, data: &Value) -> String {
     }
 
     let summary = match name {
+        "js_repl" => {
+            let value = data.get("value").cloned().unwrap_or(Value::Null);
+            if value.is_null() {
+                "JavaScript 执行完成".to_string()
+            } else {
+                format!(
+                    "JavaScript 执行完成：{}",
+                    truncate_stream_text(value.to_string().as_str(), 120)
+                )
+            }
+        }
+        "js_repl_reset" => "已重置持久化浏览器会话".to_string(),
+        "browser_navigate" => {
+            let url = data
+                .get("url")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let browser_started = data
+                .get("browserStarted")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            if browser_started && !url.is_empty() {
+                format!("已启动真实浏览器并打开 {}", url)
+            } else if !url.is_empty() {
+                format!("已在真实浏览器打开 {}", url)
+            } else {
+                "已在真实浏览器完成页面导航".to_string()
+            }
+        }
+        "browser_snapshot" => {
+            let title = data
+                .get("title")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let url = data
+                .get("url")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            if !title.is_empty() {
+                format!("已抓取页面快照：{}", title)
+            } else if !url.is_empty() {
+                format!("已抓取页面快照：{}", url)
+            } else {
+                "已抓取页面快照".to_string()
+            }
+        }
+        "browser_click" => {
+            let url = data
+                .get("snapshot")
+                .and_then(|value| value.get("url"))
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            if !url.is_empty() {
+                format!("已在真实浏览器点击页面元素：{}", url)
+            } else {
+                "已在真实浏览器点击页面元素".to_string()
+            }
+        }
+        "browser_type" => {
+            let url = data
+                .get("snapshot")
+                .and_then(|value| value.get("url"))
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            if !url.is_empty() {
+                format!("已在真实浏览器输入内容：{}", url)
+            } else {
+                "已在真实浏览器输入内容".to_string()
+            }
+        }
+        "browser_wait_for" => "已等待页面条件成立".to_string(),
+        "browser_take_screenshot" => {
+            let path = data
+                .get("path")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            if path.is_empty() {
+                "已保存页面截图".to_string()
+            } else {
+                format!("已保存页面截图：{}", path)
+            }
+        }
+        "browser_tabs" => {
+            let count = data
+                .get("tabs")
+                .and_then(|value| value.as_array())
+                .map(|items| items.len())
+                .unwrap_or(0);
+            format!("已同步真实浏览器标签页，共 {} 个", count)
+        }
+        "browser_close" => "已关闭真实浏览器".to_string(),
         "run_shell" => {
             let stdout = data.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
             let stderr = data.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
@@ -2832,6 +3124,16 @@ fn build_default_tool_registry(
     registry.register(Box::new(ApplyPatchTool));
     registry.register(Box::new(WebSearchTool));
     registry.register(Box::new(FetchUrlTool));
+    registry.register(Box::new(JsReplTool));
+    registry.register(Box::new(JsReplResetTool));
+    registry.register(Box::new(BrowserNavigateTool));
+    registry.register(Box::new(BrowserSnapshotTool));
+    registry.register(Box::new(BrowserClickTool));
+    registry.register(Box::new(BrowserTypeTool));
+    registry.register(Box::new(BrowserWaitTool));
+    registry.register(Box::new(BrowserTakeScreenshotTool));
+    registry.register(Box::new(BrowserTabsTool));
+    registry.register(Box::new(BrowserCloseTool));
     registry.register(Box::new(McpTool {
         dcc_provider_addr: dcc_provider_addr.map(String::from),
         registered_mcps: available_mcps.to_vec(),
@@ -2979,6 +3281,76 @@ fn builtin_tool_descriptors() -> &'static [AgentToolDescriptor] {
             params: "query: string, limit?: number",
             tags: &["web", "search", "internet"],
             example: r#"web_search("rust tauri command best practices", 5)"#,
+        },
+        AgentToolDescriptor {
+            name: "js_repl",
+            description: "在持久化 Node/Playwright 会话中执行 JavaScript（native 模式）",
+            params: "source: string",
+            tags: &["browser", "playwright", "javascript", "interactive"],
+            example: r#"js_repl("return await page.title()")"#,
+        },
+        AgentToolDescriptor {
+            name: "js_repl_reset",
+            description: "重置持久化 Node/Playwright 会话中的绑定，并按需关闭浏览器",
+            params: "close_browser?: bool",
+            tags: &["browser", "playwright", "javascript", "interactive"],
+            example: r#"js_repl_reset(close_browser=True)"#,
+        },
+        AgentToolDescriptor {
+            name: "browser_navigate",
+            description: "在真实 Chromium 窗口中导航到目标 URL",
+            params: "url: string, wait_until?: string, timeout_ms?: number",
+            tags: &["browser", "playwright", "navigate", "interactive"],
+            example: r#"browser_navigate(url="http://127.0.0.1:3000")"#,
+        },
+        AgentToolDescriptor {
+            name: "browser_snapshot",
+            description: "提取当前页面文本摘要与可交互元素概览",
+            params: "max_elements?: number, max_text_chars?: number",
+            tags: &["browser", "playwright", "snapshot", "interactive"],
+            example: r#"browser_snapshot()"#,
+        },
+        AgentToolDescriptor {
+            name: "browser_click",
+            description: "点击当前页面元素，支持 selector / text / role 定位",
+            params: "selector?: string, text?: string, role?: string, index?: number, exact?: bool, timeout_ms?: number",
+            tags: &["browser", "playwright", "click", "interactive"],
+            example: r#"browser_click(selector="button[data-testid='submit']")"#,
+        },
+        AgentToolDescriptor {
+            name: "browser_type",
+            description: "向当前页面元素输入文本，支持 selector 或 role+name 定位",
+            params: "selector?: string, role?: string, name?: string, text: string, index?: number, submit?: bool",
+            tags: &["browser", "playwright", "type", "interactive"],
+            example: r#"browser_type(selector="input[name='email']", text="demo@example.com")"#,
+        },
+        AgentToolDescriptor {
+            name: "browser_wait_for",
+            description: "等待页面条件成立，支持时间、文本或 selector",
+            params: "time_secs?: number, text?: string, text_gone?: string, selector?: string, timeout_ms?: number",
+            tags: &["browser", "playwright", "wait", "interactive"],
+            example: r#"browser_wait_for(text="保存成功")"#,
+        },
+        AgentToolDescriptor {
+            name: "browser_take_screenshot",
+            description: "对当前页面截图并保存到沙盒路径",
+            params: "path?: string, full_page?: bool, type?: string",
+            tags: &["browser", "playwright", "screenshot", "interactive"],
+            example: r#"browser_take_screenshot(path="artifacts/ui.png", full_page=True)"#,
+        },
+        AgentToolDescriptor {
+            name: "browser_tabs",
+            description: "管理当前浏览器标签页，支持 list/select/close/new",
+            params: "action: string, index?: number, url?: string",
+            tags: &["browser", "playwright", "tabs", "interactive"],
+            example: r#"browser_tabs(action="list")"#,
+        },
+        AgentToolDescriptor {
+            name: "browser_close",
+            description: "关闭当前会话的 Chromium 窗口",
+            params: "none",
+            tags: &["browser", "playwright", "close", "interactive"],
+            example: r#"browser_close()"#,
         },
         AgentToolDescriptor {
             name: "fetch_url",
@@ -4091,8 +4463,11 @@ finish("read_text/read_json default unwrap ok")
         let root = build_unique_test_root();
         fs::create_dir_all(&root).expect("create temp root");
         fs::write(root.join("note.txt"), "underscore bridge\n").expect("prepare note fixture");
-        fs::write(root.join("meta.json"), r#"{"stage":"underscore","count":1}"#)
-            .expect("prepare meta fixture");
+        fs::write(
+            root.join("meta.json"),
+            r#"{"stage":"underscore","count":1}"#,
+        )
+        .expect("prepare meta fixture");
         let script = r##"
 read_text("note.txt")
 text_content = _
@@ -4984,7 +5359,15 @@ NEXT: 进入接口建模
     /// 描述：验证多轮编排脚本提示词不再强制 PLAN 注释协议，避免前端展示固定模板化步骤。
     #[test]
     fn should_not_require_plan_comment_protocol_in_prompt() {
-        let prompt = build_python_workflow_prompt("实现登录页面", Some("demo"), 1, 6, &[], &[]);
+        let prompt = build_python_workflow_prompt(
+            "实现登录页面",
+            Some("demo"),
+            1,
+            6,
+            &[],
+            &[],
+            &AgentRuntimeCapabilities::default(),
+        );
         assert!(!prompt.contains("# PLAN_TITLE:"));
         assert!(!prompt.contains("# PLAN_STEP_1:"));
         assert!(prompt.contains("STATUS: CONTINUE 或 DONE"));
@@ -5009,6 +5392,80 @@ NEXT: 进入接口建模
         assert!(prompt.contains("项目文件只允许写入用户真正需要的交付物"));
         assert!(prompt.contains("STATUS 只表示“当前阶段”是否完成"));
         assert!(prompt.contains("当前阶段节点要求已满足时返回 DONE"));
+    }
+
+    /// 描述：验证 native 模式提示词会显式注入 js_repl 与 browser_* 工具，并要求使用真实 Chromium。
+    #[test]
+    fn should_include_native_playwright_prompt_contract_when_runtime_is_native() {
+        let prompt = build_python_workflow_prompt(
+            "执行 playwright-interactive 技能并验证设置页交互",
+            Some("demo"),
+            1,
+            6,
+            &[],
+            &[],
+            &AgentRuntimeCapabilities {
+                native_js_repl: true,
+                native_browser_tools: true,
+                playwright_mcp_server_id: String::new(),
+                playwright_mcp_ready: false,
+                playwright_mcp_name: String::new(),
+                interactive_mode: AgentInteractiveMode::Native,
+                skip_reason: String::new(),
+            },
+        );
+        assert!(prompt.contains("js_repl/js_repl_reset/browser_navigate/browser_snapshot"));
+        assert!(prompt.contains("Playwright Interactive 执行模式：native"));
+        assert!(prompt.contains("真实 Chromium 窗口"));
+        assert!(prompt.contains(
+            "禁止回退到 `playwright.config.ts`、`e2e/*.spec.ts` 或 `npx playwright test`"
+        ));
+    }
+
+    /// 描述：验证 mcp 模式提示词会要求先探测 list_tools，并禁止暴露原生 browser_* 工具。
+    #[test]
+    fn should_include_mcp_playwright_prompt_contract_without_native_browser_tools() {
+        let prompt = build_python_workflow_prompt(
+            "执行 playwright-interactive 技能并验证设置页交互",
+            Some("demo"),
+            1,
+            6,
+            &[],
+            &[],
+            &AgentRuntimeCapabilities {
+                native_js_repl: false,
+                native_browser_tools: false,
+                playwright_mcp_server_id: "playwright-mcp".to_string(),
+                playwright_mcp_ready: true,
+                playwright_mcp_name: "Playwright Browser MCP".to_string(),
+                interactive_mode: AgentInteractiveMode::Mcp,
+                skip_reason: String::new(),
+            },
+        );
+        assert!(!prompt.contains("js_repl/js_repl_reset/browser_navigate/browser_snapshot"));
+        assert!(prompt.contains("Playwright Interactive 执行模式：mcp"));
+        assert!(prompt.contains("mcp_tool(server=\"playwright-mcp\", tool=\"list_tools\")"));
+        assert!(prompt.contains(
+            "禁止回退到 `playwright.config.ts`、`e2e/*.spec.ts` 或 `npx playwright test`"
+        ));
+    }
+
+    /// 描述：验证 none 模式提示词会显式要求跳过阶段，并禁止 CLI Playwright 降级方案。
+    #[test]
+    fn should_include_none_playwright_prompt_contract_with_skip_instruction() {
+        let prompt = build_python_workflow_prompt(
+            "执行 playwright-interactive 技能并验证设置页交互",
+            Some("demo"),
+            1,
+            6,
+            &[],
+            &[],
+            &AgentRuntimeCapabilities::default(),
+        );
+        assert!(prompt.contains("Playwright Interactive 执行模式：none"));
+        assert!(prompt.contains("测试阶段已跳过"));
+        assert!(prompt.contains("禁止生成 `playwright.config.ts`"));
+        assert!(!prompt.contains("js_repl/js_repl_reset/browser_navigate/browser_snapshot"));
     }
 
     /// 描述：验证 request_user_input 参数校验会拒绝空问题列表，避免生成无意义的挂起请求。
@@ -5148,6 +5605,7 @@ NEXT: 进入接口建模
             &[],
             &[AgentRegisteredMcp {
                 id: "openapi-docs".to_string(),
+                template_id: String::new(),
                 name: "OpenAPI Docs".to_string(),
                 domain: "general".to_string(),
                 software: "".to_string(),
@@ -5167,10 +5625,43 @@ NEXT: 进入接口建模
                 runtime_ready: true,
                 runtime_hint: None,
             }],
+            &AgentRuntimeCapabilities::default(),
         );
         assert!(prompt.contains("当前已启用的 MCP"));
         assert!(prompt.contains("openapi-docs"));
         assert!(prompt.contains("OpenAPI Docs"));
+    }
+
+    /// 描述：验证 none 模式命中 playwright-interactive 阶段时，会直接构造“已跳过”结果而不是继续进入脚本执行。
+    #[test]
+    fn should_build_skipped_playwright_interactive_result_when_runtime_is_none() {
+        let request = AgentRunRequest {
+            trace_id: "trace-demo".to_string(),
+            session_id: "session-demo".to_string(),
+            agent_key: "agent".to_string(),
+            provider: "codex".to_string(),
+            provider_api_key: None,
+            provider_model: None,
+            provider_mode: None,
+            prompt: "执行 playwright-interactive 技能".to_string(),
+            project_name: Some("demo".to_string()),
+            model_export_enabled: false,
+            dcc_provider_addr: None,
+            output_dir: None,
+            workdir: None,
+            available_mcps: Vec::new(),
+            runtime_capabilities: AgentRuntimeCapabilities::default(),
+        };
+        let mut emitted: Vec<AgentStreamEvent> = Vec::new();
+        let result = build_skipped_playwright_interactive_result(&request, &mut |event| {
+            emitted.push(event);
+        });
+        assert_eq!(result.control, "done");
+        assert!(result.display_message.contains("测试阶段已跳过"));
+        assert_eq!(result.steps[0].status, ProtocolStepStatus::Skipped);
+        assert!(emitted
+            .iter()
+            .any(|event| matches!(event, AgentStreamEvent::Final { .. })));
     }
 
     /// 描述：验证未闭合三引号字符串会在顶层 finish(...) 前自动补齐，避免 finish 被吞进字符串导致 SyntaxError。

@@ -588,6 +588,186 @@ def tool_search(query="", limit=10, **kwargs):
         },
     )
 
+def js_repl(source=None, with_meta=False, **kwargs):
+    resolved_source = _pick_first_non_none([source, _pop_alias(kwargs, ("code",))])
+    include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, ("include_meta", "raw")), False))
+    response = _invoke_tool("js_repl", {"source": _require_arg(resolved_source, "source")})
+    if include_meta:
+        return _remember_last_value(response)
+    if isinstance(response, dict):
+        data = response.get("data")
+        if isinstance(data, dict):
+            if "value" in data:
+                return _remember_last_value(data.get("value"))
+            return _remember_last_value(data)
+    return _remember_last_value(response)
+
+def js_repl_reset(close_browser=True, with_meta=False, **kwargs):
+    include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, ("include_meta", "raw")), False))
+    resolved_close_browser = bool(_resolve_with_alias(close_browser, _pop_alias(kwargs, ("closeBrowser",)), True))
+    response = _invoke_tool("js_repl_reset", {"close_browser": resolved_close_browser})
+    if include_meta:
+        return _remember_last_value(response)
+    if isinstance(response, dict):
+        data = response.get("data")
+        if isinstance(data, dict):
+            return _remember_last_value(data)
+    return _remember_last_value(response)
+
+def browser_navigate(url=None, wait_until="domcontentloaded", timeout_ms=30000, with_meta=False, **kwargs):
+    resolved_url = _pick_first_non_none([url, _pop_alias(kwargs, ("link",))])
+    include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, ("include_meta", "raw")), False))
+    resolved_wait_until = _resolve_with_alias(wait_until, _pop_alias(kwargs, ("waitUntil",)), "domcontentloaded")
+    resolved_timeout_ms = _resolve_with_alias(timeout_ms, _pop_alias(kwargs, ("timeout",)), 30000)
+    response = _invoke_tool("browser_navigate", {
+        "url": _require_arg(resolved_url, "url"),
+        "wait_until": resolved_wait_until if resolved_wait_until is not None else "domcontentloaded",
+        "timeout_ms": resolved_timeout_ms if resolved_timeout_ms is not None else 30000,
+    })
+    if include_meta:
+        return _remember_last_value(response)
+    if isinstance(response, dict):
+        data = response.get("data")
+        if isinstance(data, dict):
+            return _remember_last_value(data)
+    return _remember_last_value(response)
+
+def browser_snapshot(max_elements=40, max_text_chars=4000, with_meta=False, **kwargs):
+    include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, ("include_meta", "raw")), False))
+    resolved_max_elements = _resolve_with_alias(max_elements, _pop_alias(kwargs, ("limit",)), 40)
+    resolved_max_text_chars = _resolve_with_alias(max_text_chars, _pop_alias(kwargs, ("text_limit",)), 4000)
+    response = _invoke_tool("browser_snapshot", {
+        "max_elements": resolved_max_elements if resolved_max_elements is not None else 40,
+        "max_text_chars": resolved_max_text_chars if resolved_max_text_chars is not None else 4000,
+    })
+    if include_meta:
+        return _remember_last_value(response)
+    if isinstance(response, dict):
+        data = response.get("data")
+        if isinstance(data, dict):
+            return _remember_last_value(data)
+    return _remember_last_value(response)
+
+def browser_click(selector=None, text=None, role=None, index=0, exact=False, button="left", double_click=False, timeout_ms=30000, with_meta=False, **kwargs):
+    include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, ("include_meta", "raw")), False))
+    resolved_selector = _pick_first_non_none([selector, _pop_alias(kwargs, ("path", "locator"))])
+    resolved_text = _pick_first_non_none([text, _pop_alias(kwargs, ("name", "target_text"))])
+    resolved_role = _resolve_with_alias(role, _pop_alias(kwargs, ("aria_role",)), "")
+    resolved_index = _resolve_with_alias(index, _pop_alias(kwargs, ("nth",)), 0)
+    resolved_exact = bool(_resolve_with_alias(exact, _pop_alias(kwargs, ("match_exact",)), False))
+    resolved_button = _resolve_with_alias(button, _pop_alias(kwargs, ("mouse_button",)), "left")
+    resolved_double_click = bool(_resolve_with_alias(double_click, _pop_alias(kwargs, ("doubleClick",)), False))
+    resolved_timeout_ms = _resolve_with_alias(timeout_ms, _pop_alias(kwargs, ("timeout",)), 30000)
+    response = _invoke_tool("browser_click", {
+        "selector": resolved_selector or "",
+        "text": resolved_text or "",
+        "role": resolved_role or "",
+        "index": resolved_index if resolved_index is not None else 0,
+        "exact": resolved_exact,
+        "button": resolved_button if resolved_button is not None else "left",
+        "doubleClick": resolved_double_click,
+        "timeout_ms": resolved_timeout_ms if resolved_timeout_ms is not None else 30000,
+    })
+    if include_meta:
+        return _remember_last_value(response)
+    if isinstance(response, dict):
+        data = response.get("data")
+        if isinstance(data, dict):
+            return _remember_last_value(data)
+    return _remember_last_value(response)
+
+def browser_type(selector=None, text=None, role=None, name=None, index=0, exact=False, clear_first=True, submit=False, slowly=False, timeout_ms=30000, with_meta=False, **kwargs):
+    include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, ("include_meta", "raw")), False))
+    resolved_selector = _pick_first_non_none([selector, _pop_alias(kwargs, ("path", "locator"))])
+    resolved_text = _pick_first_non_none([text, _pop_alias(kwargs, ("value", "input"))])
+    resolved_role = _resolve_with_alias(role, _pop_alias(kwargs, ("aria_role",)), "")
+    resolved_name = _pick_first_non_none([name, _pop_alias(kwargs, ("target_text", "label"))])
+    resolved_index = _resolve_with_alias(index, _pop_alias(kwargs, ("nth",)), 0)
+    resolved_exact = bool(_resolve_with_alias(exact, _pop_alias(kwargs, ("match_exact",)), False))
+    resolved_timeout_ms = _resolve_with_alias(timeout_ms, _pop_alias(kwargs, ("timeout",)), 30000)
+    response = _invoke_tool("browser_type", {
+        "selector": resolved_selector or "",
+        "text": _require_arg(resolved_text, "text"),
+        "role": resolved_role or "",
+        "name": resolved_name or "",
+        "index": resolved_index if resolved_index is not None else 0,
+        "exact": resolved_exact,
+        "clear_first": bool(_resolve_with_alias(clear_first, _pop_alias(kwargs, ("clearFirst",)), True)),
+        "submit": bool(_resolve_with_alias(submit, _pop_alias(kwargs, ("press_enter",)), False)),
+        "slowly": bool(_resolve_with_alias(slowly, _pop_alias(kwargs, ("type_slowly",)), False)),
+        "timeout_ms": resolved_timeout_ms if resolved_timeout_ms is not None else 30000,
+    })
+    if include_meta:
+        return _remember_last_value(response)
+    if isinstance(response, dict):
+        data = response.get("data")
+        if isinstance(data, dict):
+            return _remember_last_value(data)
+    return _remember_last_value(response)
+
+def browser_wait_for(time_secs=None, text=None, text_gone=None, selector=None, timeout_ms=30000, with_meta=False, **kwargs):
+    include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, ("include_meta", "raw")), False))
+    resolved_timeout_ms = _resolve_with_alias(timeout_ms, _pop_alias(kwargs, ("timeout",)), 30000)
+    response = _invoke_tool("browser_wait_for", {
+        "time_secs": _resolve_with_alias(time_secs, _pop_alias(kwargs, ("time", "seconds")), 0) or 0,
+        "text": _resolve_with_alias(text, _pop_alias(kwargs, ("contains_text",)), "") or "",
+        "text_gone": _resolve_with_alias(text_gone, _pop_alias(kwargs, ("textGone", "gone_text")), "") or "",
+        "selector": _resolve_with_alias(selector, _pop_alias(kwargs, ("path", "locator")), "") or "",
+        "timeout_ms": resolved_timeout_ms if resolved_timeout_ms is not None else 30000,
+    })
+    if include_meta:
+        return _remember_last_value(response)
+    if isinstance(response, dict):
+        data = response.get("data")
+        if isinstance(data, dict):
+            return _remember_last_value(data)
+    return _remember_last_value(response)
+
+def browser_take_screenshot(path=None, full_page=False, type="png", with_meta=False, **kwargs):
+    resolved_path = _pick_first_non_none([path, _pop_alias(kwargs, ("file_path", "filename"))])
+    include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, ("include_meta", "raw")), False))
+    response = _invoke_tool("browser_take_screenshot", {
+        "path": _require_arg(resolved_path, "path"),
+        "full_page": bool(_resolve_with_alias(full_page, _pop_alias(kwargs, ("fullPage",)), False)),
+        "type": _resolve_with_alias(type, _pop_alias(kwargs, ("image_type",)), "png") or "png",
+    })
+    if include_meta:
+        return _remember_last_value(response)
+    if isinstance(response, dict):
+        data = response.get("data")
+        if isinstance(data, dict):
+            return _remember_last_value(data)
+    return _remember_last_value(response)
+
+def browser_tabs(action="list", index=0, url="", with_meta=False, **kwargs):
+    include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, ("include_meta", "raw")), False))
+    resolved_action = _resolve_with_alias(action, _pop_alias(kwargs, ("mode",)), "list")
+    resolved_index = _resolve_with_alias(index, _pop_alias(kwargs, ("tab_index",)), 0)
+    resolved_url = _resolve_with_alias(url, _pop_alias(kwargs, ("link",)), "")
+    response = _invoke_tool("browser_tabs", {
+        "action": resolved_action if resolved_action is not None else "list",
+        "index": resolved_index if resolved_index is not None else 0,
+        "url": resolved_url if resolved_url is not None else "",
+    })
+    if include_meta:
+        return _remember_last_value(response)
+    if isinstance(response, dict):
+        data = response.get("data")
+        if isinstance(data, dict):
+            return _remember_last_value(data)
+    return _remember_last_value(response)
+
+def browser_close(with_meta=False, **kwargs):
+    include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, ("include_meta", "raw")), False))
+    response = _invoke_tool("browser_close", {})
+    if include_meta:
+        return _remember_last_value(response)
+    if isinstance(response, dict):
+        data = response.get("data")
+        if isinstance(data, dict):
+            return _remember_last_value(data)
+    return _remember_last_value(response)
+
 def read_file(file_path):
     return read_text(file_path)
 
@@ -1020,7 +1200,7 @@ mod tests {
             "def run_shell(command=None, timeout_secs=None, with_meta=False, **kwargs):"
         ));
         assert!(PERSISTENT_PRELUDE.contains("include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, (\"include_meta\", \"raw\")), False))"));
-        assert!(PERSISTENT_PRELUDE.contains("return _ShellResult(data)"));
+        assert!(PERSISTENT_PRELUDE.contains("return _remember_last_value(_ShellResult(data))"));
         assert!(PERSISTENT_PRELUDE
             .contains("self.get(\"success\") is False or self.get(\"ok\") is False"));
         assert!(PERSISTENT_PRELUDE.contains("def lower(self):"));
@@ -1054,12 +1234,32 @@ mod tests {
         //
         //   - 沙盒预置脚本应直接暴露 `request_user_input(...)` 顶层函数，
         //     让 Python 编排脚本无需 import 就能挂起并等待用户回答。
-        assert!(PERSISTENT_PRELUDE.contains(
-            "def request_user_input(questions=None, with_meta=False, **kwargs):"
-        ));
+        assert!(PERSISTENT_PRELUDE
+            .contains("def request_user_input(questions=None, with_meta=False, **kwargs):"));
         assert!(PERSISTENT_PRELUDE.contains("def _normalize_user_input_questions(questions):"));
         assert!(PERSISTENT_PRELUDE
             .contains("\"questions\": _require_arg(normalized_questions, \"questions\")"));
+    }
+
+    #[test]
+    fn should_expose_browser_and_js_repl_tools_in_prelude() {
+        // 描述：
+        //
+        //   - 沙盒预置脚本应暴露 js_repl / js_repl_reset / browser_* 顶层函数，
+        //     让 Python 编排脚本可以直接发起真实浏览器交互，而不是退回 CLI Playwright 文件流。
+        assert!(PERSISTENT_PRELUDE.contains("def js_repl(source=None, with_meta=False, **kwargs):"));
+        assert!(PERSISTENT_PRELUDE
+            .contains("def js_repl_reset(close_browser=True, with_meta=False, **kwargs):"));
+        assert!(PERSISTENT_PRELUDE.contains("def browser_navigate(url=None, wait_until=\"domcontentloaded\", timeout_ms=30000, with_meta=False, **kwargs):"));
+        assert!(PERSISTENT_PRELUDE.contains("def browser_snapshot(max_elements=40, max_text_chars=4000, with_meta=False, **kwargs):"));
+        assert!(PERSISTENT_PRELUDE.contains("def browser_click(selector=None, text=None, role=None, index=0, exact=False, button=\"left\", double_click=False, timeout_ms=30000, with_meta=False, **kwargs):"));
+        assert!(PERSISTENT_PRELUDE.contains("def browser_type(selector=None, text=None, role=None, name=None, index=0, exact=False, clear_first=True, submit=False, slowly=False, timeout_ms=30000, with_meta=False, **kwargs):"));
+        assert!(PERSISTENT_PRELUDE.contains("def browser_wait_for(time_secs=None, text=None, text_gone=None, selector=None, timeout_ms=30000, with_meta=False, **kwargs):"));
+        assert!(PERSISTENT_PRELUDE.contains("def browser_take_screenshot(path=None, full_page=False, type=\"png\", with_meta=False, **kwargs):"));
+        assert!(PERSISTENT_PRELUDE.contains(
+            "def browser_tabs(action=\"list\", index=0, url=\"\", with_meta=False, **kwargs):"
+        ));
+        assert!(PERSISTENT_PRELUDE.contains("def browser_close(with_meta=False, **kwargs):"));
     }
 
     #[test]
@@ -1132,9 +1332,8 @@ mod tests {
         //     兼容模型将上一条结果写成 `content = _` 的 REPL 风格脚本。
         assert!(PERSISTENT_PRELUDE.contains("def _remember_last_value(value):"));
         assert!(PERSISTENT_PRELUDE.contains("setattr(builtins, \"_\", None)"));
-        assert!(PERSISTENT_PRELUDE.contains(
-            "return _remember_last_value(json.loads(line[len(_TOOL_RESULT_PREFIX):]))"
-        ));
+        assert!(PERSISTENT_PRELUDE
+            .contains("return _remember_last_value(json.loads(line[len(_TOOL_RESULT_PREFIX):]))"));
         assert!(PERSISTENT_PRELUDE.contains("return _remember_last_value(content)"));
         assert!(PERSISTENT_PRELUDE.contains("return _remember_last_value(data.get(\"data\"))"));
     }

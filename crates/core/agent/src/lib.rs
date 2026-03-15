@@ -7,11 +7,16 @@ pub mod platform;
 pub mod policy;
 pub mod profile;
 mod python_orchestrator;
+pub mod runtime_capabilities;
 pub mod sandbox;
 pub mod tools;
 pub mod workflow;
 
 use once_cell::sync::Lazy;
+pub use runtime_capabilities::{
+    detect_agent_runtime_capabilities, resolve_agent_runtime_capabilities, AgentInteractiveMode,
+    AgentRuntimeCapabilities,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -179,6 +184,7 @@ pub trait AgentExecutor {
 #[derive(Debug, Clone)]
 pub struct AgentRegisteredMcp {
     pub id: String,
+    pub template_id: String,
     pub name: String,
     pub domain: String,
     pub software: String,
@@ -216,6 +222,7 @@ pub struct AgentRunRequest {
     pub output_dir: Option<String>,
     pub workdir: Option<String>,
     pub available_mcps: Vec<AgentRegisteredMcp>,
+    pub runtime_capabilities: AgentRuntimeCapabilities,
 }
 
 #[derive(Debug, Clone)]

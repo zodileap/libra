@@ -95,7 +95,7 @@ pub fn call_with_retry(
     )
 }
 
-fn call_with_retry_and_bins(
+pub(crate) fn call_with_retry_and_bins(
     prompt: &str,
     workdir: Option<&str>,
     policy: LlmGatewayPolicy,

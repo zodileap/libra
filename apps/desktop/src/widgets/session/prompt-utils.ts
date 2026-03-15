@@ -31,6 +31,118 @@ export const AGENT_WORKFLOW_SELECTED_KEY = "libra.desktop.agent.selectedWorkflow
 //   - 技能选中状态存储键，统一引用全局常量避免硬编码。
 export const AGENT_SKILL_SELECTED_KEY = STORAGE_KEYS.AGENT_SKILL_SELECTED_IDS;
 
+// 描述:
+//
+//   - 会话执行选择统一存储键；新版本只持久化该键，旧工作流/技能键仅用于迁移读取。
+export const AGENT_EXECUTION_SELECTION_KEY = STORAGE_KEYS.AGENT_EXECUTION_SELECTION;
+
+// 描述:
+//
+//   - 定义会话级执行选择；同一会话同一时刻只允许“无 / 工作流 / 技能”三种上下文之一生效。
+export type SessionExecutionSelection =
+  | { kind: "none" }
+  | { kind: "workflow"; workflowId: string }
+  | { kind: "skill"; skillId: string };
+
+// 描述:
+//
+//   - 定义读取会话执行选择时可用的迁移来源，兼容旧工作流/技能分离存储键与路由快速开始预设。
+interface ReadSessionExecutionSelectionOptions {
+  storageKey: string;
+  legacyWorkflowKey?: string;
+  legacySkillKey?: string;
+  preferredWorkflowId?: string;
+  preferredSkillIds?: string[];
+}
+
+// 描述:
+//
+//   - 提供统一的“无执行上下文”快照，避免各模块重复手写字面量。
+export const EMPTY_SESSION_EXECUTION_SELECTION: SessionExecutionSelection = { kind: "none" };
+
+// 描述:
+//
+//   - 归一化会话执行选择，确保 workflowId / skillId 为空时回退为 `none`。
+//
+// Params:
+//
+//   - value: 原始执行选择。
+//
+// Returns:
+//
+//   - 归一化后的执行选择。
+export function normalizeSessionExecutionSelection(value: unknown): SessionExecutionSelection {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return EMPTY_SESSION_EXECUTION_SELECTION;
+  }
+  const source = value as Partial<SessionExecutionSelection> & {
+    workflowId?: string;
+    skillId?: string;
+  };
+  const kind = String(source.kind || "").trim();
+  if (kind === "workflow") {
+    const workflowId = String(source.workflowId || "").trim();
+    if (workflowId) {
+      return { kind: "workflow", workflowId };
+    }
+  }
+  if (kind === "skill") {
+    const skillId = String(source.skillId || "").trim();
+    if (skillId) {
+      return { kind: "skill", skillId };
+    }
+  }
+  return EMPTY_SESSION_EXECUTION_SELECTION;
+}
+
+// 描述:
+//
+//   - 基于工作流 ID 构建执行选择；空值会回退为 `none`。
+//
+// Params:
+//
+//   - workflowId: 工作流 ID。
+//
+// Returns:
+//
+//   - 工作流执行选择。
+export function buildWorkflowExecutionSelection(workflowId: string): SessionExecutionSelection {
+  const normalizedWorkflowId = String(workflowId || "").trim();
+  if (!normalizedWorkflowId) {
+    return EMPTY_SESSION_EXECUTION_SELECTION;
+  }
+  return {
+    kind: "workflow",
+    workflowId: normalizedWorkflowId,
+  };
+}
+
+// 描述:
+//
+//   - 基于技能 ID 列表构建执行选择；当前策略仅允许单技能，因此只取首个有效值。
+//
+// Params:
+//
+//   - skillIds: 技能 ID 列表。
+//
+// Returns:
+//
+//   - 技能执行选择。
+export function buildSkillExecutionSelection(skillIds: string[]): SessionExecutionSelection {
+  const normalizedSkillId = Array.isArray(skillIds)
+    ? skillIds
+      .map((item) => String(item || "").trim())
+      .find((item) => item.length > 0)
+    : "";
+  if (!normalizedSkillId) {
+    return EMPTY_SESSION_EXECUTION_SELECTION;
+  }
+  return {
+    kind: "skill",
+    skillId: normalizedSkillId,
+  };
+}
+
 // 描述：
 //
 //   - 从本地存储读取当前智能体最近一次选择的工作流 ID，未命中时返回空字符串。
@@ -82,6 +194,94 @@ export function readSelectedSkillIds(storageKey: string): string[] {
     return Array.from(new Set(normalized)).slice(0, 1);
   } catch (_err) {
     return [];
+  }
+}
+
+// 描述:
+//
+//   - 从本地存储读取会话执行选择；优先读取新结构，缺失时按“路由预设 > 旧技能 > 旧工作流”的顺序迁移。
+//
+// Params:
+//
+//   - options: 读取与迁移配置。
+//
+// Returns:
+//
+//   - 归一化后的会话执行选择。
+export function readSessionExecutionSelection(
+  options: ReadSessionExecutionSelectionOptions,
+): SessionExecutionSelection {
+  if (!IS_BROWSER) {
+    return EMPTY_SESSION_EXECUTION_SELECTION;
+  }
+  const preferredSkillSelection = buildSkillExecutionSelection(options.preferredSkillIds || []);
+  if (preferredSkillSelection.kind === "skill") {
+    return preferredSkillSelection;
+  }
+  const preferredWorkflowSelection = buildWorkflowExecutionSelection(String(options.preferredWorkflowId || ""));
+  if (preferredWorkflowSelection.kind === "workflow") {
+    return preferredWorkflowSelection;
+  }
+
+  const rawValue = window.localStorage.getItem(options.storageKey);
+  const parsedSelection = rawValue ? normalizeSessionExecutionSelection(safeParseJson(rawValue)) : EMPTY_SESSION_EXECUTION_SELECTION;
+  if (parsedSelection.kind !== "none") {
+    return parsedSelection;
+  }
+
+  const legacySkillSelection = buildSkillExecutionSelection(
+    readSelectedSkillIds(options.legacySkillKey || AGENT_SKILL_SELECTED_KEY),
+  );
+  if (legacySkillSelection.kind === "skill") {
+    return legacySkillSelection;
+  }
+
+  return buildWorkflowExecutionSelection(
+    readSelectedWorkflowId(options.legacyWorkflowKey || AGENT_WORKFLOW_SELECTED_KEY),
+  );
+}
+
+// 描述:
+//
+//   - 将会话执行选择写入本地存储，并清理旧版工作流/技能选择键，避免同一会话长期保留双写状态。
+//
+// Params:
+//
+//   - selection: 当前会话执行选择。
+//   - storageKey: 新版执行选择存储键。
+//   - legacyWorkflowKey: 旧工作流键。
+//   - legacySkillKey: 旧技能键。
+export function writeSessionExecutionSelection(
+  selection: SessionExecutionSelection,
+  storageKey = AGENT_EXECUTION_SELECTION_KEY,
+  legacyWorkflowKey = AGENT_WORKFLOW_SELECTED_KEY,
+  legacySkillKey = AGENT_SKILL_SELECTED_KEY,
+) {
+  if (!IS_BROWSER) {
+    return;
+  }
+  const normalizedSelection = normalizeSessionExecutionSelection(selection);
+  window.localStorage.setItem(storageKey, JSON.stringify(normalizedSelection));
+  window.localStorage.removeItem(legacyWorkflowKey);
+  window.localStorage.removeItem(legacySkillKey);
+}
+
+// 描述:
+//
+//   - 安全解析 JSON 字符串；解析失败时回退为 `null`，避免 localStorage 脏值导致读取异常。
+//
+// Params:
+//
+//   - value: 原始 JSON 字符串。
+//
+// Returns:
+//
+//   - 解析后的对象或 `null`。
+function safeParseJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch (_err) {
+    return null;
   }
 }
 

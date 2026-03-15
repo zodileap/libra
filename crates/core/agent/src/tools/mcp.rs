@@ -3,8 +3,8 @@ use super::{AgentTool, RiskLevel, ToolContext};
 use crate::AgentRegisteredMcp;
 use libra_mcp_common::ProtocolError;
 use reqwest::blocking::Client;
-use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
-use serde_json::{Value, json};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
+use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
@@ -1561,10 +1561,10 @@ fn truncate_stderr(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentRegisteredMcp, DccToolCallRequest, McpToolCallRequest, build_cross_dcc_transfer_plan,
-        build_http_headers, build_http_mcp_payload, parse_dcc_tool_request,
-        parse_http_mcp_response, parse_mcp_tool_request, read_jsonrpc_message, select_dcc_provider,
-        select_registered_mcp,
+        build_cross_dcc_transfer_plan, build_http_headers, build_http_mcp_payload,
+        parse_dcc_tool_request, parse_http_mcp_response, parse_mcp_tool_request,
+        read_jsonrpc_message, select_dcc_provider, select_registered_mcp, AgentRegisteredMcp,
+        DccToolCallRequest, McpToolCallRequest,
     };
     use serde_json::json;
     use std::collections::HashMap;
@@ -1575,6 +1575,7 @@ mod tests {
     fn build_registered_mcp(id: &str, name: &str) -> AgentRegisteredMcp {
         AgentRegisteredMcp {
             id: id.to_string(),
+            template_id: String::new(),
             name: name.to_string(),
             domain: "general".to_string(),
             software: "".to_string(),
@@ -1650,8 +1651,7 @@ mod tests {
             build_registered_mcp("openapi-docs", "OpenAPI Docs"),
             build_registered_mcp("design-tools", "Design Tools"),
         ];
-        let by_id =
-            select_registered_mcp(items.as_slice(), "openapi-docs").expect("match by id");
+        let by_id = select_registered_mcp(items.as_slice(), "openapi-docs").expect("match by id");
         let by_name =
             select_registered_mcp(items.as_slice(), "Design Tools").expect("match by name");
         assert_eq!(by_id.id, "openapi-docs");

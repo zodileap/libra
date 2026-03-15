@@ -19,7 +19,8 @@ use dcc_runtime::{
     DccRuntimeStatusResponse, check_dcc_runtime_status_inner, prepare_dcc_runtime_inner,
 };
 use libra_agent_core::{
-    AgentRegisteredMcp, AgentRunRequest, AgentStreamEvent, UserInputAnswer, UserInputResolution,
+    AgentRegisteredMcp, AgentRunRequest, AgentRuntimeCapabilities, AgentStreamEvent,
+    UserInputAnswer, UserInputResolution, detect_agent_runtime_capabilities,
     llm::{
         LlmGatewayPolicy, LlmProviderConfig, LlmUsage, call_model_with_policy_and_config,
         parse_provider,
@@ -660,6 +661,7 @@ async fn run_agent_command(
     dcc_provider_addr: Option<String>,
     output_dir: Option<String>,
     workdir: Option<String>,
+    runtime_capabilities: Option<AgentRuntimeCapabilities>,
 ) -> Result<AgentRunResponse, DesktopProtocolError> {
     tauri::async_runtime::spawn_blocking(move || {
         match catch_unwind(AssertUnwindSafe(|| {
@@ -678,6 +680,7 @@ async fn run_agent_command(
                 dcc_provider_addr,
                 output_dir,
                 workdir,
+                runtime_capabilities,
             )
         })) {
             Ok(result) => result,
@@ -697,6 +700,23 @@ async fn run_agent_command(
         code: "core.desktop.agent.task_join_failed".to_string(),
         message: format!("agent command task join failed: {}", err),
         suggestion: Some("请重试一次；如仍失败请重启应用".to_string()),
+        retryable: true,
+    })?
+}
+
+#[tauri::command]
+async fn get_agent_runtime_capabilities(
+    app: tauri::AppHandle,
+    workdir: Option<String>,
+) -> Result<AgentRuntimeCapabilities, DesktopProtocolError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        get_agent_runtime_capabilities_inner(app, workdir)
+    })
+    .await
+    .map_err(|err| DesktopProtocolError {
+        code: "core.desktop.agent.runtime_capabilities_join_failed".to_string(),
+        message: format!("get agent runtime capabilities task join failed: {}", err),
+        suggestion: Some("请重试一次；如仍失败请重启应用。".to_string()),
         retryable: true,
     })?
 }
@@ -781,6 +801,7 @@ fn build_runtime_registered_mcps(
 
         runtime_mcps.push(AgentRegisteredMcp {
             id: item.id,
+            template_id: item.template_id,
             name: item.name,
             domain: item.domain,
             software: item.software,
@@ -805,6 +826,63 @@ fn build_runtime_registered_mcps(
     Ok(runtime_mcps)
 }
 
+/// 描述：解析智能体请求的工作目录，统一兼容绝对路径、相对路径与缺省回退逻辑。
+///
+/// Params:
+///
+///   - workdir: 会话或前端透传的工作目录。
+///
+/// Returns:
+///
+///   - 归一化后的绝对工作目录。
+fn resolve_agent_selected_workdir(workdir: Option<String>) -> Result<PathBuf, DesktopProtocolError> {
+    let current_dir = env::current_dir().map_err(|err| DesktopProtocolError {
+        code: "core.desktop.agent.current_dir_read_failed".to_string(),
+        message: format!("read current dir failed: {}", err),
+        suggestion: None,
+        retryable: false,
+    })?;
+    let selected_workdir = workdir
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| current_dir.clone());
+    let normalized_workdir = if selected_workdir.is_absolute() {
+        selected_workdir
+    } else {
+        current_dir.join(selected_workdir)
+    };
+    if !normalized_workdir.exists() || !normalized_workdir.is_dir() {
+        return Err(DesktopProtocolError {
+            code: "core.desktop.agent.workdir_invalid".to_string(),
+            message: format!("workdir is invalid: {}", normalized_workdir.to_string_lossy()),
+            suggestion: Some("请确认会话绑定的项目目录存在且可访问".to_string()),
+            retryable: false,
+        });
+    }
+    Ok(normalized_workdir)
+}
+
+/// 描述：基于当前工作目录与已启用 MCP 注册表，构建统一智能体可见的运行时能力快照。
+///
+/// Params:
+///
+///   - app: 当前桌面应用句柄。
+///   - workdir: 可选工作目录。
+///
+/// Returns:
+///
+///   - 运行时能力快照。
+fn get_agent_runtime_capabilities_inner(
+    app: tauri::AppHandle,
+    workdir: Option<String>,
+) -> Result<AgentRuntimeCapabilities, DesktopProtocolError> {
+    let selected_workdir = resolve_agent_selected_workdir(workdir)?;
+    let available_mcps = build_runtime_registered_mcps(&app, Some(selected_workdir.as_path()))?;
+    Ok(detect_agent_runtime_capabilities(&available_mcps))
+}
+
 fn run_agent_command_inner(
     app: tauri::AppHandle,
     agent_key: String,
@@ -820,6 +898,7 @@ fn run_agent_command_inner(
     dcc_provider_addr: Option<String>,
     output_dir: Option<String>,
     workdir: Option<String>,
+    runtime_capabilities: Option<AgentRuntimeCapabilities>,
 ) -> Result<AgentRunResponse, DesktopProtocolError> {
     fn is_cancelled_protocol_error(code: &str) -> bool {
         code == "core.agent.python.orchestration_timeout"
@@ -852,34 +931,10 @@ fn run_agent_command_inner(
         let _ = app.emit(EVENT_AGENT_LOG, payload);
     };
 
-    let current_dir = env::current_dir().map_err(|err| DesktopProtocolError {
-        code: "core.desktop.agent.current_dir_read_failed".to_string(),
-        message: format!("read current dir failed: {}", err),
-        suggestion: None,
-        retryable: false,
-    })?;
     // 描述：
     //
     //   - 优先使用会话传入的项目目录作为执行路径，确保智能体基于当前项目上下文工作。
-    let selected_workdir = workdir
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| current_dir.clone());
-    let selected_workdir = if selected_workdir.is_absolute() {
-        selected_workdir
-    } else {
-        current_dir.join(selected_workdir)
-    };
-    if !selected_workdir.exists() || !selected_workdir.is_dir() {
-        return Err(DesktopProtocolError {
-            code: "core.desktop.agent.workdir_invalid".to_string(),
-            message: format!("workdir is invalid: {}", selected_workdir.to_string_lossy()),
-            suggestion: Some("请确认会话绑定的项目目录存在且可访问".to_string()),
-            retryable: false,
-        });
-    }
+    let selected_workdir = resolve_agent_selected_workdir(workdir.clone())?;
     let default_output_dir = app
         .path()
         .app_data_dir()
@@ -942,10 +997,20 @@ fn run_agent_command_inner(
         format!("output_dir={}", selected_output_dir.to_string_lossy()),
     );
     let available_mcps = build_runtime_registered_mcps(&app, Some(selected_workdir.as_path()))?;
+    let resolved_runtime_capabilities = runtime_capabilities
+        .unwrap_or_else(|| detect_agent_runtime_capabilities(&available_mcps));
     log(
         "debug",
         "request",
         format!("enabled_mcps={}", available_mcps.len()),
+    );
+    log(
+        "debug",
+        "request",
+        format!(
+            "interactive_mode={}",
+            resolved_runtime_capabilities.interactive_mode.as_str()
+        ),
     );
 
     emit_agent_text_stream_event(
@@ -976,6 +1041,7 @@ fn run_agent_command_inner(
             output_dir: Some(selected_output_dir.to_string_lossy().to_string()),
             workdir: Some(selected_workdir.to_string_lossy().to_string()),
             available_mcps,
+            runtime_capabilities: resolved_runtime_capabilities,
         },
         |stream_event| {
             let kind = stream_event.kind().to_string();
@@ -3735,6 +3801,7 @@ fn main() {
             validate_mcp_registration,
             prepare_dcc_runtime,
             check_dcc_runtime_status,
+            get_agent_runtime_capabilities,
             run_agent_command,
             call_ai_summary_command,
             check_codex_cli_health,

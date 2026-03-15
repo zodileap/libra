@@ -16,3 +16,4 @@ services/*/log/
 releases
 services/data/
 tmp/
+.pnpm-store

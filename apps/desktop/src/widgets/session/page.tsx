@@ -88,9 +88,20 @@ import {
   getAgentWorkflowById,
   listAgentWorkflowOverview,
 } from "../../shared/workflow";
-import { normalizeAgentSkillId } from "../../shared/workflow/prompt-guidance";
-import { listAgentSkills, listMcpOverview } from "../../modules/common/services";
-import type { AgentSkillItem, McpRegistrationItem } from "../../modules/common/services";
+import {
+  buildPlaywrightInteractiveRuntimePrompt,
+  isPlaywrightInteractiveSkillId,
+  normalizeAgentSkillId,
+} from "../../shared/workflow/prompt-guidance";
+import {
+  getAgentRuntimeCapabilities,
+  listAgentSkills,
+  listMcpOverview,
+} from "../../modules/common/services";
+import type {
+  AgentSkillItem,
+  McpRegistrationItem,
+} from "../../modules/common/services";
 import {
   AGENT_HOME_PATH,
   AGENT_SETTINGS_PATH,
@@ -116,20 +127,29 @@ import type {
 } from "../../shared/workflow";
 import { resolveSessionUiConfig, type SessionAgentUiConfig } from "./config";
 import {
+  AGENT_EXECUTION_SELECTION_KEY,
   buildSessionContextPrompt,
   buildSessionSkillPrompt,
+  buildSkillExecutionSelection,
+  buildWorkflowExecutionSelection,
+  EMPTY_SESSION_EXECUTION_SELECTION,
   AGENT_SKILL_SELECTED_KEY,
   AGENT_WORKFLOW_SELECTED_KEY,
   filterWorkflowStageContextMessages,
   pruneAssistantRetryTail,
-  readSelectedSkillIds,
-  readSelectedWorkflowId,
+  readSessionExecutionSelection,
+  type SessionExecutionSelection,
   type MessageItem,
   type RetryTailPruneResult,
   type TraceRecord,
   upsertAssistantMessageBeforeAnchorById,
   upsertAssistantMessageById,
+  writeSessionExecutionSelection,
 } from "./prompt-utils";
+import {
+  resolveSessionExecutionRoute,
+  type SessionExecutionRouteDecision,
+} from "./execution-routing";
 import { SessionRunSegmentItem } from "./run-segment";
 import {
   IS_BROWSER,
@@ -180,6 +200,10 @@ interface ExecutePromptOptions {
   skipDccSelectionPrompt?: boolean;
   workflowIdOverride?: string;
   workflowStageIndex?: number;
+  workflowPromptPreamble?: string;
+  disableWorkflow?: boolean;
+  selectedSkillIdsOverride?: string[];
+  routeDecision?: SessionExecutionRouteDecision;
 }
 
 // 描述:
@@ -1625,6 +1649,125 @@ function isBrowseTool(toolName: string): boolean {
 
 // 描述：
 //
+//   - 判断工具是否属于“真实浏览器交互”步骤类型，统一覆盖 js_repl 与 browser_* 工具。
+//
+// Params:
+//
+//   - toolName: 工具名。
+//
+// Returns:
+//
+//   - true: 浏览器交互类工具。
+function isBrowserTool(toolName: string): boolean {
+  return toolName === "js_repl"
+    || toolName === "js_repl_reset"
+    || toolName === "browser_navigate"
+    || toolName === "browser_snapshot"
+    || toolName === "browser_click"
+    || toolName === "browser_type"
+    || toolName === "browser_wait_for"
+    || toolName === "browser_take_screenshot"
+    || toolName === "browser_tabs"
+    || toolName === "browser_close";
+}
+
+// 描述：
+//
+//   - 将浏览器工具名映射为用户可见的进行中/完成态文案，避免执行流只显示原始工具编码。
+//
+// Params:
+//
+//   - toolName: 浏览器工具名。
+//   - state: 当前动作阶段。
+//   - payload: 浏览器工具返回的结构化结果。
+//
+// Returns:
+//
+//   - 用户可见的步骤文案。
+function buildBrowserToolStepText(
+  toolName: string,
+  state: "running" | "finished",
+  payload: Record<string, unknown>,
+): string {
+  const browserUrl = String(
+    payload.url
+    || payload.current_url
+    || (payload.snapshot && typeof payload.snapshot === "object"
+      ? (payload.snapshot as Record<string, unknown>).url
+      : "")
+    || "",
+  ).trim();
+  const screenshotPath = String(payload.path || "").trim();
+  if (state === "running") {
+    if (toolName === "browser_navigate") {
+      return translateDesktopText("正在打开页面");
+    }
+    if (toolName === "browser_click") {
+      return translateDesktopText("正在点击页面元素");
+    }
+    if (toolName === "browser_type") {
+      return translateDesktopText("正在输入页面内容");
+    }
+    if (toolName === "browser_wait_for") {
+      return translateDesktopText("正在等待页面条件");
+    }
+    if (toolName === "browser_snapshot") {
+      return translateDesktopText("正在抓取页面快照");
+    }
+    if (toolName === "browser_take_screenshot") {
+      return translateDesktopText("正在保存页面截图");
+    }
+    if (toolName === "browser_tabs") {
+      return translateDesktopText("正在读取浏览器标签页");
+    }
+    if (toolName === "browser_close") {
+      return translateDesktopText("正在关闭真实浏览器");
+    }
+    if (toolName === "js_repl_reset") {
+      return translateDesktopText("正在重置浏览器会话");
+    }
+    return translateDesktopText("正在执行浏览器脚本");
+  }
+  if (toolName === "browser_navigate" && browserUrl) {
+    return translateDesktopText("已在真实浏览器打开 {{url}}", { url: browserUrl });
+  }
+  if (toolName === "browser_snapshot") {
+    return browserUrl
+      ? translateDesktopText("已抓取页面快照 {{url}}", { url: browserUrl })
+      : translateDesktopText("已抓取页面快照");
+  }
+  if (toolName === "browser_click") {
+    return browserUrl
+      ? translateDesktopText("已在真实浏览器点击页面元素 {{url}}", { url: browserUrl })
+      : translateDesktopText("已在真实浏览器点击页面元素");
+  }
+  if (toolName === "browser_type") {
+    return browserUrl
+      ? translateDesktopText("已在真实浏览器输入内容 {{url}}", { url: browserUrl })
+      : translateDesktopText("已在真实浏览器输入内容");
+  }
+  if (toolName === "browser_wait_for") {
+    return translateDesktopText("已等待页面条件成立");
+  }
+  if (toolName === "browser_take_screenshot") {
+    return screenshotPath
+      ? translateDesktopText("已保存页面截图 {{path}}", { path: screenshotPath })
+      : translateDesktopText("已保存页面截图");
+  }
+  if (toolName === "browser_tabs") {
+    return translateDesktopText("已同步真实浏览器标签页");
+  }
+  if (toolName === "browser_close") {
+    return translateDesktopText("已关闭真实浏览器");
+  }
+  if (toolName === "js_repl_reset") {
+    return translateDesktopText("已重置浏览器会话");
+  }
+  return translateDesktopText("已执行浏览器脚本");
+}
+
+// 描述：
+//
 //   - 根据浏览类工具名称与参数，生成统一可读的浏览明细文案。
 //
 // Params:
@@ -2144,6 +2287,19 @@ function mapAgentTextStreamToRunSegment(
   if (payload.kind === STREAM_KINDS.TOOL_CALL_STARTED) {
     const data = resolveToolCallEventData(payload);
     const toolName = String(data.name || "").trim();
+    if (isBrowserTool(toolName)) {
+      return {
+        key: segmentKey,
+        intro: translateDesktopText("真实浏览器"),
+        step: buildBrowserToolStepText(toolName, "running", data.args_data || {}),
+        status: "running",
+        data: {
+          __segment_kind: payload.kind,
+          __step_type: "browser",
+          tool_name: toolName,
+        },
+      };
+    }
     if (isTodoTool(toolName)) {
       return {
         key: segmentKey,
@@ -2388,6 +2544,25 @@ function mapAgentTextStreamToRunSegment(
           __segment_kind: payload.kind,
           __step_type: "create",
           create_path: path,
+        },
+      };
+    }
+
+    if (isBrowserTool(toolName)) {
+      const detail = truncateRunText(
+        JSON.stringify(resultData || {}, null, 2),
+        64000,
+      );
+      return {
+        key: segmentKey,
+        intro: translateDesktopText("真实浏览器"),
+        step: buildBrowserToolStepText(toolName, "finished", resultData),
+        status: runOk ? "finished" : "failed",
+        detail,
+        data: {
+          __segment_kind: payload.kind,
+          __step_type: "browser",
+          tool_name: toolName,
         },
       };
     }
@@ -3621,19 +3796,50 @@ export function SessionPage({
     () => availableAiKeys.find((item) => item.provider === selectedProvider) || availableAiKeys[0] || null,
     [availableAiKeys, selectedProvider],
   );
-  const [selectedWorkflowId, setSelectedWorkflowId] = useState<string>(
-    () => routePreferredWorkflowId || readSelectedWorkflowId(AGENT_WORKFLOW_SELECTED_KEY),
+  const [executionSelection, setExecutionSelection] = useState<SessionExecutionSelection>(() =>
+    readSessionExecutionSelection({
+      storageKey: AGENT_EXECUTION_SELECTION_KEY,
+      legacyWorkflowKey: AGENT_WORKFLOW_SELECTED_KEY,
+      legacySkillKey: AGENT_SKILL_SELECTED_KEY,
+      preferredWorkflowId: routePreferredWorkflowId,
+      preferredSkillIds: routePreferredSkillIds,
+    })
   );
-  const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>(
-    () => routePreferredSkillIds.length > 0 ? routePreferredSkillIds : readSelectedSkillIds(AGENT_SKILL_SELECTED_KEY),
-  );
+  const selectedWorkflowId = executionSelection.kind === "workflow"
+    ? String(executionSelection.workflowId || "").trim()
+    : "";
+  const selectedSkillIds = executionSelection.kind === "skill" && String(executionSelection.skillId || "").trim()
+    ? [String(executionSelection.skillId || "").trim()]
+    : [];
+  // 描述：
+  //
+  //   - 兼容既有“工作流/技能分离 setter”调用点；内部统一写回单一执行选择状态。
+  const setSelectedWorkflowId = useCallback((workflowId: string) => {
+    setExecutionSelection(buildWorkflowExecutionSelection(workflowId));
+  }, []);
+  const setSelectedSkillIds = useCallback((skillIds: string[]) => {
+    setExecutionSelection(buildSkillExecutionSelection(skillIds));
+  }, []);
   const [selectedDccSoftware, setSelectedDccSoftware] = useState<string>(
     () => resolveAgentSessionSelectedDccSoftware(sessionId),
   );
   const [pendingDccSelection, setPendingDccSelection] = useState<PendingDccSelectionState | null>(null);
   const [workflowSkillModalVisible, setWorkflowSkillModalVisible] = useState(false);
-  const [draftWorkflowId, setDraftWorkflowId] = useState("");
-  const [draftSkillIds, setDraftSkillIds] = useState<string[]>([]);
+  const [draftExecutionSelection, setDraftExecutionSelection] = useState<SessionExecutionSelection>(
+    EMPTY_SESSION_EXECUTION_SELECTION,
+  );
+  const draftWorkflowId = draftExecutionSelection.kind === "workflow"
+    ? String(draftExecutionSelection.workflowId || "").trim()
+    : "";
+  const draftSkillIds = draftExecutionSelection.kind === "skill" && String(draftExecutionSelection.skillId || "").trim()
+    ? [String(draftExecutionSelection.skillId || "").trim()]
+    : [];
+  const setDraftWorkflowId = useCallback((workflowId: string) => {
+    setDraftExecutionSelection(buildWorkflowExecutionSelection(workflowId));
+  }, []);
+  const setDraftSkillIds = useCallback((skillIds: string[]) => {
+    setDraftExecutionSelection(buildSkillExecutionSelection(skillIds));
+  }, []);
   const [availableSkills, setAvailableSkills] = useState<AgentSkillItem[]>([]);
   const [availableSkillsLoaded, setAvailableSkillsLoaded] = useState(false);
 
@@ -3656,11 +3862,11 @@ export function SessionPage({
     [workflows],
   );
   const selectedWorkflow = useMemo<AgentWorkflowDefinition | null>(() => {
-    if (selectedSkillIds.length > 0) {
+    if (executionSelection.kind !== "workflow") {
       return null;
     }
     return getAgentWorkflowById(selectedWorkflowId) || workflows.find((item) => item.id === selectedWorkflowId) || workflows[0] || null;
-  }, [workflows, selectedSkillIds.length, selectedWorkflowId]);
+  }, [executionSelection.kind, workflows, selectedWorkflowId]);
   const workflowMenuItems = useMemo(
     () =>
       workflows.map((workflow) => ({
@@ -3835,8 +4041,12 @@ export function SessionPage({
     if (selectedSessionSkills.length > 0) {
       return selectedSessionSkills[0]?.title || t("技能");
     }
-    return selectedWorkflow?.name || resolvedSessionUiConfig.workflowFallbackLabel;
+    if (executionSelection.kind === "workflow") {
+      return selectedWorkflow?.name || resolvedSessionUiConfig.workflowFallbackLabel;
+    }
+    return t("不使用流程");
   }, [
+    executionSelection.kind,
     t,
     resolvedSessionUiConfig.workflowFallbackLabel,
     selectedWorkflow?.name,
@@ -5189,6 +5399,9 @@ export function SessionPage({
   }, []);
 
   useEffect(() => {
+    if (executionSelection.kind !== "workflow") {
+      return;
+    }
     if (!selectedWorkflow) {
       return;
     }
@@ -5196,18 +5409,19 @@ export function SessionPage({
       setSelectedWorkflowId(selectedWorkflow.id);
       return;
     }
-    if (IS_BROWSER) {
-      window.localStorage.setItem(AGENT_WORKFLOW_SELECTED_KEY, selectedWorkflow.id);
-    }
-  }, [selectedWorkflow, selectedWorkflowId]);
+  }, [executionSelection.kind, selectedWorkflow, selectedWorkflowId, setSelectedWorkflowId]);
 
-  // 描述：持久化当前会话选择的技能列表，保持跨会话复用。
+  // 描述：
+  //
+  //   - 持久化会话级执行选择；新版本统一落到单一 selection 键，并同步清理旧工作流/技能本地键。
   useEffect(() => {
-    if (!IS_BROWSER) {
-      return;
-    }
-    window.localStorage.setItem(AGENT_SKILL_SELECTED_KEY, JSON.stringify(selectedSkillIds));
-  }, [selectedSkillIds]);
+    writeSessionExecutionSelection(
+      executionSelection,
+      AGENT_EXECUTION_SELECTION_KEY,
+      AGENT_WORKFLOW_SELECTED_KEY,
+      AGENT_SKILL_SELECTED_KEY,
+    );
+  }, [executionSelection]);
 
   // 描述：在切换会话时同步恢复线程级 DCC 软件绑定，保证同一话题后续默认继续使用已选软件。
   useEffect(() => {
@@ -5473,9 +5687,10 @@ export function SessionPage({
     promptText: string,
     displayMessages: MessageItem[],
     contextMessages: MessageItem[],
+    shouldUseDccPreflight: boolean,
     options?: ExecutePromptOptions,
   ): Promise<DccPreflightResult> => {
-    if (!activeUsesDccModelingSkill) {
+    if (!shouldUseDccPreflight) {
       return {
         blocked: false,
         promptBlock: "",
@@ -5614,13 +5829,12 @@ export function SessionPage({
 
     throw new Error(t("当前 DCC 会话缺少软件选择结果，请先选择一个建模软件后继续。"));
   }, [
-    activeUsesDccModelingSkill,
     activeWorkspace?.path,
     selectedDccSoftware,
     sessionId,
   ]);
 
-  const executePrompt = async (content: string, options?: ExecutePromptOptions) => {
+  const executePromptDirect = async (content: string, options?: ExecutePromptOptions) => {
     const normalizedContent = content.trim();
     if (!normalizedContent || sending) return;
 
@@ -5635,10 +5849,32 @@ export function SessionPage({
           baseDisplayMessages,
           assistantRunMetaMapRef.current,
         );
-    const activeWorkflow = options?.workflowIdOverride
-      ? getAgentWorkflowById(options.workflowIdOverride) || workflows.find((item) => item.id === options.workflowIdOverride) || null
-      : selectedWorkflow;
-    const dccPreflight = await resolveDccPreflight(normalizedContent, baseDisplayMessages, baseContextMessages, options);
+    const effectiveSelectedSkillIds = Array.isArray(options?.selectedSkillIdsOverride)
+      ? Array.from(new Set(
+        options.selectedSkillIdsOverride
+          .map((item) => String(item || "").trim())
+          .filter((item) => item.length > 0),
+      )).slice(0, 1)
+      : activeSelectedSkillIds;
+    const effectiveSelectedSessionSkills = availableSkills.filter((item) => effectiveSelectedSkillIds.includes(item.id));
+    const activeWorkflow = options?.disableWorkflow
+      ? null
+      : options?.workflowIdOverride
+        ? getAgentWorkflowById(options.workflowIdOverride) || workflows.find((item) => item.id === options.workflowIdOverride) || null
+        : selectedWorkflow;
+    const effectiveUsesDccModelingSkill = effectiveSelectedSessionSkills.some((item) => isDccModelingSkill(item))
+      || Boolean(
+        (activeWorkflow?.graph?.nodes || []).some(
+          (node) => node.type === "skill" && normalizeAgentSkillId(String(node.skillId || "").trim()) === DCC_MODELING_SKILL_ID,
+        ),
+      );
+    const dccPreflight = await resolveDccPreflight(
+      normalizedContent,
+      baseDisplayMessages,
+      baseContextMessages,
+      effectiveUsesDccModelingSkill,
+      options,
+    );
     if (dccPreflight.blocked) {
       return;
     }
@@ -5698,6 +5934,8 @@ export function SessionPage({
             session_id: sessionId || "new-session",
             agent_key: normalizedAgentKey,
             provider,
+            route_kind: options?.routeDecision?.routeKind || "direct",
+            route_reason: options?.routeDecision?.reason || "",
             workflow_id: activeWorkflowId || null,
             workflow_name: activeWorkflowName,
             prompt: normalizedContent,
@@ -5777,11 +6015,17 @@ export function SessionPage({
           ? `${streamMessageId}-stage-${currentStageIndex + 1}`
           : streamMessageId;
         const stageDividerTitle = hasWorkflowStages && currentStageItem && currentStageAttempt === 0
-          ? buildWorkflowStageDividerTitle(
-            currentStageIndex,
-            totalWorkflowStageCount,
-            currentStageItem.nodeTitle,
-          )
+          ? options?.routeDecision?.routeKind === "workflow_partial"
+            ? t("从第 {{current}}/{{total}} 阶段开始：{{title}}", {
+              current: currentStageIndex + 1,
+              total: totalWorkflowStageCount,
+              title: currentStageItem.nodeTitle,
+            })
+            : buildWorkflowStageDividerTitle(
+              currentStageIndex,
+              totalWorkflowStageCount,
+              currentStageItem.nodeTitle,
+            )
           : "";
         const initialStreamText = "";
 
@@ -5900,7 +6144,7 @@ export function SessionPage({
         const latestProjectProfile = activeWorkspace?.id
           ? (activeProjectProfile || getProjectWorkspaceProfile(activeWorkspace.id))
           : null;
-        const selectedSessionSkillPrompt = buildSessionSkillPrompt(selectedSessionSkills);
+        const selectedSessionSkillPrompt = buildSessionSkillPrompt(effectiveSelectedSessionSkills);
         const currentRequestPrompt = buildSessionContextPrompt(
           nextContextMessages,
           normalizedContent,
@@ -5915,13 +6159,31 @@ export function SessionPage({
           latestProjectProfile,
           activeWorkspaceEnabledCapabilities,
         );
+        const routedCurrentRequestPrompt = options?.workflowPromptPreamble
+          ? `${options.workflowPromptPreamble}\n\n${currentRequestPrompt}`
+          : currentRequestPrompt;
+        const routedContextualRequestPrompt = options?.workflowPromptPreamble
+          ? `${options.workflowPromptPreamble}\n\n${contextualRequestPrompt}`
+          : contextualRequestPrompt;
+        const runtimeCapabilities = await getAgentRuntimeCapabilities({
+          workspaceRoot: String(activeWorkspace?.path || "").trim() || undefined,
+        });
+        const hasWorkflowPlaywrightInteractiveSkill = (scopedWorkflow?.graph?.nodes || []).some((node) =>
+          node.type === "skill" && isPlaywrightInteractiveSkillId(String(node.skillId || "").trim()));
+        const hasSelectedPlaywrightInteractiveSkill = effectiveSelectedSessionSkills.some((skill) =>
+          isPlaywrightInteractiveSkillId(String(skill.id || "").trim()));
+        const selectedPlaywrightRuntimePrompt = hasSelectedPlaywrightInteractiveSkill
+          && !hasWorkflowPlaywrightInteractiveSkill
+          ? buildPlaywrightInteractiveRuntimePrompt(runtimeCapabilities)
+          : "";
         const workflowPrompt = buildAgentWorkflowPrompt(
           scopedWorkflow,
-          contextualRequestPrompt || currentRequestPrompt,
+          routedContextualRequestPrompt || routedCurrentRequestPrompt,
+          runtimeCapabilities,
         );
         const agentPrompt = currentStagePlan.planPrompt
-          ? `${workflowPrompt}\n\n${currentStagePlan.planPrompt}${selectedSessionSkillPrompt ? `\n\n${selectedSessionSkillPrompt}` : ""}${dccPreflight.promptBlock ? `\n\n${dccPreflight.promptBlock}` : ""}`
-          : `${workflowPrompt}${selectedSessionSkillPrompt ? `\n\n${selectedSessionSkillPrompt}` : ""}${dccPreflight.promptBlock ? `\n\n${dccPreflight.promptBlock}` : ""}`;
+          ? `${workflowPrompt}\n\n${currentStagePlan.planPrompt}${selectedPlaywrightRuntimePrompt ? `\n\n${selectedPlaywrightRuntimePrompt}` : ""}${selectedSessionSkillPrompt ? `\n\n${selectedSessionSkillPrompt}` : ""}${dccPreflight.promptBlock ? `\n\n${dccPreflight.promptBlock}` : ""}`
+          : `${workflowPrompt}${selectedPlaywrightRuntimePrompt ? `\n\n${selectedPlaywrightRuntimePrompt}` : ""}${selectedSessionSkillPrompt ? `\n\n${selectedSessionSkillPrompt}` : ""}${dccPreflight.promptBlock ? `\n\n${dccPreflight.promptBlock}` : ""}`;
         agentPromptRawRef.current = agentPrompt;
         agentLlmDeltaBufferRef.current = "";
         agentLlmResponseRawRef.current = "";
@@ -5960,6 +6222,7 @@ export function SessionPage({
           dccProviderAddr: DEFAULT_DCC_PROVIDER_ADDR,
           outputDir,
           workdir: String(activeWorkspace?.path || "").trim() || undefined,
+          runtimeCapabilities,
         });
         const responseSteps = response.steps || [];
         setStepRecords(responseSteps);
@@ -6160,16 +6423,23 @@ export function SessionPage({
             workflowSummaryResult.summarySource,
           );
         }
+        const activeExecutionTarget = activeWorkflow
+          ? t("工作流：{{workflow}}", { workflow: activeWorkflowName })
+          : effectiveSelectedSessionSkills.length > 0
+            ? t("技能：{{skill}}", {
+              skill: effectiveSelectedSessionSkills[0]?.title || effectiveSelectedSessionSkills[0]?.id || t("未命名技能"),
+            })
+            : t("普通对话");
         setStatus(
           response.exported_file
-            ? t("{{actionText}}；工作流：{{workflow}}；导出文件：{{file}}", {
+            ? t("{{actionText}}；{{target}}；导出文件：{{file}}", {
               actionText,
-              workflow: activeWorkflowName,
+              target: activeExecutionTarget,
               file: response.exported_file,
             })
-            : t("{{actionText}}；工作流：{{workflow}}", {
+            : t("{{actionText}}；{{target}}", {
               actionText,
-              workflow: activeWorkflowName,
+              target: activeExecutionTarget,
             }),
         );
         workflowPhaseCursorRef.current = null;
@@ -6267,6 +6537,130 @@ export function SessionPage({
     }
   };
 
+  // 描述：
+  //
+  //   - 发送前先按消息级执行路由裁决当前消息该走完整工作流、部分工作流、技能执行、普通对话还是恢复未完成执行。
+  //
+  // Params:
+  //
+  //   - content: 用户输入内容。
+  //   - options: 发送控制项。
+  const executePrompt = async (content: string, options?: ExecutePromptOptions) => {
+    const normalizedContent = String(content || "").trim();
+    if (!normalizedContent || sending) {
+      return;
+    }
+    const routeDecision = resolveSessionExecutionRoute({
+      messageText: normalizedContent,
+      selection: executionSelection,
+      workflow: selectedWorkflow,
+      workflowPhaseCursor,
+      hasPendingApproval: Boolean(activeApprovalId),
+      hasPendingUserInput: Boolean(activeUserInputRequestId),
+    });
+    appendDebugFlowRecord(
+      "ui",
+      "message_route",
+      t("消息执行路由"),
+      JSON.stringify(
+        {
+          route_kind: routeDecision.routeKind,
+          workflow_id: routeDecision.workflowId || null,
+          skill_id: routeDecision.skillId || null,
+          stage_index: Number.isFinite(routeDecision.stageIndex) ? routeDecision.stageIndex : null,
+          node_id: routeDecision.nodeId || null,
+          resume_target: routeDecision.resumeTarget || null,
+          reason: routeDecision.reason,
+        },
+        null,
+        2,
+      ),
+    );
+    appendTraceRecord({
+      traceId: `trace-local-${Date.now()}`,
+      source: "workflow:route",
+      message: `${routeDecision.routeKind}: ${routeDecision.reason}`,
+    });
+
+    if (routeDecision.routeKind === "resume_pending") {
+      setInput("");
+      if (routeDecision.resumeTarget === "approval" || routeDecision.resumeTarget === "user_input") {
+        setStatus(t("已恢复未完成执行，请先完成当前交互。"));
+        return;
+      }
+      const currentWorkflowPhaseCursor = workflowPhaseCursorRef.current;
+      if (!currentWorkflowPhaseCursor) {
+        setStatus(t("当前没有可恢复的执行阶段。"));
+        return;
+      }
+      setStatus(t("正在恢复未完成执行..."));
+      await executePromptDirect(currentWorkflowPhaseCursor.rootPrompt || normalizedContent, {
+        ...options,
+        appendUserMessage: false,
+        workflowIdOverride: routeDecision.workflowId || currentWorkflowPhaseCursor.workflowId,
+        workflowStageIndex: routeDecision.stageIndex ?? currentWorkflowPhaseCursor.currentStageIndex,
+        routeDecision,
+      });
+      return;
+    }
+
+    if (routeDecision.routeKind === "workflow_partial") {
+      const totalWorkflowStageCount = Math.max(
+        buildAgentWorkflowSkillExecutionPlan(selectedWorkflow, availableSkills).totalReadyCount,
+        Number(routeDecision.stageIndex || 0) + 1,
+      );
+      const workflowPromptPreamble = [
+        t("【消息级执行路由】"),
+        t("当前请求已路由为“工作流部分执行”。"),
+        t("仅执行第 {{current}}/{{total}} 阶段。", {
+          current: Number(routeDecision.stageIndex || 0) + 1,
+          total: totalWorkflowStageCount,
+        }),
+        t("不要重新执行前置阶段。"),
+        t("若该阶段依赖的事实缺失，可直接指出阻塞，但不要自作主张回到阶段 1。"),
+      ].join("\n");
+      await executePromptDirect(normalizedContent, {
+        ...options,
+        disableWorkflow: false,
+        workflowIdOverride: routeDecision.workflowId,
+        workflowStageIndex: routeDecision.stageIndex,
+        selectedSkillIdsOverride: [],
+        workflowPromptPreamble,
+        routeDecision,
+      });
+      return;
+    }
+
+    if (routeDecision.routeKind === "workflow_full") {
+      await executePromptDirect(normalizedContent, {
+        ...options,
+        disableWorkflow: false,
+        workflowIdOverride: routeDecision.workflowId,
+        workflowStageIndex: 0,
+        selectedSkillIdsOverride: [],
+        routeDecision,
+      });
+      return;
+    }
+
+    if (routeDecision.routeKind === "skill") {
+      await executePromptDirect(normalizedContent, {
+        ...options,
+        disableWorkflow: true,
+        selectedSkillIdsOverride: routeDecision.skillId ? [routeDecision.skillId] : [],
+        routeDecision,
+      });
+      return;
+    }
+
+    await executePromptDirect(normalizedContent, {
+      ...options,
+      disableWorkflow: true,
+      selectedSkillIdsOverride: [],
+      routeDecision,
+    });
+  };
+
   const sendMessage = async () => {
     const content = input.trim();
     if (!content || sending) {
@@ -6348,7 +6742,7 @@ export function SessionPage({
       currentWorkflowPhaseCursor
       && String(currentWorkflowPhaseCursor.currentMessageId || "").trim() === String(assistantMessage.id || "").trim(),
     );
-    await executePrompt(shouldResumeWorkflowStage ? currentWorkflowPhaseCursor?.rootPrompt || retryPrompt : retryPrompt, {
+    await executePromptDirect(shouldResumeWorkflowStage ? currentWorkflowPhaseCursor?.rootPrompt || retryPrompt : retryPrompt, {
       allowDangerousAction: false,
       appendUserMessage: false,
       replaceAssistantMessageId: String(assistantMessage.id || "").trim() || undefined,
@@ -6861,7 +7255,7 @@ export function SessionPage({
       const pendingDisplayMessages = pendingDccSelection.displayMessages;
       const pendingContextMessages = pendingDccSelection.contextMessages;
       setPendingDccSelection(null);
-      await executePrompt(pendingPrompt, {
+      await executePromptDirect(pendingPrompt, {
         ...pendingOptions,
         resolvedCrossDccSoftwares: [nextSoftware, nextTargetSoftware],
         skipDccSelectionPrompt: true,
@@ -6884,7 +7278,7 @@ export function SessionPage({
     const pendingDisplayMessages = pendingDccSelection.displayMessages;
     const pendingContextMessages = pendingDccSelection.contextMessages;
     setPendingDccSelection(null);
-    await executePrompt(pendingPrompt, {
+    await executePromptDirect(pendingPrompt, {
       ...pendingOptions,
       resolvedDccSoftware: nextSoftware,
       skipDccSelectionPrompt: true,
@@ -7029,15 +7423,17 @@ export function SessionPage({
   //
   //   - 打开“工作流/技能”选择弹窗，并用当前生效配置初始化草稿状态。
   const handleOpenWorkflowSkillModal = () => {
-    const normalizedSkillIds = activeSelectedSkillIds.slice(0, 1);
-    if (normalizedSkillIds.length > 0) {
-      setDraftWorkflowId("");
-      setDraftSkillIds(normalizedSkillIds);
+    if (executionSelection.kind === "skill") {
+      setDraftExecutionSelection(buildSkillExecutionSelection(activeSelectedSkillIds));
       setWorkflowSkillModalVisible(true);
       return;
     }
-    setDraftWorkflowId(activeSelectedWorkflowId);
-    setDraftSkillIds([]);
+    if (executionSelection.kind === "workflow") {
+      setDraftExecutionSelection(buildWorkflowExecutionSelection(activeSelectedWorkflowId));
+      setWorkflowSkillModalVisible(true);
+      return;
+    }
+    setDraftExecutionSelection(EMPTY_SESSION_EXECUTION_SELECTION);
     setWorkflowSkillModalVisible(true);
   };
 
@@ -7046,8 +7442,14 @@ export function SessionPage({
   //   - 关闭“工作流/技能”选择弹窗，不提交草稿变更。
   const handleCloseWorkflowSkillModal = () => {
     setWorkflowSkillModalVisible(false);
-    setDraftWorkflowId("");
-    setDraftSkillIds([]);
+    setDraftExecutionSelection(EMPTY_SESSION_EXECUTION_SELECTION);
+  };
+
+  // 描述：
+  //
+  //   - 将弹窗草稿切回“无执行上下文”，用于显式选择普通对话模式。
+  const handleSelectDraftExecutionNone = () => {
+    setDraftExecutionSelection(EMPTY_SESSION_EXECUTION_SELECTION);
   };
 
   // 描述：
@@ -7077,23 +7479,17 @@ const handleToggleDraftSkill = (skillId: string) => {
 const handleConfirmWorkflowSkillModal = () => {
   const nextWorkflowId = String(draftWorkflowId || "").trim();
   const nextSkillIds = draftSkillIds.slice(0, 1);
-  if (!nextWorkflowId && nextSkillIds.length === 0) {
-    AriMessage.warning({
-      content: t("请选择一个执行策略。"),
-      duration: 2500,
-    });
-    return;
-  }
   if (nextSkillIds.length > 0) {
     setSelectedSkillIds(nextSkillIds);
     setSelectedWorkflowId("");
-  } else {
+  } else if (nextWorkflowId) {
     setSelectedSkillIds([]);
     setSelectedWorkflowId(nextWorkflowId || workflows[0]?.id || "");
+  } else {
+    setExecutionSelection(EMPTY_SESSION_EXECUTION_SELECTION);
   }
   setWorkflowSkillModalVisible(false);
-  setDraftWorkflowId("");
-  setDraftSkillIds([]);
+  setDraftExecutionSelection(EMPTY_SESSION_EXECUTION_SELECTION);
   };
 
   useEffect(() => {
@@ -7169,7 +7565,7 @@ const handleConfirmWorkflowSkillModal = () => {
     }
     const pending = dependencyRuleConfirmState;
     setDependencyRuleConfirmState(null);
-    await executePrompt(pending.prompt, {
+    await executePromptDirect(pending.prompt, {
       ...pending.options,
       skipDependencyRuleCheck: true,
     });
@@ -7198,7 +7594,7 @@ const handleConfirmWorkflowSkillModal = () => {
           : t("依赖升级完成：已更新 {{updated}} 项。", { updated: updatedCount }),
       );
       setDependencyRuleConfirmState(null);
-      await executePrompt(pending.prompt, {
+      await executePromptDirect(pending.prompt, {
         ...pending.options,
         skipDependencyRuleCheck: true,
       });
@@ -7245,7 +7641,7 @@ const handleConfirmWorkflowSkillModal = () => {
       setUiHint(null);
       setPendingDangerousPrompt("");
       setPendingDangerousToken("");
-      await executePrompt(prompt, {
+      await executePromptDirect(prompt, {
         allowDangerousAction: true,
         appendUserMessage: false,
         confirmationToken: pendingDangerousToken,
@@ -7279,7 +7675,7 @@ const handleConfirmWorkflowSkillModal = () => {
     }
     const currentWorkflowPhaseCursor = workflowPhaseCursorRef.current;
     setStatus(t("正在重试最近一轮..."));
-    await executePrompt(currentWorkflowPhaseCursor?.rootPrompt || normalizedPrompt, {
+    await executePromptDirect(currentWorkflowPhaseCursor?.rootPrompt || normalizedPrompt, {
       allowDangerousAction: false,
       appendUserMessage: false,
       workflowIdOverride: currentWorkflowPhaseCursor?.workflowId,
@@ -7542,9 +7938,17 @@ const handleConfirmWorkflowSkillModal = () => {
       const name = String(item.title || "").trim() || item.id;
       return `${name} (${item.id})`;
     });
+    const executionSelectionLabel = executionSelection.kind === "workflow"
+      ? t("工作流")
+      : executionSelection.kind === "skill"
+        ? t("技能")
+        : t("不使用流程");
     const workflowSummary = selectedWorkflow
       ? `${selectedWorkflow.name} (${selectedWorkflow.id})`
-      : t("（当前未选择工作流，可能已切换为技能执行）");
+      : t("（当前未选择工作流）");
+    const skillSummary = configuredSkillItems.length > 0
+      ? configuredSkillItems.join("；")
+      : t("（当前未选择技能）");
     const providerName = String(selectedAi?.providerLabel || selectedAi?.provider || selectedProvider || "").trim() || "-";
     const providerId = String(selectedAi?.provider || selectedProvider || "").trim() || "-";
     const providerModel = String(selectedModelName || "").trim() || t("(未填写)");
@@ -7554,7 +7958,9 @@ const handleConfirmWorkflowSkillModal = () => {
       t("- AI：{{name}} ({{id}})", { name: providerName, id: providerId }),
       t("- 模型：{{model}}", { model: providerModel }),
       t("- 模式：{{mode}}", { mode: providerMode }),
+      t("- 执行上下文：{{selection}}", { selection: executionSelectionLabel }),
       t("- 工作流：{{workflow}}", { workflow: workflowSummary }),
+      t("- 技能：{{skills}}", { skills: skillSummary }),
       "",
       t("#### 可使用技能列表"),
       formatSessionCopyList(configuredSkillItems, t("（未配置会话技能，使用工作流默认技能链）")),
@@ -8171,6 +8577,47 @@ const handleConfirmWorkflowSkillModal = () => {
         )}
       >
         <AriContainer className="desk-session-strategy-modal-body" padding={0}>
+          <AriTypography
+            className="desk-session-strategy-section-title"
+            variant="caption"
+            value={t("模式")}
+          />
+          <AriList
+            bordered
+            className="desk-session-strategy-list"
+            emptyMessage={t("暂无可选模式")}
+          >
+            <AriListItem
+              key="execution-none"
+              split={false}
+              className={`desk-session-strategy-item${draftExecutionSelection.kind === "none" ? " is-active" : ""}`}
+              onClick={handleSelectDraftExecutionNone}
+              actions={[
+                <AriTypography key="execution-none-type" variant="caption" value={t("普通对话")} />,
+              ]}
+              extra={
+                draftExecutionSelection.kind === "none" ? (
+                  <AriContainer className="desk-session-strategy-item-extra" padding={0}>
+                    <AriIcon name="done" />
+                  </AriContainer>
+                ) : null
+              }
+            >
+              <AriFlex className="desk-session-strategy-item-main" align="center" space={8}>
+                <AriContainer className="desk-session-strategy-item-icon" padding={0}>
+                  <AriIcon name="chat_bubble_outline" />
+                </AriContainer>
+                <AriContainer className="desk-session-strategy-item-text" padding={0}>
+                  <AriTypography variant="h4" value={t("不使用流程")} />
+                  <AriTypography
+                    variant="caption"
+                    value={t("当前消息默认按普通对话处理，不自动注入工作流或技能。")}
+                  />
+                </AriContainer>
+              </AriFlex>
+            </AriListItem>
+          </AriList>
+
           <AriTypography
             className="desk-session-strategy-section-title"
             variant="caption"

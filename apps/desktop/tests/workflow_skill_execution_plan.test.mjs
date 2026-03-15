@@ -51,8 +51,16 @@ test("TestWorkflowSkillExecutionPlanShouldValidateRegistryStateAndBuildPrompt", 
 
   // 描述：
   //
-  //   - 工作流 Prompt 构建应仍然拼接“可用工具集”，同时通过技能别名归一化兼容旧工作流。
+  //   - 工作流 Prompt 构建应支持运行时动态工具清单，同时通过技能别名归一化兼容旧工作流。
   assert.match(promptGuidanceSource, /AGENT_TOOLSET_LINES/);
+  assert.match(promptGuidanceSource, /buildAgentToolsetLines/);
+  assert.match(promptGuidanceSource, /buildPlaywrightInteractiveRuntimePrompt/);
+  assert.match(promptGuidanceSource, /DEFAULT_AGENT_RUNTIME_CAPABILITIES/);
+  assert.match(promptGuidanceSource, /interactiveMode: "none"/);
+  assert.match(promptGuidanceSource, /if \(normalizedRuntimeCapabilities\.interactiveMode === "native"\)/);
+  assert.match(promptGuidanceSource, /js_repl、js_repl_reset、browser_navigate、browser_snapshot、browser_click、browser_type、browser_wait_for、browser_take_screenshot、browser_tabs、browser_close/);
+  assert.match(promptGuidanceSource, /mcp_tool\(server=.*tool=.*list_tools/);
+  assert.match(promptGuidanceSource, /当前阶段必须显式标记为“已跳过”/);
   assert.match(promptGuidanceSource, /禁止 import 第三方工具模块/);
   assert.match(promptGuidanceSource, /工具调用签名与示例/);
   assert.match(promptGuidanceSource, /- read_text\(path\)：content = read_text/);
@@ -66,7 +74,9 @@ test("TestWorkflowSkillExecutionPlanShouldValidateRegistryStateAndBuildPrompt", 
   assert.match(promptGuidanceSource, /ignored 结果当作真实执行结果处理/);
   assert.match(promptGuidanceSource, /LEGACY_AGENT_SKILL_ID_ALIASES/);
   assert.match(promptGuidanceSource, /normalizeAgentSkillId/);
-  assert.match(workflowStorageSource, /AGENT_TOOLSET_LINES/);
+  assert.match(workflowStorageSource, /buildAgentToolsetLines/);
+  assert.match(workflowStorageSource, /buildPlaywrightInteractiveRuntimePrompt/);
+  assert.match(workflowStorageSource, /isPlaywrightInteractiveSkillId/);
   assert.match(workflowStorageSource, /normalizeAgentSkillId/);
   assert.match(workflowStorageSource, /translateDesktopText\("- \{\{label\}\}：技能编码 \{\{skillId\}\}"/);
   assert.match(workflowStorageSource, /兼容读取历史工作流中残留的项目能力声明字段/);
@@ -89,10 +99,20 @@ test("TestWorkflowSkillExecutionPlanShouldValidateRegistryStateAndBuildPrompt", 
   assert.match(sessionPageSource, /const latestProjectProfile = activeWorkspace\?\.id\s*\?\s*\(activeProjectProfile \|\| getProjectWorkspaceProfile\(activeWorkspace\.id\)\)\s*:\s*null;/s);
   assert.match(sessionPageSource, /const currentRequestPrompt = buildSessionContextPrompt\(\s*nextContextMessages,\s*normalizedContent,\s*undefined,\s*latestProjectProfile,\s*activeWorkspaceEnabledCapabilities,\s*\);/s);
   assert.match(sessionPageSource, /const contextualRequestPrompt = buildSessionContextPrompt\(\s*nextContextMessages,\s*normalizedContent,\s*String\(activeWorkspace\?\.path \|\| ""\)\.trim\(\) \|\| undefined,\s*latestProjectProfile,\s*activeWorkspaceEnabledCapabilities,\s*\);/s);
+  assert.match(sessionPageSource, /const runtimeCapabilities = await getAgentRuntimeCapabilities\(\{/);
+  assert.match(sessionPageSource, /workspaceRoot: String\(activeWorkspace\?\.path \|\| ""\)\.trim\(\) \|\| undefined,/);
+  assert.match(sessionPageSource, /const hasWorkflowPlaywrightInteractiveSkill = \(scopedWorkflow\?\.graph\?\.nodes \|\| \[\]\)\.some/);
+  assert.match(sessionPageSource, /const hasSelectedPlaywrightInteractiveSkill = effectiveSelectedSessionSkills\.some/);
+  assert.match(sessionPageSource, /const selectedPlaywrightRuntimePrompt = hasSelectedPlaywrightInteractiveSkill/);
   assert.match(sessionPageSource, /scopeWorkflowDefinitionToSkillNode\(activeWorkflow, currentStageItem\.nodeId\)/);
   assert.match(sessionPageSource, /const agentPrompt = currentStagePlan\.planPrompt/);
   assert.match(sessionPageSource, /source: "workflow:skill_plan"/);
   assert.match(sessionPageSource, /prompt: agentPrompt/);
+  assert.match(sessionPageSource, /runtimeCapabilities,/);
+  assert.match(sessionPageSource, /const effectiveSelectedSkillIds = Array\.isArray\(options\?\.selectedSkillIdsOverride\)/);
+  assert.match(sessionPageSource, /const activeWorkflow = options\?\.disableWorkflow/);
+  assert.match(sessionPageSource, /const routedCurrentRequestPrompt = options\?\.workflowPromptPreamble/);
+  assert.match(sessionPageSource, /const routedContextualRequestPrompt = options\?\.workflowPromptPreamble/);
   assert.match(sessionPageSource, /let currentStageIndex = hasWorkflowStages \? initialStageIndex : 0;/);
   assert.match(sessionPageSource, /let currentStageAttempt = 0;/);
   assert.match(sessionPageSource, /while \(currentStageIndex < \(hasWorkflowStages \? totalWorkflowStageCount : 1\)\)/);

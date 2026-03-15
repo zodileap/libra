@@ -71,6 +71,7 @@ test("TestDesktopTauriWindowShouldEnableTransparent", () => {
   const windows = config?.app?.windows ?? [];
   const mainWindow = windows.find((item) => item?.label === "main") ?? windows[0];
 
+  assert.equal(config?.productName, "Libra", "tauri 打包产物名称必须固定为 Libra");
   assert.equal(Boolean(mainWindow), true, "tauri.conf.json 缺少 main 窗口配置");
   assert.equal(
     mainWindow?.transparent,

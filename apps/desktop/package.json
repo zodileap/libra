@@ -1,7 +1,7 @@
 {
   "name": "@libra/desktop",
   "private": true,
-  "version": "0.1.3",
+  "version": "0.1.4",
   "type": "module",
   "scripts": {
     "dev:ui": "node ./scripts/dev-ui.mjs",
@@ -13,7 +13,7 @@
     "package": "pnpm exec tauri build --bundles app"
   },
   "dependencies": {
-    "@aries-kit/react": "^0.2.7",
+    "@aries-kit/react": "^0.2.9",
     "@tauri-apps/api": "^2.0.0",
     "@xyflow/react": "^12.10.1",
     "react": "^19.2.4",
@@ -25,6 +25,7 @@
     "@types/react": "^18.3.28",
     "@types/react-dom": "^18.3.7",
     "@vitejs/plugin-react-swc": "^3.11.0",
+    "playwright": "^1.58.2",
     "sass-embedded": "^1.97.3",
     "typescript": "^5.9.3",
     "vite": "^5.4.21",

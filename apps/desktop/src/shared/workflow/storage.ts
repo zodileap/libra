@@ -1,6 +1,12 @@
 import { translateDesktopText } from "../i18n";
 import { resolveDefaultAgentWorkflows } from "./templates";
-import { AGENT_TOOLSET_LINES, normalizeAgentSkillId } from "./prompt-guidance";
+import {
+  buildAgentToolsetLines,
+  buildPlaywrightInteractiveRuntimePrompt,
+  isPlaywrightInteractiveSkillId,
+  normalizeAgentSkillId,
+  type AgentRuntimeCapabilities,
+} from "./prompt-guidance";
 import {
   AGENT_WORKFLOWS_UPDATED_EVENT,
   IS_BROWSER,
@@ -709,9 +715,13 @@ export function deleteAgentWorkflow(workflowId: string): boolean {
 export function buildAgentWorkflowPrompt(
   workflow: AgentWorkflowDefinition | null | undefined,
   userPrompt: string,
+  runtimeCapabilities?: AgentRuntimeCapabilities | null,
 ): string {
   const normalizedPrompt = String(userPrompt || "").trim();
   const prefix = String(workflow?.promptPrefix || "").trim();
+  const normalizedRuntimePrompt = buildPlaywrightInteractiveRuntimePrompt(runtimeCapabilities);
+  const hasPlaywrightInteractiveSkill = (workflow?.graph?.nodes || []).some((node) =>
+    node.type === "skill" && isPlaywrightInteractiveSkillId(String(node.skillId || "").trim()));
   const skillChainLines = (workflow?.graph?.nodes || [])
     .filter((node) => node.type === "skill")
     .map((node) => {
@@ -739,11 +749,14 @@ export function buildAgentWorkflowPrompt(
       return "";
     })
     .filter((line) => line.length > 0);
-  const toolsetBlock = ["", ...AGENT_TOOLSET_LINES];
+  const toolsetBlock = ["", ...buildAgentToolsetLines(runtimeCapabilities)];
+  const playwrightRuntimeBlock = hasPlaywrightInteractiveSkill && normalizedRuntimePrompt
+    ? ["", normalizedRuntimePrompt]
+    : [];
   if (!prefix) {
     if (skillChainLines.length === 0) {
       return [
-        ...AGENT_TOOLSET_LINES,
+        ...buildAgentToolsetLines(runtimeCapabilities),
         "",
         translateDesktopText("【用户需求】"),
         normalizedPrompt,
@@ -752,6 +765,7 @@ export function buildAgentWorkflowPrompt(
     return [
       translateDesktopText("【技能链路】"),
       ...skillChainLines,
+      ...playwrightRuntimeBlock,
       ...toolsetBlock,
       "",
       translateDesktopText("【用户需求】"),
@@ -767,6 +781,7 @@ export function buildAgentWorkflowPrompt(
     }),
     prefix,
     ...skillChainBlock,
+    ...playwrightRuntimeBlock,
     ...toolsetBlock,
     "",
     translateDesktopText("【用户需求】"),

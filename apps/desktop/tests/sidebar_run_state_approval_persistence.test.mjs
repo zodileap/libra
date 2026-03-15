@@ -50,9 +50,9 @@ test("TestSidebarRunStateShouldPreserveApprovalAcrossNavigation", () => {
   // 描述：
   //
   //   - 待审批期间应忽略心跳覆盖，并且仅在工具完成\/终态事件后才结束审批片段。
-  assert.match(sidebarSource, /if \(hasPendingApproval && incomingSegmentKind === STREAM_KINDS\.HEARTBEAT\) \{\s*return current;\s*\}/s);
-  assert.match(sidebarSource, /if \(!isApprovalPendingSegment\(item\)\) \{\s*return \{ \.\.\.item, status: "finished" as const \};\s*\}/s);
-  assert.match(sidebarSource, /if \(!shouldResolveApprovalPending\) \{\s*return item;\s*\}/s);
+  assert.match(sidebarSource, /if \(hasPendingInteractiveSegment && incomingSegmentKind === STREAM_KINDS\.HEARTBEAT\) \{\s*return current;\s*\}/s);
+  assert.match(sidebarSource, /if \(!isApprovalPendingSegment\(item\) && !isUserInputPendingSegment\(item\)\) \{\s*return \{ \.\.\.item, status: "finished" as const \};\s*\}/s);
+  assert.match(sidebarSource, /if \(!shouldResolvePendingInteractiveSegment\) \{\s*return item;\s*\}/s);
   assert.match(sidebarSource, /incomingSegmentKind === STREAM_KINDS\.TOOL_CALL_FINISHED/);
   assert.match(sidebarSource, /incomingErrorCode === "core\.agent\.human_refused"/);
   assert.match(sidebarSource, /step: t\("已拒绝 \{\{tool\}\} 的执行请求。", \{ tool: toolName \|\| t\("该工具"\) \}\)/);

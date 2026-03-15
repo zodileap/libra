@@ -599,24 +599,52 @@ test("TestMcpPageShouldRenderInstalledAndMarketplaceSections", () => {
 });
 
 test("TestMcpRegistryShouldInjectRuntimeIntoUnifiedAgentAndPromptGuidance", () => {
+  const agentRuntimeServiceSource = readDesktopSource("src/modules/common/services/agent-runtime.ts");
+  const serviceIndexSource = readDesktopSource("src/modules/common/services/index.ts");
+  const constantsSource = readDesktopSource("src/shared/constants.ts");
   const tauriMainSource = readDesktopSource("src-tauri/src/main.rs");
   const coreLibSource = readDesktopSource("../../crates/core/agent/src/lib.rs");
   const coreToolSource = readDesktopSource("../../crates/core/agent/src/tools/mcp.rs");
   const corePromptSource = readDesktopSource("../../crates/core/agent/src/python_orchestrator.rs");
+  const runtimeCapabilitiesSource = readDesktopSource("../../crates/core/agent/src/runtime_capabilities.rs");
   const promptGuidanceSource = readDesktopSource("src/shared/workflow/prompt-guidance.ts");
 
   // 描述：
   //
-  //   - Tauri 侧应在执行统一智能体前注入启用中的 MCP 注册项，而不是只停留在管理页。
+  //   - Tauri 侧应先暴露统一运行时能力查询命令，并在执行统一智能体前注入能力快照与启用中的 MCP 注册项。
+  assert.match(constantsSource, /GET_AGENT_RUNTIME_CAPABILITIES: "get_agent_runtime_capabilities"/);
+  assert.match(tauriMainSource, /async fn get_agent_runtime_capabilities/);
+  assert.match(tauriMainSource, /get_agent_runtime_capabilities_inner/);
+  assert.match(tauriMainSource, /detect_agent_runtime_capabilities\(&available_mcps\)/);
+  assert.match(tauriMainSource, /runtime_capabilities: Option<AgentRuntimeCapabilities>/);
+  assert.match(tauriMainSource, /get_agent_runtime_capabilities,/);
   assert.match(tauriMainSource, /build_runtime_registered_mcps/);
   assert.match(tauriMainSource, /list_enabled_mcp_registrations/);
   assert.match(tauriMainSource, /available_mcps,/);
+  assert.match(tauriMainSource, /runtime_capabilities: resolved_runtime_capabilities,/);
+  assert.match(tauriMainSource, /interactive_mode=/);
+
+  // 描述：
+  //   - 运行时能力服务与导出入口应统一透传 Tauri 能力查询结果。
+  assert.match(agentRuntimeServiceSource, /export interface AgentRuntimeCapabilityContext/);
+  assert.match(agentRuntimeServiceSource, /export async function getAgentRuntimeCapabilities/);
+  assert.match(agentRuntimeServiceSource, /COMMANDS\.GET_AGENT_RUNTIME_CAPABILITIES/);
+  assert.match(agentRuntimeServiceSource, /normalizeAgentRuntimeCapabilities/);
+  assert.match(serviceIndexSource, /export \* from "\.\/agent-runtime";/);
 
   // 描述：
   //
-  //   - core agent 请求结构应显式携带 MCP 快照，工具层需使用通用 mcp_tool 命名。
+  //   - core agent 请求结构应显式携带 MCP 快照与运行时能力快照，且 Playwright fallback 识别逻辑必须收敛到统一解析器。
   assert.match(coreLibSource, /pub struct AgentRegisteredMcp/);
+  assert.match(coreLibSource, /pub template_id: String,/);
   assert.match(coreLibSource, /pub available_mcps: Vec<AgentRegisteredMcp>/);
+  assert.match(coreLibSource, /pub runtime_capabilities: AgentRuntimeCapabilities,/);
+  assert.match(runtimeCapabilitiesSource, /pub enum AgentInteractiveMode/);
+  assert.match(runtimeCapabilitiesSource, /pub struct AgentRuntimeCapabilities/);
+  assert.match(runtimeCapabilitiesSource, /template_id/);
+  assert.match(runtimeCapabilitiesSource, /eq_ignore_ascii_case\("playwright-mcp"\)/);
+  assert.match(runtimeCapabilitiesSource, /detect_native_browser_tool_capabilities/);
+  assert.match(runtimeCapabilitiesSource, /build_native_skip_reason/);
   assert.match(coreToolSource, /pub struct McpTool/);
   assert.match(coreToolSource, /fn name\(&self\) -> &'static str \{\n        "mcp_tool"/);
   assert.match(coreToolSource, /tools\/call/);
@@ -624,9 +652,17 @@ test("TestMcpRegistryShouldInjectRuntimeIntoUnifiedAgentAndPromptGuidance", () =
 
   // 描述：
   //
-  //   - 提示词指导层应切换到通用 mcp_tool，并提示先用 list_tools 探测能力。
+  //   - 提示词指导层应基于统一运行时能力动态注入 native / mcp / none 三种 Playwright 契约。
   assert.match(corePromptSource, /mcp_tool/);
   assert.match(corePromptSource, /tool="list_tools"/);
+  assert.match(corePromptSource, /build_python_playwright_runtime_prompt_block/);
+  assert.match(corePromptSource, /build_skipped_playwright_interactive_result/);
+  assert.match(corePromptSource, /js_repl\/js_repl_reset\/browser_navigate/);
   assert.match(promptGuidanceSource, /mcp_tool/);
+  assert.match(promptGuidanceSource, /export interface AgentRuntimeCapabilities/);
+  assert.match(promptGuidanceSource, /export const DEFAULT_AGENT_RUNTIME_CAPABILITIES/);
+  assert.match(promptGuidanceSource, /buildAgentToolsetLines/);
+  assert.match(promptGuidanceSource, /buildPlaywrightInteractiveRuntimePrompt/);
+  assert.match(promptGuidanceSource, /当前阶段必须显式标记为“已跳过”/);
   assert.doesNotMatch(promptGuidanceSource, /mcp_model_tool/);
 });
