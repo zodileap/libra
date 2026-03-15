@@ -2583,7 +2583,7 @@ function WorkflowsSidebar({
   );
 
   return (
-    <AriContainer className="desk-sidebar">
+    <AriContainer className="desk-sidebar" showBorderRadius={false}>
       <SidebarBackHeader
         onBack={() => navigate(WORKFLOW_PAGE_PATH)}
         label={t("返回")}

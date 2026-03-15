@@ -1999,6 +1999,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-updater",
+ "windows-version",
  "zip 0.6.6",
 ]
 

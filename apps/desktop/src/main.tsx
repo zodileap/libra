@@ -10,4 +10,9 @@ if (navigator.userAgent.includes("Mac")) {
   document.documentElement.classList.add("desk-platform-macos");
 }
 
+// 描述：在 Windows 下标记平台类名，便于样式层切换透明根层与材质面板变量。
+if (navigator.userAgent.includes("Windows")) {
+  document.documentElement.classList.add("desk-platform-windows");
+}
+
 ReactDOM.createRoot(document.getElementById("root")!).render(<App />);

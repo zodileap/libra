@@ -148,6 +148,16 @@ body {
   font-size: var(--z-font-size);
 }
 
+/* 描述:
+ *
+ *   - Windows 透明窗口需要让根层真正透明，否则原生 Mica/Acrylic 会被整层背景覆盖。
+ *   - 主内容与侧栏再回填半透明 token，兼顾材质透出与界面可读性。
+ */
+.desk-platform-windows {
+  --desk-root-bg: transparent;
+  --desk-sidebar-bg: var(--z-color-bg-opacity-blur);
+}
+
 .desk-app {
   --desk-active-sidebar-width: var(--desk-sidebar-width);
   height: 100%;
@@ -274,7 +284,7 @@ body {
   height: 100%;
   border-right: var(--desk-border-width) solid var(--z-color-border-glass);
   background: var(--desk-sidebar-bg);
-  padding: calc(var(--z-inset) + var(--desk-app-header-height)) 0 var(--z-inset);
+  padding: calc(var(--z-inset) + var(--desk-app-header-height)) var(--z-inset) var(--z-inset);
   display: flex;
   flex-direction: column;
   position: relative;
