@@ -24,14 +24,14 @@ const PNPM_COMMAND = resolvePnpmCommand();
 function usage() {
   process.stdout.write(`Usage:
   node scripts/package-desktop-release.mjs <x.y.z>
-  node scripts/package-desktop-release.mjs --version <x.y.z> [--sync-only]
+  node scripts/package-desktop-release.mjs --version <x.y.z> [--sync-only] [--sync-pubkey]
   ./scripts/package-desktop-release.sh <x.y.z>
   scripts\\package-desktop-release.cmd <x.y.z>
 
 Description:
   1. Sync Libra Desktop version files to the requested release version
-  2. Generate or reuse the official Tauri updater signing key
-  3. Sync the updater public key into src-tauri/updater/public.key
+  2. Reuse the official Tauri updater signing key by default
+  3. Verify the checked-in updater public key matches the signing key
   4. Run \`tauri build\` to produce:
      - full install bundles (for example .dmg / .msi)
      - updater artifacts (for example .app.tar.gz + .sig)
@@ -41,11 +41,13 @@ Description:
 Notes:
   - This script does not upload files
   - This script does not generate latest.json
+  - Pass --sync-pubkey only when you intentionally rotate the updater key pair
   - Upload the staged platform folder to your update server manually after packaging
 
 Examples:
   node scripts/package-desktop-release.mjs 0.1.1
   node scripts/package-desktop-release.mjs --version 0.1.1 --sync-only
+  node scripts/package-desktop-release.mjs --version 0.1.1 --sync-pubkey
   pnpm run release:desktop -- 0.1.1
 `);
 }
@@ -65,6 +67,7 @@ Examples:
 function parseArgs(argv) {
   let targetVersion = "";
   let syncOnly = false;
+  let syncPubkey = false;
 
   for (let index = 0; index < argv.length; ) {
     const current = argv[index];
@@ -96,6 +99,12 @@ function parseArgs(argv) {
       continue;
     }
 
+    if (current === "--sync-pubkey") {
+      syncPubkey = true;
+      index += 1;
+      continue;
+    }
+
     if (current.startsWith("--")) {
       process.stderr.write(`unknown option: ${current}\n`);
       usage();
@@ -117,7 +126,7 @@ function parseArgs(argv) {
     process.exit(1);
   }
 
-  return { targetVersion, syncOnly };
+  return { targetVersion, syncOnly, syncPubkey };
 }
 
 // 描述：
@@ -241,12 +250,13 @@ function runCommand(commandName, args, options = {}) {
     : commandName;
   const commandArgs = [...resolvedCommand.commandArgs, ...args];
   const effectiveEnv = buildCommandEnv(env);
+  const useShell = process.platform === "win32" && /\.(cmd|bat)$/i.test(resolvedCommand.commandName);
   const result = spawnSync(resolvedCommand.commandName, commandArgs, {
     cwd,
     env: effectiveEnv,
     stdio: captureOutput ? ["ignore", "pipe", "pipe"] : "inherit",
     encoding: "utf8",
-    shell: false,
+    shell: useShell,
   });
 
   if (result.error) {
@@ -552,13 +562,25 @@ Before packaging on the build host, run:
 // 描述：
 //
 //   - 生成或复用官方 updater 签名密钥，确保首次打包时也能得到可用于热更新的签名文件。
-function ensureUpdaterSigningKey() {
-  fs.mkdirSync(path.dirname(PRIVATE_KEY_PATH), { recursive: true });
+function ensureUpdaterSigningKey(options = {}) {
+  const { allowGenerate = false } = options;
 
   if (fs.existsSync(PRIVATE_KEY_PATH) && fs.existsSync(PUBLIC_KEY_PATH)) {
     return;
   }
 
+  if (!allowGenerate) {
+    process.stderr.write(`missing updater signing key pair:
+  private: ${PRIVATE_KEY_PATH}
+  public:  ${PUBLIC_KEY_PATH}
+
+Provide the deployed updater private key with TAURI_UPDATER_PRIVATE_KEY_PATH,
+or rerun with --sync-pubkey if you intentionally want to rotate keys.
+`);
+    process.exit(1);
+  }
+
+  fs.mkdirSync(path.dirname(PRIVATE_KEY_PATH), { recursive: true });
   process.stdout.write(`Generating Tauri updater signing key at ${PRIVATE_KEY_PATH}\n`);
   runCommand(PNPM_COMMAND, ["--dir", DESKTOP_DIR, "exec", "tauri", "signer", "generate", "--ci", "-w", PRIVATE_KEY_PATH]);
 
@@ -571,28 +593,71 @@ function ensureUpdaterSigningKey() {
 // 描述：
 //
 //   - 将 updater 公钥同步到 Tauri 源码与配置文件，保证打包产物和运行时内嵌公钥保持一致。
-function syncUpdaterPublicKey() {
+function syncUpdaterPublicKey(options = {}) {
+  const { allowWrite = false } = options;
+
   if (!fs.existsSync(PUBLIC_KEY_PATH)) {
     process.stderr.write(`missing updater public key: ${PUBLIC_KEY_PATH}\n`);
     process.exit(1);
   }
 
-  fs.mkdirSync(path.dirname(PUBLIC_KEY_DEST), { recursive: true });
-  fs.copyFileSync(PUBLIC_KEY_PATH, PUBLIC_KEY_DEST);
-
   const tauriConfigPath = path.join(TAURI_DIR, "tauri.conf.json");
   const tauriConfig = readJsonFile(tauriConfigPath);
   const pubkey = fs.readFileSync(PUBLIC_KEY_PATH, "utf8").trim();
+  const embeddedPubkey = fs.existsSync(PUBLIC_KEY_DEST)
+    ? fs.readFileSync(PUBLIC_KEY_DEST, "utf8").trim()
+    : "";
+  const configuredPubkey = String(tauriConfig.plugins?.updater?.pubkey || "").trim();
 
-  tauriConfig.plugins ||= {};
-  tauriConfig.plugins.updater ||= {};
-  tauriConfig.plugins.updater.pubkey = pubkey;
+  if (allowWrite) {
+    fs.mkdirSync(path.dirname(PUBLIC_KEY_DEST), { recursive: true });
+    fs.writeFileSync(PUBLIC_KEY_DEST, `${pubkey}\n`);
+    tauriConfig.plugins ||= {};
+    tauriConfig.plugins.updater ||= {};
+    tauriConfig.plugins.updater.pubkey = pubkey;
 
-  if (!Array.isArray(tauriConfig.plugins.updater.endpoints) || tauriConfig.plugins.updater.endpoints.length === 0) {
-    tauriConfig.plugins.updater.endpoints = ["https://open.zodileap.com/libra/updates/latest.json"];
+    if (!Array.isArray(tauriConfig.plugins.updater.endpoints) || tauriConfig.plugins.updater.endpoints.length === 0) {
+      tauriConfig.plugins.updater.endpoints = ["https://open.zodileap.com/libra/updates/latest.json"];
+    }
+
+    writeJsonFile(tauriConfigPath, tauriConfig);
+    return;
   }
 
-  writeJsonFile(tauriConfigPath, tauriConfig);
+  if (!embeddedPubkey) {
+    process.stderr.write(`missing embedded updater public key: ${PUBLIC_KEY_DEST}
+Rerun with --sync-pubkey if you intentionally want to sync from ${PUBLIC_KEY_PATH}.
+`);
+    process.exit(1);
+  }
+
+  if (!configuredPubkey) {
+    process.stderr.write(`missing updater pubkey in ${tauriConfigPath}
+Rerun with --sync-pubkey if you intentionally want to sync from ${PUBLIC_KEY_PATH}.
+`);
+    process.exit(1);
+  }
+
+  if (embeddedPubkey !== configuredPubkey) {
+    process.stderr.write(`checked-in updater pubkey is inconsistent:
+  embedded: ${PUBLIC_KEY_DEST}
+  config:   ${tauriConfigPath}
+
+Rerun with --sync-pubkey only if you intend to update both files together.
+`);
+    process.exit(1);
+  }
+
+  if (embeddedPubkey !== pubkey) {
+    process.stderr.write(`updater signing key does not match the checked-in pubkey:
+  signing:  ${PUBLIC_KEY_PATH}
+  embedded: ${PUBLIC_KEY_DEST}
+
+Set TAURI_UPDATER_PRIVATE_KEY_PATH to the deployed updater private key,
+or rerun with --sync-pubkey if you intentionally want to rotate keys.
+`);
+    process.exit(1);
+  }
 }
 
 // 描述：
@@ -738,7 +803,7 @@ function printReleaseFolderSummary(version) {
 //
 //   - 执行 Desktop 发布主流程：同步版本、校验依赖、生成签名、调用 Tauri 打包并整理发布目录。
 function main() {
-  const { targetVersion, syncOnly } = parseArgs(process.argv.slice(2));
+  const { targetVersion, syncOnly, syncPubkey } = parseArgs(process.argv.slice(2));
 
   assertReleaseVersion(targetVersion);
   syncDesktopVersions(targetVersion);
@@ -754,8 +819,8 @@ function main() {
   ensurePnpmCommand();
   ensureCargoCommand();
   ensureTauriCli();
-  ensureUpdaterSigningKey();
-  syncUpdaterPublicKey();
+  ensureUpdaterSigningKey({ allowGenerate: syncPubkey });
+  syncUpdaterPublicKey({ allowWrite: syncPubkey });
 
   process.env.TAURI_SIGNING_PRIVATE_KEY = PRIVATE_KEY_PATH;
   process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD = process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || "";
