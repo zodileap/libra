@@ -5,6 +5,9 @@
   "type": "module",
   "scripts": {
     "dev:ui": "node ./scripts/dev-ui.mjs",
+    "dev:ui:windows": "node ./scripts/dev-ui.windows.mjs",
+    "dev:ui:macos": "node ./scripts/dev-ui.macos.mjs",
+    "dev:ui:linux": "node ./scripts/dev-ui.linux.mjs",
     "build:ui": "vite build",
     "test:unit": "node --test ./tests/**/*.test.mjs",
     "test:e2e": "node --test ./tests/e2e/tauri-driver/desktop-smoke.e2e.mjs",

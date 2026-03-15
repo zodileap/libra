@@ -1,171 +1,70 @@
-import { execSync, spawn } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const PORT = 1420;
-const HOST = "127.0.0.1";
-const CHECK_ONLY = process.argv.includes("--check-only");
-const FORCE_RESTART = process.env.FORCE_RESTART_UI === "1";
-const HEALTH_URLS = [`http://${HOST}:${PORT}`, `http://localhost:${PORT}`];
+const CURRENT_FILE_PATH = fileURLToPath(import.meta.url);
+const CURRENT_DIR_PATH = path.dirname(CURRENT_FILE_PATH);
 
-function listPidsOnPort(port) {
-  if (process.platform === "win32") {
-    try {
-      const output = execSync(`netstat -ano -p tcp | findstr :${port}`, {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      });
-      const lines = output
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .filter((line) => /LISTENING/i.test(line));
-      const pids = lines
-        .map((line) => line.split(/\s+/).pop())
-        .filter((value) => value && /^\d+$/.test(value))
-        .map((value) => Number(value));
-      return [...new Set(pids)];
-    } catch (_err) {
-      return [];
-    }
+// 描述：
+//
+//   - 按当前运行平台解析 Desktop UI 开发脚本入口，确保系统差异落到独立脚本文件中维护。
+//
+// Params:
+//
+//   - platform: 目标平台标识。
+//     default: process.platform
+//
+// Returns:
+//
+//   - Windows 返回 `dev-ui.windows.mjs`。
+//   - macOS 返回 `dev-ui.macos.mjs`。
+//   - Linux 返回 `dev-ui.linux.mjs`。
+export function resolveDevUiScriptPath(platform = process.platform) {
+  if (platform === "win32") {
+    return path.resolve(CURRENT_DIR_PATH, "dev-ui.windows.mjs");
+  }
+  if (platform === "darwin") {
+    return path.resolve(CURRENT_DIR_PATH, "dev-ui.macos.mjs");
+  }
+  if (platform === "linux") {
+    return path.resolve(CURRENT_DIR_PATH, "dev-ui.linux.mjs");
   }
 
-  try {
-    const output = execSync(`lsof -ti tcp:${port} -sTCP:LISTEN`, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return output
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .filter((value) => /^\d+$/.test(value))
-      .map((value) => Number(value));
-  } catch (_err) {
-    return [];
-  }
+  throw new Error(`unsupported platform: ${platform}`);
 }
 
-function killPid(pid) {
-  if (!pid || Number.isNaN(pid)) return;
-  if (pid === process.pid) return;
-
-  if (process.platform === "win32") {
-    try {
-      execSync(`taskkill /PID ${pid} /F`, { stdio: "ignore" });
-    } catch (_err) {
-      // ignore
-    }
-    return;
-  }
-
-  try {
-    process.kill(pid, "SIGTERM");
-  } catch (_err) {
-    // ignore
-  }
+// 描述：
+//
+//   - 加载当前平台对应的 Desktop UI 开发脚本模块，供统一入口复用。
+//
+// Params:
+//
+//   - platform: 目标平台标识。
+//     default: process.platform
+//
+// Returns:
+//
+//   - 当前平台脚本模块。
+export async function loadDevUiScriptModule(platform = process.platform) {
+  return import(pathToFileURL(resolveDevUiScriptPath(platform)).href);
 }
 
-async function isDevServerReachable() {
-  for (const url of HEALTH_URLS) {
-    try {
-      const response = await fetch(url, {
-        method: "GET",
-        signal: AbortSignal.timeout(1200),
-      });
-      if (response.ok || response.status === 304) {
-        return true;
-      }
-    } catch (_err) {
-      // try next url
-    }
-  }
-  return false;
+// 描述：
+//
+//   - 执行当前平台对应的 Desktop UI 开发脚本主流程。
+//
+// Params:
+//
+//   - platform: 目标平台标识。
+//     default: process.platform
+export async function main(platform = process.platform) {
+  const scriptModule = await loadDevUiScriptModule(platform);
+  await scriptModule.main();
 }
 
-async function ensurePortAvailable(port) {
-  const pids = listPidsOnPort(port);
-  if (pids.length === 0) {
-    return { reused: false };
-  }
-
-  const reachable = await isDevServerReachable();
-  if (!FORCE_RESTART) {
-    if (reachable) {
-      console.log(
-        `[dev:ui] port ${port} is in use by pid(s): ${pids.join(", ")}, existing dev server is healthy, reusing.`
-      );
-      return { reused: true };
-    }
-    console.log(
-      `[dev:ui] port ${port} is occupied by pid(s): ${pids.join(", ")}, but server is unhealthy. Trying restart...`
-    );
-  }
-
-  console.log(
-    `[dev:ui] killing pid(s) on ${port}: ${pids.join(", ")}${FORCE_RESTART ? " (forced)" : ""}`
-  );
-  for (const pid of pids) killPid(pid);
-
-  // Give OS time to release socket.
-  const waitUntil = Date.now() + 1200;
-  while (Date.now() < waitUntil) {
-    const remainingNow = listPidsOnPort(port);
-    if (remainingNow.length === 0) break;
-  }
-  const remaining = listPidsOnPort(port);
-  if (remaining.length > 0) {
-    const reusedReachable = await isDevServerReachable();
-    if (reusedReachable) {
-      console.log(
-        `[dev:ui] after restart attempt, port ${port} still occupied but service is reachable, reusing existing server.`
-      );
-      return { reused: true };
-    }
-    if (CHECK_ONLY) {
-      console.log(
-        `[dev:ui] check-only: ${HOST}:${port} is still in use by ${remaining.join(", ")} and unreachable.`
-      );
-      return { reused: true };
-    }
-    throw new Error(
-      `port ${port} still in use by pid(s): ${remaining.join(", ")} and server unreachable; please terminate these processes manually`
-    );
-  }
-  return { reused: false };
-}
-
-async function main() {
-  const portState = await ensurePortAvailable(PORT);
-  if (CHECK_ONLY) {
-    console.log(
-      `[dev:ui] check-only ok: ${HOST}:${PORT} ${portState.reused ? "is reused" : "is available"}.`
-    );
-    process.exit(0);
-  }
-
-  if (portState.reused) {
-    process.exit(0);
-  }
-
-  const child = spawn(
-    "pnpm",
-    ["exec", "vite", "--host", HOST, "--port", String(PORT), "--strictPort", "--logLevel", "error"],
-    {
-      stdio: "inherit",
-      env: process.env,
-    }
-  );
-
-  child.on("exit", (code, signal) => {
-    if (signal) {
-      process.kill(process.pid, signal);
-      return;
-    }
-    process.exit(code ?? 0);
+if (process.argv[1] && path.resolve(process.argv[1]) === CURRENT_FILE_PATH) {
+  main().catch((err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[dev:ui] ${message}`);
+    process.exit(1);
   });
 }
-
-main().catch((err) => {
-  const message = err instanceof Error ? err.message : String(err);
-  console.error(`[dev:ui] ${message}`);
-  process.exit(1);
-});
