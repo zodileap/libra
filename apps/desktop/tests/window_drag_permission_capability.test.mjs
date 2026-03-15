@@ -5,9 +5,9 @@ import path from "node:path";
 
 // 描述：
 //
-//   - 读取 Desktop Tauri capability 配置，验证窗口拖拽命令权限已开启。
+//   - 读取 Desktop Tauri capability 配置，验证自定义标题栏依赖的窗口命令权限已开启。
 //
-// Returns：
+// Returns:
 //
 //   - capability JSON 对象。
 function readDefaultCapability() {
@@ -16,17 +16,33 @@ function readDefaultCapability() {
   return JSON.parse(raw);
 }
 
-test("TestDesktopCapabilityShouldAllowWindowStartDragging", () => {
+test("TestDesktopCapabilityShouldAllowWindowStartDraggingAndWindowControls", () => {
   const capability = readDefaultCapability();
   const permissions = capability?.permissions ?? [];
 
   // 描述：
   //
-  //   - 自定义标题栏拖拽依赖 start_dragging 命令权限，缺失时会触发 not allowed 异常。
+  //   - 自定义标题栏既依赖拖拽命令，也依赖最小化、最大化/还原与关闭命令。
+  //   - 缺失任一权限时，前端点击按钮会触发 not allowed 异常。
   assert.equal(Array.isArray(permissions), true, "default capability permissions 必须是数组");
   assert.equal(
     permissions.includes("core:window:allow-start-dragging"),
     true,
     "default capability 必须包含 core:window:allow-start-dragging"
+  );
+  assert.equal(
+    permissions.includes("core:window:allow-minimize"),
+    true,
+    "default capability 必须包含 core:window:allow-minimize"
+  );
+  assert.equal(
+    permissions.includes("core:window:allow-toggle-maximize"),
+    true,
+    "default capability 必须包含 core:window:allow-toggle-maximize"
+  );
+  assert.equal(
+    permissions.includes("core:window:allow-close"),
+    true,
+    "default capability 必须包含 core:window:allow-close"
   );
 });

@@ -54,12 +54,10 @@ use std::thread;
 use std::time::Duration;
 use tauri::Emitter;
 use tauri::Manager;
-use tauri::window::{Color, Effect, EffectsBuilder};
+use tauri::window::Color;
 #[cfg(target_os = "macos")]
-use tauri::window::EffectState;
+use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tauri_plugin_updater::UpdaterExt;
-#[cfg(target_os = "windows")]
-use windows_version::OsVersion;
 
 // ── Tauri 事件名常量 ──────────────────────────────────────────────────
 //
@@ -3283,22 +3281,7 @@ fn now_millis() -> u128 {
         .unwrap_or(0)
 }
 
-/// 描述：根据当前 Windows 版本挑选更贴近系统默认观感的窗口材质。
-///
-/// Returns:
-///
-///   - Windows 11 及以上：返回 Mica，避免 Acrylic 在新系统上显得过重。
-///   - 其他版本：返回 Acrylic，兼容 Windows 10 的透明材质能力。
-#[cfg(target_os = "windows")]
-fn resolve_windows_main_window_effect() -> Effect {
-    let current_version = OsVersion::current();
-    if current_version >= OsVersion::new(10, 0, 0, 22000) {
-        return Effect::Mica;
-    }
-    Effect::Acrylic
-}
-
-/// 描述：为主窗口应用系统材质效果，提升 Desktop 端玻璃质感表现。
+/// 描述：为主窗口应用平台相关的外观设置，平衡视觉效果与拖动流畅度。
 ///
 /// Params:
 ///
@@ -3328,17 +3311,12 @@ fn apply_main_window_effects(app: &tauri::AppHandle) {
         //
         //   - Decorated Windows windows always receive a DWM drop shadow outside the app surface.
         //   - Switch to a frameless window and disable the undecorated shadow so the outer dark halo disappears.
+        //   - Skip native Mica/Acrylic materials because they add noticeable drag latency on the transparent shell.
         if let Err(err) = window.set_decorations(false) {
             eprintln!("disable Windows window decorations failed: {}", err);
         }
         if let Err(err) = window.set_shadow(false) {
             eprintln!("disable Windows window shadow failed: {}", err);
-        }
-        let effects = EffectsBuilder::new()
-            .effect(resolve_windows_main_window_effect())
-            .build();
-        if let Err(err) = window.set_effects(effects) {
-            eprintln!("apply Windows window effects failed: {}", err);
         }
     }
 }

@@ -104,13 +104,11 @@ export function DesktopAppHeader({
       className="desk-app-header"
       positionType="fixed"
       ghost
-      data-tauri-drag-region
     >
       <AriFlex
         className="desk-app-header-inner"
         align="flex-start"
         flexItem={[{ index: 1, flex: 1, overflow: "hidden" }]}
-        data-tauri-drag-region
       >
         <AriContainer
           className={`desk-app-header-leading${sidebarCollapsed ? " is-collapsed" : " is-expanded"}`}
@@ -144,18 +142,26 @@ export function DesktopAppHeader({
               />
             ) : null}
           </AriFlex>
+          {/* 描述：
+           *
+           *   - 左侧操作组后方单独保留空白拖拽区，避免把交互按钮包进 Tauri drag region。
+           */}
+          <AriContainer
+            className="desk-app-header-leading-drag-region"
+            padding={0}
+            ghost
+            data-tauri-drag-region
+          />
         </AriContainer>
         <AriContainer
           className="desk-app-header-slot"
           padding={{ left: "var(--z-inset-sm)", right: "var(--z-inset-sm)", top: 0, bottom: 0 }}
-          data-tauri-drag-region
         >
           <AriFlex
             className="desk-app-header-slot-inner"
             align="center"
             space={8}
             flexItem={[{ index: 0, flex: 1, overflow: "hidden" }]}
-            data-tauri-drag-region
           >
             <AriContainer
               id="desk-app-header-slot"

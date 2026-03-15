@@ -47,6 +47,16 @@ test("TestDesktopWindowsStylesShouldKeepRootTransparentAndUseBlurTokens", () => 
     /\.desk-platform-windows\s*\{[\s\S]*--desk-sidebar-bg:\s*var\(--z-color-bg-opacity-blur\);[\s\S]*\}/,
     "Windows styles should reuse the blur token for the sidebar"
   );
+  assert.match(
+    styleSource,
+    /\.desk-platform-windows\s*\{[\s\S]*--desk-sidebar-backdrop-blur:\s*var\(--z-inset-sm\);[\s\S]*\}/,
+    "Windows styles should source the sidebar blur radius from an existing Aries spacing token"
+  );
+  assert.match(
+    styleSource,
+    /\.desk-platform-windows\s+\.desk-sidebar\s*\{[\s\S]*backdrop-filter:\s*blur\(var\(--desk-sidebar-backdrop-blur\)\);[\s\S]*-webkit-backdrop-filter:\s*blur\(var\(--desk-sidebar-backdrop-blur\)\);[\s\S]*\}/,
+    "Windows sidebar styles should enable backdrop blur through the shared blur variable"
+  );
   assert.doesNotMatch(
     styleSource,
     /\.desk-platform-windows\s*\{[^}]*--desk-main-bg:/,
@@ -131,34 +141,39 @@ test("TestDesktopWindowsHeaderShouldProvideCustomWindowControls", () => {
   );
 });
 
-test("TestDesktopWindowsEffectShouldDisableNativeShadowAndKeepEffectFallback", () => {
+test("TestDesktopWindowsEffectShouldDisableNativeShadowAndSkipMaterialEffects", () => {
   const cargoSource = readDesktopSource("src-tauri/Cargo.toml");
   const rustSource = readDesktopSource("src-tauri/src/main.rs");
 
-  assert.match(
+  assert.doesNotMatch(
     cargoSource,
-    /\[target\.'cfg\(target_os = "windows"\)'\.dependencies\][\s\S]*windows-version\s*=\s*"0\.1\.7"/,
-    "Cargo.toml should declare windows-version for the Windows material fallback"
+    /windows-version\s*=\s*"0\.1\.7"/,
+    "Cargo.toml should not keep the Windows version helper dependency once material effects are removed"
   );
-  assert.match(
+  assert.doesNotMatch(
+    rustSource,
+    /use windows_version::OsVersion;/,
+    "main.rs should not import the Windows version helper once material effects are removed"
+  );
+  assert.doesNotMatch(
     rustSource,
     /fn resolve_windows_main_window_effect\(\)\s*->\s*Effect/,
-    "main.rs should define a Windows material selection helper"
+    "main.rs should not keep a Windows material selection helper"
   );
-  assert.match(
-    rustSource,
-    /OsVersion::new\(10,\s*0,\s*0,\s*22000\)/,
-    "main.rs should use Windows 11 build 22000 as the Mica threshold"
-  );
-  assert.match(
+  assert.doesNotMatch(
     rustSource,
     /Effect::Mica/,
-    "main.rs should keep Mica on Windows 11"
+    "main.rs should stop applying Mica so window dragging stays responsive on Windows"
+  );
+  assert.doesNotMatch(
+    rustSource,
+    /Effect::Acrylic/,
+    "main.rs should stop applying Acrylic so window dragging stays responsive on Windows"
   );
   assert.match(
     rustSource,
-    /Effect::Acrylic/,
-    "main.rs should keep Acrylic on older Windows versions"
+    /Skip native Mica\/Acrylic materials because they add noticeable drag latency on the transparent shell\./,
+    "main.rs should document why Windows material effects stay disabled"
   );
   assert.match(
     rustSource,

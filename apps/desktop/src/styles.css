@@ -155,7 +155,7 @@ body {
  */
 .desk-platform-windows {
   --desk-root-bg: transparent;
-  --desk-sidebar-bg: var(--z-color-bg-opacity-blur);
+  --desk-sidebar-bg: var(--z-color-bg-tertiary);
 }
 
 .desk-platform-windows .desk-sidebar {
@@ -190,13 +190,9 @@ body {
   background: transparent;
   border: 0;
   overflow: hidden;
-  -webkit-app-region: drag;
 }
 
-.desk-app-header-inner,
-.desk-app-header-leading,
-.desk-app-header-slot,
-.desk-app-header-slot-inner,
+.desk-app-header-leading-drag-region,
 .desk-app-header-slot-content,
 .desk-session-head-wrap,
 .desk-session-head-bar,
@@ -217,10 +213,6 @@ body {
  *
  *   - 仅原生交互元素禁用拖拽，避免过宽的 role 选择器误伤整块标题栏区域。
  */
-.desk-app-header-slot {
-  -webkit-app-region: drag;
-}
-
 /* 描述:
  *
  *   - 标题栏交互区及其内部节点必须整体禁用拖拽，避免 Windows 将图标或文字命中识别成窗口拖动。
@@ -261,6 +253,12 @@ body {
 
 .desk-app-header-leading-actions {
   min-width: 0;
+}
+
+.desk-app-header-leading-drag-region {
+  min-width: 0;
+  height: 100%;
+  flex: 1 1 auto;
 }
 
 .desk-platform-macos .desk-app-header-inner {

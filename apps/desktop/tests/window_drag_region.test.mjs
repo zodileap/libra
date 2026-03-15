@@ -35,16 +35,21 @@ test("TestDesktopShouldRenderFloatingHeaderWithDragRegion", () => {
   //
   //   - 标题栏组件应提供 drag-region 与页面 slot。
   assert.match(headerWidgetSource, /className="desk-app-header"/);
-  assert.match(headerWidgetSource, /data-tauri-drag-region/);
-  assert.match(headerWidgetSource, /id="desk-app-header-slot"/);
+  assert.doesNotMatch(headerWidgetSource, /<AriContainer[^>]*className="desk-app-header"[^>]*data-tauri-drag-region/);
+  assert.doesNotMatch(headerWidgetSource, /<AriFlex[^>]*className="desk-app-header-inner"[^>]*data-tauri-drag-region/);
+  assert.doesNotMatch(headerWidgetSource, /<AriContainer[^>]*className="desk-app-header-slot"[^>]*data-tauri-drag-region/);
+  assert.doesNotMatch(headerWidgetSource, /<AriFlex[^>]*className="desk-app-header-slot-inner"[^>]*data-tauri-drag-region/);
+  assert.match(headerWidgetSource, /className="desk-app-header-leading-drag-region"[\s\S]*data-tauri-drag-region/);
+  assert.match(headerWidgetSource, /id="desk-app-header-slot"[\s\S]*data-tauri-drag-region/);
 
   // 描述：
   //
   //   - 样式层应定义悬浮 header 高度，并支持侧边栏折叠布局。
   assert.match(styleSource, /\.desk-app-header \{/);
   assert.match(styleSource, /height:\s*var\(--desk-app-header-height\);/);
-  assert.match(styleSource, /\.desk-app-header-slot\s*\{[\s\S]*-webkit-app-region:\s*drag;/);
-  assert.doesNotMatch(styleSource, /\.desk-app-header-slot,\s*\.desk-app-header-slot \*/);
+  assert.match(styleSource, /\.desk-app-header-leading-drag-region,\s*\.desk-app-header-slot-content,[\s\S]*-webkit-app-region:\s*drag;/);
+  assert.match(styleSource, /\.desk-app-header-leading-drag-region\s*\{[\s\S]*flex:\s*1 1 auto;/);
+  assert.doesNotMatch(styleSource, /\.desk-app-header-slot\s*\{[\s\S]*-webkit-app-region:\s*drag;/);
   assert.match(styleSource, /\.desk-app-header-leading-actions,[\s\S]*\.desk-app-header-window-controls \*,[\s\S]*-webkit-app-region:\s*no-drag;/);
   assert.match(styleSource, /\.desk-app-header button,[\s\S]*\.desk-app-header button \*,[\s\S]*-webkit-app-region:\s*no-drag;/);
   assert.doesNotMatch(styleSource, /\.desk-app-header \[role="button"\]/);
