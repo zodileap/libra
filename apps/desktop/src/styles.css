@@ -162,7 +162,7 @@ body {
   border-radius: var(--z-border-radius-zero);
 }
 
-.desk-platform-macos .desk-content {
+.desk-platform-macos .desk-main {
   border-radius: var(--z-border-radius-container) 0 0 var(--z-border-radius-container) !important;
 }
 
