@@ -44,6 +44,7 @@ export function DesktopLayout({
       <AriContainer
         className={`desk-app${sidebarCollapsed ? " is-sidebar-collapsed" : ""}`}
         padding={0}
+        showBorderRadius={false}
       >
         <DesktopAppHeader
           sidebarCollapsed={sidebarCollapsed}
@@ -59,7 +60,7 @@ export function DesktopLayout({
           }}
           onHeaderSlotElementChange={setHeaderSlotElement}
         />
-        <AriContainer className="desk-app-sidebar-wrap">
+        <AriContainer className="desk-app-sidebar-wrap" padding={0} showBorderRadius={false}>
           <ClientSidebar
             user={user}
             selectedIdentity={selectedIdentity}
@@ -71,8 +72,13 @@ export function DesktopLayout({
             onInstallDesktopUpdate={onInstallDesktopUpdate}
           />
         </AriContainer>
-        {/* 描述：主内容区容器固定启用阴影效果，确保视觉层级稳定。 */}
-        <AriContainer className="desk-main" shadowMode="always" padding={0}>
+        {/* 描述：透明窗口下主面板不再叠加组件阴影与圆角，避免与系统窗口阴影重叠。 */}
+        <AriContainer
+          className="desk-main"
+          shadowMode="never"
+          padding={0}
+          showBorderRadius={false}
+        >
           <Outlet />
         </AriContainer>
       </AriContainer>

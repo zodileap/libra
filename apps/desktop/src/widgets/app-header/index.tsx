@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { AriButton, AriContainer, AriFlex } from "@aries-kit/react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { DesktopUpdateState } from "../../shell/types";
 import { useDesktopI18n } from "../../shared/i18n";
 
@@ -31,9 +32,13 @@ export function DesktopAppHeader({
   onHeaderSlotElementChange,
 }: DesktopAppHeaderProps) {
   const { t } = useDesktopI18n();
+  const isWindowsPlatform = typeof navigator !== "undefined" && navigator.userAgent.includes("Windows");
   const sidebarToggleLabel = sidebarCollapsed ? t("展开侧边栏") : t("收起侧边栏");
   const [updateButtonLoading, setUpdateButtonLoading] = useState(false);
-  // 描述：根据更新状态切换标题栏按钮行为；按钮视觉统一保持为主色文本“更新”。
+  const [windowMaximized, setWindowMaximized] = useState(false);
+  // Description:
+  //
+  //   - Switches the header action between update states while keeping the visual treatment consistent.
   const shouldInstallDesktopUpdate = desktopUpdateState.status === "ready";
   // 描述：仅在已有可安装更新时显示标题栏更新入口，避免常驻占位。
   const showUpdateButton = shouldInstallDesktopUpdate;
@@ -54,6 +59,45 @@ export function DesktopAppHeader({
       onHeaderSlotElementChange(null);
     };
   }, [onHeaderSlotElementChange]);
+
+  useEffect(() => {
+    if (!isWindowsPlatform) {
+      setWindowMaximized(false);
+      return;
+    }
+
+    let disposed = false;
+    let unlistenResize: null | (() => void) = null;
+    const currentWindow = getCurrentWindow();
+
+    // Description:
+    //
+    //   - Tracks the maximized state so the Windows titlebar control can switch between maximize and restore.
+    const syncWindowMaximized = async () => {
+      const maximized = await currentWindow.isMaximized();
+      if (!disposed) {
+        setWindowMaximized(maximized);
+      }
+    };
+
+    void syncWindowMaximized();
+    void currentWindow
+      .onResized(async () => {
+        await syncWindowMaximized();
+      })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+        unlistenResize = unlisten;
+      });
+
+    return () => {
+      disposed = true;
+      unlistenResize?.();
+    };
+  }, [isWindowsPlatform]);
 
   return (
     <AriContainer
@@ -128,6 +172,34 @@ export function DesktopAppHeader({
                   aria-label={debugFloatVisible ? t("关闭 Dev 调试窗口") : t("打开 Dev 调试窗口")}
                   onClick={onToggleDebugFloat}
                 />
+              ) : null}
+              {isWindowsPlatform ? (
+                <AriFlex className="desk-app-header-window-controls" align="center" space={4}>
+                  <AriButton
+                    type="text"
+                    icon="remove"
+                    aria-label={t("Minimize window")}
+                    onClick={async () => {
+                      await getCurrentWindow().minimize();
+                    }}
+                  />
+                  <AriButton
+                    type="text"
+                    icon={windowMaximized ? "filter_none" : "crop_square"}
+                    aria-label={windowMaximized ? t("Restore window") : t("Maximize window")}
+                    onClick={async () => {
+                      await getCurrentWindow().toggleMaximize();
+                    }}
+                  />
+                  <AriButton
+                    type="text"
+                    icon="close"
+                    aria-label={t("Close window")}
+                    onClick={async () => {
+                      await getCurrentWindow().close();
+                    }}
+                  />
+                </AriFlex>
               ) : null}
             </AriFlex>
           </AriFlex>
