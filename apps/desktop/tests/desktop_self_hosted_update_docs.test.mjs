@@ -47,6 +47,7 @@ test("TestDesktopSelfHostedUpdateDocsShouldDescribeOfficialUpdaterFlow", () => {
   assert.match(docSource, /TAURI_UPDATER_PRIVATE_KEY_PASSWORD/);
   assert.match(docSource, /pnpm -C \/Users\/yoho\/code\/zodileap-agen\/apps\/desktop build/);
   assert.match(docSource, /tauri signer generate/);
+  assert.match(docSource, /仓库中不再保留 `apps\/desktop\/src-tauri\/updater\/public\.key`/);
   assert.match(docSource, /安装完成后，应用会自动重启/);
   assert.match(docSource, /releases\/<version>\/macos/);
 

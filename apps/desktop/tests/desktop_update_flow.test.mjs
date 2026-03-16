@@ -26,7 +26,7 @@ test("TestDesktopUpdateFlowShouldUseOfficialTauriUpdater", () => {
   const tauriCargoSource = readDesktopSource("src-tauri/Cargo.toml");
   const tauriConfigSource = readDesktopSource("src-tauri/tauri.conf.json");
   const tauriConfig = JSON.parse(tauriConfigSource);
-  const updaterPubkeySource = readDesktopSource("src-tauri/updater/public.key");
+  const updaterPubkeyPath = path.resolve(process.cwd(), "src-tauri", "updater", "public.key");
   const rootPackageSource = readRepoSource("package.json");
 
   assert.match(constantsSource, /CHECK_DESKTOP_UPDATE/);
@@ -59,9 +59,9 @@ test("TestDesktopUpdateFlowShouldUseOfficialTauriUpdater", () => {
 
   assert.match(tauriSource, /use tauri_plugin_updater::UpdaterExt;/);
   assert.match(tauriSource, /const LOCAL_UPDATER_PUBKEY: Option<&str> = option_env!\("LIBRA_UPDATER_PUBKEY"\);/);
-  assert.match(tauriSource, /const EMBEDDED_UPDATER_PUBKEY: &str = include_str!\("\.\.\/updater\/public\.key"\);/);
   assert.match(tauriSource, /fn normalize_updater_pubkey\(value: &str\) -> Option<String>/);
-  assert.match(tauriSource, /fn resolve_embedded_updater_pubkey\(\) -> Option<String>/);
+  assert.match(tauriSource, /fn resolve_local_updater_pubkey\(\) -> Option<String>/);
+  assert.doesNotMatch(tauriSource, /include_str!\("\.\.\/updater\/public\.key"\)/);
   assert.match(tauriSource, /async fn check_desktop_update\(/);
   assert.match(tauriSource, /updater_builder\(\)/);
   assert.match(tauriSource, /\.download_and_install\(/);
@@ -86,10 +86,8 @@ test("TestDesktopUpdateFlowShouldUseOfficialTauriUpdater", () => {
   assert.doesNotMatch(tauriConfigSource, /export APPLE_API_KEY='[A-Z0-9]{10}'/);
   assert.doesNotMatch(tauriConfigSource, /Notarization Ticket=/);
   assert.equal(tauriConfig.plugins?.updater?.pubkey, "");
-  assert.equal(updaterPubkeySource.trim(), "");
-  assert.equal(tauriConfig.plugins?.updater?.pubkey, updaterPubkeySource.trim());
+  assert.equal(fs.existsSync(updaterPubkeyPath), false);
   assert.doesNotMatch(tauriConfigSource, /dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWdu/);
-  assert.doesNotMatch(updaterPubkeySource, /dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWdu/);
 
   assert.match(rootPackageSource, /"release:desktop": "node scripts\/package-desktop-release\.mjs"/);
 });

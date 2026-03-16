@@ -429,8 +429,8 @@ xcrun stapler validate /path/to/Libra.app
 为了避免把真实 updater 公钥提交到开源仓库，当前实现已经改成：
 
 - `apps/desktop/src-tauri/tauri.conf.json` 中的 `plugins.updater.pubkey` 默认为空字符串
-- `apps/desktop/src-tauri/updater/public.key` 默认为空文件
-- 真正参与构建和运行时验签的公钥只来自本地构建机
+- 仓库中不再保留 `apps/desktop/src-tauri/updater/public.key`
+- 真正参与构建和运行时验签的公钥只来自本地构建机注入
 
 这意味着：
 

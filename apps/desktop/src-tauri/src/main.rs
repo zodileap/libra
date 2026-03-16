@@ -70,7 +70,6 @@ const EVENT_AGENT_TEXT_STREAM: &str = "agent:text_stream";
 /// 描述：智能体后台日志事件名。
 const EVENT_AGENT_LOG: &str = "agent:log";
 const LOCAL_UPDATER_PUBKEY: Option<&str> = option_env!("LIBRA_UPDATER_PUBKEY");
-const EMBEDDED_UPDATER_PUBKEY: &str = include_str!("../updater/public.key");
 
 #[derive(Serialize, Clone)]
 struct DesktopRuntimeInfoResponse {
@@ -138,13 +137,9 @@ fn normalize_updater_pubkey(value: &str) -> Option<String> {
     Some(normalized.to_string())
 }
 
-/// 描述：读取编译进应用的 updater 公钥；优先使用构建机本地注入值，其次回退到仓库默认空文件。
-fn resolve_embedded_updater_pubkey() -> Option<String> {
-    if let Some(value) = LOCAL_UPDATER_PUBKEY.and_then(normalize_updater_pubkey) {
-        return Some(value);
-    }
-
-    normalize_updater_pubkey(EMBEDDED_UPDATER_PUBKEY)
+/// 描述：读取构建机在编译阶段注入的 updater 公钥；若为空，则表示当前产物未携带可用于更新验签的公钥。
+fn resolve_local_updater_pubkey() -> Option<String> {
+    LOCAL_UPDATER_PUBKEY.and_then(normalize_updater_pubkey)
 }
 
 /// 描述：将内部桌面更新状态转换为前端可消费结构。
@@ -3396,12 +3391,12 @@ async fn check_desktop_update(
         return Ok(snapshot_desktop_update_state());
     }
 
-    let Some(pubkey) = resolve_embedded_updater_pubkey() else {
+    let Some(pubkey) = resolve_local_updater_pubkey() else {
         set_desktop_update_state(|state| {
             state.status = "failed".to_string();
             state.target_version.clear();
             state.progress = 0.0;
-            state.message = "未配置更新签名公钥，请先在构建主机运行发布脚本。".to_string();
+            state.message = "未配置更新签名公钥，请先在构建主机注入本地 updater 公钥。".to_string();
             state.download_path = None;
         });
         return Ok(snapshot_desktop_update_state());
