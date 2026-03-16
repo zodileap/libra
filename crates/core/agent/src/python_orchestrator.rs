@@ -6,7 +6,8 @@ use crate::sandbox::{
     BATCH_SIZE_PREFIX, FINAL_RESULT_PREFIX, SANDBOX_ERROR_PREFIX, TOOL_CALL_PREFIX, TURN_END_MARKER,
 };
 use crate::{
-    AgentRegisteredMcp, AgentRunRequest, AgentRunResult, AgentStreamEvent, QuestionPrompt,
+    AgentExecutionMode, AgentRegisteredMcp, AgentRunRequest, AgentRunResult, AgentStreamEvent,
+    QuestionPrompt,
     UserInputResolution,
 };
 use libra_mcp_common::{
@@ -93,6 +94,9 @@ pub(crate) fn run_agent_with_python_workflow(
             &request,
             on_stream_event,
         ));
+    }
+    if request.execution_mode == AgentExecutionMode::Chat {
+        return run_agent_with_python_chat(request, policy, on_stream_event);
     }
     let should_stop_after_single_turn =
         should_stop_after_current_workflow_stage(request.prompt.as_str());
@@ -400,6 +404,189 @@ pub(crate) fn run_agent_with_python_workflow(
     })
 }
 
+/// 描述：执行普通对话模式下的单轮 Python 编排；允许按需读取项目信息并直接返回对话答复，不走多轮交付流程。
+fn run_agent_with_python_chat(
+    request: AgentRunRequest,
+    policy: crate::policy::AgentPolicy,
+    on_stream_event: &mut dyn FnMut(AgentStreamEvent),
+) -> Result<AgentRunResult, ProtocolError> {
+    let provider = parse_provider(&request.provider);
+    let provider_config = crate::llm::LlmProviderConfig {
+        api_key: request.provider_api_key.clone(),
+        model: request.provider_model.clone(),
+        mode: request.provider_mode.clone(),
+    };
+    let trace_id = request.trace_id.clone();
+    let llm_policy = crate::llm::LlmGatewayPolicy {
+        timeout_secs: policy.llm_timeout_secs,
+        retry_policy: policy.llm_retry_policy,
+    };
+    let mut usage_total = LlmUsage::default();
+    let mut steps: Vec<ProtocolStepRecord> = Vec::new();
+    let mut events: Vec<ProtocolEventRecord> = Vec::new();
+    let mut assets: Vec<ProtocolAssetRecord> = Vec::new();
+
+    on_stream_event(AgentStreamEvent::LlmStarted {
+        provider: request.provider.clone(),
+    });
+    let prompt = build_python_chat_prompt(
+        &request.prompt,
+        request.project_name.as_deref(),
+        request.available_mcps.as_slice(),
+        &request.runtime_capabilities,
+    );
+    let llm_started_at = now_millis();
+    let run_result = {
+        let stream_event_cell = std::cell::RefCell::new(&mut *on_stream_event);
+        let mut codegen_progress_observer = |progress: &str| {
+            let mut emitter = stream_event_cell.borrow_mut();
+            (*emitter)(AgentStreamEvent::Heartbeat {
+                message: build_llm_waiting_heartbeat_message(
+                    "正在读取当前问题所需的项目信息…",
+                    progress,
+                ),
+            });
+        };
+        crate::llm::call_model_with_policy_and_stream(
+            provider,
+            &prompt,
+            request.workdir.as_deref(),
+            llm_policy.clone(),
+            Some(&provider_config),
+            None,
+            Some(&mut codegen_progress_observer),
+        )
+    }
+    .map_err(|err| err.to_protocol_error())?;
+    let llm_finished_at = now_millis();
+    usage_total.prompt_tokens = usage_total
+        .prompt_tokens
+        .saturating_add(run_result.usage.prompt_tokens);
+    usage_total.completion_tokens = usage_total
+        .completion_tokens
+        .saturating_add(run_result.usage.completion_tokens);
+    usage_total.total_tokens = usage_total
+        .total_tokens
+        .saturating_add(run_result.usage.total_tokens);
+    on_stream_event(AgentStreamEvent::LlmFinished {
+        provider: request.provider.clone(),
+    });
+
+    let llm_raw_response = run_result.content.clone();
+    let generated_script = extract_python_script(&llm_raw_response);
+    if generated_script.trim().is_empty() {
+        return Err(ProtocolError::new(
+            "core.agent.python.empty_script",
+            "模型未返回可执行 Python 脚本",
+        )
+        .with_suggestion("请重试，或调整提示词让模型只输出 Python 代码。"));
+    }
+    let generated_script = repair_missing_python_block_body(&generated_script);
+    let generated_script = repair_unterminated_python_string_literals(&generated_script);
+    let generated_script = ensure_script_has_finish(&generated_script);
+    let generated_script = truncate_script_after_first_top_level_finish(&generated_script);
+    let exec_started_at = now_millis();
+    let execution = execute_python_script(
+        PythonScriptExecutionRequest {
+            user_script: &generated_script,
+            workdir: request.workdir.as_deref(),
+            dcc_provider_addr: request.dcc_provider_addr.as_deref(),
+            available_mcps: request.available_mcps.as_slice(),
+            policy: &policy,
+            trace_id: trace_id.clone(),
+            session_id: request.session_id.clone(),
+        },
+        on_stream_event,
+    )?;
+    let exec_finished_at = now_millis();
+    let turn_result = parse_turn_result_envelope(
+        &execution.message,
+        &execution.display_message_hint,
+        &execution.actions,
+        execution.tool_facts.as_slice(),
+        1,
+        1,
+    );
+    let final_message = if turn_result.display_message.trim().is_empty() {
+        if turn_result.summary.trim().is_empty() {
+            "已完成当前问题的读取与说明。".to_string()
+        } else {
+            turn_result.summary.clone()
+        }
+    } else {
+        turn_result.display_message.clone()
+    };
+    let execution_actions = execution.actions.clone();
+    let execution_tool_facts = execution
+        .tool_facts
+        .iter()
+        .map(|item| {
+            json!({
+                "name": item.name,
+                "ok": item.ok,
+                "summary": item.summary,
+            })
+        })
+        .collect::<Vec<Value>>();
+    steps.push(ProtocolStepRecord {
+        index: 0,
+        code: "llm_python_chat_codegen".to_string(),
+        status: ProtocolStepStatus::Success,
+        elapsed_ms: llm_finished_at.saturating_sub(llm_started_at),
+        summary: format!("普通对话：provider={} 已生成单轮 Python 脚本", request.provider),
+        error: None,
+        data: Some(json!({
+            "execution_mode": request.execution_mode.as_str(),
+            "script_length": generated_script.chars().count(),
+            "usage": run_result.usage,
+            "llm_prompt_raw": prompt,
+            "llm_response_raw": llm_raw_response,
+            "llm_script_extracted": generated_script,
+        })),
+    });
+    steps.push(ProtocolStepRecord {
+        index: 1,
+        code: "python_chat_execute".to_string(),
+        status: ProtocolStepStatus::Success,
+        elapsed_ms: exec_finished_at.saturating_sub(exec_started_at),
+        summary: "普通对话：Python 沙盒执行完成".to_string(),
+        error: None,
+        data: Some(json!({
+            "execution_mode": request.execution_mode.as_str(),
+            "actions": execution_actions,
+            "tool_facts": execution_tool_facts,
+            "turn_control": "done",
+            "turn_summary": turn_result.summary,
+            "display_message": final_message,
+        })),
+    });
+    events.push(ProtocolEventRecord {
+        event: "turn_completed".to_string(),
+        step_index: Some(1),
+        timestamp_ms: now_millis(),
+        message: "turn=1 control=done".to_string(),
+    });
+    events.extend(execution.events);
+    assets.extend(execution.assets);
+    on_stream_event(AgentStreamEvent::Final {
+        message: final_message.clone(),
+    });
+
+    Ok(AgentRunResult {
+        trace_id,
+        control: "done".to_string(),
+        message: final_message.clone(),
+        display_message: final_message,
+        usage: Some(usage_total),
+        actions: execution.actions,
+        exported_file: None,
+        steps,
+        events,
+        assets,
+        ui_hint: None,
+    })
+}
+
 /// 描述：构建“本轮任务描述”提示词，要求模型只返回一段口语化中文描述。
 fn build_round_description_prompt(
     user_prompt: &str,
@@ -505,6 +692,50 @@ fn build_python_workflow_prompt(
 当前项目：{project_name_text}\n\
 历史执行摘要（最近轮次）：\n\
 {turn_context}\n\
+当前已启用的 MCP：\n\
+{registered_mcp_context}\n\
+{playwright_runtime_block}\n\
+用户需求：\n\
+{user_prompt}"
+    )
+}
+
+/// 描述：构建普通对话模式下的单轮 Python 提示词；允许按需读取项目与上下文，但必须把答案直接返回到会话中。
+fn build_python_chat_prompt(
+    user_prompt: &str,
+    project_name: Option<&str>,
+    available_mcps: &[AgentRegisteredMcp],
+    runtime_capabilities: &AgentRuntimeCapabilities,
+) -> String {
+    let project_name_text = project_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("未命名项目");
+    let system_prompt = build_system_prompt();
+    let registered_mcp_context = build_registered_mcp_context(available_mcps);
+    let toolset_block = build_python_toolset_prompt_block(runtime_capabilities);
+    let playwright_runtime_block =
+        build_python_playwright_runtime_prompt_block(user_prompt, runtime_capabilities);
+
+    format!(
+        "{system_prompt}\n\
+当前请求属于普通对话或信息解释，不是多轮交付任务。\n\
+你必须严格遵守以下输出协议：\n\
+1. 仅输出可执行 Python3 代码，禁止输出 Markdown 围栏与任何自然语言说明。\n\
+2. 如需了解事实，可使用 list_dir/read_text/read_json/search_files/stat/glob/run_shell 等工具先读取当前项目，再在同一轮直接给出最终答复。\n\
+3. 脚本必须只完成与当前问题直接相关的一次读取/分析任务，完成后立即调用 `finish(...)` 结束。\n\
+4. `finish(...)` 的正文必须直接写面向用户的自然语言答复；禁止返回 STATUS/SUMMARY/NEXT 协议块、轮次说明、执行计划或过程总结模板。\n\
+5. 除非用户明确要求交付文件或修改代码，否则禁止调用 write_text/write_json/apply_patch/mkdir，也禁止把解释内容落盘到 Markdown/JSON/TODO 等项目文件。\n\
+6. 若确实需要运行命令，只做与回答直接相关的只读检查；不要执行会修改仓库状态、安装依赖或生成产物的命令。\n\
+7. 工具调用前若不确定参数，必须先执行 `tool_search(\"工具名\", 1)` 查看签名与示例，再落地调用。\n\
+8. 可用内置工具：{toolset_block}\n\
+9. 关键签名示例：\n\
+   - read_text(path)  # 默认返回文件 content 字符串；请显式写成 content = read_text(\"README.md\")，不要依赖 _ 接收上一条结果\n\
+   - read_json(path)  # 默认返回 JSON data 对象；请显式写成 data = read_json(\"package.json\")，不要依赖 _ 接收上一条结果\n\
+   - run_shell(command, timeout_secs=30)  # 默认返回含 stdout/stderr/status/success 的结果对象；优先读取 result.get(\"stdout\")/result.get(\"stderr\")/result.get(\"success\")\n\
+   - finish(\"这里直接写给用户的最终答复\")\n\
+10. 若读取后仍无法确认事实，应在答复中明确说明“读取了什么、还缺什么”，不要编造目录结构、文件内容或执行结果。\n\
+当前项目：{project_name_text}\n\
 当前已启用的 MCP：\n\
 {registered_mcp_context}\n\
 {playwright_runtime_block}\n\
@@ -4043,6 +4274,56 @@ finish("list_directory alias returns entry names")
         assert!(result.actions.iter().any(|item| item == "list_dir"));
     }
 
+    /// 描述：验证 `list_directory(path, recursive=True)` 关键字参数写法可递归展开目录名，避免兼容别名直接抛出 `unexpected keyword argument 'recursive'`。
+    #[test]
+    fn should_support_recursive_keyword_for_list_directory_alias() {
+        if resolve_python_command().is_err() {
+            return;
+        }
+        let root = build_unique_test_root();
+        let api_dir = root.join("apps").join("backend-mock").join("api");
+        let admin_dir = api_dir.join("admin");
+        fs::create_dir_all(&admin_dir).expect("create nested backend mock api dir");
+        fs::write(api_dir.join("auth.ts"), "export default [];\n")
+            .expect("seed backend mock auth file");
+        fs::write(admin_dir.join("user.ts"), "export default [];\n")
+            .expect("seed backend mock user file");
+        let script = r##"
+import os
+
+files = list_directory("apps/backend-mock", recursive=True)
+if not isinstance(files, list):
+    raise RuntimeError(f"list_directory recursive should return list: {files}")
+
+expected = {
+    "api",
+    os.path.join("api", "auth.ts"),
+    os.path.join("api", "admin"),
+    os.path.join("api", "admin", "user.ts"),
+}
+missing = sorted(expected.difference(set(files)))
+if missing:
+    raise RuntimeError(f"list_directory recursive missing entries: {missing}, got: {files}")
+
+finish("list_directory recursive keyword ok")
+"##;
+        let result = execute_python_script(
+            PythonScriptExecutionRequest {
+                user_script: script,
+                workdir: root.to_str(),
+                dcc_provider_addr: None,
+                available_mcps: &[],
+                policy: &crate::policy::AgentPolicy::default(),
+                trace_id: "test-trace".to_string(),
+                session_id: "test-session-list-directory-recursive-alias".to_string(),
+            },
+            &mut |_| {},
+        )
+        .expect("list_directory recursive alias should execute successfully");
+        assert_eq!(result.message, "list_directory recursive keyword ok");
+        assert!(result.actions.iter().any(|item| item == "list_dir"));
+    }
+
     /// 描述：验证 `write_text(file_path=..., text=...)` 关键字参数写法可被兼容层正确映射，不再触发 TypeError。
     #[test]
     fn should_support_write_text_keyword_alias_arguments() {
@@ -5456,6 +5737,25 @@ NEXT: 进入接口建模
         assert!(prompt.contains("当前阶段节点要求已满足时返回 DONE"));
     }
 
+    /// 描述：验证普通对话提示词会要求单轮读取后直接答复，并禁止默认落盘到项目文件。
+    #[test]
+    fn should_build_python_chat_prompt_without_delivery_protocol() {
+        let prompt = build_python_chat_prompt(
+            "读取下项目结构并解释框架",
+            Some("demo"),
+            &[],
+            &AgentRuntimeCapabilities::default(),
+        );
+        assert!(prompt.contains("当前请求属于普通对话或信息解释"));
+        assert!(prompt.contains("脚本必须只完成与当前问题直接相关的一次读取/分析任务"));
+        assert!(prompt.contains("finish(...)` 的正文必须直接写面向用户的自然语言答复"));
+        assert!(prompt.contains("禁止返回 STATUS/SUMMARY/NEXT 协议块"));
+        assert!(prompt.contains("禁止调用 write_text/write_json/apply_patch/mkdir"));
+        assert!(prompt.contains("也禁止把解释内容落盘到 Markdown/JSON/TODO 等项目文件"));
+        assert!(!prompt.contains("你正在执行“多轮智能体流程”"));
+        assert!(!prompt.contains("STATUS: CONTINUE 或 DONE"));
+    }
+
     /// 描述：验证 native 模式提示词会显式注入 js_repl 与 browser_* 工具，并要求使用真实 Chromium。
     #[test]
     fn should_include_native_playwright_prompt_contract_when_runtime_is_native() {
@@ -5713,6 +6013,7 @@ NEXT: 进入接口建模
             workdir: None,
             available_mcps: Vec::new(),
             runtime_capabilities: AgentRuntimeCapabilities::default(),
+            execution_mode: AgentExecutionMode::Workflow,
         };
         let mut emitted: Vec<AgentStreamEvent> = Vec::new();
         let result = build_skipped_playwright_interactive_result(&request, &mut |event| {

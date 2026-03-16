@@ -229,6 +229,11 @@ interface AgentRunResponse {
 
 // 描述：
 //
+//   - 定义会话请求发送到 Tauri/core 时使用的执行模式；普通对话仍允许工具读取，但不走多轮交付式编排。
+type AgentExecutionMode = "workflow" | "chat";
+
+// 描述：
+//
 //   - 定义纯模型总结调用的返回结构；仅返回最终文本与 token 使用量，不附带工具执行轨迹。
 interface AgentSummaryResponse {
   content: string;
@@ -5909,6 +5914,9 @@ export function SessionPage({
     const activeWorkflowId = activeWorkflow?.id || "";
     const outputDir = undefined;
     const executionTraceId = `trace-${Date.now()}`;
+    const executionMode: AgentExecutionMode = options?.routeDecision?.routeKind === "chat"
+      ? "chat"
+      : "workflow";
     let nextContextMessages = [...baseContextMessages];
     setInput("");
     setSending(true);
@@ -5927,6 +5935,7 @@ export function SessionPage({
             route_reason: options?.routeDecision?.reason || "",
             workflow_id: activeWorkflowId || null,
             workflow_name: activeWorkflowName,
+            execution_mode: executionMode,
             prompt: normalizedContent,
             output_dir: outputDir || null,
             allow_dangerous_action: allowDangerousAction,
@@ -6212,6 +6221,7 @@ export function SessionPage({
           outputDir,
           workdir: String(activeWorkspace?.path || "").trim() || undefined,
           runtimeCapabilities,
+          executionMode,
         });
         const responseSteps = response.steps || [];
         setStepRecords(responseSteps);

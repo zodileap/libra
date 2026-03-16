@@ -206,6 +206,23 @@ pub struct AgentRegisteredMcp {
 }
 
 /// 描述：统一智能体执行请求，承载会话上下文、执行目录以及外部能力注册信息。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentExecutionMode {
+    Workflow,
+    Chat,
+}
+
+impl AgentExecutionMode {
+    /// 描述：返回执行模式的稳定字符串表示，供日志与前端协议复用。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Workflow => "workflow",
+            Self::Chat => "chat",
+        }
+    }
+}
+
+/// 描述：统一智能体执行请求，承载会话上下文、执行目录以及外部能力注册信息。
 #[derive(Debug, Clone)]
 pub struct AgentRunRequest {
     pub trace_id: String,
@@ -223,6 +240,7 @@ pub struct AgentRunRequest {
     pub workdir: Option<String>,
     pub available_mcps: Vec<AgentRegisteredMcp>,
     pub runtime_capabilities: AgentRuntimeCapabilities,
+    pub execution_mode: AgentExecutionMode,
 }
 
 #[derive(Debug, Clone)]

@@ -19,7 +19,8 @@ use dcc_runtime::{
     DccRuntimeStatusResponse, check_dcc_runtime_status_inner, prepare_dcc_runtime_inner,
 };
 use libra_agent_core::{
-    AgentRegisteredMcp, AgentRunRequest, AgentRuntimeCapabilities, AgentStreamEvent,
+    AgentExecutionMode, AgentRegisteredMcp, AgentRunRequest, AgentRuntimeCapabilities,
+    AgentStreamEvent,
     UserInputAnswer, UserInputResolution, detect_agent_runtime_capabilities,
     llm::{
         LlmGatewayPolicy, LlmProviderConfig, LlmUsage, call_model_with_policy_and_config,
@@ -664,6 +665,7 @@ async fn run_agent_command(
     output_dir: Option<String>,
     workdir: Option<String>,
     runtime_capabilities: Option<AgentRuntimeCapabilities>,
+    execution_mode: Option<String>,
 ) -> Result<AgentRunResponse, DesktopProtocolError> {
     tauri::async_runtime::spawn_blocking(move || {
         match catch_unwind(AssertUnwindSafe(|| {
@@ -683,6 +685,7 @@ async fn run_agent_command(
                 output_dir,
                 workdir,
                 runtime_capabilities,
+                execution_mode,
             )
         })) {
             Ok(result) => result,
@@ -901,11 +904,25 @@ fn run_agent_command_inner(
     output_dir: Option<String>,
     workdir: Option<String>,
     runtime_capabilities: Option<AgentRuntimeCapabilities>,
+    execution_mode: Option<String>,
 ) -> Result<AgentRunResponse, DesktopProtocolError> {
     fn is_cancelled_protocol_error(code: &str) -> bool {
         code == "core.agent.python.orchestration_timeout"
             || code == "core.agent.request_cancelled"
             || code == "core.agent.human_approval_timeout"
+    }
+
+    fn normalize_agent_execution_mode(value: Option<String>) -> AgentExecutionMode {
+        match value
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "chat" => AgentExecutionMode::Chat,
+            _ => AgentExecutionMode::Workflow,
+        }
     }
 
     let trace_id = trace_id
@@ -914,6 +931,7 @@ fn run_agent_command_inner(
         .filter(|value| !value.is_empty())
         .unwrap_or("trace-unknown")
         .to_string();
+    let normalized_execution_mode = normalize_agent_execution_mode(execution_mode);
     if let Some(session) = session_id.as_deref() {
         clear_agent_session_cancelled(session);
         // 描述：
@@ -981,9 +999,10 @@ fn run_agent_command_inner(
         "info",
         "request",
         format!(
-            "agent_key={}, provider={}, prompt_len={}, model_export_enabled={}",
+            "agent_key={}, provider={}, execution_mode={}, prompt_len={}, model_export_enabled={}",
             agent_key,
             provider.as_deref().unwrap_or("codex"),
+            normalized_execution_mode.as_str(),
             prompt.chars().count(),
             model_export_enabled.unwrap_or(false)
         ),
@@ -1044,6 +1063,7 @@ fn run_agent_command_inner(
             workdir: Some(selected_workdir.to_string_lossy().to_string()),
             available_mcps,
             runtime_capabilities: resolved_runtime_capabilities,
+            execution_mode: normalized_execution_mode,
         },
         |stream_event| {
             let kind = stream_event.kind().to_string();

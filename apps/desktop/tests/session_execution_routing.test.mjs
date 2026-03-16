@@ -94,12 +94,15 @@ test("TestSessionExecutionRoutingShouldSupportWorkflowSkillChatAndResumePaths", 
   assert.match(sessionPageSource, /disableWorkflow: true,/);
   assert.match(sessionPageSource, /selectedSkillIdsOverride: routeDecision\.skillId \? \[routeDecision\.skillId\] : \[\],/);
   assert.match(sessionPageSource, /selectedSkillIdsOverride: \[\],/);
+  assert.match(sessionPageSource, /const executionMode: AgentExecutionMode = options\?\.routeDecision\?\.routeKind === "chat"/);
+  assert.match(sessionPageSource, /executionMode,/);
 
   // 描述：
   //
   //   - 分阶段执行的 UI 文案应明确显示“从第 N 阶段开始”，普通对话则不注入工作流执行包装。
   assert.match(sessionPageSource, /routeDecision\?\.routeKind === "workflow_partial"/);
   assert.match(sessionPageSource, /从第 \{\{current\}\}\/\{\{total\}\} 阶段开始：\{\{title\}\}/);
+  assert.doesNotMatch(sessionPageSource, /routeDecision\.routeKind === "chat"[\s\S]*workflowStageIndex: 0,/);
 
   // 描述：
   //
