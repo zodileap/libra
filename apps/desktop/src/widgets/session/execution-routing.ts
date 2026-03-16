@@ -323,7 +323,7 @@ function findBestWorkflowStageMatch(
   workflow: AgentWorkflowDefinition | null,
   messageText: string,
 ): WorkflowStageMatchResult | null {
-  const skillNodes = (workflow?.graph?.nodes || []).filter((node) => node.type === "skill");
+  const skillNodes = (workflow?.graph?.nodes || []).filter((node) => node.type === "skill" || node.type === "action");
   if (skillNodes.length === 0) {
     return null;
   }

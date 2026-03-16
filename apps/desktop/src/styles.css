@@ -672,6 +672,11 @@ body {
   white-space: nowrap;
 }
 
+.desk-overview-card-caption {
+  display: block;
+  color: var(--z-color-text-secondary);
+}
+
 .desk-overview-card-description {
   display: block;
   width: 100%;

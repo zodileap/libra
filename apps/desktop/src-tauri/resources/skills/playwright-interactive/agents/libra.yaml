@@ -2,5 +2,7 @@ libra:
   title: Playwright Interactive
   description: 复用同一 Playwright 会话持续做前端交互调试、功能核验和视觉回归，避免每轮重复启动。
   example_prompt: 用 Playwright Interactive 帮我复用同一个浏览器会话检查这个页面的关键交互和视觉状态，先列验证清单再执行。
+  version: 1.0.0
+  status: stable
   group: 代码
   icon: libra_skill

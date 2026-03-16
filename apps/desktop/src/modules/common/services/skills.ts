@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { COMMANDS } from "../../../shared/constants";
 import { translateDesktopText } from "../../../shared/i18n";
 
+export type AgentSkillStatus = "stable" | "testing" | string;
+
 // 描述：
 //
 //   - 定义单个 Agent Skill 结构，统一承载标准技能包的元信息、正文与来源。
@@ -10,6 +12,8 @@ export interface AgentSkillItem {
   title: string;
   description: string;
   examplePrompt: string;
+  version: string;
+  status: AgentSkillStatus;
   group: string;
   icon: string;
   source: "builtin" | "external" | string;
@@ -34,6 +38,8 @@ interface RawAgentSkillItem {
   title?: unknown;
   description?: unknown;
   example_prompt?: unknown;
+  version?: unknown;
+  status?: unknown;
   group?: unknown;
   icon?: unknown;
   source?: unknown;
@@ -99,6 +105,38 @@ function normalizeRuntimeRequirements(rawValue: unknown): Record<string, unknown
 
 // 描述：
 //
+//   - 规整技能版本号；后端已做严格校验，这里主要提供前端兜底，避免异常值污染展示文案。
+//
+// Params:
+//
+//   - rawValue: 原始版本号。
+//
+// Returns:
+//
+//   - 归一化后的版本号。
+function normalizeSkillVersion(rawValue: unknown): string {
+  const normalizedVersion = String(rawValue || "").trim();
+  return /^\d+\.\d+\.\d+$/.test(normalizedVersion) ? normalizedVersion : "0.0.0";
+}
+
+// 描述：
+//
+//   - 规整技能状态；当前桌面端只识别 `stable` / `testing`，其他值统一按稳定版处理。
+//
+// Params:
+//
+//   - rawValue: 原始状态值。
+//
+// Returns:
+//
+//   - 归一化后的技能状态。
+function normalizeSkillStatus(rawValue: unknown): AgentSkillStatus {
+  const normalizedStatus = String(rawValue || "").trim().toLowerCase();
+  return normalizedStatus === "testing" ? "testing" : "stable";
+}
+
+// 描述：
+//
 //   - 规整技能图标键，仅允许白名单中的内置图标名；未知值统一回退默认图标键。
 //
 // Params:
@@ -134,6 +172,23 @@ export function resolveAgentSkillIconName(iconKey: string): string {
 
 // 描述：
 //
+//   - 将技能状态解析为用户可读标签，供技能页直接展示版本稳定性。
+//
+// Params:
+//
+//   - status: 技能状态值。
+//
+// Returns:
+//
+//   - 状态标签文案。
+export function resolveAgentSkillStatusLabel(status: AgentSkillStatus): string {
+  return normalizeSkillStatus(status) === "testing"
+    ? translateDesktopText("测试中")
+    : translateDesktopText("正式");
+}
+
+// 描述：
+//
 //   - 将 Tauri 返回的原始技能记录归一化为前端统一结构，过滤缺失关键字段的数据。
 //
 // Params:
@@ -159,6 +214,8 @@ function normalizeAgentSkillItem(rawItem: unknown): AgentSkillItem | null {
     title,
     description: String(source.description || "").trim(),
     examplePrompt: String(source.example_prompt || "").trim(),
+    version: normalizeSkillVersion(source.version),
+    status: normalizeSkillStatus(source.status),
     group: normalizeSkillCategoryLabel(source.group, "未分组"),
     icon: normalizeSkillIconKey(String(source.icon || "").trim()),
     source: String(source.source || "builtin").trim() || "builtin",

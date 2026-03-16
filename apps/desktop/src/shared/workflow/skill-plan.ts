@@ -1,7 +1,7 @@
 import type { AgentSkillItem } from "../../modules/common/services/skills";
 import { translateDesktopText } from "../i18n";
 import { normalizeAgentSkillId } from "./prompt-guidance";
-import type { AgentWorkflowDefinition } from "./types";
+import type { AgentWorkflowDefinition, WorkflowGraphNodeType } from "./types";
 
 // 描述：
 //
@@ -14,6 +14,7 @@ type AgentWorkflowSkillPlanStatus = "ready" | "missing_skill_id" | "not_found";
 export interface AgentWorkflowSkillPlanItem {
   nodeId: string;
   nodeTitle: string;
+  nodeType: WorkflowGraphNodeType;
   skillId: string;
   skillVersion: string;
   skillTitle: string;
@@ -46,6 +47,21 @@ export interface BuildAgentWorkflowSkillExecutionPlanOptions {
 
 // 描述：
 //
+//   - 判断节点类型是否属于会进入阶段执行链路的节点；当前 action / skill 都会参与统一阶段编排。
+//
+// Params:
+//
+//   - nodeType: 节点类型。
+//
+// Returns:
+//
+//   - true: 当前节点会进入阶段执行计划。
+function isExecutableWorkflowNodeType(nodeType: WorkflowGraphNodeType): boolean {
+  return nodeType === "action" || nodeType === "skill";
+}
+
+// 描述：
+//
 //   - 将可用技能列表转换为按标准技能编码索引的映射，供工作流执行前校验复用。
 //
 // Params:
@@ -69,24 +85,28 @@ function buildAgentSkillMap(skills: AgentSkillItem[]): Map<string, AgentSkillIte
 
 // 描述：
 //
-//   - 为单个技能节点构造标准技能说明块，在执行计划里直接注入 `SKILL.md` 正文。
+//   - 为单个阶段构造执行说明块；技能节点会追加技能定义，动作节点则直接使用工作流内嵌内容。
 //
 // Params:
 //
 //   - item: 已就绪的技能计划项。
 //
 // Returns:
-//
-//   - 技能说明文本块。
+//   - 阶段说明文本块。
 function buildSkillInstructionBlock(item: AgentWorkflowSkillPlanItem): string {
-  const lines = [`### ${item.skillTitle} (${item.skillId})`];
+  const lines = [`### ${item.nodeTitle}`];
+  if (item.nodeType === "skill" && item.skillId) {
+    lines.push(`技能：${item.skillTitle} (${item.skillId})`);
+  }
   if (item.skillDescription) {
     lines.push(item.skillDescription);
   }
   if (item.instruction) {
     lines.push(translateDesktopText("节点要求：{{instruction}}", { instruction: item.instruction }));
   }
-  lines.push(item.skillMarkdownBody);
+  if (item.skillMarkdownBody) {
+    lines.push(item.skillMarkdownBody);
+  }
   return lines.filter((line) => String(line || "").trim().length > 0).join("\n\n");
 }
 
@@ -108,7 +128,7 @@ export function buildAgentWorkflowSkillExecutionPlan(
   options?: BuildAgentWorkflowSkillExecutionPlanOptions,
 ): AgentWorkflowSkillExecutionPlan {
   const skillMap = buildAgentSkillMap(skills);
-  const skillNodes = (workflow?.graph?.nodes || []).filter((node) => node.type === "skill");
+  const skillNodes = (workflow?.graph?.nodes || []).filter((node) => isExecutableWorkflowNodeType(node.type));
 
   if (skillNodes.length === 0) {
     return {
@@ -124,15 +144,34 @@ export function buildAgentWorkflowSkillExecutionPlan(
   }
 
   const items: AgentWorkflowSkillPlanItem[] = skillNodes.map((node) => {
-    const nodeTitle = String(node.title || translateDesktopText("技能节点")).trim() || translateDesktopText("技能节点");
+    const nodeType = node.type === "skill" ? "skill" : "action";
+    const nodeTitle = String(node.title || translateDesktopText("阶段节点")).trim() || translateDesktopText("阶段节点");
     const skillId = normalizeAgentSkillId(String(node.skillId || "").trim());
     const skillVersion = String(node.skillVersion || "").trim();
+    const description = String(node.description || "").trim();
     const instruction = String(node.instruction || "").trim();
+    const content = String(node.content || "").trim();
+
+    if (nodeType === "action") {
+      return {
+        nodeId: node.id,
+        nodeTitle,
+        nodeType,
+        skillId: "",
+        skillVersion: "",
+        skillTitle: nodeTitle,
+        skillDescription: description,
+        skillMarkdownBody: content,
+        instruction,
+        status: "ready",
+      };
+    }
 
     if (!skillId) {
       return {
         nodeId: node.id,
         nodeTitle,
+        nodeType,
         skillId: "",
         skillVersion,
         skillTitle: "",
@@ -148,6 +187,7 @@ export function buildAgentWorkflowSkillExecutionPlan(
       return {
         nodeId: node.id,
         nodeTitle,
+        nodeType,
         skillId,
         skillVersion,
         skillTitle: "",
@@ -161,6 +201,7 @@ export function buildAgentWorkflowSkillExecutionPlan(
     return {
       nodeId: node.id,
       nodeTitle,
+      nodeType,
       skillId,
       skillVersion,
       skillTitle: resolvedSkill.title,
@@ -195,7 +236,7 @@ export function buildAgentWorkflowSkillExecutionPlan(
 
   const planPrompt = promptItems.length > 0
     ? [
-        translateDesktopText("【Skill 执行计划】"),
+        translateDesktopText("【阶段执行计划】"),
         ...(stageScoped
           ? [
             translateDesktopText("当前阶段：{{current}}/{{total}}", {
@@ -209,16 +250,21 @@ export function buildAgentWorkflowSkillExecutionPlan(
             ? translateDesktopText("；节点要求：{{instruction}}", { instruction: item.instruction })
             : "";
           const descriptionText = item.skillDescription
-            ? translateDesktopText("；技能说明：{{description}}", { description: item.skillDescription })
+            ? translateDesktopText(item.nodeType === "skill" ? "；技能说明：{{description}}" : "；阶段说明：{{description}}", {
+              description: item.skillDescription,
+            })
             : "";
           const displayIndex = stageScoped ? normalizedStageIndex : index;
-          return `${displayIndex + 1}. ${item.nodeTitle}：${item.skillTitle} (${item.skillId})${descriptionText}${instructionText}`;
+          if (item.nodeType === "skill") {
+            return `${displayIndex + 1}. ${item.nodeTitle}：${item.skillTitle} (${item.skillId})${descriptionText}${instructionText}`;
+          }
+          return `${displayIndex + 1}. ${item.nodeTitle}${descriptionText}${instructionText}`;
         }),
         stageScoped
-          ? translateDesktopText("执行约束：本轮仅执行当前阶段，禁止提前执行后续技能；若当前阶段失败，先输出阻塞原因与修复建议，再决定是否继续。")
-          : translateDesktopText("执行约束：按顺序执行技能；若任一步骤失败，先输出阻塞原因与修复建议，再决定是否继续。"),
+          ? translateDesktopText("执行约束：本轮仅执行当前阶段，禁止提前执行后续阶段；若当前阶段失败，先输出阻塞原因与修复建议，再决定是否继续。")
+          : translateDesktopText("执行约束：按顺序执行阶段；若任一步骤失败，先输出阻塞原因与修复建议，再决定是否继续。"),
         "",
-        translateDesktopText("【Skill 定义】"),
+        translateDesktopText("【阶段定义】"),
         ...promptItems.map((item) => buildSkillInstructionBlock(item)),
       ].join("\n\n")
     : "";

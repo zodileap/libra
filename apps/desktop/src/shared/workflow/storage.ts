@@ -237,6 +237,21 @@ function normalizeNodeType(value: unknown): WorkflowGraphNodeType {
 
 // 描述：
 //
+//   - 判断节点类型是否属于可直接执行的工作流阶段；当前仅 action / skill 两类会进入阶段执行与 Prompt 链路。
+//
+// Params:
+//
+//   - nodeType: 节点类型。
+//
+// Returns:
+//
+//   - true: 当前节点会作为执行阶段参与工作流编排。
+function isExecutableWorkflowNodeType(nodeType: WorkflowGraphNodeType): boolean {
+  return nodeType === "action" || nodeType === "skill";
+}
+
+// 描述：
+//
 //   - 规范化连线类型，确保类型落在支持集合中。
 //
 // Params:
@@ -276,6 +291,7 @@ function normalizeGraphNode(node: WorkflowGraphNode): WorkflowGraphNode | null {
   const normalizedSkillVersion = String(node.skillVersion || "").trim();
   const rawDescription = String(node.description || "").trim();
   const rawInstruction = String(node.instruction || "").trim();
+  const normalizedContent = String(node.content || "").trim();
   const normalizedDescription = normalizedType === "skill"
     && normalizedSkillId === "openapi-model-designer"
     && rawDescription === LEGACY_OPENAPI_MODEL_DESCRIPTION
@@ -291,6 +307,7 @@ function normalizeGraphNode(node: WorkflowGraphNode): WorkflowGraphNode | null {
     title: String(node.title || "").trim() || translateDesktopText("未命名节点"),
     description: normalizedDescription,
     instruction: normalizedInstruction,
+    content: normalizedContent || undefined,
     type: normalizedType,
     skillId: normalizedType === "skill" ? normalizedSkillId || undefined : undefined,
     skillVersion: normalizedType === "skill" ? normalizedSkillVersion || undefined : undefined,
@@ -722,28 +739,38 @@ export function buildAgentWorkflowPrompt(
   const normalizedRuntimePrompt = buildPlaywrightInteractiveRuntimePrompt(runtimeCapabilities);
   const hasPlaywrightInteractiveSkill = (workflow?.graph?.nodes || []).some((node) =>
     node.type === "skill" && isPlaywrightInteractiveSkillId(String(node.skillId || "").trim()));
-  const skillChainLines = (workflow?.graph?.nodes || [])
-    .filter((node) => node.type === "skill")
+  const stageChainLines = (workflow?.graph?.nodes || [])
+    .filter((node) => isExecutableWorkflowNodeType(node.type))
     .map((node) => {
+      const normalizedType = normalizeNodeType(node.type);
       const skillId = normalizeAgentSkillId(String(node.skillId || "").trim());
       const normalizedInstruction = String(node.instruction || "").trim();
       const label = String(node.title || translateDesktopText("技能节点")).trim() || translateDesktopText("技能节点");
-      if (normalizedInstruction) {
-        return skillId
-          ? translateDesktopText("- {{label}}：技能编码 {{skillId}}；本节点要求：{{instruction}}", {
+      if (normalizedType === "skill") {
+        if (normalizedInstruction) {
+          return skillId
+            ? translateDesktopText("- {{label}}：技能编码 {{skillId}}；本节点要求：{{instruction}}", {
+              label,
+              skillId,
+              instruction: normalizedInstruction,
+            })
+            : translateDesktopText("- {{label}}：{{instruction}}", {
+              label,
+              instruction: normalizedInstruction,
+            });
+        }
+        if (skillId) {
+          return translateDesktopText("- {{label}}：技能编码 {{skillId}}", {
             label,
             skillId,
-            instruction: normalizedInstruction,
-          })
-          : translateDesktopText("- {{label}}：{{instruction}}", {
-            label,
-            instruction: normalizedInstruction,
           });
+        }
+        return "";
       }
-      if (skillId) {
-        return translateDesktopText("- {{label}}：技能编码 {{skillId}}", {
+      if (normalizedInstruction) {
+        return translateDesktopText("- {{label}}：{{instruction}}", {
           label,
-          skillId,
+          instruction: normalizedInstruction,
         });
       }
       return "";
@@ -754,7 +781,7 @@ export function buildAgentWorkflowPrompt(
     ? ["", normalizedRuntimePrompt]
     : [];
   if (!prefix) {
-    if (skillChainLines.length === 0) {
+    if (stageChainLines.length === 0) {
       return [
         ...buildAgentToolsetLines(runtimeCapabilities),
         "",
@@ -763,8 +790,8 @@ export function buildAgentWorkflowPrompt(
       ].join("\n");
     }
     return [
-      translateDesktopText("【技能链路】"),
-      ...skillChainLines,
+      translateDesktopText("【执行链路】"),
+      ...stageChainLines,
       ...playwrightRuntimeBlock,
       ...toolsetBlock,
       "",
@@ -772,15 +799,15 @@ export function buildAgentWorkflowPrompt(
       normalizedPrompt,
     ].join("\n");
   }
-  const skillChainBlock = skillChainLines.length > 0
-    ? ["", translateDesktopText("【技能链路】"), ...skillChainLines]
+  const stageChainBlock = stageChainLines.length > 0
+    ? ["", translateDesktopText("【执行链路】"), ...stageChainLines]
     : [];
   return [
     translateDesktopText("【工作流：{{name}}】", {
       name: workflow?.name || translateDesktopText("智能体工作流"),
     }),
     prefix,
-    ...skillChainBlock,
+    ...stageChainBlock,
     ...playwrightRuntimeBlock,
     ...toolsetBlock,
     "",

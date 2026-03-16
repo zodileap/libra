@@ -7,6 +7,7 @@ import {
   AriIcon,
   AriMessage,
   AriModal,
+  AriTag,
   AriTooltip,
   AriTypography,
 } from "@aries-kit/react";
@@ -15,6 +16,7 @@ import {
   listSkillOverview,
   openBuiltinAgentSkillFolder,
   resolveAgentSkillIconName,
+  resolveAgentSkillStatusLabel,
   registerBuiltinAgentSkill,
   unregisterBuiltinAgentSkill,
 } from "../services";
@@ -124,6 +126,47 @@ function SkillIcon({
 
 // 描述：
 //
+//   - 渲染技能版本与状态标签，供卡片标题和详情弹窗统一展示技能稳定性与安装目标版本。
+//
+// Params:
+//
+//   - skill: 当前技能。
+function SkillMetaTags({
+  skill,
+}: {
+  skill: AgentSkillItem;
+}) {
+  const statusLabel = resolveAgentSkillStatusLabel(skill.status);
+  const isTesting = String(skill.status || "").trim().toLowerCase() === "testing";
+  return (
+    <AriFlex align="center" justify="flex-start" space={8}>
+      <AriTag bordered size="sm">{skill.version}</AriTag>
+      <AriTag bordered size="sm" color={isTesting ? "var(--z-color-warning)" : undefined}>
+        {statusLabel}
+      </AriTag>
+    </AriFlex>
+  );
+}
+
+// 描述：
+//
+//   - 生成技能卡片 caption，将版本独立为辅助信息，避免直接拼进标题影响主信息层级。
+//
+// Params:
+//
+//   - skill: 当前技能。
+//
+// Returns:
+//
+//   - 卡片 caption 文本。
+function buildSkillCardCaption(skill: AgentSkillItem): string {
+  const statusLabel = resolveAgentSkillStatusLabel(skill.status);
+  const isTesting = String(skill.status || "").trim().toLowerCase() === "testing";
+  return isTesting ? `${skill.version} · ${statusLabel}` : skill.version;
+}
+
+// 描述：
+//
 //   - 仅在技能详情页渲染时剥离正文首个一级标题，避免与元数据标题重复出现。
 //
 // Params:
@@ -182,6 +225,7 @@ function SkillCard({
     <DeskOverviewCard
       icon={<SkillIcon skill={skill} />}
       title={skill.title}
+      caption={buildSkillCardCaption(skill)}
       description={skill.description || t("未填写技能描述")}
       actions={(
         <>
@@ -512,6 +556,7 @@ export function SkillsPage() {
               variant="body"
               value={managingSkill.description || t("未填写技能描述")}
             />
+            <SkillMetaTags skill={managingSkill} />
             <AriContainer className="desk-skill-details-prompt-card">
               <AriFlex className="desk-skill-details-prompt-head" align="center" justify="space-between">
                 <AriTypography

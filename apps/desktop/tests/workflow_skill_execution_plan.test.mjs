@@ -31,7 +31,7 @@ test("TestWorkflowSkillExecutionPlanShouldValidateRegistryStateAndBuildPrompt", 
 
   // 描述：
   //
-  //   - Skill 计划构建器应基于真实技能注册表校验技能是否存在，并将 `SKILL.md` 正文拼接到执行计划中。
+  //   - 阶段计划构建器应基于真实技能注册表校验 skill 节点，并支持 action 节点直接携带内嵌正文。
   assert.match(skillPlanSource, /buildAgentSkillMap/);
   assert.match(skillPlanSource, /status: "missing_skill_id"/);
   assert.match(skillPlanSource, /status: "not_found"/);
@@ -41,10 +41,14 @@ test("TestWorkflowSkillExecutionPlanShouldValidateRegistryStateAndBuildPrompt", 
   assert.match(skillPlanSource, /totalReadyCount: number;/);
   assert.match(skillPlanSource, /hasNextStage: boolean;/);
   assert.match(skillPlanSource, /stageIndex\?: number;/);
-  assert.match(skillPlanSource, /"【Skill 执行计划】"/);
+  assert.match(skillPlanSource, /nodeType: WorkflowGraphNodeType;/);
+  assert.match(skillPlanSource, /return nodeType === "action" \|\| nodeType === "skill";/);
+  assert.match(skillPlanSource, /if \(nodeType === "action"\) \{/);
+  assert.match(skillPlanSource, /skillMarkdownBody: content,/);
+  assert.match(skillPlanSource, /"【阶段执行计划】"/);
   assert.match(skillPlanSource, /"当前阶段：\{\{current\}\}\/\{\{total\}\}"/);
-  assert.match(skillPlanSource, /"执行约束：本轮仅执行当前阶段，禁止提前执行后续技能；若当前阶段失败，先输出阻塞原因与修复建议，再决定是否继续。"/);
-  assert.match(skillPlanSource, /"【Skill 定义】"/);
+  assert.match(skillPlanSource, /"执行约束：本轮仅执行当前阶段，禁止提前执行后续阶段；若当前阶段失败，先输出阻塞原因与修复建议，再决定是否继续。"/);
+  assert.match(skillPlanSource, /"【阶段定义】"/);
   assert.match(skillPlanSource, /skillMarkdownBody/);
   assert.match(skillPlanSource, /normalizeAgentSkillId/);
   assert.match(skillPlanSource, /buildAgentWorkflowSkillExecutionPlan/);
@@ -78,7 +82,9 @@ test("TestWorkflowSkillExecutionPlanShouldValidateRegistryStateAndBuildPrompt", 
   assert.match(workflowStorageSource, /buildPlaywrightInteractiveRuntimePrompt/);
   assert.match(workflowStorageSource, /isPlaywrightInteractiveSkillId/);
   assert.match(workflowStorageSource, /normalizeAgentSkillId/);
+  assert.match(workflowStorageSource, /return nodeType === "action" \|\| nodeType === "skill";/);
   assert.match(workflowStorageSource, /translateDesktopText\("- \{\{label\}\}：技能编码 \{\{skillId\}\}"/);
+  assert.match(workflowStorageSource, /translateDesktopText\("【执行链路】"\)/);
   assert.match(workflowStorageSource, /兼容读取历史工作流中残留的项目能力声明字段/);
   assert.doesNotMatch(workflowStorageSource, /translateDesktopText\("【项目能力声明】"\)/);
   assert.doesNotMatch(workflowStorageSource, /getProjectWorkspaceCapabilityManifest/);
@@ -90,11 +96,11 @@ test("TestWorkflowSkillExecutionPlanShouldValidateRegistryStateAndBuildPrompt", 
 
   // 描述：
   //
-  //   - 统一智能体发送前应执行 Skill 计划校验，失败时阻断；成功时将计划拼接到 prompt。
+  //   - 统一智能体发送前应执行阶段计划校验，失败时阻断；成功时将计划拼接到 prompt。
   assert.match(sessionPageSource, /buildAgentWorkflowSkillExecutionPlan\(activeWorkflow, availableSkills\)/);
   assert.match(sessionPageSource, /buildAgentWorkflowSkillExecutionPlan\(activeWorkflow, availableSkills, \{ stageIndex: currentStageIndex \}\)/);
   assert.match(sessionPageSource, /if \(skillExecutionPlan\.blockingIssues\.length > 0\)/);
-  assert.match(sessionPageSource, /throw new Error\(t\("技能执行前检查未通过：\{\{issues\}\}", \{\s*issues: skillExecutionPlan\.blockingIssues\.join\("；"\),\s*\}\)\)/s);
+  assert.match(sessionPageSource, /throw new Error\(t\("工作流阶段前检查未通过：\{\{issues\}\}", \{\s*issues: skillExecutionPlan\.blockingIssues\.join\("；"\),\s*\}\)\)/s);
   assert.doesNotMatch(sessionPageSource, /selectedWorkflowMissingRequiredCapabilities/);
   assert.match(sessionPageSource, /const latestProjectProfile = activeWorkspace\?\.id\s*\?\s*\(activeProjectProfile \|\| getProjectWorkspaceProfile\(activeWorkspace\.id\)\)\s*:\s*null;/s);
   assert.match(sessionPageSource, /const currentRequestPrompt = buildSessionContextPrompt\(\s*nextContextMessages,\s*normalizedContent,\s*undefined,\s*latestProjectProfile,\s*activeWorkspaceEnabledCapabilities,\s*\);/s);
@@ -104,7 +110,7 @@ test("TestWorkflowSkillExecutionPlanShouldValidateRegistryStateAndBuildPrompt", 
   assert.match(sessionPageSource, /const hasWorkflowPlaywrightInteractiveSkill = \(scopedWorkflow\?\.graph\?\.nodes \|\| \[\]\)\.some/);
   assert.match(sessionPageSource, /const hasSelectedPlaywrightInteractiveSkill = effectiveSelectedSessionSkills\.some/);
   assert.match(sessionPageSource, /const selectedPlaywrightRuntimePrompt = hasSelectedPlaywrightInteractiveSkill/);
-  assert.match(sessionPageSource, /scopeWorkflowDefinitionToSkillNode\(activeWorkflow, currentStageItem\.nodeId\)/);
+  assert.match(sessionPageSource, /scopeWorkflowDefinitionToStageNode\(activeWorkflow, currentStageItem\.nodeId\)/);
   assert.match(sessionPageSource, /const agentPrompt = currentStagePlan\.planPrompt/);
   assert.match(sessionPageSource, /source: "workflow:skill_plan"/);
   assert.match(sessionPageSource, /prompt: agentPrompt/);
@@ -118,7 +124,7 @@ test("TestWorkflowSkillExecutionPlanShouldValidateRegistryStateAndBuildPrompt", 
   assert.match(sessionPageSource, /while \(currentStageIndex < \(hasWorkflowStages \? totalWorkflowStageCount : 1\)\)/);
   assert.match(sessionPageSource, /interface WorkflowStageCompletionDecision \{/);
   assert.match(sessionPageSource, /function shouldRequireWorkflowStageValidation\(item: AgentWorkflowSkillPlanItem \| null\): boolean \{/);
-  assert.match(sessionPageSource, /String\(item\.skillId \|\| ""\)\.trim\(\) === "frontend-page-builder"/);
+  assert.match(sessionPageSource, /String\(item\.nodeId \|\| ""\)\.trim\(\) === "wf-agent-full-delivery-pages"/);
   assert.match(sessionPageSource, /function collectWorkflowStageTerminalCommands\(runMeta: AssistantRunMeta \| undefined\): string\[] \{/);
   assert.match(sessionPageSource, /function hasWorkflowStageValidationEvidence\(terminalCommands: string\[\]\): boolean \{/);
   assert.match(sessionPageSource, /function resolveWorkflowStageCompletionDecision\(/);

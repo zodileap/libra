@@ -57,6 +57,7 @@ export interface WorkflowGraphNode {
   title: string;
   description: string;
   instruction?: string;
+  content?: string;
   type: WorkflowGraphNodeType;
   skillId?: string;
   skillVersion?: string;

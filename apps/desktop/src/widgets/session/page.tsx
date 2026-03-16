@@ -107,6 +107,7 @@ import {
   AGENT_SETTINGS_PATH,
 } from "../../modules/agent/routes";
 import { useDesktopHeaderSlot } from "../app-header/header-slot-context";
+import { DeskEmptyState } from "../settings-primitives";
 import { resolveDesktopTextVariants, translateDesktopText, useDesktopI18n } from "../../shared/i18n";
 import { DESKTOP_TEXT_VARIANT_GROUPS } from "../../shared/i18n/messages";
 import {
@@ -274,17 +275,17 @@ function clampWorkflowStageIndex(stageIndex: number | undefined, totalStageCount
 
 // 描述：
 //
-//   - 按当前技能节点裁剪工作流定义，只把当前阶段相关技能链路注入 Prompt，避免一次性塞入整条链路。
+//   - 按当前阶段节点裁剪工作流定义，只把当前阶段相关执行链路注入 Prompt，避免一次性塞入整条链路。
 //
 // Params:
 //
 //   - workflow: 当前工作流定义。
-//   - nodeId: 当前阶段技能节点 ID。
+//   - nodeId: 当前阶段节点 ID。
 //
 // Returns:
 //
 //   - 裁剪后的工作流定义；若无 nodeId 则返回原工作流。
-function scopeWorkflowDefinitionToSkillNode(
+function scopeWorkflowDefinitionToStageNode(
   workflow: AgentWorkflowDefinition | null,
   nodeId: string,
 ): AgentWorkflowDefinition | null {
@@ -292,7 +293,8 @@ function scopeWorkflowDefinitionToSkillNode(
   if (!workflow || !workflow.graph || !normalizedNodeId) {
     return workflow;
   }
-  const scopedNodes = workflow.graph.nodes.filter((node) => node.type !== "skill" || node.id === normalizedNodeId);
+  const scopedNodes = workflow.graph.nodes.filter((node) =>
+    (node.type !== "skill" && node.type !== "action") || node.id === normalizedNodeId);
   const visibleNodeIdSet = new Set(scopedNodes.map((node) => node.id));
   return {
     ...workflow,
@@ -521,7 +523,7 @@ function shouldRequireWorkflowStageValidation(item: AgentWorkflowSkillPlanItem |
   if (!item) {
     return false;
   }
-  if (String(item.skillId || "").trim() === "frontend-page-builder") {
+  if (String(item.nodeId || "").trim() === "wf-agent-full-delivery-pages") {
     return true;
   }
   const requirementText = resolveWorkflowStageRequirementText(item);
@@ -5958,7 +5960,7 @@ export function SessionPage({
     try {
       const skillExecutionPlan = buildAgentWorkflowSkillExecutionPlan(activeWorkflow, availableSkills);
       if (skillExecutionPlan.blockingIssues.length > 0) {
-        throw new Error(t("技能执行前检查未通过：{{issues}}", {
+        throw new Error(t("工作流阶段前检查未通过：{{issues}}", {
           issues: skillExecutionPlan.blockingIssues.join("；"),
         }));
       }
@@ -5967,7 +5969,7 @@ export function SessionPage({
       appendDebugFlowRecord(
         "ui",
         "skill_plan",
-        t("技能执行计划"),
+        t("阶段执行计划"),
         JSON.stringify(
           {
             ready_count: skillExecutionPlan.readyItems.length,
@@ -5986,7 +5988,7 @@ export function SessionPage({
         appendTraceRecord({
           traceId: executionTraceId,
           source: "workflow:skill_plan",
-          message: t("已加载 {{count}} 个技能节点", { count: skillExecutionPlan.readyItems.length }),
+          message: t("已加载 {{count}} 个阶段节点", { count: skillExecutionPlan.readyItems.length }),
         });
       }
       const totalWorkflowStageCount = skillExecutionPlan.totalReadyCount;
@@ -6005,7 +6007,7 @@ export function SessionPage({
           : skillExecutionPlan;
         const currentStageItem = currentStagePlan.activeItem;
         const scopedWorkflow = currentStageItem
-          ? scopeWorkflowDefinitionToSkillNode(activeWorkflow, currentStageItem.nodeId)
+          ? scopeWorkflowDefinitionToStageNode(activeWorkflow, currentStageItem.nodeId)
           : activeWorkflow;
         const stageTraceId = `${executionTraceId}-${currentStageIndex + 1}`;
         const streamMessageId = workflowRootStreamMessageId;
@@ -8561,7 +8563,6 @@ const handleConfirmWorkflowSkillModal = () => {
             />
             <AriButton
               type="default"
-              color="brand"
               label={t("确定")}
               onClick={handleConfirmWorkflowSkillModal}
             />
@@ -8576,6 +8577,7 @@ const handleConfirmWorkflowSkillModal = () => {
           />
           <AriList
             bordered
+            size="sm"
             className="desk-session-strategy-list"
             emptyMessage={t("暂无可选模式")}
           >
@@ -8584,9 +8586,6 @@ const handleConfirmWorkflowSkillModal = () => {
               split={false}
               className={`desk-session-strategy-item${draftExecutionSelection.kind === "none" ? " is-active" : ""}`}
               onClick={handleSelectDraftExecutionNone}
-              actions={[
-                <AriTypography key="execution-none-type" variant="caption" value={t("普通对话")} />,
-              ]}
               extra={
                 draftExecutionSelection.kind === "none" ? (
                   <AriContainer className="desk-session-strategy-item-extra" padding={0}>
@@ -8615,87 +8614,95 @@ const handleConfirmWorkflowSkillModal = () => {
             variant="caption"
             value={t("工作流")}
           />
-          <AriList
-            bordered
-            className="desk-session-strategy-list"
-            emptyMessage={t("暂无可选工作流")}
-          >
-            {workflowMenuItems.map((item) => (
-              <AriListItem
-                key={`workflow-${item.key}`}
-                split={false}
-                className={`desk-session-strategy-item${draftWorkflowId === item.key ? " is-active" : ""}`}
-                onClick={() => {
-                  setDraftExecutionSelection(buildWorkflowExecutionSelection(item.key));
-                }}
-                actions={[
-                  <AriTypography key={`${item.key}-type`} variant="caption" value={t("工作流")} />,
-                ]}
-                extra={
-                  draftWorkflowId === item.key ? (
-                    <AriContainer className="desk-session-strategy-item-extra" padding={0}>
-                      <AriIcon name="done" />
+          {workflowMenuItems.length > 0 ? (
+            <AriList
+              bordered
+              size="sm"
+              className="desk-session-strategy-list"
+            >
+              {workflowMenuItems.map((item) => (
+                <AriListItem
+                  key={`workflow-${item.key}`}
+                  split={false}
+                  className={`desk-session-strategy-item${draftWorkflowId === item.key ? " is-active" : ""}`}
+                  onClick={() => {
+                    setDraftExecutionSelection(buildWorkflowExecutionSelection(item.key));
+                  }}
+                  extra={
+                    draftWorkflowId === item.key ? (
+                      <AriContainer className="desk-session-strategy-item-extra" padding={0}>
+                        <AriIcon name="done" />
+                      </AriContainer>
+                    ) : null
+                  }
+                >
+                  <AriFlex className="desk-session-strategy-item-main" align="center" space={8}>
+                    <AriContainer className="desk-session-strategy-item-icon" padding={0}>
+                      <AriIcon name="account_tree" />
                     </AriContainer>
-                  ) : null
-                }
-              >
-                <AriFlex className="desk-session-strategy-item-main" align="center" space={8}>
-                  <AriContainer className="desk-session-strategy-item-icon" padding={0}>
-                    <AriIcon name="account_tree" />
-                  </AriContainer>
-                  <AriContainer className="desk-session-strategy-item-text" padding={0}>
-                    <AriTypography variant="h4" value={item.label} />
-                    <AriTypography
-                      variant="caption"
-                      value={item.description || t("按该工作流执行。")}
-                    />
-                  </AriContainer>
-                </AriFlex>
-              </AriListItem>
-            ))}
-          </AriList>
+                    <AriContainer className="desk-session-strategy-item-text" padding={0}>
+                      <AriTypography variant="h4" value={item.label} />
+                      <AriTypography
+                        variant="caption"
+                        value={item.description || t("按该工作流执行。")}
+                      />
+                    </AriContainer>
+                  </AriFlex>
+                </AriListItem>
+              ))}
+            </AriList>
+          ) : (
+            <DeskEmptyState
+              title={t("暂无可选工作流")}
+              description={t("请先注册工作流后再选择。")}
+            />
+          )}
 
           <AriTypography
             className="desk-session-strategy-section-title"
             variant="caption"
             value={t("技能")}
           />
-          <AriList
-            bordered
-            className="desk-session-strategy-list"
-            emptyMessage={t("暂无可用技能")}
-          >
-            {availableSkills.map((item) => (
-              <AriListItem
-                key={`skill-${item.id}`}
-                split={false}
-                className={`desk-session-strategy-item${draftSkillIds.includes(item.id) ? " is-active" : ""}`}
-                onClick={() => {
-                  handleToggleDraftSkill(item.id);
-                }}
-                actions={[
-                  <AriTypography key={`${item.id}-origin`} variant="caption" value={t("系统")} />,
-                ]}
-                extra={
-                  draftSkillIds.includes(item.id) ? (
-                    <AriContainer className="desk-session-strategy-item-extra" padding={0}>
-                      <AriIcon name="done" />
+          {availableSkills.length > 0 ? (
+            <AriList
+              bordered
+              size="sm"
+              className="desk-session-strategy-list"
+            >
+              {availableSkills.map((item) => (
+                <AriListItem
+                  key={`skill-${item.id}`}
+                  split={false}
+                  className={`desk-session-strategy-item${draftSkillIds.includes(item.id) ? " is-active" : ""}`}
+                  onClick={() => {
+                    handleToggleDraftSkill(item.id);
+                  }}
+                  extra={
+                    draftSkillIds.includes(item.id) ? (
+                      <AriContainer className="desk-session-strategy-item-extra" padding={0}>
+                        <AriIcon name="done" />
+                      </AriContainer>
+                    ) : null
+                  }
+                >
+                  <AriFlex className="desk-session-strategy-item-main" align="center" space={8}>
+                    <AriContainer className="desk-session-strategy-item-icon" padding={0}>
+                      <AriIcon name={item.icon} />
                     </AriContainer>
-                  ) : null
-                }
-              >
-                <AriFlex className="desk-session-strategy-item-main" align="center" space={8}>
-                  <AriContainer className="desk-session-strategy-item-icon" padding={0}>
-                    <AriIcon name={item.icon} />
-                  </AriContainer>
-                  <AriContainer className="desk-session-strategy-item-text" padding={0}>
-                    <AriTypography variant="h4" value={item.title} />
-                    <AriTypography variant="caption" value={item.description} />
-                  </AriContainer>
-                </AriFlex>
-              </AriListItem>
-            ))}
-          </AriList>
+                    <AriContainer className="desk-session-strategy-item-text" padding={0}>
+                      <AriTypography variant="h4" value={item.title} />
+                      <AriTypography variant="caption" value={item.description} />
+                    </AriContainer>
+                  </AriFlex>
+                </AriListItem>
+              ))}
+            </AriList>
+          ) : (
+            <DeskEmptyState
+              title={t("暂无可用技能")}
+              description={t("请先注册技能后再选择。")}
+            />
+          )}
         </AriContainer>
       </AriModal>
       <AriContainer className="desk-session-shell">

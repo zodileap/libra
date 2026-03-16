@@ -138,6 +138,7 @@ export function DeskPageHeader({
 interface DeskOverviewCardProps {
   icon: ReactNode;
   title: string;
+  caption?: string;
   actions?: ReactNode;
   description?: string;
 }
@@ -153,11 +154,13 @@ interface DeskOverviewCardProps {
 //
 //   - icon: 左侧图标区域内容。
 //   - title: 卡片标题。
+//   - caption: 标题下方的辅助 caption 文本。
 //   - actions: 标题栏右侧工具组。
 //   - description: 卡片摘要说明。
 export function DeskOverviewCard({
   icon,
   title,
+  caption,
   actions,
   description,
 }: DeskOverviewCardProps) {
@@ -205,6 +208,13 @@ export function DeskOverviewCard({
               </AriFlex>
             ) : null}
           </AriFlex>
+          {caption ? (
+            <AriTypography
+              className="desk-overview-card-caption"
+              variant="caption"
+              value={caption}
+            />
+          ) : null}
           {description ? (
             <AriTypography
               className="desk-overview-card-description"

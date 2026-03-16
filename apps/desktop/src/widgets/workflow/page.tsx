@@ -62,6 +62,7 @@ interface CanvasNodeData {
   title: string;
   description: string;
   instruction: string;
+  content: string;
   nodeType: WorkflowGraphNodeType;
   skillId: string;
   skillVersion: string;
@@ -72,6 +73,7 @@ interface ParsedCanvasNodeData {
   title: string;
   description: string;
   instruction: string;
+  content: string;
   type: WorkflowGraphNodeType;
   skillId?: string;
   skillVersion?: string;
@@ -148,6 +150,7 @@ function parseCanvasNodeData(
       translateDesktopText("未命名节点"),
     description: String(source.description || "").trim(),
     instruction: String(source.instruction || "").trim(),
+    content: String(source.content || "").trim(),
     type: nodeType,
     skillId: nodeType === "skill" ? normalizedSkillId || undefined : undefined,
     skillVersion: nodeType === "skill" ? normalizedSkillVersion || undefined : undefined,
@@ -368,6 +371,7 @@ function toFlowNodes(graph: WorkflowGraph): WorkflowCanvasNode[] {
       title: node.title,
       description: node.description,
       instruction: String(node.instruction || "").trim(),
+      content: String(node.content || "").trim(),
       nodeType: node.type,
       skillId: String(node.skillId || "").trim(),
       skillVersion: String(node.skillVersion || "").trim(),
@@ -421,6 +425,7 @@ function toWorkflowGraph(
         title: parsed.title,
         description: parsed.description,
         instruction: parsed.instruction,
+        content: parsed.content || undefined,
         type: parsed.type,
         skillId: parsed.skillId,
         skillVersion: parsed.skillVersion,
@@ -757,6 +762,7 @@ export function WorkflowCanvasPage() {
           title: t("节点 {{index}}", { index: nextIndex }),
           description: "",
           instruction: "",
+          content: "",
           nodeType: "action",
           skillId: "",
           skillVersion: "",
@@ -769,7 +775,7 @@ export function WorkflowCanvasPage() {
 
   const patchSelectedNode = (
     patch: Partial<
-      Pick<CanvasNodeData, "title" | "description" | "instruction" | "nodeType" | "skillId" | "skillVersion">
+      Pick<CanvasNodeData, "title" | "description" | "instruction" | "content" | "nodeType" | "skillId" | "skillVersion">
     >,
   ) => {
     if (!canEditWorkflow || !selectedNodeId) {
@@ -786,6 +792,7 @@ export function WorkflowCanvasPage() {
         const title = patch.title ?? parsed.title;
         const description = patch.description ?? parsed.description;
         const instruction = patch.instruction ?? parsed.instruction;
+        const content = patch.content ?? parsed.content;
         const nodeType = patch.nodeType ?? parsed.type;
         const skillId = patch.skillId ?? (parsed.skillId || "");
         const skillVersion = patch.skillVersion ?? (parsed.skillVersion || "");
@@ -797,6 +804,7 @@ export function WorkflowCanvasPage() {
             title,
             description,
             instruction,
+            content,
             nodeType,
             skillId: nodeType === "skill" ? skillId : "",
             skillVersion: nodeType === "skill" ? skillVersion : "",
@@ -1492,6 +1500,18 @@ export function WorkflowCanvasPage() {
                         placeholder={t("请输入该节点命中后的 AI 提示词")}
                         rows={3}
                         autoSize={{ minRows: 3, maxRows: 8 }}
+                      />
+                    </AriFormItem>
+                    <AriFormItem label={t("节点内容")} name="selectedNode.content">
+                      <AriInput.TextArea
+                        value={selectedNodeData.content || ""}
+                        disabled={!canEditWorkflow}
+                        onChange={(value: string) =>
+                          patchSelectedNode({ content: value })
+                        }
+                        placeholder={t("请输入该节点要内嵌到工作流中的详细说明")}
+                        rows={6}
+                        autoSize={{ minRows: 6, maxRows: 16 }}
                       />
                     </AriFormItem>
                   </AriForm>

@@ -23,7 +23,7 @@ test("TestSessionTodoDockShouldRenderTodoSnapshotAndKeepAnalysisInChat", () => {
   const sessionSource = readDesktopSource("src/widgets/session/page.tsx");
   const styleSource = readDesktopSource("src/styles.css");
   const promptGuidanceSource = readDesktopSource("src/shared/workflow/prompt-guidance.ts");
-  const requirementsSkillSource = readDesktopSource("src-tauri/resources/skills/requirements-analyst/SKILL.md");
+  const workflowTemplateSource = readDesktopSource("src/shared/workflow/templates.ts");
   const openapiSkillSource = readDesktopSource("src-tauri/resources/skills/openapi-model-designer/SKILL.md");
 
   // 描述：
@@ -57,16 +57,15 @@ test("TestSessionTodoDockShouldRenderTodoSnapshotAndKeepAnalysisInChat", () => {
 
   // 描述：
   //
-  //   - 提示词与需求分析技能都应明确：需求分析默认直接输出到会话，不写入项目计划文档；
+  //   - 提示词与工作流内嵌“需求分析”阶段都应明确：需求分析默认直接输出到会话，不写入项目计划文档；
   //   - run_shell 的返回值应提醒模型按结构化字段读取，需求分析阶段也不应提前初始化项目。
   assert.match(promptGuidanceSource, /todo_read\/todo_write 仅用于会话内任务计划同步；agent 编排、任务规划、阶段说明、过程总结等会话过程信息默认直接输出到会话，不要写入项目过程文件。/);
   assert.match(promptGuidanceSource, /AI 过程信息（如 agent 编排、任务规划、阶段分析、方案草案、阻塞说明、阶段总结）默认只允许持久化到会话上下文并发送到前端消息；除非用户明确要求导出，否则禁止写入 `REQUIREMENTS\.md`、`TODO\.md`、`api_design\.json`、`mock-plan\.md` 等过程文件。/);
   assert.match(promptGuidanceSource, /项目文件只写用户真正需要的交付物/);
   assert.match(promptGuidanceSource, /run_shell 默认返回结果对象（含 stdout\/stderr\/status\/success）/);
   assert.match(promptGuidanceSource, /result\.get\(\\\"stdout\\\"\) \/ result\.get\(\\\"stderr\\\"\) \/ result\.get\(\\\"success\\\"\)/);
-  assert.match(requirementsSkillSource, /默认在会话中直接交付分析结果；只有用户明确要求导出文档时，才写入仓库或生成文件。/);
-  assert.match(requirementsSkillSource, /不要在分析阶段执行 `apply_patch`、安装依赖、初始化项目、生成代码或创建过程文件。/);
-  assert.match(requirementsSkillSource, /不要用 `TODO\.md`、`REQUIREMENTS\.md`、计划草稿等文件替代会话输出，除非用户明确要求。/);
+  assert.match(workflowTemplateSource, /默认直接在会话中交付分析结果；只有用户明确要求导出时，才创建文档或文件。/);
+  assert.match(workflowTemplateSource, /当前阶段只做分析，不执行 apply_patch、安装依赖、初始化项目、生成代码或创建过程文件。/);
   assert.match(openapiSkillSource, /接口建模正文、Mock 说明、OpenAPI 写入结果和阻塞原因，默认直接输出到当前会话并保留在会话上下文中；除非用户明确要求导出文件，否则不要创建或修改 `api-models\.md`、`mock-plan\.md` 等过程文件。/);
   assert.match(openapiSkillSource, /默认优先写入 `<workspace>\/docs\/openapi\/` 目录；文件名应根据当前项目或模块语义命名/);
   assert.match(openapiSkillSource, /不要假设固定业务名称/);

@@ -29,27 +29,6 @@ function readDesktopSource(relativePath) {
 function builtinSkillPackageAssertions() {
   return [
     {
-      id: "requirements-analyst",
-      title: "代码需求分析",
-      group: "代码",
-      heading: "# Requirements Analysis",
-      references: ["references/acceptance-checklist.md"],
-    },
-    {
-      id: "frontend-architect",
-      title: "前端架构",
-      group: "代码",
-      heading: "# Frontend Architecture",
-      references: ["references/desktop-frontend-rules.md"],
-    },
-    {
-      id: "frontend-page-builder",
-      title: "前端页面实现",
-      group: "代码",
-      heading: "# Frontend Page Build",
-      references: ["references/page-implementation-checklist.md"],
-    },
-    {
       id: "openapi-model-designer",
       title: "接口建模",
       group: "代码",
@@ -181,10 +160,14 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   assert.doesNotMatch(skillsPageSource, /DeskSectionLabel/);
   assert.doesNotMatch(skillsPageSource, /className="desk-skill-subgroup-section"/);
   assert.match(skillsPageSource, /resolveAgentSkillIconName/);
+  assert.match(skillsPageSource, /resolveAgentSkillStatusLabel/);
   assert.match(skillsPageSource, /<AriIcon/);
   assert.match(skillsPageSource, /name=\{iconName\}/);
   assert.match(skillsPageSource, /size=\{size === "hero" \? "xxl" : "lg"\}/);
+  assert.match(skillsPageSource, /function SkillMetaTags/);
+  assert.match(skillsPageSource, /function buildSkillCardCaption\(skill: AgentSkillItem\): string/);
   assert.match(skillsPageSource, /title=\{skill\.title\}/);
+  assert.match(skillsPageSource, /caption=\{buildSkillCardCaption\(skill\)\}/);
   assert.match(skillsPageSource, /<AriModal/);
   assert.match(skillsPageSource, /title=\{managingSkill \? \(/);
   assert.match(skillsPageSource, /className="desk-skill-details-modal-title"/);
@@ -198,6 +181,7 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   assert.match(skillsPageSource, /ChatMarkdown/);
   assert.match(skillsPageSource, /label=\{t\("打开文件夹"\)\}/);
   assert.match(skillsPageSource, /stripSkillDetailHeading/);
+  assert.match(skillsPageSource, /<SkillMetaTags skill=\{managingSkill\} \/>/);
   assert.match(skillsPageSource, /className="desk-skill-details-section-label"[\s\S]*variant="body"[\s\S]*value=\{t\("示例提示"\)\}/);
   assert.match(skillsPageSource, /value=\{t\("示例提示"\)\}/);
   assert.match(skillsPageSource, /aria-label=\{t\("复制示例提示"\)\}/);
@@ -219,6 +203,8 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   assert.doesNotMatch(skillsPageSource, /DeskSectionTitle title=\{t\("已提供"\)\}/);
   assert.doesNotMatch(skillsPageSource, /DeskOverviewDetailsModal/);
   assert.doesNotMatch(skillsPageSource, /DeskOverviewDetailRow/);
+  assert.doesNotMatch(skillsPageSource, /title=\{`\$\{skill\.title\} · v\$\{skill\.version\}`\}/);
+  assert.doesNotMatch(skillsPageSource, /v\$\{skill\.version\}/);
   assert.doesNotMatch(skillsPageSource, /导入本地技能/);
   assert.doesNotMatch(skillsPageSource, /label="刷新"/);
   assert.doesNotMatch(skillsPageSource, /pickLocalAgentSkillFolder/);
@@ -231,7 +217,10 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   //   - 技能服务层应输出技能标题、描述、示例提示与图标键，并统一映射到桌面端内置图标资源。
   assert.match(skillServiceSource, /export interface AgentSkillItem/);
   assert.match(skillServiceSource, /title: string;/);
+  assert.match(skillServiceSource, /description: string;/);
   assert.match(skillServiceSource, /examplePrompt: string;/);
+  assert.match(skillServiceSource, /version: string;/);
+  assert.match(skillServiceSource, /status: AgentSkillStatus;/);
   assert.match(skillServiceSource, /group: string;/);
   assert.match(skillServiceSource, /icon: string;/);
   assert.match(skillServiceSource, /markdownBody: string;/);
@@ -242,9 +231,12 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   assert.match(skillServiceSource, /const AGENT_SKILL_ICON_NAMES = \{/);
   assert.match(skillServiceSource, /libra_skill: "new_releases"/);
   assert.match(skillServiceSource, /const DEFAULT_AGENT_SKILL_ICON_KEY = "libra_skill" as const;/);
+  assert.match(skillServiceSource, /function normalizeSkillVersion\(rawValue: unknown\): string/);
+  assert.match(skillServiceSource, /function normalizeSkillStatus\(rawValue: unknown\): AgentSkillStatus/);
   assert.match(skillServiceSource, /function normalizeSkillCategoryLabel\(rawValue: unknown, fallbackLabel: string\): string/);
   assert.match(skillServiceSource, /function normalizeSkillIconKey\(rawIcon: string\): keyof typeof AGENT_SKILL_ICON_NAMES/);
   assert.match(skillServiceSource, /export function resolveAgentSkillIconName\(iconKey: string\): string/);
+  assert.match(skillServiceSource, /export function resolveAgentSkillStatusLabel\(status: AgentSkillStatus\): string/);
   assert.match(skillServiceSource, /invoke<unknown\[]>\(COMMANDS\.LIST_AGENT_SKILLS\)/);
   assert.match(skillServiceSource, /invoke<unknown>\(COMMANDS\.LIST_AGENT_SKILL_OVERVIEW\)/);
   assert.match(skillServiceSource, /invoke<unknown>\(COMMANDS\.REGISTER_BUILTIN_AGENT_SKILL,\s*\{\s*skillId,\s*\}\)/s);
@@ -258,6 +250,8 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   assert.match(skillServiceSource, /const title = String\(source\.title \|\| ""\)\.trim\(\);/);
   assert.match(skillServiceSource, /title,/);
   assert.match(skillServiceSource, /examplePrompt: String\(source\.example_prompt \|\| ""\)\.trim\(\),/);
+  assert.match(skillServiceSource, /version: normalizeSkillVersion\(source\.version\),/);
+  assert.match(skillServiceSource, /status: normalizeSkillStatus\(source\.status\),/);
   assert.match(skillServiceSource, /group: normalizeSkillCategoryLabel\(source\.group, "未分组"\),/);
   assert.match(skillServiceSource, /icon: normalizeSkillIconKey\(String\(source\.icon \|\| ""\)\.trim\(\)\),/);
   assert.doesNotMatch(skillServiceSource, /SKILL_CATALOG/);
@@ -299,19 +293,31 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   assert.match(tauriSkillRegistrySource, /pub async fn remove_user_agent_skill/);
   assert.match(tauriSkillRegistrySource, /serde_yaml::from_str/);
   assert.match(tauriSkillRegistrySource, /pub title: String,/);
+  assert.match(tauriSkillRegistrySource, /pub description: String,/);
   assert.match(tauriSkillRegistrySource, /pub example_prompt: String,/);
+  assert.match(tauriSkillRegistrySource, /pub version: String,/);
+  assert.match(tauriSkillRegistrySource, /pub status: String,/);
   assert.match(tauriSkillRegistrySource, /pub group: String,/);
   assert.match(tauriSkillRegistrySource, /pub icon: String,/);
+  assert.match(tauriSkillRegistrySource, /struct AgentSkillRegistryEntry/);
+  assert.match(tauriSkillRegistrySource, /registered: Vec<AgentSkillRegistryEntry>/);
   assert.match(tauriSkillRegistrySource, /struct AgentSkillLibraMetadata/);
   assert.match(tauriSkillRegistrySource, /struct AgentSkillLibraMetadataDocument/);
   assert.match(tauriSkillRegistrySource, /fn parse_skill_libra_metadata\(metadata: &str\) -> Result<AgentSkillLibraMetadata, String>/);
   assert.match(tauriSkillRegistrySource, /fn read_skill_libra_metadata\(skill_root: &Path\) -> Result<AgentSkillLibraMetadata, String>/);
   assert.match(tauriSkillRegistrySource, /let parsed: AgentSkillLibraMetadataDocument = serde_yaml::from_str\(metadata\)/);
-  assert.match(tauriSkillRegistrySource, /let parsed = parsed\.libra;/);
+  assert.match(tauriSkillRegistrySource, /let mut parsed = parsed\.libra;/);
+  assert.match(tauriSkillRegistrySource, /version: String,/);
+  assert.match(tauriSkillRegistrySource, /status: Option<String>,/);
   assert.match(tauriSkillRegistrySource, /if parsed\.group\.trim\(\)\.is_empty\(\) \{/);
+  assert.match(tauriSkillRegistrySource, /validate_agent_skill_version/);
+  assert.match(tauriSkillRegistrySource, /normalize_agent_skill_status/);
+  assert.match(tauriSkillRegistrySource, /normalize_registered_skill_entries/);
   assert.match(tauriSkillRegistrySource, /fn resolve_skill_description\(/);
   assert.match(tauriSkillRegistrySource, /read_optional_runtime_requirements/);
   assert.match(tauriSkillRegistrySource, /resolve_agent_skill_registry_path/);
+  assert.match(tauriSkillRegistrySource, /should_expose_skill_in_current_build/);
+  assert.match(tauriSkillRegistrySource, /resolve_registry_state_with_available_skills/);
   assert.match(tauriSkillRegistrySource, /write_agent_skill_registry_state/);
   assert.match(tauriSkillRegistrySource, /build_agent_skill_overview/);
   assert.match(tauriSkillRegistrySource, /register_builtin_agent_skill_inner/);
@@ -385,6 +391,8 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
     assert.match(metadataSource, new RegExp(`^  title: ${skillPackage.title}$`, "m"));
     assert.match(metadataSource, /^  description: .+$/m);
     assert.match(metadataSource, /^  example_prompt: .+$/m);
+    assert.match(metadataSource, /^  version: 1\.0\.0$/m);
+    assert.match(metadataSource, /^  status: stable$/m);
     assert.match(metadataSource, new RegExp(`^  group: ${skillPackage.group}$`, "m"));
     assert.doesNotMatch(metadataSource, /^  subgroup: .+$/m);
     assert.match(metadataSource, /^  icon: libra_skill$/m);
@@ -423,6 +431,7 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   assert.match(styleSource, /\.desk-skill-details-markdown \{/);
   assert.doesNotMatch(styleSource, /\.desk-skill-details-card \{/);
   assert.match(styleSource, /\.desk-overview-card/);
+  assert.match(styleSource, /\.desk-overview-card-caption/);
   assert.match(styleSource, /\.desk-overview-card-content/);
   assert.match(styleSource, /\.desk-overview-card-title/);
   assert.match(styleSource, /\.desk-overview-card-description/);

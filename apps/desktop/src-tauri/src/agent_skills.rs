@@ -13,6 +13,8 @@ pub struct AgentSkillRecord {
     pub title: String,
     pub description: String,
     pub example_prompt: String,
+    pub version: String,
+    pub status: String,
     pub group: String,
     pub icon: String,
     pub source: String,
@@ -32,12 +34,22 @@ pub struct AgentSkillOverview {
     pub all: Vec<AgentSkillRecord>,
 }
 
-/// 描述：桌面端技能注册表文件结构，仅持久化用户手动启用的内置技能 ID。
+/// 描述：桌面端技能注册表条目结构，统一记录技能 ID 与已安装版本，供升级替换和未注册提示复用。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct AgentSkillRegistryEntry {
+    id: String,
+    version: String,
+}
+
+/// 描述：桌面端技能注册表文件结构，兼容旧版 `registered_ids` 并逐步迁移到带版本的注册条目。
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct AgentSkillRegistryState {
     #[serde(default)]
     registered_ids: Vec<String>,
+    #[serde(default)]
+    registered: Vec<AgentSkillRegistryEntry>,
 }
 
 /// 描述：Agent Skills `SKILL.md` frontmatter 的最小标准字段，当前至少要求 name 与 description。
@@ -53,6 +65,8 @@ struct AgentSkillLibraMetadata {
     title: String,
     description: Option<String>,
     example_prompt: String,
+    version: String,
+    status: Option<String>,
     group: String,
     icon: String,
 }
@@ -62,6 +76,9 @@ struct AgentSkillLibraMetadata {
 struct AgentSkillLibraMetadataDocument {
     libra: AgentSkillLibraMetadata,
 }
+
+const AGENT_SKILL_STATUS_STABLE: &str = "stable";
+const AGENT_SKILL_STATUS_TESTING: &str = "testing";
 
 /// 描述：将多来源技能根目录规整为可扫描列表，并移除重复路径，避免开发态与打包态目录被重复解析。
 ///
@@ -173,25 +190,82 @@ fn validate_agent_skill_name(name: &str) -> Result<(), String> {
     ))
 }
 
-/// 描述：规整技能注册 ID 列表，统一移除空值、裁剪空白并去重，避免旧注册表污染当前运行态。
+/// 描述：校验技能版本是否符合三段式语义化版本，避免注册态与展示态出现无法比较的脏值。
 ///
 /// Params:
 ///
-///   - registered_ids: 原始注册 ID 列表。
+///   - version: 原始版本号。
 ///
 /// Returns:
 ///
-///   - 规整后的技能 ID 列表。
-fn normalize_registered_skill_ids(registered_ids: Vec<String>) -> Vec<String> {
+///   - 0: 版本合法。
+fn validate_agent_skill_version(version: &str) -> Result<(), String> {
+    let normalized = version.trim();
+    if normalized.is_empty() {
+        return Err("skills 元数据缺少 version。".to_string());
+    }
+    let segments: Vec<&str> = normalized.split('.').collect();
+    if segments.len() != 3 || segments.iter().any(|segment| {
+        segment.is_empty() || !segment.chars().all(|char| char.is_ascii_digit())
+    }) {
+        return Err(format!(
+            "skills 元数据 version {} 非法，仅支持 Major.Minor.Patch。",
+            normalized
+        ));
+    }
+    Ok(())
+}
+
+/// 描述：将技能状态规整为稳定枚举值；当前仅支持 stable / testing 两种状态。
+///
+/// Params:
+///
+///   - status: 原始状态值。
+///
+/// Returns:
+///
+///   - 归一化后的技能状态。
+fn normalize_agent_skill_status(status: Option<&str>) -> Result<String, String> {
+    let normalized = status
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(AGENT_SKILL_STATUS_STABLE)
+        .to_lowercase();
+    if normalized == AGENT_SKILL_STATUS_STABLE || normalized == AGENT_SKILL_STATUS_TESTING {
+        return Ok(normalized);
+    }
+    Err(format!(
+        "skills 元数据 status {} 非法，仅支持 stable / testing。",
+        normalized
+    ))
+}
+
+/// 描述：规整带版本的技能注册条目，统一移除空值、裁剪空白并按 `id + version` 去重。
+///
+/// Params:
+///
+///   - entries: 原始注册条目列表。
+///
+/// Returns:
+///
+///   - 规整后的注册条目列表。
+fn normalize_registered_skill_entries(
+    entries: Vec<AgentSkillRegistryEntry>,
+) -> Vec<AgentSkillRegistryEntry> {
     let mut normalized = Vec::new();
     let mut seen = HashSet::new();
-    for skill_id in registered_ids {
-        let trimmed = skill_id.trim().to_string();
-        if trimmed.is_empty() {
+    for entry in entries {
+        let normalized_id = entry.id.trim().to_string();
+        let normalized_version = entry.version.trim().to_string();
+        if normalized_id.is_empty() {
             continue;
         }
-        if seen.insert(trimmed.clone()) {
-            normalized.push(trimmed);
+        let dedupe_key = format!("{}@{}", normalized_id, normalized_version);
+        if seen.insert(dedupe_key) {
+            normalized.push(AgentSkillRegistryEntry {
+                id: normalized_id,
+                version: normalized_version,
+            });
         }
     }
     normalized
@@ -240,7 +314,7 @@ fn parse_skill_markdown(markdown: &str) -> Result<(AgentSkillFrontmatter, String
 fn parse_skill_libra_metadata(metadata: &str) -> Result<AgentSkillLibraMetadata, String> {
     let parsed: AgentSkillLibraMetadataDocument = serde_yaml::from_str(metadata)
         .map_err(|err| format!("解析 agents/libra.yaml 失败：{}", err))?;
-    let parsed = parsed.libra;
+    let mut parsed = parsed.libra;
 
     if parsed.title.trim().is_empty() {
         return Err("skills 元数据缺少 title。".to_string());
@@ -248,6 +322,8 @@ fn parse_skill_libra_metadata(metadata: &str) -> Result<AgentSkillLibraMetadata,
     if parsed.example_prompt.trim().is_empty() {
         return Err("skills 元数据缺少 example_prompt。".to_string());
     }
+    validate_agent_skill_version(parsed.version.as_str())?;
+    parsed.status = Some(normalize_agent_skill_status(parsed.status.as_deref())?);
     if parsed.group.trim().is_empty() {
         return Err("skills 元数据缺少 group。".to_string());
     }
@@ -389,6 +465,13 @@ fn load_skill_record_from_file(
             metadata.description.as_deref(),
         ),
         example_prompt: metadata.example_prompt.trim().to_string(),
+        version: metadata.version.trim().to_string(),
+        status: metadata
+            .status
+            .as_deref()
+            .unwrap_or(AGENT_SKILL_STATUS_STABLE)
+            .trim()
+            .to_string(),
         group: metadata.group.trim().to_string(),
         icon: metadata.icon.trim().to_string(),
         source: source.to_string(),
@@ -430,6 +513,19 @@ fn read_optional_runtime_requirements(skill_root: &Path) -> Result<Value, String
     })
 }
 
+/// 描述：判断技能是否应在当前构建环境中对外展示；`testing` 仅允许开发态出现，避免进入正式构建。
+///
+/// Params:
+///
+///   - status: 技能状态。
+///
+/// Returns:
+///
+///   - true: 当前环境允许展示该技能。
+fn should_expose_skill_in_current_build(status: &str) -> bool {
+    cfg!(debug_assertions) || status.trim() != AGENT_SKILL_STATUS_TESTING
+}
+
 /// 描述：读取技能注册表文件；当文件不存在时返回空注册状态，避免首次启动因缺少文件报错。
 ///
 /// Params:
@@ -460,8 +556,58 @@ fn read_agent_skill_registry_state(
                 err
             )
         })?;
-    state.registered_ids = normalize_registered_skill_ids(state.registered_ids);
+    state.registered = normalize_registered_skill_entries(state.registered);
+    state.registered_ids = state
+        .registered_ids
+        .into_iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect();
     Ok(state)
+}
+
+/// 描述：按当前可用内置技能清单规整注册表状态；旧版 `registered_ids` 会迁移到当前版本，显式旧版本则保留待升级语义。
+///
+/// Params:
+///
+///   - state: 原始注册表状态。
+///   - all_skills: 当前可见的全部技能。
+///
+/// Returns:
+///
+///   - 按当前技能版本清单规整后的注册表状态。
+fn resolve_registry_state_with_available_skills(
+    state: AgentSkillRegistryState,
+    all_skills: &[AgentSkillRecord],
+) -> AgentSkillRegistryState {
+    let mut entries = normalize_registered_skill_entries(state.registered);
+    let existing_ids: HashSet<String> = entries.iter().map(|item| item.id.clone()).collect();
+    for legacy_id in state.registered_ids {
+        if existing_ids.contains(legacy_id.as_str()) {
+            continue;
+        }
+        if let Some(current_skill) = all_skills.iter().find(|item| item.id == legacy_id) {
+            entries.push(AgentSkillRegistryEntry {
+                id: current_skill.id.clone(),
+                version: current_skill.version.clone(),
+            });
+        }
+    }
+
+    let available_pairs: HashSet<String> = all_skills
+        .iter()
+        .map(|item| format!("{}@{}", item.id, item.version))
+        .collect();
+    let normalized_entries = normalize_registered_skill_entries(
+        entries
+            .into_iter()
+            .filter(|entry| available_pairs.contains(format!("{}@{}", entry.id, entry.version).as_str()))
+            .collect(),
+    );
+    AgentSkillRegistryState {
+        registered_ids: Vec::new(),
+        registered: normalized_entries,
+    }
 }
 
 /// 描述：写回技能注册表文件，统一使用易读 JSON 结构，便于排查当前注册状态。
@@ -479,7 +625,11 @@ fn write_agent_skill_registry_state(
     state: &AgentSkillRegistryState,
 ) -> Result<(), String> {
     ensure_skill_registry_parent(registry_path)?;
-    let content = serde_json::to_string_pretty(state)
+    let normalized_state = AgentSkillRegistryState {
+        registered_ids: Vec::new(),
+        registered: normalize_registered_skill_entries(state.registered.clone()),
+    };
+    let content = serde_json::to_string_pretty(&normalized_state)
         .map_err(|err| format!("序列化技能注册表失败：{}", err))?;
     fs::write(registry_path, format!("{}\n", content)).map_err(|err| {
         format!(
@@ -510,6 +660,9 @@ fn list_builtin_agent_skills_inner(
         collect_skill_markdown_files(&builtin_root, &mut skill_files)?;
         for skill_file in skill_files {
             let record = load_skill_record_from_file(&skill_file, "builtin", false)?;
+            if !should_expose_skill_in_current_build(record.status.as_str()) {
+                continue;
+            }
             skill_map.insert(record.id.clone(), record);
         }
     }
@@ -523,25 +676,29 @@ fn list_builtin_agent_skills_inner(
     Ok(skills)
 }
 
-/// 描述：基于完整内置技能列表和注册 ID 列表构建技能总览，确保页面与运行时共享同一套注册判断。
+/// 描述：基于完整内置技能列表和带版本注册条目构建技能总览，确保页面与运行时共享同一套升级判断。
 ///
 /// Params:
 ///
 ///   - all_skills: 全量内置技能。
-///   - registered_ids: 当前注册的技能 ID 列表。
+///   - registered_entries: 当前注册的技能条目列表。
 ///
 /// Returns:
 ///
 ///   - 结构化技能总览。
 fn build_agent_skill_overview(
     all_skills: Vec<AgentSkillRecord>,
-    registered_ids: &[String],
+    registered_entries: &[AgentSkillRegistryEntry],
 ) -> AgentSkillOverview {
-    let registered_id_set: HashSet<&str> = registered_ids.iter().map(String::as_str).collect();
+    let registered_key_set: HashSet<String> = registered_entries
+        .iter()
+        .map(|entry| format!("{}@{}", entry.id, entry.version))
+        .collect();
     let mut registered = Vec::new();
     let mut unregistered = Vec::new();
     for item in &all_skills {
-        if registered_id_set.contains(item.id.as_str()) {
+        let registry_key = format!("{}@{}", item.id, item.version);
+        if registered_key_set.contains(registry_key.as_str()) {
             registered.push(item.clone());
             continue;
         }
@@ -566,22 +723,36 @@ fn build_agent_skill_overview(
 fn list_agent_skill_overview_inner(app: &tauri::AppHandle) -> Result<AgentSkillOverview, String> {
     let all_skills = list_builtin_agent_skills_inner(app)?;
     let registry_path = resolve_agent_skill_registry_path(app)?;
-    let mut registry_state = read_agent_skill_registry_state(&registry_path)?;
-    let previous_registered_ids = registry_state.registered_ids.clone();
-    let available_skill_ids: HashSet<String> =
-        all_skills.iter().map(|item| item.id.clone()).collect();
-    registry_state.registered_ids = previous_registered_ids
-        .iter()
-        .filter(|skill_id| available_skill_ids.contains(skill_id.as_str()))
-        .cloned()
-        .collect();
-    if registry_state.registered_ids != previous_registered_ids {
-        write_agent_skill_registry_state(&registry_path, &registry_state)?;
+    let registry_state = read_agent_skill_registry_state(&registry_path)?;
+    let normalized_registry_state =
+        resolve_registry_state_with_available_skills(registry_state.clone(), all_skills.as_slice());
+    if should_rewrite_registry_state(&registry_state, &normalized_registry_state) {
+        write_agent_skill_registry_state(&registry_path, &normalized_registry_state)?;
     }
     Ok(build_agent_skill_overview(
         all_skills,
-        registry_state.registered_ids.as_slice(),
+        normalized_registry_state.registered.as_slice(),
     ))
+}
+
+/// 描述：读取技能总览时判断注册表是否需要回写，避免每次都重复读取同一路径造成状态判断分散。
+///
+/// Params:
+///
+///   - current: 原始注册表状态。
+///   - normalized: 规整后的注册表状态。
+///
+/// Returns:
+///
+///   - true: 需要回写到磁盘。
+fn should_rewrite_registry_state(
+    current: &AgentSkillRegistryState,
+    normalized: &AgentSkillRegistryState,
+) -> bool {
+    if !current.registered_ids.is_empty() {
+        return true;
+    }
+    current.registered != normalized.registered
 }
 
 /// 描述：校验指定技能是否属于当前应用内置技能，避免前端提交任意 ID 直接污染注册表。
@@ -624,23 +795,34 @@ fn register_builtin_agent_skill_inner(
     }
     let all_skills = list_builtin_agent_skills_inner(app)?;
     ensure_builtin_skill_exists(normalized_skill_id, all_skills.as_slice())?;
+    let target_skill = all_skills
+        .iter()
+        .find(|item| item.id == normalized_skill_id)
+        .ok_or_else(|| format!("未找到内置技能 {}。", normalized_skill_id))?;
     let registry_path = resolve_agent_skill_registry_path(app)?;
-    let mut registry_state = read_agent_skill_registry_state(&registry_path)?;
-    let next_registered_ids = normalize_registered_skill_ids(
+    let current_registry_state = read_agent_skill_registry_state(&registry_path)?;
+    let mut registry_state =
+        resolve_registry_state_with_available_skills(current_registry_state, all_skills.as_slice());
+    let next_registered_entries = normalize_registered_skill_entries(
         registry_state
-            .registered_ids
+            .registered
             .iter()
             .cloned()
-            .chain(std::iter::once(normalized_skill_id.to_string()))
+            .filter(|entry| entry.id != normalized_skill_id)
+            .chain(std::iter::once(AgentSkillRegistryEntry {
+                id: target_skill.id.clone(),
+                version: target_skill.version.clone(),
+            }))
             .collect(),
     );
-    if next_registered_ids != registry_state.registered_ids {
-        registry_state.registered_ids = next_registered_ids;
+    if next_registered_entries != registry_state.registered {
+        registry_state.registered = next_registered_entries;
+        registry_state.registered_ids.clear();
         write_agent_skill_registry_state(&registry_path, &registry_state)?;
     }
     Ok(build_agent_skill_overview(
         all_skills,
-        registry_state.registered_ids.as_slice(),
+        registry_state.registered.as_slice(),
     ))
 }
 
@@ -665,20 +847,23 @@ fn unregister_builtin_agent_skill_inner(
     let all_skills = list_builtin_agent_skills_inner(app)?;
     ensure_builtin_skill_exists(normalized_skill_id, all_skills.as_slice())?;
     let registry_path = resolve_agent_skill_registry_path(app)?;
-    let mut registry_state = read_agent_skill_registry_state(&registry_path)?;
-    let next_registered_ids: Vec<String> = registry_state
-        .registered_ids
+    let current_registry_state = read_agent_skill_registry_state(&registry_path)?;
+    let mut registry_state =
+        resolve_registry_state_with_available_skills(current_registry_state, all_skills.as_slice());
+    let next_registered_entries: Vec<AgentSkillRegistryEntry> = registry_state
+        .registered
         .iter()
-        .filter(|item| item.as_str() != normalized_skill_id)
+        .filter(|item| item.id != normalized_skill_id)
         .cloned()
         .collect();
-    if next_registered_ids != registry_state.registered_ids {
-        registry_state.registered_ids = next_registered_ids;
+    if next_registered_entries != registry_state.registered {
+        registry_state.registered = next_registered_entries;
+        registry_state.registered_ids.clear();
         write_agent_skill_registry_state(&registry_path, &registry_state)?;
     }
     Ok(build_agent_skill_overview(
         all_skills,
-        registry_state.registered_ids.as_slice(),
+        registry_state.registered.as_slice(),
     ))
 }
 
@@ -832,9 +1017,10 @@ pub async fn remove_user_agent_skill(_skill_id: String) -> Result<bool, String> 
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentSkillRecord, build_agent_skill_overview, is_hidden_skill_path,
-        normalize_registered_skill_ids, parse_skill_libra_metadata, parse_skill_markdown,
-        resolve_skill_description, validate_agent_skill_name,
+        AgentSkillRecord, AgentSkillRegistryEntry, build_agent_skill_overview,
+        is_hidden_skill_path, normalize_registered_skill_entries, parse_skill_libra_metadata,
+        parse_skill_markdown, resolve_skill_description, validate_agent_skill_name,
+        validate_agent_skill_version,
     };
     use serde_json::json;
     use std::path::Path;
@@ -855,6 +1041,8 @@ mod tests {
             title: title.to_string(),
             description: format!("{} 的描述", title),
             example_prompt: format!("{} 的示例提示", title),
+            version: "1.0.0".to_string(),
+            status: "stable".to_string(),
             group: "测试分组".to_string(),
             icon: "libra_skill".to_string(),
             source: "builtin".to_string(),
@@ -889,6 +1077,8 @@ description: 拆解需求与验收项
   title: 需求分析
   description: 优先展示的技能描述
   example_prompt: 帮我拆解需求并整理验收标准。
+  version: 1.0.0
+  status: stable
   group: 代码
   icon: libra_skill
 "#;
@@ -896,6 +1086,8 @@ description: 拆解需求与验收项
         assert_eq!(parsed.title, "需求分析");
         assert_eq!(parsed.description.as_deref(), Some("优先展示的技能描述"));
         assert_eq!(parsed.example_prompt, "帮我拆解需求并整理验收标准。");
+        assert_eq!(parsed.version, "1.0.0");
+        assert_eq!(parsed.status.as_deref(), Some("stable"));
         assert_eq!(parsed.group, "代码");
         assert_eq!(parsed.icon, "libra_skill");
     }
@@ -947,6 +1139,13 @@ icon: libra_skill
     }
 
     #[test]
+    fn validate_agent_skill_version_should_require_major_minor_patch() {
+        assert!(validate_agent_skill_version("1.0.0").is_ok());
+        assert!(validate_agent_skill_version("1.0").is_err());
+        assert!(validate_agent_skill_version("v1.0.0").is_err());
+    }
+
+    #[test]
     fn is_hidden_skill_path_should_detect_dot_prefixed_segments() {
         assert!(is_hidden_skill_path(Path::new(
             ".system/skill-creator/SKILL.md"
@@ -957,18 +1156,36 @@ icon: libra_skill
     }
 
     #[test]
-    fn normalize_registered_skill_ids_should_trim_and_dedupe() {
-        let normalized = normalize_registered_skill_ids(vec![
-            "".to_string(),
-            " requirements-analyst ".to_string(),
-            "dcc-modeling".to_string(),
-            "requirements-analyst".to_string(),
+    fn normalize_registered_skill_entries_should_trim_and_dedupe() {
+        let normalized = normalize_registered_skill_entries(vec![
+            AgentSkillRegistryEntry {
+                id: "".to_string(),
+                version: "1.0.0".to_string(),
+            },
+            AgentSkillRegistryEntry {
+                id: " requirements-analyst ".to_string(),
+                version: " 1.0.0 ".to_string(),
+            },
+            AgentSkillRegistryEntry {
+                id: "dcc-modeling".to_string(),
+                version: "2.0.0".to_string(),
+            },
+            AgentSkillRegistryEntry {
+                id: "requirements-analyst".to_string(),
+                version: "1.0.0".to_string(),
+            },
         ]);
         assert_eq!(
             normalized,
             vec![
-                "requirements-analyst".to_string(),
-                "dcc-modeling".to_string()
+                AgentSkillRegistryEntry {
+                    id: "requirements-analyst".to_string(),
+                    version: "1.0.0".to_string()
+                },
+                AgentSkillRegistryEntry {
+                    id: "dcc-modeling".to_string(),
+                    version: "2.0.0".to_string()
+                }
             ]
         );
     }
@@ -980,10 +1197,10 @@ icon: libra_skill
                 build_test_skill_record("requirements-analyst", "需求分析"),
                 build_test_skill_record("dcc-modeling", "建模执行"),
             ],
-            &vec![
-                "requirements-analyst".to_string(),
-                "missing-skill".to_string(),
-            ],
+            &[AgentSkillRegistryEntry {
+                id: "requirements-analyst".to_string(),
+                version: "1.0.0".to_string(),
+            }],
         );
         assert_eq!(overview.all.len(), 2);
         assert_eq!(overview.registered.len(), 1);
