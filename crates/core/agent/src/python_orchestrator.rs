@@ -477,7 +477,7 @@ fn build_python_workflow_prompt(
    SUMMARY: 本轮已完成的具体结果（必须是已执行事实，不是计划）\n\
    NEXT: 下一步要做什么（若 STATUS=DONE 则写“无”）\n\
 5. 禁止输出“我将会...”等计划性句子，计划应写成代码注释。\n\
-6. 禁止导入 `gemini_cli_native_tools` / `codex_tools` / `openai_tools` 等外部工具模块，直接调用内置函数（如 list_directory/write_file/run_shell_command）。\n\
+6. 禁止导入 `tools` / `gemini_cli_native_tools` / `codex_tools` / `openai_tools` 等外部工具模块，直接调用内置函数（如 list_directory/write_file/run_shell_command）。\n\
 7. 可用内置工具：{toolset_block}\n\
 8. 工具调用前若不确定参数，必须先执行 `tool_search(\"工具名\", 1)` 查看签名与示例，再落地调用。\n\
 9. 关键签名示例：\n\
@@ -1130,7 +1130,29 @@ fn extract_python_script(raw: &str) -> String {
     if let Some(plain_script) = extract_plain_python_from_mixed_text(trimmed) {
         return plain_script;
     }
-    trimmed.to_string()
+    wrap_plain_text_response_as_finish_script(trimmed)
+}
+
+/// 描述：将“未命中任何 Python 代码结构”的自然语言响应包装为 finish(...) 脚本，
+/// 避免把整段 Markdown/正文直接送进 Python 沙盒后触发 SyntaxError。
+///
+/// Params:
+///
+///   - raw: 模型原始文本。
+///
+/// Returns:
+///
+///   - 可执行的 finish(...) Python 脚本。
+fn wrap_plain_text_response_as_finish_script(raw: &str) -> String {
+    let normalized = raw.trim();
+    if normalized.is_empty() {
+        return String::new();
+    }
+    let escaped = serde_json::to_string(normalized)
+        .unwrap_or_else(|_| "\"模型返回了无法解析的自然语言结果\"".to_string());
+    format!(
+        "# 描述：模型本轮返回的是自然语言结果，系统自动包装为 finish(...)，避免误当作 Python 代码执行。\nfinish({escaped})"
+    )
 }
 
 /// 描述：确保脚本包含 finish(...) 终止调用；若缺失则自动补全，避免执行结束后返回空结果。
@@ -1749,9 +1771,6 @@ fn is_probable_python_entry_line(line: &str) -> bool {
         || line.starts_with("try:")
         || line.starts_with("with ")
         || line.starts_with('@')
-        || line.starts_with('#')
-        || line.starts_with("\"\"\"")
-        || line.starts_with("'''")
     {
         return true;
     }
@@ -3593,6 +3612,49 @@ def main():
         assert!(script.starts_with("import os"));
         assert!(script.contains("import json"));
         assert!(script.contains("def main():"));
+    }
+
+    /// 描述：验证 Markdown 需求分析正文末尾携带 finish(...) 时，不会把标题和正文误判为 Python 注释脚本。
+    #[test]
+    fn should_extract_trailing_finish_from_markdown_analysis_response() {
+        let raw = r#"
+# Requirements Analysis for User Management System on Vben Admin
+
+## 1. Goal
+Build a lightweight yet complete user-management module inside a fresh Vben Admin 3.x project so that administrators can list, search, create, edit, enable/disable and assign roles to users through a single-page UI backed by RESTful JSON endpoints.
+
+## 2. Scope
+- Project bootstrap with latest Vben Admin
+- User list page
+
+finish("STATUS: DONE\nSUMMARY: Completed requirements analysis.\nNEXT: 无")
+"#;
+        let script = extract_python_script(raw);
+        assert!(script.starts_with("finish(\"STATUS: DONE"));
+        assert!(script.contains("SUMMARY: Completed requirements analysis."));
+        assert!(
+            !script.contains("# Requirements Analysis for User Management System on Vben Admin")
+        );
+    }
+
+    /// 描述：验证模型整段返回自然语言说明时，会自动包装为 finish(...) 脚本，避免直接触发 SyntaxError。
+    #[test]
+    fn should_wrap_plain_text_response_as_finish_script_when_no_python_is_found() {
+        let raw = r#"
+# Requirements Analysis for User Management System on Vben Admin
+
+## 1. Goal
+Build a lightweight yet complete user-management module inside a fresh Vben Admin 3.x project.
+
+## 2. Scope
+- Project bootstrap with latest Vben Admin
+- User list page
+"#;
+        let script = extract_python_script(raw);
+        assert!(script.starts_with("# 描述：模型本轮返回的是自然语言结果"));
+        assert!(script.contains("finish("));
+        assert!(script.contains("Requirements Analysis for User Management System on Vben Admin"));
+        assert!(script.contains("Vben Admin 3.x project"));
     }
 
     /// 描述：验证当脚本以 `print("""` 这类顶层函数调用开头时，会从真正的调用行开始提取，

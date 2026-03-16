@@ -129,11 +129,11 @@ test("TestSessionPageShouldUseUnifiedWorkflowSelection", () => {
 
   // 描述：
   //
-  //   - 单智能体模式下，会话页只保留统一工作流选择，并统一应用到执行请求。
+  //   - 单智能体模式下，会话页统一维护执行选择，并在工作流/技能切换时单次写回请求状态。
   assert.match(source, /workflowMenuItems/);
   assert.match(source, /setSelectedWorkflowId/);
   assert.match(source, /const activeWorkflowId = activeWorkflow\?\.id \|\| "";/);
-  assert.match(source, /setSelectedSkillIds\(nextSkillIds\);/);
+  assert.match(source, /setExecutionSelection\(buildSkillExecutionSelection\(nextSkillIds\)\);/);
   assert.match(source, /const workflowPrompt = buildAgentWorkflowPrompt\(\s*scopedWorkflow,/s);
 });
 
@@ -182,7 +182,8 @@ test("TestAgentHomeShouldOnlyManageWorkspaceBindingAndSessionShouldProvideQuickS
   assert.match(sessionSource, /const message = t\("当前未注册“\{\{title\}\}”所需技能，请先注册后再试。", \{ title: preset\.title \}\);[\s\S]*AriMessage\.warning\(\{\s*content: message,\s*duration: 2200,\s*\}\);[\s\S]*setStatus\(message\);[\s\S]*return;/s);
   assert.match(sessionSource, /const message = t\("当前未注册“\{\{title\}\}”所需工作流，请先注册后再试。", \{ title: preset\.title \}\);[\s\S]*AriMessage\.warning\(\{\s*content: message,\s*duration: 2200,\s*\}\);[\s\S]*setStatus\(message\);[\s\S]*return;/s);
   assert.match(sessionSource, /setInput\(preset\.prompt\);/);
-  assert.match(sessionSource, /setSelectedSkillIds\(nextSkillIds\);/);
+  assert.match(sessionSource, /setExecutionSelection\(buildSkillExecutionSelection\(nextSkillIds\)\);/);
+  assert.match(sessionSource, /setExecutionSelection\(buildWorkflowExecutionSelection\(nextWorkflowId\)\);/);
   assert.doesNotMatch(sessionSource, /className="desk-session-quick-start-icon"/);
   assert.doesNotMatch(sessionSource, /label=\{t\("使用预设"\)\}/);
   assert.doesNotMatch(sessionSource, /title: t\("写代码"\)/);

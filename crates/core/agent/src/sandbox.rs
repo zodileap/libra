@@ -806,26 +806,50 @@ def list_directory(dir_path=".", path=None):
         return _remember_last_value(names)
     return _remember_last_value(result)
 
-def _register_gemini_native_tools_alias():
-    # 描述：兼容 Gemini 常见脚本习惯，允许 `from gemini_cli_native_tools import ...` 直接工作。
+def _register_python_tool_module_aliases():
+    # 描述：兼容 Gemini 与通用 Python Agent 常见脚本习惯，允许 `from gemini_cli_native_tools import ...`
+    #   与 `from tools import ...` 直接工作，避免模型沿用旧模板时触发 ModuleNotFoundError。
     try:
         import types
-        module = types.ModuleType("gemini_cli_native_tools")
         exports = {
+            "read_text": read_text,
+            "read_json": read_json,
+            "write_text": write_text,
+            "write_json": write_json,
+            "list_dir": list_dir,
             "list_directory": list_directory,
-            "write_file": write_file,
             "read_file": read_file,
+            "write_file": write_file,
+            "mkdir": mkdir,
+            "stat": stat,
+            "glob": glob,
+            "search_files": search_files,
+            "run_shell": run_shell,
             "run_shell_command": run_shell_command,
+            "git_status": git_status,
+            "git_diff": git_diff,
+            "git_log": git_log,
+            "apply_patch": apply_patch,
+            "todo_read": todo_read,
+            "todo_write": todo_write,
+            "request_user_input": request_user_input,
+            "web_search": web_search,
+            "fetch_url": fetch_url,
+            "mcp_tool": mcp_tool,
+            "dcc_tool": dcc_tool,
+            "tool_search": tool_search,
             "finish": finish,
         }
-        for name, handler in exports.items():
-            setattr(module, name, handler)
-        sys.modules["gemini_cli_native_tools"] = module
+        for module_name in ("gemini_cli_native_tools", "tools"):
+            module = types.ModuleType(module_name)
+            for name, handler in exports.items():
+                setattr(module, name, handler)
+            sys.modules[module_name] = module
     except Exception:
         # 描述：别名注册失败不应阻断主流程，继续按内置工具函数执行。
         pass
 
-_register_gemini_native_tools_alias()
+_register_python_tool_module_aliases()
 
 def _is_probable_python_entry(line):
     text = line.strip().lstrip("\ufeff")
@@ -1169,14 +1193,17 @@ mod tests {
     use super::PERSISTENT_PRELUDE;
 
     #[test]
-    fn should_register_gemini_native_tools_alias_in_prelude() {
+    fn should_register_python_tool_module_aliases_in_prelude() {
         // 描述：
         //
-        //   - 沙盒预置脚本应注册 `gemini_cli_native_tools` 兼容模块别名，
-        //     防止模型脚本直接 import 时触发 ModuleNotFoundError。
-        assert!(PERSISTENT_PRELUDE.contains("_register_gemini_native_tools_alias"));
+        //   - 沙盒预置脚本应同时注册 `gemini_cli_native_tools` 与 `tools` 两类兼容模块别名，
+        //     防止模型脚本沿用历史模板直接 import 时触发 ModuleNotFoundError。
+        assert!(PERSISTENT_PRELUDE.contains("_register_python_tool_module_aliases"));
         assert!(PERSISTENT_PRELUDE.contains("types.ModuleType(\"gemini_cli_native_tools\")"));
         assert!(PERSISTENT_PRELUDE.contains("sys.modules[\"gemini_cli_native_tools\"] = module"));
+        assert!(PERSISTENT_PRELUDE.contains("types.ModuleType(module_name)"));
+        assert!(PERSISTENT_PRELUDE.contains("for module_name in (\"gemini_cli_native_tools\", \"tools\")"));
+        assert!(PERSISTENT_PRELUDE.contains("sys.modules[module_name] = module"));
     }
 
     #[test]

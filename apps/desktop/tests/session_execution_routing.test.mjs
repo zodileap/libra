@@ -62,15 +62,17 @@ test("TestSessionExecutionRoutingShouldSupportWorkflowSkillChatAndResumePaths", 
 
   // 描述：
   //
-  //   - 工作流模式应优先命中部分阶段，其次才是完整工作流，并通过 stage 文本匹配避免回退到阶段 1。
+  //   - 工作流模式应优先命中部分阶段；若未命中阶段但已明确选择工作流，则默认从起点完整执行。
   assert.match(routingSource, /const matchedStage = findBestWorkflowStageMatch\(options\.workflow, normalizedMessageText\);/);
   assert.match(routingSource, /routeKind: "workflow_partial"/);
   assert.match(routingSource, /当前消息命中了工作流中的定向阶段，将直接从该阶段开始执行。/);
   assert.match(routingSource, /if \(hasWorkflowFullIntent\(normalizedMessageText\)\) \{/);
   assert.match(routingSource, /routeKind: "workflow_full"/);
   assert.match(routingSource, /当前消息表达了完整交付意图，将从工作流起点开始执行。/);
+  assert.match(routingSource, /当前会话已选择工作流，且消息具备执行意图，将从工作流起点开始执行。/);
   assert.match(routingSource, /if \(score < 3\) \{/);
   assert.match(routingSource, /score === bestMatch\.score && stageIndex > bestMatch\.stageIndex/);
+  assert.doesNotMatch(routingSource, /当前消息未命中任何工作流阶段，按普通对话处理。/);
 
   // 描述：
   //

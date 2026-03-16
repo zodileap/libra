@@ -208,6 +208,7 @@ export function hasWorkflowFullIntent(messageText: string): boolean {
 // 描述：
 //
 //   - 解析消息级执行路由，严格按“恢复 > 普通对话 > 技能 > 部分工作流 > 完整工作流”的规则优先级裁决。
+//   - 当会话已显式选择工作流且消息具备执行意图时，未命中阶段也默认从工作流起点执行，避免错误降级为普通对话。
 //
 // Params:
 //
@@ -293,8 +294,10 @@ export function resolveSessionExecutionRoute(
   }
 
   return {
-    routeKind: "chat",
-    reason: translateDesktopText("当前消息未命中任何工作流阶段，按普通对话处理。"),
+    routeKind: "workflow_full",
+    workflowId: normalizedSelection.workflowId,
+    stageIndex: 0,
+    reason: translateDesktopText("当前会话已选择工作流，且消息具备执行意图，将从工作流起点开始执行。"),
   };
 }
 

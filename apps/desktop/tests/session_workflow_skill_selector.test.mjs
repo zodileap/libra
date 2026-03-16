@@ -80,6 +80,8 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(sessionSource, /if \(!nextWorkflowId \|\| !registeredWorkflowIdSet\.has\(nextWorkflowId\)\) \{\s*const message = t\("当前未注册“\{\{title\}\}”所需工作流，请先注册后再试。", \{ title: preset\.title \}\);/s);
   assert.match(sessionSource, /const missingSkillIds = nextSkillIds\.filter\(\(item\) => !registeredSkillIdSet\.has\(item\)\);/);
   assert.match(sessionSource, /if \(missingSkillIds\.length > 0\) \{\s*const message = t\("当前未注册“\{\{title\}\}”所需技能，请先注册后再试。", \{ title: preset\.title \}\);/s);
+  assert.match(sessionSource, /setExecutionSelection\(buildSkillExecutionSelection\(nextSkillIds\)\);/);
+  assert.match(sessionSource, /setExecutionSelection\(buildWorkflowExecutionSelection\(nextWorkflowId\)\);/);
   assert.match(sessionSource, /setInput\(preset\.prompt\);/);
   assert.match(sessionSource, /setStatus\(t\("已选择“\{\{title\}\}”预设，可继续补充需求后发送。", \{ title: preset\.title \}\)\);/);
 
@@ -129,9 +131,15 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(sessionSource, /handleSelectDraftExecutionNone/);
   assert.match(sessionSource, /handleToggleDraftSkill/);
   assert.match(sessionSource, /return Array\.from\(new Set\(normalized\)\)\.slice\(0, 1\);/);
-  assert.match(sessionSource, /if \(current\.includes\(skillId\)\) \{\s*return \[\];\s*\}/s);
-  assert.match(sessionSource, /return \[skillId\];/);
+  assert.match(sessionSource, /const nextSkillIds = draftSkillIds\.includes\(skillId\) \? \[\] : \[skillId\];/);
+  assert.match(sessionSource, /setDraftExecutionSelection\(buildSkillExecutionSelection\(nextSkillIds\)\);/);
   assert.match(sessionSource, /const nextSkillIds = draftSkillIds\.slice\(0, 1\);/);
+  assert.match(sessionSource, /setExecutionSelection\(buildSkillExecutionSelection\(nextSkillIds\)\);/);
+  assert.match(sessionSource, /setExecutionSelection\(buildWorkflowExecutionSelection\(nextWorkflowId \|\| workflows\[0\]\?\.id \|\| ""\)\);/);
+  assert.match(sessionSource, /setDraftExecutionSelection\(buildWorkflowExecutionSelection\(item\.key\)\);/);
+  assert.doesNotMatch(sessionSource, /setSelectedSkillIds\(nextSkillIds\);\s*setSelectedWorkflowId\(""\);/s);
+  assert.doesNotMatch(sessionSource, /setSelectedSkillIds\(\[\]\);\s*setSelectedWorkflowId\(nextWorkflowId\);/s);
+  assert.doesNotMatch(sessionSource, /setDraftWorkflowId\(item\.key\);\s*setDraftSkillIds\(\[\]\);/s);
   assert.match(sessionSource, /const initialStreamText = "";/);
   assert.match(sessionSource, /mapAgentTextStreamToRunSegment\(/);
   assert.match(sessionSource, /resolveAssistantRunStageByAgentTextStream\(/);
@@ -183,8 +191,9 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(sessionSource, /if \(executionSelection\.kind === "skill"\) \{\s*setDraftExecutionSelection\(buildSkillExecutionSelection\(activeSelectedSkillIds\)\);/s);
   assert.match(sessionSource, /if \(executionSelection\.kind === "workflow"\) \{\s*setDraftExecutionSelection\(buildWorkflowExecutionSelection\(activeSelectedWorkflowId\)\);/s);
   assert.match(sessionSource, /setDraftExecutionSelection\(EMPTY_SESSION_EXECUTION_SELECTION\);/);
-  assert.match(sessionSource, /setDraftWorkflowId\(item\.key\);\s*setDraftSkillIds\(\[\]\);/s);
-  assert.match(sessionSource, /setDraftWorkflowId\(""\);/);
+  assert.match(sessionSource, /setDraftExecutionSelection\(buildWorkflowExecutionSelection\(item\.key\)\);/);
+  assert.doesNotMatch(sessionSource, /setDraftWorkflowId\(item\.key\);\s*setDraftSkillIds\(\[\]\);/s);
+  assert.doesNotMatch(sessionSource, /setDraftWorkflowId\(""\);/);
   assert.match(sessionSource, /setExecutionSelection\(EMPTY_SESSION_EXECUTION_SELECTION\);/);
   assert.match(sessionSource, /\{uiHint \? \(/);
   assert.doesNotMatch(sessionSource, /\{uiHint \|\| compactActionSlotStatus \? \(/);
@@ -423,7 +432,7 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(sessionSource, /className="desk-msg-user-surface"/);
   assert.match(sessionSource, /className="desk-msg-assistant-surface"/);
   assert.match(sessionSource, /className="desk-run-failure-card"/);
-  assert.match(sessionSource, /if \(nextSkillIds\.length > 0\) \{\s*setSelectedSkillIds\(nextSkillIds\);\s*setSelectedWorkflowId\(""\);/s);
+  assert.match(sessionSource, /if \(nextSkillIds\.length > 0\) \{\s*setExecutionSelection\(buildSkillExecutionSelection\(nextSkillIds\)\);/s);
   // 描述：
   //
   //   - 样式层应提供弹窗列表与选中态样式，确保与设计图一致的列表结构。

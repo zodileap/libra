@@ -3813,12 +3813,9 @@ export function SessionPage({
     : [];
   // 描述：
   //
-  //   - 兼容既有“工作流/技能分离 setter”调用点；内部统一写回单一执行选择状态。
+  //   - 兼容既有工作流回写调用点；内部统一写回单一执行选择状态。
   const setSelectedWorkflowId = useCallback((workflowId: string) => {
     setExecutionSelection(buildWorkflowExecutionSelection(workflowId));
-  }, []);
-  const setSelectedSkillIds = useCallback((skillIds: string[]) => {
-    setExecutionSelection(buildSkillExecutionSelection(skillIds));
   }, []);
   const [selectedDccSoftware, setSelectedDccSoftware] = useState<string>(
     () => resolveAgentSessionSelectedDccSoftware(sessionId),
@@ -3834,12 +3831,6 @@ export function SessionPage({
   const draftSkillIds = draftExecutionSelection.kind === "skill" && String(draftExecutionSelection.skillId || "").trim()
     ? [String(draftExecutionSelection.skillId || "").trim()]
     : [];
-  const setDraftWorkflowId = useCallback((workflowId: string) => {
-    setDraftExecutionSelection(buildWorkflowExecutionSelection(workflowId));
-  }, []);
-  const setDraftSkillIds = useCallback((skillIds: string[]) => {
-    setDraftExecutionSelection(buildSkillExecutionSelection(skillIds));
-  }, []);
   const [availableSkills, setAvailableSkills] = useState<AgentSkillItem[]>([]);
   const [availableSkillsLoaded, setAvailableSkillsLoaded] = useState(false);
 
@@ -4089,8 +4080,7 @@ export function SessionPage({
         setStatus(message);
         return;
       }
-      setSelectedSkillIds(nextSkillIds);
-      setSelectedWorkflowId("");
+      setExecutionSelection(buildSkillExecutionSelection(nextSkillIds));
     } else {
       if (!nextWorkflowId || !registeredWorkflowIdSet.has(nextWorkflowId)) {
         const message = t("当前未注册“{{title}}”所需工作流，请先注册后再试。", { title: preset.title });
@@ -4101,8 +4091,7 @@ export function SessionPage({
         setStatus(message);
         return;
       }
-      setSelectedSkillIds([]);
-      setSelectedWorkflowId(nextWorkflowId);
+      setExecutionSelection(buildWorkflowExecutionSelection(nextWorkflowId));
     }
     setInput(preset.prompt);
     setStatus(t("已选择“{{title}}”预设，可继续补充需求后发送。", { title: preset.title }));
@@ -7463,13 +7452,8 @@ const handleToggleDraftSkill = (skillId: string) => {
   if (!skillId) {
     return;
   }
-  setDraftSkillIds((current) => {
-    if (current.includes(skillId)) {
-      return [];
-    }
-    return [skillId];
-  });
-  setDraftWorkflowId("");
+  const nextSkillIds = draftSkillIds.includes(skillId) ? [] : [skillId];
+  setDraftExecutionSelection(buildSkillExecutionSelection(nextSkillIds));
 };
 
   // 描述：
@@ -7480,11 +7464,9 @@ const handleConfirmWorkflowSkillModal = () => {
   const nextWorkflowId = String(draftWorkflowId || "").trim();
   const nextSkillIds = draftSkillIds.slice(0, 1);
   if (nextSkillIds.length > 0) {
-    setSelectedSkillIds(nextSkillIds);
-    setSelectedWorkflowId("");
+    setExecutionSelection(buildSkillExecutionSelection(nextSkillIds));
   } else if (nextWorkflowId) {
-    setSelectedSkillIds([]);
-    setSelectedWorkflowId(nextWorkflowId || workflows[0]?.id || "");
+    setExecutionSelection(buildWorkflowExecutionSelection(nextWorkflowId || workflows[0]?.id || ""));
   } else {
     setExecutionSelection(EMPTY_SESSION_EXECUTION_SELECTION);
   }
@@ -8634,8 +8616,7 @@ const handleConfirmWorkflowSkillModal = () => {
                 split={false}
                 className={`desk-session-strategy-item${draftWorkflowId === item.key ? " is-active" : ""}`}
                 onClick={() => {
-                  setDraftWorkflowId(item.key);
-                  setDraftSkillIds([]);
+                  setDraftExecutionSelection(buildWorkflowExecutionSelection(item.key));
                 }}
                 actions={[
                   <AriTypography key={`${item.key}-type`} variant="caption" value={t("工作流")} />,

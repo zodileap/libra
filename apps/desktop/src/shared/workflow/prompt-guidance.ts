@@ -158,7 +158,7 @@ export function buildAgentToolsetLines(runtimeCapabilities?: unknown): string[] 
     translateDesktopText("- 跨软件迁移先调用：dcc_tool(\"cross_dcc.transfer\", \"plan_transfer\", {\"preferred_format\":\"fbx\"}, source_software=\"blender\", target_software=\"maya\")"),
     translateDesktopText("- 参数不确定时先调用：tool_search(\"todo_write\", 1) / tool_search(\"write_text\", 1)"),
     translateDesktopText("- 结束输出：finish(message)"),
-    translateDesktopText("执行约束：禁止 import 第三方工具模块（例如 gemini_cli_native_tools、codex_tools、openai_tools）；必须直接调用上述内置函数。"),
+    translateDesktopText("执行约束：禁止 import 第三方工具模块（例如 tools、gemini_cli_native_tools、codex_tools、openai_tools）；必须直接调用上述内置函数。"),
   );
   return lines;
 }
