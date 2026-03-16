@@ -5,7 +5,7 @@ import {
   AriFlex,
   AriIcon,
   AriMenu,
-  AriTooltip,
+  AriPopover,
   AriTypography,
 } from "@aries-kit/react";
 import { useNavigate } from "react-router-dom";
@@ -121,7 +121,7 @@ export function UserHoverMenu({
   );
 
   return (
-    <AriTooltip content={content} position="top" trigger="click" matchTriggerWidth={false}>
+    <AriPopover content={content} position="top" trigger="click" matchTriggerWidth={false}>
       <AriContainer
         className="desk-user-trigger-wrap"
         onMouseEnter={() => setEntryHovered(true)}
@@ -141,6 +141,6 @@ export function UserHoverMenu({
           />
         </button>
       </AriContainer>
-    </AriTooltip>
+    </AriPopover>
   );
 }

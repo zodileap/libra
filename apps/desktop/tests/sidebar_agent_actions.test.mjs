@@ -78,7 +78,7 @@ test("TestAgentSidebarHoverActionsContainPinAndDeleteOnRight", () => {
   assert.match(source, /const \[hoveredDeleteSessionId, setHoveredDeleteSessionId\] = useState\(""\);/);
   assert.match(source, /icon=\{item\.pinned \|\| hoveredPinSessionId === item\.id \? "pinboard_fill" : "pinboard"\}/);
   assert.match(source, /hoveredDeleteSessionId === item\.id\s*\?\s*"delete_fill"\s*:\s*"delete"/);
-  assert.match(source, /showActionsOnHover: true/);
+  assert.match(source, /actionsVisibility: "hover"/);
   assert.match(styleSource, /\.desk-sidebar-entry-text/);
 });
 
@@ -136,7 +136,10 @@ test("TestAgentSidebarShouldUseWorkspaceTreeAndWorkspaceActions", () => {
   assert.match(source, /icon="settings"/);
   assert.match(source, /aria-label=\{t\("项目设置"\)\}/);
   assert.match(source, /aria-label=\{t\("在项目内新增话题"\)\}/);
-  assert.match(source, /trigger="manual"/);
+  assert.match(source, /<AriPopover/);
+  assert.match(source, /trigger="click"/);
+  assert.match(source, /open=\{openWorkspaceActionMenuId === group\.workspace\.id\}/);
+  assert.match(source, /onOpenChange=\{\(nextOpen\) => \{\s*setOpenWorkspaceActionMenuId\(nextOpen \? group\.workspace\.id : ""\);\s*\}\}/s);
   assert.match(source, /\{ key: "delete", label: t\("删除"\), icon: "delete", fillIcon: "delete_fill" \}/);
   assert.doesNotMatch(source, /\{ key: "edit", label: "编辑", icon: "edit" \}/);
 });
@@ -164,14 +167,14 @@ test("TestAgentSidebarTitleUsesUnifiedResolver", () => {
   assert.match(dataSource, /return translateDesktopText\("会话详情"\);/);
 });
 
-test("TestAgentSidebarRenameModalsShouldUseBorderlessInput", () => {
+test("TestAgentSidebarRenameModalsShouldUseEmbeddedInput", () => {
   const source = readDesktopSource("src/sidebar/index.tsx");
 
   // 描述:
   //
   //   - 侧边栏会话重命名对话框输入框应使用无边框样式；目录重命名弹窗已迁移为项目设置页编辑。
   assert.match(source, /placeholder=\{t\("输入新的会话标题"\)\}/);
-  assert.match(source, /<AriInput\s+variant="borderless"\s+value=\{renameValue\}/s);
+  assert.match(source, /<AriInput\s+variant="embedded"\s+value=\{renameValue\}/s);
   assert.doesNotMatch(source, /workspaceRenameModalVisible/);
   assert.doesNotMatch(source, /placeholder="输入目录展示名称"/);
 });

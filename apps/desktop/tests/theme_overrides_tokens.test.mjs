@@ -15,18 +15,6 @@ function readDesktopMainSource() {
   return fs.readFileSync(sourcePath, "utf8");
 }
 
-// 描述:
-//
-//   - 读取 Desktop 主题覆盖样式文件，校验全局变量覆盖内容。
-//
-// Returns:
-//
-//   - 覆盖样式文件源码文本。
-function readThemeOverrideSource() {
-  const sourcePath = path.resolve(process.cwd(), "src/theme-overrides.css");
-  return fs.readFileSync(sourcePath, "utf8");
-}
-
 // 描述：
 //
 //   - 读取 Desktop 全局样式文件，校验标题栏覆盖模式下的布局安全区。
@@ -64,27 +52,28 @@ function readDesktopAppSource() {
 }
 
 test("TestDesktopThemeOverrideShouldSetBorderRadiusToRem", () => {
-  const css = readThemeOverrideSource();
-  assert.equal(
-    css.includes("--z-border-radius: 1.125rem;"),
-    true,
-    "theme-overrides.css 必须将 --z-border-radius 覆盖为 1.125rem"
-  );
+  const source = readDesktopAppSource();
+  assert.match(source, /cssVars:\s*\{/);
+  assert.match(source, /"--z-border-radius": "1\.125rem"/);
+  assert.match(source, /"--z-border-radius-container": "1\.125rem"/);
+  assert.match(source, /"--z-color-bg-app-layout": "transparent"/);
+  assert.match(source, /"--z-base-font-size": "14px"/);
 });
 
 test("TestDesktopMainShouldLoadThemeOverrideAfterAriesStyles", () => {
   const source = readDesktopMainSource();
   const indexTheme = source.indexOf('import "@aries-kit/react/theme/index.scss";');
   const indexStyle = source.indexOf('import "@aries-kit/react/style.css";');
-  const indexOverride = source.indexOf('import "./theme-overrides.css";');
+  const indexAppStyles = source.indexOf('import "./styles.css";');
 
   assert.equal(indexTheme >= 0, true, "main.tsx 缺少 @aries-kit/react 主题样式引入");
   assert.equal(indexStyle >= 0, true, "main.tsx 缺少 @aries-kit/react 编译样式引入");
-  assert.equal(indexOverride >= 0, true, "main.tsx 缺少 theme-overrides.css 引入");
+  assert.equal(indexAppStyles >= 0, true, "main.tsx 缺少 desktop 全局样式引入");
+  assert.equal(source.includes('import "./theme-overrides.css";'), false, "main.tsx 不应继续依赖 theme-overrides.css");
   assert.equal(
-    indexOverride > indexTheme && indexOverride > indexStyle,
+    indexAppStyles > indexTheme && indexAppStyles > indexStyle,
     true,
-    "theme-overrides.css 必须在 @aries-kit/react 样式之后引入，确保覆盖生效"
+    "styles.css 必须在 @aries-kit/react 样式之后引入，确保页面覆盖规则生效"
   );
 });
 
@@ -135,13 +124,23 @@ test("TestDesktopShouldEnableMacOsTitlebarSafeInset", () => {
   );
 });
 
-test("TestDesktopMacosWindowEffectShouldUseWindowBackgroundMaterial", () => {
+test("TestDesktopMacosStylesShouldKeepRoundedMainSurface", () => {
+  const styleSource = readDesktopStyleSource();
+
+  assert.match(
+    styleSource,
+    /\.desk-platform-macos\s+\.desk-main\s*\{[\s\S]*border-radius:\s*var\(--z-border-radius-container\)\s+0\s+0\s+var\(--z-border-radius-container\)\s*!important;[\s\S]*\}/,
+    "macOS 主内容区需保留左侧圆角，避免透明窗口下主内容与侧栏拼接生硬"
+  );
+});
+
+test("TestDesktopMacosWindowEffectShouldUseHudWindowMaterial", () => {
   const rustSource = readDesktopTauriMainSource();
 
   assert.match(
     rustSource,
-    /effect\(Effect::WindowBackground\)/,
-    "macOS 主窗口应使用 WindowBackground 原生材质，避免 Sidebar 材质带来过重的发暗效果"
+    /effect\(Effect::HudWindow\)/,
+    "macOS 主窗口应使用 HudWindow 原生材质，维持当前标题栏与半透明窗口的统一质感"
   );
   assert.doesNotMatch(
     rustSource,
@@ -150,8 +149,8 @@ test("TestDesktopMacosWindowEffectShouldUseWindowBackgroundMaterial", () => {
   );
   assert.doesNotMatch(
     rustSource,
-    /effect\(Effect::HudWindow\)/,
-    "macOS 主窗口不应继续使用 HudWindow 原生材质"
+    /effect\(Effect::WindowBackground\)/,
+    "macOS 主窗口不应回退到 WindowBackground 原生材质"
   );
 });
 

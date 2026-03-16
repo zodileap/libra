@@ -6,3 +6,5 @@ export * from "./skills";
 export * from "./mcps";
 // 描述：导出智能体运行时能力查询服务。
 export * from "./agent-runtime";
+// 描述：导出桌面端运行时信息读取服务。
+export * from "./desktop-runtime";

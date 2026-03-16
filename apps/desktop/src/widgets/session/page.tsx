@@ -77,6 +77,7 @@ import type {
   AgentUserInputAnswer as SharedAgentUserInputAnswer,
   AgentUserInputQuestionPrompt as SharedAgentUserInputQuestionPrompt,
   AiKeyItem,
+  DesktopRuntimeInfo,
   LoginUser,
   DccMcpCapabilities,
   ProtocolUiHint,
@@ -94,6 +95,7 @@ import {
   normalizeAgentSkillId,
 } from "../../shared/workflow/prompt-guidance";
 import {
+  getDesktopRuntimeInfo,
   getAgentRuntimeCapabilities,
   listAgentSkills,
   listMcpOverview,
@@ -129,6 +131,9 @@ import type {
 import { resolveSessionUiConfig, type SessionAgentUiConfig } from "./config";
 import {
   AGENT_EXECUTION_SELECTION_KEY,
+  buildDesktopRuntimeCommandConstraint,
+  resolveDesktopRuntimeArchLabel,
+  resolveDesktopRuntimeSystemLabel,
   buildSessionContextPrompt,
   buildSessionSkillPrompt,
   buildSkillExecutionSelection,
@@ -3657,7 +3662,6 @@ export function SessionPage({
   const [sessionMenuVersion, setSessionMenuVersion] = useState(0);
   const [messagesHydrated, setMessagesHydrated] = useState(false);
   const [hydratedSessionKey, setHydratedSessionKey] = useState("");
-  const [hoveredRetryTooltipMessageId, setHoveredRetryTooltipMessageId] = useState("");
   const [dependencyRuleConfirmState, setDependencyRuleConfirmState] = useState<DependencyRuleConfirmState | null>(null);
   const [dependencyRuleUpgrading, setDependencyRuleUpgrading] = useState(false);
   const headerSlotElement = useDesktopHeaderSlot();
@@ -3699,6 +3703,15 @@ export function SessionPage({
   const sessionHeadParentHint = workspaceGroupName;
 
   const [activeProjectProfile, setActiveProjectProfile] = useState<ProjectWorkspaceProfile | null>(null);
+  const [desktopRuntimeInfo, setDesktopRuntimeInfo] = useState<DesktopRuntimeInfo | null>(null);
+  const desktopRuntimeInfoRef = useRef<DesktopRuntimeInfo | null>(null);
+
+  // 描述：
+  //
+  //   - 保持桌面运行时信息的 ref 与渲染态同步，避免异步发送链路读取到旧值。
+  useEffect(() => {
+    desktopRuntimeInfoRef.current = desktopRuntimeInfo;
+  }, [desktopRuntimeInfo]);
 
   // 描述：
   //
@@ -3710,6 +3723,23 @@ export function SessionPage({
     }
     setActiveProjectProfile(getProjectWorkspaceProfile(activeWorkspace.id));
   }, [activeWorkspace?.id]);
+
+  // 描述：
+  //
+  //   - 页面初始化时预读取桌面运行系统与架构，帮助后续 prompt 注入稳定的命令平台约束。
+  useEffect(() => {
+    let disposed = false;
+    void getDesktopRuntimeInfo().then((runtimeInfo) => {
+      if (disposed) {
+        return;
+      }
+      desktopRuntimeInfoRef.current = runtimeInfo;
+      setDesktopRuntimeInfo(runtimeInfo);
+    });
+    return () => {
+      disposed = true;
+    };
+  }, []);
 
   // 描述：
   //
@@ -5129,14 +5159,6 @@ export function SessionPage({
     };
   }, [agentContextMessages, messages, messagesHydrated, hydratedSessionKey, normalizedAgentKey, sending, sessionId, sessionStorageKey]);
 
-  // 描述：进入发送态时关闭“重试”按钮 tooltip，避免点击后 tooltip 残留悬浮。
-  useEffect(() => {
-    if (!sending) {
-      return;
-    }
-    setHoveredRetryTooltipMessageId("");
-  }, [sending]);
-
   useEffect(() => {
     if (!sessionId || !messagesHydrated || hydratedSessionKey !== sessionStorageKey) {
       clearSessionRunStatePersistTimer();
@@ -6161,6 +6183,9 @@ export function SessionPage({
         const latestProjectProfile = activeWorkspace?.id
           ? (activeProjectProfile || getProjectWorkspaceProfile(activeWorkspace.id))
           : null;
+        const runtimeInfo = desktopRuntimeInfoRef.current || await getDesktopRuntimeInfo();
+        desktopRuntimeInfoRef.current = runtimeInfo;
+        setDesktopRuntimeInfo(runtimeInfo);
         const selectedSessionSkillPrompt = buildSessionSkillPrompt(effectiveSelectedSessionSkills);
         const currentRequestPrompt = buildSessionContextPrompt(
           nextContextMessages,
@@ -6168,6 +6193,7 @@ export function SessionPage({
           undefined,
           latestProjectProfile,
           activeWorkspaceEnabledCapabilities,
+          runtimeInfo,
         );
         const contextualRequestPrompt = buildSessionContextPrompt(
           nextContextMessages,
@@ -6175,6 +6201,7 @@ export function SessionPage({
           String(activeWorkspace?.path || "").trim() || undefined,
           latestProjectProfile,
           activeWorkspaceEnabledCapabilities,
+          runtimeInfo,
         );
         const routedCurrentRequestPrompt = options?.workflowPromptPreamble
           ? `${options.workflowPromptPreamble}\n\n${currentRequestPrompt}`
@@ -6719,7 +6746,6 @@ export function SessionPage({
   //
   //   - assistantMessageIndex: 当前助手消息索引。
   const handleRetryAssistantMessage = async (assistantMessageIndex: number) => {
-    setHoveredRetryTooltipMessageId("");
     if (sending) {
       setStatus(t("当前仍在执行中，请稍后再试"));
       return;
@@ -8003,6 +8029,12 @@ const handleConfirmWorkflowSkillModal = () => {
     const dependencyPolicyEnabled = isProjectWorkspaceCapabilityEnabled(activeWorkspace, "dependency-policy");
     const toolchainIntegrationEnabled = isProjectWorkspaceCapabilityEnabled(activeWorkspace, "toolchain-integration");
     const profile = activeProjectProfile;
+    const runtimeInfo = desktopRuntimeInfo;
+    const runtimeSystem = resolveDesktopRuntimeSystemLabel(runtimeInfo);
+    const runtimeArch = resolveDesktopRuntimeArchLabel(runtimeInfo);
+    const runtimeConstraint = runtimeInfo
+      ? buildDesktopRuntimeCommandConstraint(runtimeInfo)
+      : "";
     const profileSummary = String(profile?.summary || "").trim() || t("（无）");
     const sectionLines = (profile?.knowledgeSections || []).map((section) => {
       const title = String(section.title || section.key || "").trim() || t("未命名分类");
@@ -8024,6 +8056,15 @@ const handleConfirmWorkflowSkillModal = () => {
     return [
       t("- 项目名称：{{name}}", { name: workspaceName }),
       t("- 项目路径：{{path}}", { path: workspacePath }),
+      ...(runtimeSystem
+        ? [t("- 运行系统：{{system}}", { system: runtimeSystem })]
+        : []),
+      ...(runtimeArch
+        ? [t("- 系统架构：{{arch}}", { arch: runtimeArch })]
+        : []),
+      ...(runtimeConstraint
+        ? [t("- 命令约束：{{constraint}}", { constraint: runtimeConstraint })]
+        : []),
       "",
       t("#### 项目能力"),
       formatSessionCopyList(enabledCapabilityLines, t("（未启用项目能力）"), 20),
@@ -8480,7 +8521,12 @@ const handleConfirmWorkflowSkillModal = () => {
   );
 
   return (
-    <AriContainer className="desk-content desk-session-content" height="100%" showBorderRadius={false}>
+    <AriContainer
+      className="desk-content desk-session-content"
+      height="100%"
+      variant="plain"
+      showBorderRadius={false}
+    >
       {headerSlotElement ? createPortal(sessionHeaderNode, headerSlotElement) : null}
       <AriModal
         visible={Boolean(dependencyRuleConfirmState)}
@@ -8619,7 +8665,7 @@ const handleConfirmWorkflowSkillModal = () => {
                   <AriIcon name="chat_bubble_outline" />
                 </AriContainer>
                 <AriContainer className="desk-session-strategy-item-text" padding={0}>
-                  <AriTypography variant="h4" value={t("不使用流程")} />
+                  <AriTypography variant="body" bold value={t("不使用流程")} />
                   <AriTypography
                     variant="caption"
                     value={t("当前消息默认按普通对话处理，不自动注入工作流或技能。")}
@@ -8661,7 +8707,7 @@ const handleConfirmWorkflowSkillModal = () => {
                       <AriIcon name="account_tree" />
                     </AriContainer>
                     <AriContainer className="desk-session-strategy-item-text" padding={0}>
-                      <AriTypography variant="h4" value={item.label} />
+                      <AriTypography variant="body" bold value={item.label} />
                       <AriTypography
                         variant="caption"
                         value={item.description || t("按该工作流执行。")}
@@ -8710,7 +8756,7 @@ const handleConfirmWorkflowSkillModal = () => {
                       <AriIcon name={item.icon} />
                     </AriContainer>
                     <AriContainer className="desk-session-strategy-item-text" padding={0}>
-                      <AriTypography variant="h4" value={item.title} />
+                      <AriTypography variant="body" bold value={item.title} />
                       <AriTypography variant="caption" value={item.description} />
                     </AriContainer>
                   </AriFlex>
@@ -8721,6 +8767,8 @@ const handleConfirmWorkflowSkillModal = () => {
             <DeskEmptyState
               title={t("暂无可用技能")}
               description={t("请先注册技能后再选择。")}
+              titleVariant="body"
+              titleBold
             />
           )}
         </AriContainer>
@@ -8986,7 +9034,7 @@ const handleConfirmWorkflowSkillModal = () => {
                     space={8}
                   >
                     {isUserMessage ? (
-                      <AriTooltip content={t("编辑")} position="top" minWidth={0} matchTriggerWidth={false}>
+                      <AriTooltip content={t("编辑")} position="top">
                         <AriButton
                           ghost
                           size="sm"
@@ -8999,34 +9047,20 @@ const handleConfirmWorkflowSkillModal = () => {
                         />
                       </AriTooltip>
                     ) : (
-                      <AriTooltip
-                        content={t("重试")}
-                        position="top"
-                        trigger="manual"
-                        visible={!sending && hoveredRetryTooltipMessageId === messageKey}
-                        minWidth={0}
-                        matchTriggerWidth={false}
-                      >
+                      <AriTooltip content={t("重试")} position="top">
                         <AriButton
                           ghost
                           size="sm"
                           icon="refresh"
                           aria-label={t("重试消息")}
                           disabled={sending}
-                          onMouseEnter={() => {
-                            setHoveredRetryTooltipMessageId(messageKey);
-                          }}
-                          onMouseLeave={() => {
-                            setHoveredRetryTooltipMessageId((current) => (current === messageKey ? "" : current));
-                          }}
                           onClick={() => {
-                            setHoveredRetryTooltipMessageId("");
                             void handleRetryAssistantMessage(index);
                           }}
                         />
                       </AriTooltip>
                     )}
-                    <AriTooltip content={t("复制")} position="top" minWidth={0} matchTriggerWidth={false}>
+                    <AriTooltip content={t("复制")} position="top">
                       <AriButton
                         ghost
                         size="sm"
@@ -9184,7 +9218,7 @@ const handleConfirmWorkflowSkillModal = () => {
                                 String(value || ""),
                               );
                             }}
-                            variant="borderless"
+                            variant="embedded"
                             rows={2}
                             autoSize={{ minRows: 2, maxRows: 5 }}
                             placeholder={t("其他，请告知 Codex 如何调整")}
@@ -9362,7 +9396,7 @@ const handleConfirmWorkflowSkillModal = () => {
               className="desk-session-prompt-input"
               value={input}
               onChange={setInput}
-              variant="borderless"
+              variant="embedded"
               onKeyDown={handlePromptInputKeyDown}
               rows={3}
               autoSize={{ minRows: 3, maxRows: 10 }}

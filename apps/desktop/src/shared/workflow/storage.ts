@@ -751,7 +751,7 @@ export function buildAgentWorkflowPrompt(
             label,
             skillId,
             instruction: normalizedInstruction,
-          });
+          })
           : translateDesktopText("- {{label}}：{{instruction}}", {
             label,
             instruction: normalizedInstruction,

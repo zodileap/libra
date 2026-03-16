@@ -401,7 +401,19 @@ function resolveSelectedDesktopIdentity(
 const appConfig = setAppConfig({
 	baseUrl: import.meta.env.VITE_APP_API_URL || defaultServiceUrl("app"),
 	localImgSrc: import.meta.env.VITE_APP_LOCAL_IMG_SRC || "",
-	theme: "brand"
+	theme: "brand",
+	cssVars: {
+		"--z-border-radius": "1.125rem",
+		"--z-border-radius-container": "1.125rem",
+		"--z-color-bg-app-layout": "transparent",
+		"--z-base-font-size": "14px",
+		"--z-icon-size-xs": "calc(var(--z-base-font-size) * 0.75)",
+		"--z-icon-size-sm": "calc(var(--z-base-font-size) * 1.125)",
+		"--z-icon-size": "calc(var(--z-base-font-size) * 1.5)",
+		"--z-icon-size-lg": "calc(var(--z-base-font-size) * 2.25)",
+		"--z-icon-size-xl": "calc(var(--z-base-font-size) * 3)",
+		"--z-icon-size-xxl": "calc(var(--z-base-font-size) * 4.5)",
+	},
 });
 
 // 描述:

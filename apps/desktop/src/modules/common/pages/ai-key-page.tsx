@@ -295,8 +295,6 @@ function AiKeyProviderCard({
                 ? t("编辑 {{providerLabel}} Key", { providerLabel: item.providerLabel })
                 : t("设置 {{providerLabel}} Key", { providerLabel: item.providerLabel })}
               position="top"
-              minWidth={0}
-              matchTriggerWidth={false}
             >
               <AriButton
                 type="text"

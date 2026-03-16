@@ -51,7 +51,12 @@ export function AgentPage({
   guideContent,
 }: AgentPageProps) {
   return (
-    <AriContainer className="desk-content desk-session-content" height="100%" showBorderRadius={false}>
+    <AriContainer
+      className="desk-content desk-session-content"
+      height="100%"
+      variant="plain"
+      showBorderRadius={false}
+    >
       <AriContainer className="desk-session-shell">
         <AriContainer className="desk-session-head">
           <AriTypography variant="h1" value={title} />
@@ -96,7 +101,7 @@ export function AgentPage({
                 className="desk-session-prompt-input"
                 value={prompt}
                 onChange={onPromptChange}
-                variant="borderless"
+                variant="embedded"
                 rows={3}
                 autoSize={{ minRows: 3, maxRows: 10 }}
                 placeholder={promptPlaceholder}

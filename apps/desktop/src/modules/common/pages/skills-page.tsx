@@ -229,7 +229,7 @@ function SkillCard({
       description={skill.description || t("未填写技能描述")}
       actions={(
         <>
-          <AriTooltip content={t("管理")} position="top" minWidth={0} matchTriggerWidth={false}>
+          <AriTooltip content={t("管理")} position="top">
             <AriButton
               type="text"
               icon="settings"
@@ -564,7 +564,7 @@ export function SkillsPage() {
                   variant="body"
                   value={t("示例提示")}
                 />
-                <AriTooltip content={t("复制")} position="top" minWidth={0} matchTriggerWidth={false}>
+                <AriTooltip content={t("复制")} position="top">
                   <AriButton
                     type="text"
                     icon="content_copy"

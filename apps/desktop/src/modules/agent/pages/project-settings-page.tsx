@@ -1084,7 +1084,7 @@ export function ProjectSettingsPage() {
 
   if (!workspaceId || !workspace) {
     return (
-      <AriContainer className="desk-content" showBorderRadius={false}>
+      <AriContainer className="desk-content" variant="plain">
         {headerSlotElement ? createPortal(projectHeaderNode, headerSlotElement) : null}
         <AriContainer className="desk-settings-shell">
           <DeskEmptyState
@@ -1097,7 +1097,7 @@ export function ProjectSettingsPage() {
   }
 
   return (
-    <AriContainer className="desk-content" showBorderRadius={false}>
+    <AriContainer className="desk-content" variant="plain">
       {headerSlotElement ? createPortal(projectHeaderNode, headerSlotElement) : null}
       <AriContainer className="desk-settings-shell">
         <DeskSectionTitle title={t("基础信息")} />
@@ -1356,7 +1356,7 @@ export function ProjectSettingsPage() {
                           summary: value,
                         }));
                       }}
-                      variant="borderless"
+                      variant="embedded"
                       rows={3}
                       autoSize={{ minRows: 3, maxRows: 8 }}
                       placeholder={t("描述项目目标、核心能力与边界。")}
@@ -1402,7 +1402,7 @@ export function ProjectSettingsPage() {
                         setProjectProfileJsonDirty(true);
                         setProjectProfileJsonStatus("");
                       }}
-                      variant="borderless"
+                      variant="embedded"
                       rows={14}
                       autoSize={{ minRows: 12, maxRows: 24 }}
                       placeholder={t("输入 ProjectProfile JSON，支持局部字段覆盖。")}

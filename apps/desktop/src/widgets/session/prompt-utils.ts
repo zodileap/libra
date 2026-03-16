@@ -2,7 +2,7 @@ import type { ProjectWorkspaceCapabilityId, ProjectWorkspaceProfile } from "../.
 import { IS_BROWSER, STORAGE_KEYS } from "../../shared/constants";
 import { resolveDesktopTextVariants, translateDesktopText } from "../../shared/i18n";
 import { DESKTOP_TEXT_VARIANT_GROUPS } from "../../shared/i18n/messages";
-import type { AgentEventRecord, AgentStepRecord } from "../../shared/types";
+import type { AgentEventRecord, AgentStepRecord, DesktopRuntimeInfo } from "../../shared/types";
 import type { AgentSkillItem } from "../../modules/common/services";
 
 // 描述:
@@ -377,6 +377,134 @@ export const CODE_FRAMEWORK_HINT_KEYWORDS = [
 
 // 描述：
 //
+//   - 归一化桌面端系统平台标识，统一折叠常见别名，便于后续生成系统相关命令约束。
+//
+// Params:
+//
+//   - platform: 原始平台标识。
+//
+// Returns:
+//
+//   - 归一化后的平台分类。
+export function normalizeDesktopRuntimePlatform(platform: string): "windows" | "macos" | "linux" | "unknown" {
+  const normalized = String(platform || "").trim().toLowerCase();
+  if (normalized === "windows" || normalized === "win32") {
+    return "windows";
+  }
+  if (normalized === "macos" || normalized === "darwin" || normalized === "mac") {
+    return "macos";
+  }
+  if (normalized === "linux") {
+    return "linux";
+  }
+  return "unknown";
+}
+
+// 描述：
+//
+//   - 将桌面端运行平台转换为可直接展示给模型和用户的系统标签。
+//
+// Params:
+//
+//   - runtimeInfo: 桌面运行时信息。
+//
+// Returns:
+//
+//   - 系统标签；无法识别时返回原始平台值或“未知系统”。
+export function resolveDesktopRuntimeSystemLabel(runtimeInfo?: DesktopRuntimeInfo | null): string {
+  if (!runtimeInfo) {
+    return "";
+  }
+  const platform = String(runtimeInfo.platform || "").trim().toLowerCase();
+  const normalizedPlatform = normalizeDesktopRuntimePlatform(platform);
+  if (normalizedPlatform === "windows") {
+    return "Windows（windows）";
+  }
+  if (normalizedPlatform === "macos") {
+    return "macOS（macos）";
+  }
+  if (normalizedPlatform === "linux") {
+    return "Linux（linux）";
+  }
+  return platform || translateDesktopText("未知系统");
+}
+
+// 描述：
+//
+//   - 将桌面端运行架构转换为稳定可读的标签，缺失时返回“未知架构”。
+//
+// Params:
+//
+//   - runtimeInfo: 桌面运行时信息。
+//
+// Returns:
+//
+//   - 架构标签。
+export function resolveDesktopRuntimeArchLabel(runtimeInfo?: DesktopRuntimeInfo | null): string {
+  if (!runtimeInfo) {
+    return "";
+  }
+  return String(runtimeInfo.arch || "").trim().toLowerCase() || translateDesktopText("未知架构");
+}
+
+// 描述：
+//
+//   - 根据当前桌面系统构建命令生成约束，避免模型在 Windows 上给出 macOS/Linux 命令，或反之。
+//
+// Params:
+//
+//   - runtimeInfo: 桌面运行时信息。
+//
+// Returns:
+//
+//   - 面向提示词与导出文本的命令约束描述。
+export function buildDesktopRuntimeCommandConstraint(runtimeInfo?: DesktopRuntimeInfo | null): string {
+  const normalizedPlatform = normalizeDesktopRuntimePlatform(String(runtimeInfo?.platform || ""));
+  if (normalizedPlatform === "windows") {
+    return translateDesktopText("提供命令时优先使用 Windows 可执行形式（PowerShell / cmd），不要混用 macOS / Linux 命令。");
+  }
+  if (normalizedPlatform === "macos") {
+    return translateDesktopText("提供命令时优先使用 macOS 可执行形式（zsh / bash），不要混用 Windows 命令。");
+  }
+  if (normalizedPlatform === "linux") {
+    return translateDesktopText("提供命令时优先使用 Linux 可执行形式（bash / sh），不要混用 Windows 命令。");
+  }
+  return translateDesktopText("提供命令前先确认当前系统类型，不要默认假设为 macOS、Linux 或 Windows。");
+}
+
+// 描述：
+//
+//   - 将桌面运行时信息转换为会话提示词上下文片段，帮助模型生成符合当前系统的终端命令。
+//
+// Params:
+//
+//   - runtimeInfo: 桌面运行时信息。
+//
+// Returns:
+//
+//   - 可拼接到提示词中的运行时信息行数组。
+export function buildDesktopRuntimePromptContextLines(runtimeInfo?: DesktopRuntimeInfo | null): string[] {
+  if (!runtimeInfo) {
+    return [];
+  }
+  const system = resolveDesktopRuntimeSystemLabel(runtimeInfo);
+  const arch = resolveDesktopRuntimeArchLabel(runtimeInfo);
+  const constraint = buildDesktopRuntimeCommandConstraint(runtimeInfo);
+  const lines: string[] = [];
+  if (system) {
+    lines.push(translateDesktopText("系统：{{system}}", { system }));
+  }
+  if (arch) {
+    lines.push(translateDesktopText("架构：{{arch}}", { arch }));
+  }
+  if (constraint) {
+    lines.push(translateDesktopText("命令约束：{{constraint}}", { constraint }));
+  }
+  return lines;
+}
+
+// 描述：
+//
 //   - 将结构化项目信息转换为会话提示词上下文片段。
 //
 // Params:
@@ -649,12 +777,14 @@ export function buildSessionContextPrompt(
   workspacePath?: string,
   projectProfile?: ProjectWorkspaceProfile | null,
   enabledCapabilities: ProjectWorkspaceCapabilityId[] = [],
+  runtimeInfo?: DesktopRuntimeInfo | null,
 ): string {
   const normalizedCurrentPrompt = String(currentPrompt || "").trim();
   if (!normalizedCurrentPrompt) {
     return "";
   }
   const normalizedWorkspacePath = String(workspacePath || "").trim();
+  const runtimeContextLines = buildDesktopRuntimePromptContextLines(runtimeInfo);
   // 描述：
   //
   //   - 仅在“重试继续”或当前请求明确依赖项目语义基线时注入结构化项目信息，避免首轮全量灌入。
@@ -683,6 +813,7 @@ export function buildSessionContextPrompt(
       return [
         translateDesktopText("【当前项目】"),
         translateDesktopText("路径：{{path}}", { path: normalizedWorkspacePath }),
+        ...runtimeContextLines,
         translateDesktopText("约束：仅基于该目录进行分析与修改，不要切换到其它工程。"),
         "",
         ...profileContextLines,
@@ -708,6 +839,7 @@ export function buildSessionContextPrompt(
     ? [
       translateDesktopText("【当前项目】"),
       translateDesktopText("路径：{{path}}", { path: normalizedWorkspacePath }),
+      ...runtimeContextLines,
       translateDesktopText("约束：仅基于该目录进行分析与修改，不要切换到其它工程。"),
       "",
     ]

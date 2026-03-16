@@ -416,7 +416,7 @@ function RegisteredMcpCard({
       title={item.name}
       description={item.description || t("未填写 MCP 描述")}
       actions={(
-        <AriTooltip content={t("管理")} position="top" minWidth={0} matchTriggerWidth={false}>
+        <AriTooltip content={t("管理")} position="top">
           <AriButton type="text" icon="settings" aria-label={t("管理 MCP")} disabled={busy} onClick={() => onManage(item)} />
         </AriTooltip>
       )}
@@ -446,7 +446,7 @@ function McpTemplateCard({
       description={item.description || t("未填写模板描述")}
       actions={(
         <>
-          <AriTooltip content={t("管理")} position="top" minWidth={0} matchTriggerWidth={false}>
+          <AriTooltip content={t("管理")} position="top">
             <AriButton type="text" icon="settings" aria-label={t("管理模板")} disabled={busy} onClick={() => onManage(item)} />
           </AriTooltip>
           <AriButton

@@ -269,7 +269,7 @@ body {
 }
 
 .desk-platform-macos .desk-app {
-  padding-top: env(titlebar-area-height, calc(var(--z-inset) * 2.25));
+  /* padding-top: env(titlebar-area-height, calc(var(--z-inset) * 2.25)); */
 }
 
 .desk-app-header-leading.is-expanded {
@@ -307,7 +307,7 @@ body {
 .desk-sidebar {
   height: 100%;
   background: var(--desk-sidebar-bg);
-  padding: calc(var(--z-inset) + var(--desk-app-header-height)) 0 var(--z-inset);
+  padding: calc(var(--desk-app-header-height)) var(--z-inset) var(--z-inset);
   display: flex;
   flex-direction: column;
   position: relative;
@@ -660,6 +660,7 @@ body {
 
 .desk-overview-card-title-main {
   min-width: 0;
+  flex: 1;
 }
 
 .desk-overview-card-title-wrap {
@@ -676,7 +677,8 @@ body {
 }
 
 .desk-overview-card-caption {
-  display: block;
+  flex-shrink: 0;
+  white-space: nowrap;
   color: var(--z-color-text-secondary);
 }
 

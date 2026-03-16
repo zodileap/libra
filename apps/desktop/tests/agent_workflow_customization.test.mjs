@@ -441,9 +441,9 @@ test("TestWorkflowCanvasSidebarAndFloatingActionsShouldMatchUxRules", () => {
   assert.match(sidebarSource, /value=\{t\("暂无未注册工作流"\)\}/);
   assert.match(sidebarSource, /if \(pendingDeleteWorkflowId !== workflowId\) \{\s*setPendingDeleteWorkflowId\(workflowId\);\s*return;\s*\}/s);
   assert.match(sidebarSource, /label=\{pendingDeleteWorkflowId === item\.id \? t\("确定"\) : undefined\}/);
-  assert.match(sidebarSource, /showActionsOnHover: pendingDeleteWorkflowId !== item\.id/);
+  assert.match(sidebarSource, /actionsVisibility: pendingDeleteWorkflowId !== item\.id \? "hover" : "always"/);
   assert.match(sidebarSource, /window\.addEventListener\(AGENT_WORKFLOWS_UPDATED_EVENT, handleAgentWorkflowsUpdated as EventListener\)/);
-  assert.match(sidebarSource, /key=\{`workflow-menu-\$\{workflowMenuRenderVersion\}`\}/);
+  assert.doesNotMatch(sidebarSource, /workflowMenuRenderVersion/);
   assert.doesNotMatch(sidebarSource, /setPendingDeleteWorkflowId\(\(current\) => \(current === item\.key \? "" : current\)\);/);
   assert.match(overviewSource, /aria-label=\{readonly \? t\("添加工作流"\) : t\("复制工作流"\)\}/);
   assert.match(overviewSource, /setPendingWorkflowSkillInstall\(pendingState\);/);

@@ -94,9 +94,9 @@ test("TestDeskContentShouldAlignTopPaddingWithAgentSidebar", () => {
 
   // 描述：
   //
-  //   - desk-content 与 desk-agent-sidebar 应复用同一顶部留白变量，确保垂直对齐。
+  //   - desk-content 与侧边栏应复用同一标题栏高度基线，确保内容与导航首行垂直对齐。
   assert.match(styleSource, /--desk-agent-surface-padding-top:\s*calc\(var\(--desk-app-header-height\)\);/);
-  assert.match(styleSource, /\.desk-sidebar\s*\{[\s\S]*padding:\s*calc\(var\(--z-inset\) \+ var\(--desk-app-header-height\)\) 0 var\(--z-inset\);/);
+  assert.match(styleSource, /\.desk-sidebar\s*\{[\s\S]*padding:\s*calc\(var\(--desk-app-header-height\)\) var\(--z-inset\) var\(--z-inset\);/);
   assert.match(styleSource, /\.desk-content\s*\{[\s\S]*padding:\s*0;/);
   assert.match(styleSource, /\.desk-content\s*\{[\s\S]*padding-top:\s*var\(--desk-agent-surface-padding-top\);/);
 });

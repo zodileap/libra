@@ -16,7 +16,7 @@
     "package": "node ../../scripts/run-desktop-tauri.mjs build --bundles app"
   },
   "dependencies": {
-    "@aries-kit/react": "^0.2.9",
+    "@aries-kit/react": "^0.2.10",
     "@tauri-apps/api": "^2.0.0",
     "@xyflow/react": "^12.10.1",
     "react": "^19.2.4",

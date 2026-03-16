@@ -124,6 +124,15 @@ export interface DesktopUpdateState {
 
 // 描述：
 //
+//   - 定义桌面端运行时信息结构，统一承载当前版本、系统平台与处理器架构。
+export interface DesktopRuntimeInfo {
+  currentVersion: string;
+  platform: string;
+  arch: string;
+}
+
+// 描述：
+//
 //   - 定义桌面端后端接入配置；未启用时 Desktop 以本地模式独立运行。
 export interface DesktopBackendConfig {
   enabled: boolean;

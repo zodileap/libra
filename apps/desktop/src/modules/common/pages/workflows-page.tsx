@@ -168,7 +168,7 @@ function WorkflowCard({
       description={workflow.description || (readonly ? t("当前模板尚未填写说明。") : t("当前工作流尚未填写说明。"))}
       actions={(
         <>
-          <AriTooltip content={t("管理")} position="top" minWidth={0} matchTriggerWidth={false}>
+          <AriTooltip content={t("管理")} position="top">
             <AriButton
               type="text"
               icon="settings"

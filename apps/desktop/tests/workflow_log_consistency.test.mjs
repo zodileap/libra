@@ -240,7 +240,7 @@ test("TestSessionPromptInputShouldSupportKeyboardHotkeys", () => {
   assert.match(source, /if \(event\.nativeEvent\.isComposing\)/);
   assert.match(source, /<AriInput\.TextArea/);
   assert.match(source, /className="desk-session-prompt-input"/);
-  assert.match(source, /variant="borderless"/);
+  assert.match(source, /variant="embedded"/);
   assert.match(source, /autoSize=\{\{ minRows: 3, maxRows: 10 \}\}/);
   assert.match(source, /onKeyDown=\{handlePromptInputKeyDown\}/);
 });

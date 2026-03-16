@@ -113,6 +113,9 @@ test("TestSessionCopyShouldBeMovedToDevDebugPanel", () => {
   assert.match(sessionSource, /#### 项目知识/);
   assert.match(sessionSource, /#### 依赖策略/);
   assert.match(sessionSource, /#### 工具接入/);
+  assert.match(sessionSource, /- 运行系统：\{\{system\}\}/);
+  assert.match(sessionSource, /- 系统架构：\{\{arch\}\}/);
+  assert.match(sessionSource, /- 命令约束：\{\{constraint\}\}/);
   assert.doesNotMatch(sessionSource, /#### 结构化项目信息/);
   assert.match(sessionSource, /window\.addEventListener\("libra:session-copy-request"/);
   assert.match(sessionSource, /new CustomEvent\("libra:session-copy-result"/);

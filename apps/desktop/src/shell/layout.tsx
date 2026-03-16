@@ -43,7 +43,7 @@ export function DesktopLayout({
     <DesktopHeaderSlotProvider value={headerSlotElement}>
       <AriContainer
         className={`desk-app${sidebarCollapsed ? " is-sidebar-collapsed" : ""}`}
-        padding={0}
+        variant="plain"
         showBorderRadius={false}
       >
         <DesktopAppHeader
@@ -60,7 +60,7 @@ export function DesktopLayout({
           }}
           onHeaderSlotElementChange={setHeaderSlotElement}
         />
-        <AriContainer className="desk-app-sidebar-wrap" padding={0} showBorderRadius={false}>
+        <AriContainer className="desk-app-sidebar-wrap" variant="plain" padding={0} showBorderRadius={false}>
           <ClientSidebar
             user={user}
             selectedIdentity={selectedIdentity}
@@ -75,8 +75,9 @@ export function DesktopLayout({
         {/* 描述：透明窗口下主面板不再叠加组件阴影与圆角，避免与系统窗口阴影重叠。 */}
         <AriContainer
           className="desk-main"
-          shadowMode="never"
+          variant="plain"
           padding={0}
+          shadowMode="never"
           showBorderRadius={false}
         >
           <Outlet />

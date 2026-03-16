@@ -71,7 +71,7 @@ export function DeskPageHeader({
       justify="space-between"
       data-tauri-drag-region={slotMode ? true : undefined}
     >
-      <AriContainer className="desk-page-header-main" padding={0}>
+      <AriContainer className="desk-page-header-main" variant="plain">
         {slotMode ? (
           <AriFlex
             className="desk-page-header-title-line"
@@ -176,7 +176,7 @@ export function DeskOverviewCard({
         <AriContainer className="desk-overview-card-icon-wrap">
           {icon}
         </AriContainer>
-        <AriContainer className="desk-overview-card-content" padding={0}>
+        <AriContainer className="desk-overview-card-content" variant="plain">
           <AriFlex
             className="desk-overview-card-title-bar"
             align="center"
@@ -186,12 +186,25 @@ export function DeskOverviewCard({
               { index: 1, flex: 1, overflow: "visible" },
             ]}
           >
-            <AriTypography
-              className="desk-overview-card-title"
-              variant="h4"
-              bold
-              value={title}
-            />
+            <AriFlex
+              className="desk-overview-card-title-main"
+              align="center"
+              space={8}
+            >
+              <AriTypography
+                className="desk-overview-card-title"
+                variant="h4"
+                bold
+                value={title}
+              />
+              {caption ? (
+                <AriTypography
+                  className="desk-overview-card-caption"
+                  variant="caption"
+                  value={caption}
+                />
+              ) : null}
+            </AriFlex>
             {actionItems.length > 0 ? (
               <AriFlex
                 className="desk-overview-card-actions"
@@ -208,13 +221,6 @@ export function DeskOverviewCard({
               </AriFlex>
             ) : null}
           </AriFlex>
-          {caption ? (
-            <AriTypography
-              className="desk-overview-card-caption"
-              variant="caption"
-              value={caption}
-            />
-          ) : null}
           {description ? (
             <AriTypography
               className="desk-overview-card-description"
@@ -278,7 +284,7 @@ export function DeskOverviewDetailsModal({
         )
       }
     >
-      <AriContainer className="desk-overview-details-body" padding={0}>
+      <AriContainer className="desk-overview-details-body" variant="plain">
         {description ? (
           <AriTypography
             className="desk-overview-details-description"
@@ -314,7 +320,7 @@ export function DeskOverviewDetailRow({
   value,
 }: DeskOverviewDetailRowProps) {
   return (
-    <AriContainer className="desk-overview-detail-row" padding={0}>
+    <AriContainer className="desk-overview-detail-row" variant="plain">
       <AriTypography
         className="desk-overview-detail-label"
         variant="caption"
@@ -327,7 +333,7 @@ export function DeskOverviewDetailRow({
           value={value}
         />
       ) : (
-        <AriContainer className="desk-overview-detail-value-wrap" padding={0}>
+        <AriContainer className="desk-overview-detail-value-wrap" variant="plain">
           {value}
         </AriContainer>
       )}
@@ -416,13 +422,13 @@ export function DeskSettingsRow({
       align="center"
       justify="space-between"
     >
-      <AriContainer className="desk-settings-row-main" padding={0}>
+      <AriContainer className="desk-settings-row-main" variant="plain">
         {title ? <AriTypography className="desk-settings-row-title" variant="h4" value={title} /> : null}
         {description ? (
           <AriTypography className="desk-settings-row-description" variant="caption" value={description} />
         ) : null}
         {metaSlot ? (
-          <AriContainer className="desk-settings-row-meta" padding={0}>
+          <AriContainer className="desk-settings-row-meta" variant="plain">
             {metaSlot}
           </AriContainer>
         ) : null}
@@ -440,6 +446,8 @@ export function DeskSettingsRow({
 interface DeskEmptyStateProps {
   title: string;
   description: string;
+  titleVariant?: "h4" | "body";
+  titleBold?: boolean;
 }
 
 // 描述:
@@ -450,10 +458,17 @@ interface DeskEmptyStateProps {
 //
 //   - title: 空状态标题。
 //   - description: 空状态说明。
-export function DeskEmptyState({ title, description }: DeskEmptyStateProps) {
+//   - titleVariant: 空状态标题层级；默认使用 h4。
+//   - titleBold: 是否加粗空状态标题；默认不加粗。
+export function DeskEmptyState({
+  title,
+  description,
+  titleVariant = "h4",
+  titleBold = false,
+}: DeskEmptyStateProps) {
   return (
     <AriContainer className="desk-empty-state">
-      <AriTypography variant="h4" value={title} />
+      <AriTypography variant={titleVariant} bold={titleBold} value={title} />
       <AriTypography variant="caption" value={description} />
     </AriContainer>
   );

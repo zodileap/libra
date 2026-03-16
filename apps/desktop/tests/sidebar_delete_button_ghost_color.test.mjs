@@ -27,23 +27,13 @@ test("TestSidebarDeleteButtonsShouldUseGhostAndColor", () => {
   );
   assert.match(
     source,
-    /showActionsOnHover: pendingDeleteSessionId !== item\.id && deletingSessionId !== item\.id/,
+    /actionsVisibility: pendingDeleteSessionId !== item\.id && deletingSessionId !== item\.id \? "hover" : "always"/,
   );
+  assert.doesNotMatch(source, /sessionMenuRenderVersion/);
+  assert.doesNotMatch(source, /reloadSessionSidebarMenu/);
   assert.match(
     source,
-    /const \[sessionMenuRenderVersion, setSessionMenuRenderVersion\] = useState\(0\);/,
-  );
-  assert.match(
-    source,
-    /const reloadSessionSidebarMenu = \(\) => \{/,
-  );
-  assert.match(
-    source,
-    /key=\{`project-workspace-menu-\$\{sessionMenuRenderVersion\}`\}/,
-  );
-  assert.match(
-    source,
-    /setSessions\(\(prev\) => prev\.filter\(\(item\) => item\.id !== sessionId\)\);\s*reloadSessionSidebarMenu\(\);/s,
+    /setSessions\(\(prev\) => prev\.filter\(\(item\) => item\.id !== sessionId\)\);\s*setPendingDeleteSessionId\(""\);/s,
   );
   assert.match(
     source,
@@ -85,11 +75,10 @@ test("TestSidebarDeleteButtonsShouldUseGhostAndColor", () => {
   );
   assert.match(
     source,
-    /showActionsOnHover: pendingDeleteWorkflowId !== item\.id/,
+    /actionsVisibility: pendingDeleteWorkflowId !== item\.id \? "hover" : "always"/,
   );
-  assert.match(source, /const \[workflowMenuRenderVersion, setWorkflowMenuRenderVersion\] = useState\(0\);/);
+  assert.doesNotMatch(source, /workflowMenuRenderVersion/);
   assert.match(source, /window\.addEventListener\(AGENT_WORKFLOWS_UPDATED_EVENT, handleAgentWorkflowsUpdated as EventListener\)/);
-  assert.match(source, /key=\{`workflow-menu-\$\{workflowMenuRenderVersion\}`\}/);
 
   // 描述:
   //
@@ -101,8 +90,10 @@ test("TestSidebarDeleteButtonsShouldUseGhostAndColor", () => {
   // 描述:
   //
   //   - 目录级操作应包含“更多/项目设置/项目内新增话题”按钮，菜单中仅保留删除动作。
-  assert.match(source, /trigger="manual"/);
-  assert.match(source, /visible=\{openWorkspaceActionMenuId === group\.workspace\.id\}/);
+  assert.match(source, /<AriPopover/);
+  assert.match(source, /trigger="click"/);
+  assert.match(source, /open=\{openWorkspaceActionMenuId === group\.workspace\.id\}/);
+  assert.match(source, /onOpenChange=\{\(nextOpen\) => \{\s*setOpenWorkspaceActionMenuId\(nextOpen \? group\.workspace\.id : ""\);\s*\}\}/s);
   assert.match(source, /icon="more_horiz"/);
   assert.match(source, /icon="settings"/);
   assert.match(source, /aria-label=\{t\("项目设置"\)\}/);
