@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::path::Component;
 use std::process::Command;
 use tauri::Manager;
 
@@ -412,6 +414,7 @@ fn collect_skill_markdown_files(root: &Path, output: &mut Vec<PathBuf>) -> Resul
     Ok(())
 }
 
+#[cfg(test)]
 /// 描述：判断指定路径是否位于隐藏系统目录下；系统目录允许展示但不允许在桌面端直接移除。
 ///
 /// Params:

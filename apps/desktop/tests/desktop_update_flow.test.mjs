@@ -58,7 +58,9 @@ test("TestDesktopUpdateFlowShouldUseOfficialTauriUpdater", () => {
   assert.doesNotMatch(appHeaderSource, /icon="system_update_alt"/);
 
   assert.match(tauriSource, /use tauri_plugin_updater::UpdaterExt;/);
+  assert.match(tauriSource, /const LOCAL_UPDATER_PUBKEY: Option<&str> = option_env!\("LIBRA_UPDATER_PUBKEY"\);/);
   assert.match(tauriSource, /const EMBEDDED_UPDATER_PUBKEY: &str = include_str!\("\.\.\/updater\/public\.key"\);/);
+  assert.match(tauriSource, /fn normalize_updater_pubkey\(value: &str\) -> Option<String>/);
   assert.match(tauriSource, /fn resolve_embedded_updater_pubkey\(\) -> Option<String>/);
   assert.match(tauriSource, /async fn check_desktop_update\(/);
   assert.match(tauriSource, /updater_builder\(\)/);
@@ -67,12 +69,27 @@ test("TestDesktopUpdateFlowShouldUseOfficialTauriUpdater", () => {
   assert.match(tauriSource, /check_desktop_update,/);
   assert.match(tauriSource, /tauri_plugin_updater::Builder::new\(\)\.build\(\)/);
   assert.match(tauriCargoSource, /tauri-plugin-updater/);
+  assert.equal(tauriConfig.identifier, "com.libra.zodileap.desktop");
   assert.match(tauriConfigSource, /"createUpdaterArtifacts": true/);
+  assert.match(tauriConfigSource, /"identifier": "com\.libra\.zodileap\.desktop"/);
+  assert.match(tauriConfigSource, /"macOS": \{/);
+  assert.match(tauriConfigSource, /"hardenedRuntime": true/);
+  assert.match(tauriConfigSource, /"entitlements": "Entitlements\.plist"/);
   assert.match(tauriConfigSource, /"plugins": \{/);
   assert.match(tauriConfigSource, /"updater": \{/);
   assert.match(tauriConfigSource, /"endpoints": \[/);
+  assert.doesNotMatch(tauriConfigSource, /Authority=Developer ID Application:\s+[A-Za-z0-9][^<\n]*\([A-Z0-9]{10}\)/);
+  assert.doesNotMatch(tauriConfigSource, /Developer ID Application:\s+[A-Za-z0-9][^<\n]*\([A-Z0-9]{10}\)/);
+  assert.doesNotMatch(tauriConfigSource, /TeamIdentifier=\s*[A-Z0-9]{10}/);
+  assert.doesNotMatch(tauriConfigSource, /export APPLE_TEAM_ID='[A-Z0-9]{10}'/);
+  assert.doesNotMatch(tauriConfigSource, /export APPLE_API_ISSUER='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'/i);
+  assert.doesNotMatch(tauriConfigSource, /export APPLE_API_KEY='[A-Z0-9]{10}'/);
+  assert.doesNotMatch(tauriConfigSource, /Notarization Ticket=/);
+  assert.equal(tauriConfig.plugins?.updater?.pubkey, "");
+  assert.equal(updaterPubkeySource.trim(), "");
   assert.equal(tauriConfig.plugins?.updater?.pubkey, updaterPubkeySource.trim());
-  assert.match(updaterPubkeySource, /\S+/);
+  assert.doesNotMatch(tauriConfigSource, /dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWdu/);
+  assert.doesNotMatch(updaterPubkeySource, /dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWdu/);
 
   assert.match(rootPackageSource, /"release:desktop": "node scripts\/package-desktop-release\.mjs"/);
 });

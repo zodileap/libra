@@ -11,12 +11,13 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(SCRIPT_DIR, "..");
 const DESKTOP_DIR = path.join(ROOT_DIR, "apps", "desktop");
 const TAURI_DIR = path.join(DESKTOP_DIR, "src-tauri");
+const TAURI_RUNNER_PATH = path.join(ROOT_DIR, "scripts", "run-desktop-tauri.mjs");
 const BUNDLE_DIR = path.join(TAURI_DIR, "target", "release", "bundle");
 const RELEASES_DIR = path.join(ROOT_DIR, "releases");
-const PUBLIC_KEY_DEST = path.join(TAURI_DIR, "updater", "public.key");
 const PRIVATE_KEY_PATH = process.env.TAURI_UPDATER_PRIVATE_KEY_PATH || path.join(os.homedir(), ".tauri", "libra-desktop-updater.key");
-const PUBLIC_KEY_PATH = `${PRIVATE_KEY_PATH}.pub`;
+const PUBLIC_KEY_PATH = process.env.TAURI_UPDATER_PUBLIC_KEY_PATH || `${PRIVATE_KEY_PATH}.pub`;
 const PNPM_COMMAND = resolvePnpmCommand();
+const APPLE_API_KEY_PATH_PREFIX = "~/";
 
 // 描述：
 //
@@ -30,8 +31,8 @@ function usage() {
 
 Description:
   1. Sync Libra Desktop version files to the requested release version
-  2. Reuse the official Tauri updater signing key by default
-  3. Verify the checked-in updater public key matches the signing key
+  2. Reuse the local Tauri updater signing key pair from this build machine
+  3. Inject the local updater public key during build without writing it back to git
   4. Run \`tauri build\` to produce:
      - full install bundles (for example .dmg / .msi)
      - updater artifacts (for example .app.tar.gz + .sig)
@@ -41,7 +42,8 @@ Description:
 Notes:
   - This script does not upload files
   - This script does not generate latest.json
-  - Pass --sync-pubkey only when you intentionally rotate the updater key pair
+  - If apps/desktop/src-tauri/tauri.local.conf.json exists, it will be merged into the official build
+  - Pass --sync-pubkey only when you intentionally generate or rotate the local updater key pair
   - Upload the staged platform folder to your update server manually after packaging
 
 Examples:
@@ -324,6 +326,44 @@ function writeJsonFile(filePath, value) {
 
 // 描述：
 //
+//   - 将敏感环境变量输出转换为是否已配置的状态文本，避免把实际值写入本地终端或 CI 构建日志。
+//
+// Params:
+//
+//   - value: 环境变量值。
+//
+// Returns:
+//
+//   - `[set]` 或 `[not set]`。
+function maskSensitiveValue(value) {
+  return value ? "[set]" : "[not set]";
+}
+
+// 描述：
+//
+//   - 将本地 updater 公钥来源转换为脱敏日志文本，只保留“环境变量”或“本地文件”这类来源类型。
+//
+// Params:
+//
+//   - source: 公钥来源描述。
+//
+// Returns:
+//
+//   - `[environment]`、`[local file]` 或 `[missing]`。
+function describeUpdaterPublicKeySource(source) {
+  if (!source) {
+    return "[missing]";
+  }
+
+  if (source === "environment") {
+    return "[environment]";
+  }
+
+  return "[local file]";
+}
+
+// 描述：
+//
 //   - 从 package.json 读取版本号，用于比对仓库根与 Desktop 子包版本是否一致。
 //
 // Params:
@@ -561,6 +601,109 @@ Before packaging on the build host, run:
 
 // 描述：
 //
+//   - 读取并裁剪环境变量值，避免后续每个校验分支都重复处理空字符串和前后空白。
+//
+// Params:
+//
+//   - name: 环境变量名。
+//   - env: 环境变量对象。
+//
+// Returns:
+//
+//   - 环境变量值；不存在或为空时返回空字符串。
+function readEnvValue(name, env = process.env) {
+  return String(env[name] || "").trim();
+}
+
+// 描述：
+//
+//   - 校验本机 macOS 打包所需的 Apple 签名与 notarization 环境变量，避免 `tauri build` 阶段才暴露模糊错误。
+//
+// Params:
+//
+//   - env: 待校验的环境变量对象。
+function ensureMacosSigningEnvironment(env = process.env) {
+  if (process.platform !== "darwin") {
+    return;
+  }
+
+  const appleSigningIdentity = readEnvValue("APPLE_SIGNING_IDENTITY", env);
+  const appleApiIssuer = readEnvValue("APPLE_API_ISSUER", env);
+  const appleApiKey = readEnvValue("APPLE_API_KEY", env);
+  const appleApiKeyPath = readEnvValue("APPLE_API_KEY_PATH", env);
+  const appleId = readEnvValue("APPLE_ID", env);
+  const applePassword = readEnvValue("APPLE_PASSWORD", env);
+  const appleTeamId = readEnvValue("APPLE_TEAM_ID", env);
+
+  if (!appleSigningIdentity) {
+    process.stderr.write(`missing macOS signing identity:
+  APPLE_SIGNING_IDENTITY
+
+Set it to the exact value returned by:
+  security find-identity -v -p codesigning
+`);
+    process.exit(1);
+  }
+
+  const usesApiKey = appleApiIssuer || appleApiKey || appleApiKeyPath;
+  const usesAppleId = appleId || applePassword;
+
+  if (!usesApiKey && !usesAppleId) {
+    process.stderr.write(`missing Apple notarization credentials:
+  API key flow:
+    - APPLE_API_ISSUER
+    - APPLE_API_KEY
+    - APPLE_API_KEY_PATH
+
+  Apple ID flow:
+    - APPLE_ID
+    - APPLE_PASSWORD
+    - APPLE_TEAM_ID
+`);
+    process.exit(1);
+  }
+
+  if (usesApiKey) {
+    if (!appleApiIssuer || !appleApiKey || !appleApiKeyPath) {
+      process.stderr.write(`incomplete App Store Connect API key configuration:
+  APPLE_API_ISSUER=${appleApiIssuer ? "[set]" : "[missing]"}
+  APPLE_API_KEY=${appleApiKey ? "[set]" : "[missing]"}
+  APPLE_API_KEY_PATH=${appleApiKeyPath ? appleApiKeyPath : "[missing]"}
+`);
+      process.exit(1);
+    }
+
+    if (appleApiKeyPath.startsWith(APPLE_API_KEY_PATH_PREFIX)) {
+      process.stderr.write(`APPLE_API_KEY_PATH must be an expanded path:
+  current: ${appleApiKeyPath}
+
+Use an absolute path or "$HOME/..."; quoted "~" will not expand.
+`);
+      process.exit(1);
+    }
+
+    if (!fs.existsSync(appleApiKeyPath)) {
+      process.stderr.write(`missing App Store Connect API key file:
+  ${appleApiKeyPath}
+`);
+      process.exit(1);
+    }
+
+    return;
+  }
+
+  if (!appleId || !applePassword || !appleTeamId) {
+    process.stderr.write(`incomplete Apple ID notarization configuration:
+  APPLE_ID=${appleId ? "[set]" : "[missing]"}
+  APPLE_PASSWORD=${applePassword ? "[set]" : "[missing]"}
+  APPLE_TEAM_ID=${appleTeamId ? "[set]" : "[missing]"}
+`);
+    process.exit(1);
+  }
+}
+
+// 描述：
+//
 //   - 生成或复用官方 updater 签名密钥，确保首次打包时也能得到可用于热更新的签名文件。
 function ensureUpdaterSigningKey(options = {}) {
   const { allowGenerate = false } = options;
@@ -592,72 +735,37 @@ or rerun with --sync-pubkey if you intentionally want to rotate keys.
 
 // 描述：
 //
-//   - 将 updater 公钥同步到 Tauri 源码与配置文件，保证打包产物和运行时内嵌公钥保持一致。
-function syncUpdaterPublicKey(options = {}) {
-  const { allowWrite = false } = options;
+//   - 解析本机构建机提供的 updater 公钥，优先读取显式环境变量，其次回落到与私钥同目录的 `.pub` 文件。
+//
+// Returns:
+//
+//   - pubkey: 本地 updater 公钥文本。
+//   - source: 当前命中的公钥来源说明。
+function resolveLocalUpdaterPublicKey() {
+  const inlinePubkey = readEnvValue("TAURI_UPDATER_PUBLIC_KEY") || readEnvValue("LIBRA_UPDATER_PUBKEY");
+  if (inlinePubkey) {
+    return { pubkey: inlinePubkey, source: "environment" };
+  }
 
   if (!fs.existsSync(PUBLIC_KEY_PATH)) {
-    process.stderr.write(`missing updater public key: ${PUBLIC_KEY_PATH}\n`);
-    process.exit(1);
-  }
+    process.stderr.write(`missing updater public key:
+  ${PUBLIC_KEY_PATH}
 
-  const tauriConfigPath = path.join(TAURI_DIR, "tauri.conf.json");
-  const tauriConfig = readJsonFile(tauriConfigPath);
-  const pubkey = fs.readFileSync(PUBLIC_KEY_PATH, "utf8").trim();
-  const embeddedPubkey = fs.existsSync(PUBLIC_KEY_DEST)
-    ? fs.readFileSync(PUBLIC_KEY_DEST, "utf8").trim()
-    : "";
-  const configuredPubkey = String(tauriConfig.plugins?.updater?.pubkey || "").trim();
-
-  if (allowWrite) {
-    fs.mkdirSync(path.dirname(PUBLIC_KEY_DEST), { recursive: true });
-    fs.writeFileSync(PUBLIC_KEY_DEST, `${pubkey}\n`);
-    tauriConfig.plugins ||= {};
-    tauriConfig.plugins.updater ||= {};
-    tauriConfig.plugins.updater.pubkey = pubkey;
-
-    if (!Array.isArray(tauriConfig.plugins.updater.endpoints) || tauriConfig.plugins.updater.endpoints.length === 0) {
-      tauriConfig.plugins.updater.endpoints = ["https://open.zodileap.com/libra/updates/latest.json"];
-    }
-
-    writeJsonFile(tauriConfigPath, tauriConfig);
-    return;
-  }
-
-  if (!embeddedPubkey) {
-    process.stderr.write(`missing embedded updater public key: ${PUBLIC_KEY_DEST}
-Rerun with --sync-pubkey if you intentionally want to sync from ${PUBLIC_KEY_PATH}.
+Set TAURI_UPDATER_PUBLIC_KEY_PATH to the deployed updater public key,
+or rerun with --sync-pubkey if you intentionally want to rotate keys on this build machine.
 `);
     process.exit(1);
   }
 
-  if (!configuredPubkey) {
-    process.stderr.write(`missing updater pubkey in ${tauriConfigPath}
-Rerun with --sync-pubkey if you intentionally want to sync from ${PUBLIC_KEY_PATH}.
+  const filePubkey = String(fs.readFileSync(PUBLIC_KEY_PATH, "utf8")).trim();
+  if (!filePubkey) {
+    process.stderr.write(`invalid updater public key:
+  ${PUBLIC_KEY_PATH}
 `);
     process.exit(1);
   }
 
-  if (embeddedPubkey !== configuredPubkey) {
-    process.stderr.write(`checked-in updater pubkey is inconsistent:
-  embedded: ${PUBLIC_KEY_DEST}
-  config:   ${tauriConfigPath}
-
-Rerun with --sync-pubkey only if you intend to update both files together.
-`);
-    process.exit(1);
-  }
-
-  if (embeddedPubkey !== pubkey) {
-    process.stderr.write(`updater signing key does not match the checked-in pubkey:
-  signing:  ${PUBLIC_KEY_PATH}
-  embedded: ${PUBLIC_KEY_DEST}
-
-Set TAURI_UPDATER_PRIVATE_KEY_PATH to the deployed updater private key,
-or rerun with --sync-pubkey if you intentionally want to rotate keys.
-`);
-    process.exit(1);
-  }
+  return { pubkey: filePubkey, source: PUBLIC_KEY_PATH };
 }
 
 // 描述：
@@ -820,18 +928,29 @@ function main() {
   ensureCargoCommand();
   ensureTauriCli();
   ensureUpdaterSigningKey({ allowGenerate: syncPubkey });
-  syncUpdaterPublicKey({ allowWrite: syncPubkey });
+  const localUpdaterPublicKey = resolveLocalUpdaterPublicKey();
+  ensureMacosSigningEnvironment(process.env);
 
   process.env.TAURI_SIGNING_PRIVATE_KEY = PRIVATE_KEY_PATH;
-  process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD = process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || "";
+  process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD = process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+    || process.env.TAURI_UPDATER_PRIVATE_KEY_PASSWORD
+    || "";
+  process.env.TAURI_UPDATER_PUBLIC_KEY = localUpdaterPublicKey.pubkey;
+  process.env.LIBRA_UPDATER_PUBKEY = process.env.LIBRA_UPDATER_PUBKEY || localUpdaterPublicKey.pubkey;
 
   process.stdout.write(`Packaging Libra Desktop ${alignedVersion}\n`);
-  process.stdout.write(`Updater private key: ${PRIVATE_KEY_PATH}\n`);
-  process.stdout.write(`Updater public key:  ${PUBLIC_KEY_PATH}\n`);
-  process.stdout.write(`Embedded pubkey:     ${PUBLIC_KEY_DEST}\n`);
+  process.stdout.write(`Updater private key: [set]\n`);
+  process.stdout.write(`Updater public key:  ${describeUpdaterPublicKeySource(localUpdaterPublicKey.source)}\n`);
+  if (process.platform === "darwin") {
+    process.stdout.write(`Apple identity:      ${maskSensitiveValue(readEnvValue("APPLE_SIGNING_IDENTITY"))}\n`);
+    process.stdout.write(`Apple team:          ${maskSensitiveValue(readEnvValue("APPLE_TEAM_ID"))}\n`);
+    process.stdout.write(`Apple API issuer:    ${maskSensitiveValue(readEnvValue("APPLE_API_ISSUER"))}\n`);
+    process.stdout.write(`Apple API key:       ${maskSensitiveValue(readEnvValue("APPLE_API_KEY"))}\n`);
+    process.stdout.write(`Apple API key path:  ${maskSensitiveValue(readEnvValue("APPLE_API_KEY_PATH"))}\n`);
+  }
 
   fs.rmSync(BUNDLE_DIR, { recursive: true, force: true });
-  runCommand(PNPM_COMMAND, ["--dir", DESKTOP_DIR, "exec", "tauri", "build"], {
+  runCommand(process.execPath, [TAURI_RUNNER_PATH, "build"], {
     env: process.env,
   });
 

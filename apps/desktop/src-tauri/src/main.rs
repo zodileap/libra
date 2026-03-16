@@ -69,6 +69,7 @@ const EVENT_AGENT_TEXT_STREAM: &str = "agent:text_stream";
 
 /// 描述：智能体后台日志事件名。
 const EVENT_AGENT_LOG: &str = "agent:log";
+const LOCAL_UPDATER_PUBKEY: Option<&str> = option_env!("LIBRA_UPDATER_PUBKEY");
 const EMBEDDED_UPDATER_PUBKEY: &str = include_str!("../updater/public.key");
 
 #[derive(Serialize, Clone)]
@@ -128,13 +129,22 @@ fn desktop_update_state_store() -> &'static Mutex<DesktopUpdateState> {
     })
 }
 
-/// 描述：读取编译进应用的 updater 公钥；若仍是占位内容，则表示构建主机尚未注入真实公钥。
-fn resolve_embedded_updater_pubkey() -> Option<String> {
-    let value = EMBEDDED_UPDATER_PUBKEY.trim();
-    if value.is_empty() || value == "REPLACE_WITH_TAURI_UPDATER_PUBLIC_KEY" {
+/// 描述：标准化 updater 公钥文本；为空时表示构建主机尚未注入真实公钥。
+fn normalize_updater_pubkey(value: &str) -> Option<String> {
+    let normalized = value.trim();
+    if normalized.is_empty() {
         return None;
     }
-    Some(value.to_string())
+    Some(normalized.to_string())
+}
+
+/// 描述：读取编译进应用的 updater 公钥；优先使用构建机本地注入值，其次回退到仓库默认空文件。
+fn resolve_embedded_updater_pubkey() -> Option<String> {
+    if let Some(value) = LOCAL_UPDATER_PUBKEY.and_then(normalize_updater_pubkey) {
+        return Some(value);
+    }
+
+    normalize_updater_pubkey(EMBEDDED_UPDATER_PUBKEY)
 }
 
 /// 描述：将内部桌面更新状态转换为前端可消费结构。

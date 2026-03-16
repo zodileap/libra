@@ -125,7 +125,7 @@ scripts\package-desktop-release.cmd 0.1.1
 
 - 把 `package.json`、`apps/desktop/package.json`、`tauri.conf.json`、`Cargo.toml` 同步到目标版本
 - 生成或复用官方 Tauri updater 签名密钥
-- 将公钥写入 `apps/desktop/src-tauri/updater/public.key`
+- 从构建机本地 `~/.tauri/libra-desktop-updater.key.pub` 注入 updater 公钥
 - 执行正式 `tauri build`
 - 产出完整安装包和 updater 热更新产物
 - 自动整理成 `releases/<version>/<platform>/` 上传目录
@@ -134,6 +134,7 @@ scripts\package-desktop-release.cmd 0.1.1
 
 - 这个脚本不会生成 `latest.json`
 - 这个脚本不会上传服务器文件
+- 真实 updater 公钥不会写回仓库 tracked 文件
 - 服务器上的 `latest.json` 仍需要手工维护
 
 macOS 发布建议：

@@ -17,3 +17,7 @@ releases
 services/data/
 tmp/
 .pnpm-store
+apps/desktop/src-tauri/tauri.local.conf.json
+apps/desktop/src-tauri/tauri.macos.local.conf.json
+apps/desktop/src-tauri/tauri.windows.local.conf.json
+apps/desktop/src-tauri/tauri.linux.local.conf.json

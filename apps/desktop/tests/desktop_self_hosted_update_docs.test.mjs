@@ -38,13 +38,23 @@ test("TestDesktopSelfHostedUpdateDocsShouldDescribeOfficialUpdaterFlow", () => {
   assert.match(docSource, /\.dmg/);
   assert.match(docSource, /\.app\.tar\.gz/);
   assert.match(docSource, /\.sig/);
+  assert.match(docSource, /从零开始的 macOS 正式打包（API Key 方案）/);
+  assert.match(docSource, /Apple Developer Program/);
+  assert.match(docSource, /Developer ID Application/);
+  assert.match(docSource, /com\.libra\.zodileap\.desktop/);
+  assert.match(docSource, /Keychain Access > Certificate Assistant/);
+  assert.match(docSource, /APPLE_API_ISSUER/);
+  assert.match(docSource, /TAURI_UPDATER_PRIVATE_KEY_PASSWORD/);
+  assert.match(docSource, /pnpm -C \/Users\/yoho\/code\/zodileap-agen\/apps\/desktop build/);
+  assert.match(docSource, /tauri signer generate/);
   assert.match(docSource, /安装完成后，应用会自动重启/);
   assert.match(docSource, /releases\/<version>\/macos/);
 
   assert.match(releaseScriptSource, /Usage:\s+node scripts\/package-desktop-release\.mjs <x\.y\.z>/s);
   assert.match(releaseScriptSource, /scripts\\\\package-desktop-release\.cmd <x\.y\.z>/);
   assert.match(releaseScriptSource, /"signer", "generate", "--ci", "-w"/);
-  assert.match(releaseScriptSource, /"tauri", "build"/);
+  assert.match(releaseScriptSource, /TAURI_UPDATER_PUBLIC_KEY_PATH/);
+  assert.match(releaseScriptSource, /run-desktop-tauri\.mjs/);
   assert.match(releaseScriptSource, /releases\/<version>\/<platform>\//);
   assert.match(windowsWrapperSource, /package-desktop-release\.mjs/);
 });
