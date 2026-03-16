@@ -3,6 +3,6 @@ libra:
   description: 梳理接口实体、请求响应、错误语义与 Mock 场景，并将结果整理成项目内 OpenAPI 文件。
   example_prompt: 先帮我整理这组接口的实体、请求响应和 Mock 场景，并生成适合当前项目的 OpenAPI 文件。
   version: 1.0.0
-  status: stable
+  status: testing
   group: 代码
   icon: libra_skill

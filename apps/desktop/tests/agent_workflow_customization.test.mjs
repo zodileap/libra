@@ -340,6 +340,7 @@ test("TestWorkflowPagesShouldUseListLayoutInSettings", () => {
   assert.equal(workflowHeaderMatches.length, 1);
   assert.match(overviewSource, /DeskPageHeader/);
   assert.match(overviewSource, /DeskOverviewCard/);
+  assert.match(overviewSource, /AriModal/);
   assert.match(overviewSource, /icon=\{<AriIcon name="account_tree" \/>\}/);
   assert.doesNotMatch(overviewSource, /DeskOverviewDetailsModal/);
   assert.doesNotMatch(overviewSource, /DeskOverviewDetailRow/);
@@ -348,6 +349,14 @@ test("TestWorkflowPagesShouldUseListLayoutInSettings", () => {
   assert.match(overviewSource, /DeskSectionTitle title=\{t\("未注册"\)\}/);
   assert.match(overviewSource, /label=\{t\("新增工作流"\)\}/);
   assert.doesNotMatch(overviewSource, /label=\{t\("刷新"\)\}/);
+  assert.match(overviewSource, /listSkillOverview/);
+  assert.match(overviewSource, /registerBuiltinAgentSkill/);
+  assert.match(overviewSource, /normalizeAgentSkillId/);
+  assert.match(overviewSource, /function collectWorkflowRequiredSkills\(workflow: AgentWorkflowDefinition\): WorkflowRequiredSkillDescriptor\[\]/);
+  assert.match(overviewSource, /function buildPendingWorkflowSkillInstallState\(/);
+  assert.match(overviewSource, /title=\{t\("未注册依赖技能"\)\}/);
+  assert.match(overviewSource, /label=\{t\("仅添加工作流"\)\}/);
+  assert.match(overviewSource, /label=\{t\("添加技能并继续"\)\}/);
   assert.match(overviewSource, /content=\{t\("管理"\)\}/);
   assert.match(overviewSource, /aria-label=\{t\("管理工作流"\)\}/);
   assert.match(overviewSource, /aria-label=\{readonly \? t\("添加工作流"\) : t\("复制工作流"\)\}/);
@@ -437,6 +446,11 @@ test("TestWorkflowCanvasSidebarAndFloatingActionsShouldMatchUxRules", () => {
   assert.match(sidebarSource, /key=\{`workflow-menu-\$\{workflowMenuRenderVersion\}`\}/);
   assert.doesNotMatch(sidebarSource, /setPendingDeleteWorkflowId\(\(current\) => \(current === item\.key \? "" : current\)\);/);
   assert.match(overviewSource, /aria-label=\{readonly \? t\("添加工作流"\) : t\("复制工作流"\)\}/);
+  assert.match(overviewSource, /setPendingWorkflowSkillInstall\(pendingState\);/);
+  assert.match(overviewSource, /handleRegisterWorkflowTemplate\(workflow\);/);
+  assert.match(overviewSource, /handleRegisterWorkflowTemplate\(targetWorkflow, true\);/);
+  assert.match(overviewSource, /await registerBuiltinAgentSkill\(skillId\);/);
+  assert.match(overviewSource, /const refreshedPendingState = await resolvePendingWorkflowSkills\(pendingWorkflowSkillInstall\.workflow\);/);
   assert.match(overviewSource, /createAgentWorkflowFromTemplate\(workflow\.id, \{ mode: "register" \}\)/);
   assert.doesNotMatch(overviewSource, /const handleCopyWorkflow[\s\S]*navigate\(resolveWorkflowEditorPath\(copied\.id\)\)/s);
   assert.doesNotMatch(overviewSource, /const handleAddWorkflow[\s\S]*navigate\(resolveWorkflowEditorPath\(created\.id\)\)/s);

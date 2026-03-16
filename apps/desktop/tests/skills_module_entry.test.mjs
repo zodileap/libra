@@ -131,6 +131,7 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   const workflowPageSource = readDesktopSource("src/widgets/workflow/page.tsx");
   const skillPlanSource = readDesktopSource("src/shared/workflow/skill-plan.ts");
   const sessionPageSource = readDesktopSource("src/widgets/session/page.tsx");
+  const settingsPrimitivesSource = readDesktopSource("src/widgets/settings-primitives.tsx");
   const constantsSource = readDesktopSource("src/shared/constants.ts");
   const tauriSkillRegistrySource = readDesktopSource("src-tauri/src/agent_skills.rs");
   const tauriMainSource = readDesktopSource("src-tauri/src/main.rs");
@@ -168,6 +169,8 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   assert.match(skillsPageSource, /function buildSkillCardCaption\(skill: AgentSkillItem\): string/);
   assert.match(skillsPageSource, /title=\{skill\.title\}/);
   assert.match(skillsPageSource, /caption=\{buildSkillCardCaption\(skill\)\}/);
+  assert.match(settingsPrimitivesSource, /className="desk-overview-card-title-main"/);
+  assert.match(settingsPrimitivesSource, /className="desk-overview-card-title-main"[\s\S]*className="desk-overview-card-caption"/s);
   assert.match(skillsPageSource, /<AriModal/);
   assert.match(skillsPageSource, /title=\{managingSkill \? \(/);
   assert.match(skillsPageSource, /className="desk-skill-details-modal-title"/);
@@ -299,6 +302,9 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
   assert.match(tauriSkillRegistrySource, /pub status: String,/);
   assert.match(tauriSkillRegistrySource, /pub group: String,/);
   assert.match(tauriSkillRegistrySource, /pub icon: String,/);
+  assert.match(tauriSkillRegistrySource, /const AGENT_SKILL_STATUS_STABLE: &str = "stable";/);
+  assert.match(tauriSkillRegistrySource, /const AGENT_SKILL_STATUS_TESTING: &str = "testing";/);
+  assert.match(tauriSkillRegistrySource, /cfg!\(debug_assertions\) \|\| status\.trim\(\) != AGENT_SKILL_STATUS_TESTING/);
   assert.match(tauriSkillRegistrySource, /struct AgentSkillRegistryEntry/);
   assert.match(tauriSkillRegistrySource, /registered: Vec<AgentSkillRegistryEntry>/);
   assert.match(tauriSkillRegistrySource, /struct AgentSkillLibraMetadata/);
@@ -392,7 +398,7 @@ test("TestSkillsPageShouldUseAgentSkillRegistryAndImportFlow", () => {
     assert.match(metadataSource, /^  description: .+$/m);
     assert.match(metadataSource, /^  example_prompt: .+$/m);
     assert.match(metadataSource, /^  version: 1\.0\.0$/m);
-    assert.match(metadataSource, /^  status: stable$/m);
+    assert.match(metadataSource, /^  status: testing$/m);
     assert.match(metadataSource, new RegExp(`^  group: ${skillPackage.group}$`, "m"));
     assert.doesNotMatch(metadataSource, /^  subgroup: .+$/m);
     assert.match(metadataSource, /^  icon: libra_skill$/m);
