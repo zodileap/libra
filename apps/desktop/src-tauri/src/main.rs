@@ -3322,7 +3322,7 @@ fn apply_main_window_effects(app: &tauri::AppHandle) {
     #[cfg(target_os = "macos")]
     {
         let effects = EffectsBuilder::new()
-            .effect(Effect::HudWindow)
+            .effect(Effect::WindowBackground)
             .state(EffectState::Active)
             .build();
         if let Err(err) = window.set_effects(effects) {

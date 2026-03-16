@@ -739,38 +739,28 @@ export function buildAgentWorkflowPrompt(
   const normalizedRuntimePrompt = buildPlaywrightInteractiveRuntimePrompt(runtimeCapabilities);
   const hasPlaywrightInteractiveSkill = (workflow?.graph?.nodes || []).some((node) =>
     node.type === "skill" && isPlaywrightInteractiveSkillId(String(node.skillId || "").trim()));
-  const stageChainLines = (workflow?.graph?.nodes || [])
-    .filter((node) => isExecutableWorkflowNodeType(node.type))
+  const skillChainLines = (workflow?.graph?.nodes || [])
+    .filter((node) => node.type === "skill")
     .map((node) => {
-      const normalizedType = normalizeNodeType(node.type);
       const skillId = normalizeAgentSkillId(String(node.skillId || "").trim());
       const normalizedInstruction = String(node.instruction || "").trim();
       const label = String(node.title || translateDesktopText("技能节点")).trim() || translateDesktopText("技能节点");
-      if (normalizedType === "skill") {
-        if (normalizedInstruction) {
-          return skillId
-            ? translateDesktopText("- {{label}}：技能编码 {{skillId}}；本节点要求：{{instruction}}", {
-              label,
-              skillId,
-              instruction: normalizedInstruction,
-            })
-            : translateDesktopText("- {{label}}：{{instruction}}", {
-              label,
-              instruction: normalizedInstruction,
-            });
-        }
-        if (skillId) {
-          return translateDesktopText("- {{label}}：技能编码 {{skillId}}", {
+      if (normalizedInstruction) {
+        return skillId
+          ? translateDesktopText("- {{label}}：技能编码 {{skillId}}；本节点要求：{{instruction}}", {
             label,
             skillId,
+            instruction: normalizedInstruction,
           });
-        }
-        return "";
+          : translateDesktopText("- {{label}}：{{instruction}}", {
+            label,
+            instruction: normalizedInstruction,
+          });
       }
-      if (normalizedInstruction) {
-        return translateDesktopText("- {{label}}：{{instruction}}", {
+      if (skillId) {
+        return translateDesktopText("- {{label}}：技能编码 {{skillId}}", {
           label,
-          instruction: normalizedInstruction,
+          skillId,
         });
       }
       return "";
@@ -781,7 +771,7 @@ export function buildAgentWorkflowPrompt(
     ? ["", normalizedRuntimePrompt]
     : [];
   if (!prefix) {
-    if (stageChainLines.length === 0) {
+    if (skillChainLines.length === 0) {
       return [
         ...buildAgentToolsetLines(runtimeCapabilities),
         "",
@@ -791,7 +781,7 @@ export function buildAgentWorkflowPrompt(
     }
     return [
       translateDesktopText("【执行链路】"),
-      ...stageChainLines,
+      ...skillChainLines,
       ...playwrightRuntimeBlock,
       ...toolsetBlock,
       "",
@@ -799,8 +789,8 @@ export function buildAgentWorkflowPrompt(
       normalizedPrompt,
     ].join("\n");
   }
-  const stageChainBlock = stageChainLines.length > 0
-    ? ["", translateDesktopText("【执行链路】"), ...stageChainLines]
+  const stageChainBlock = skillChainLines.length > 0
+    ? ["", translateDesktopText("【执行链路】"), ...skillChainLines]
     : [];
   return [
     translateDesktopText("【工作流：{{name}}】", {

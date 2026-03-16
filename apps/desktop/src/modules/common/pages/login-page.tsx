@@ -95,6 +95,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
             type="password"
             placeholder={t("请输入密码")}
             onChange={handlePasswordChange}
+            status={passwordError ? "error" : "default"}
           />
           {passwordError ? (
             <AriTypography

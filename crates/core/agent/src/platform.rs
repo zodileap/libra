@@ -1,5 +1,4 @@
 use std::env;
-use std::path::Path;
 use std::process::Command;
 
 /// 描述：可执行命令候选，统一承载程序路径与固定前置参数。
@@ -161,25 +160,19 @@ fn resolve_cli_command_candidates_with(
             if let Some(home) = home.map(str::trim).filter(|value| !value.is_empty()) {
                 push_unique_candidate(
                     &mut candidates,
-                    CommandCandidate::new(
-                        Path::new(home)
-                            .join(".volta")
-                            .join("bin")
-                            .join(bin_name)
-                            .to_string_lossy()
-                            .to_string(),
-                    ),
+                    CommandCandidate::new(join_target_path(
+                        home,
+                        &[".volta", "bin", bin_name],
+                        target,
+                    )),
                 );
                 push_unique_candidate(
                     &mut candidates,
-                    CommandCandidate::new(
-                        Path::new(home)
-                            .join("Library")
-                            .join("pnpm")
-                            .join(bin_name)
-                            .to_string_lossy()
-                            .to_string(),
-                    ),
+                    CommandCandidate::new(join_target_path(
+                        home,
+                        &["Library", "pnpm", bin_name],
+                        target,
+                    )),
                 );
             }
         }
@@ -192,14 +185,11 @@ fn resolve_cli_command_candidates_with(
             if let Some(home) = home.map(str::trim).filter(|value| !value.is_empty()) {
                 push_unique_candidate(
                     &mut candidates,
-                    CommandCandidate::new(
-                        Path::new(home)
-                            .join(".volta")
-                            .join("bin")
-                            .join(bin_name)
-                            .to_string_lossy()
-                            .to_string(),
-                    ),
+                    CommandCandidate::new(join_target_path(
+                        home,
+                        &[".volta", "bin", bin_name],
+                        target,
+                    )),
                 );
             }
         }
@@ -290,14 +280,11 @@ fn resolve_node_command_candidates_with(
             if let Some(home) = home.map(str::trim).filter(|value| !value.is_empty()) {
                 push_unique_candidate(
                     &mut candidates,
-                    CommandCandidate::new(
-                        Path::new(home)
-                            .join(".volta")
-                            .join("bin")
-                            .join("node")
-                            .to_string_lossy()
-                            .to_string(),
-                    ),
+                    CommandCandidate::new(join_target_path(
+                        home,
+                        &[".volta", "bin", "node"],
+                        target,
+                    )),
                 );
             }
         }
@@ -310,20 +297,52 @@ fn resolve_node_command_candidates_with(
             if let Some(home) = home.map(str::trim).filter(|value| !value.is_empty()) {
                 push_unique_candidate(
                     &mut candidates,
-                    CommandCandidate::new(
-                        Path::new(home)
-                            .join(".volta")
-                            .join("bin")
-                            .join("node")
-                            .to_string_lossy()
-                            .to_string(),
-                    ),
+                    CommandCandidate::new(join_target_path(
+                        home,
+                        &[".volta", "bin", "node"],
+                        target,
+                    )),
                 );
             }
         }
     }
 
     candidates
+}
+
+/// 描述：按目标平台拼接路径，避免在跨平台测试中误用宿主机路径分隔符。
+///
+/// Params:
+///
+///   - base: 起始目录。
+///   - segments: 需要依次追加的路径片段。
+///   - target: 目标平台。
+///
+/// Returns:
+///
+///   - 0: 使用目标平台分隔符拼接后的路径。
+fn join_target_path(base: &str, segments: &[&str], target: PlatformTarget) -> String {
+    let separator = match target {
+        PlatformTarget::Windows => '\\',
+        PlatformTarget::MacOs | PlatformTarget::Unix => '/',
+    };
+    let mut result = base
+        .trim()
+        .trim_end_matches(|ch| ch == '/' || ch == '\\')
+        .to_string();
+
+    for segment in segments {
+        let normalized_segment = segment.trim_matches(|ch| ch == '/' || ch == '\\');
+        if normalized_segment.is_empty() {
+            continue;
+        }
+        if !result.is_empty() {
+            result.push(separator);
+        }
+        result.push_str(normalized_segment);
+    }
+
+    result
 }
 
 /// 描述：向候选列表中追加唯一命令，避免同一路径重复探测。

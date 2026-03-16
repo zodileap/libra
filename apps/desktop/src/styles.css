@@ -155,11 +155,14 @@ body {
  */
 .desk-platform-windows {
   --desk-root-bg: transparent;
-  --desk-sidebar-bg: var(--z-color-bg-tertiary);
+  --desk-sidebar-bg: var(--z-color-bg-opacity-blur);
+  --desk-sidebar-backdrop-blur: var(--z-inset-sm);
 }
 
 .desk-platform-windows .desk-sidebar {
   border-radius: var(--z-border-radius-zero);
+  backdrop-filter: blur(var(--desk-sidebar-backdrop-blur));
+  -webkit-backdrop-filter: blur(var(--desk-sidebar-backdrop-blur));
 }
 
 .desk-platform-macos .desk-main {
@@ -304,7 +307,7 @@ body {
 .desk-sidebar {
   height: 100%;
   background: var(--desk-sidebar-bg);
-  padding: calc(var(--z-inset) + var(--desk-app-header-height)) var(--z-inset) var(--z-inset);
+  padding: calc(var(--z-inset) + var(--desk-app-header-height)) 0 var(--z-inset);
   display: flex;
   flex-direction: column;
   position: relative;

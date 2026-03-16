@@ -6012,6 +6012,7 @@ export function SessionPage({
       const initialStageIndex = hasWorkflowStages
         ? clampWorkflowStageIndex(options?.workflowStageIndex, totalWorkflowStageCount)
         : 0;
+      const availableSkills = currentAvailableSkills;
       const workflowRootStreamMessageId = String(options?.replaceAssistantMessageId || "").trim()
         || `assistant-stream-${Date.now()}`;
 
@@ -6019,8 +6020,8 @@ export function SessionPage({
       let currentStageAttempt = 0;
       while (currentStageIndex < (hasWorkflowStages ? totalWorkflowStageCount : 1)) {
         const currentStagePlan = hasWorkflowStages
-          ? buildAgentWorkflowSkillExecutionPlan(activeWorkflow, currentAvailableSkills, { stageIndex: currentStageIndex })
-          : skillExecutionPlan;
+          ? buildAgentWorkflowSkillExecutionPlan(activeWorkflow, availableSkills, { stageIndex: currentStageIndex })
+          : buildAgentWorkflowSkillExecutionPlan(activeWorkflow, availableSkills);
         const currentStageItem = currentStagePlan.activeItem;
         const scopedWorkflow = currentStageItem
           ? scopeWorkflowDefinitionToStageNode(activeWorkflow, currentStageItem.nodeId)
