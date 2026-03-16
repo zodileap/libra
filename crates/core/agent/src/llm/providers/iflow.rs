@@ -336,9 +336,6 @@ mod tests {
             model: Some("deepseek-v3.2".to_string()),
             mode: None,
         };
-        assert_eq!(
-            resolve_iflow_model(Some(&provider_config)),
-            "deepseek-v3.2"
-        );
+        assert_eq!(resolve_iflow_model(Some(&provider_config)), "deepseek-v3.2");
     }
 }

@@ -774,25 +774,92 @@ def read_file(file_path):
 def write_file(file_path, content):
     return write_text(file_path, content)
 
-def list_directory(dir_path=".", path=None):
-    target_path = path if path is not None else dir_path
-    result = list_dir(target_path, with_meta=True)
+def _extract_list_dir_entries(result):
     if isinstance(result, list):
-        entries = result
-    elif isinstance(result, dict):
+        return result
+    if isinstance(result, dict):
         if result.get("ok") is False:
             return []
         # 描述：list_dir 会返回 {"ok": True, "data": {...}} 包装结构，
         # 兼容别名需要继续下钻到 data.entries，避免把响应对象误当成目录项列表返回。
-        entries = None
         data = result.get("data")
         if isinstance(data, dict):
             entries = data.get("entries")
-        if entries is None:
-            entries = result.get("entries")
-    else:
-        entries = None
+            if isinstance(entries, list):
+                return entries
+        entries = result.get("entries")
+        if isinstance(entries, list):
+            return entries
+    return None
+
+def _flatten_list_directory_entries(base_path, entries):
+    flattened_entries = []
+    pending = [("", base_path, entries)]
+    visited = set()
+    while pending:
+        prefix, current_path, current_entries = pending.pop(0)
+        normalized_current_path = os.path.normpath(current_path if isinstance(current_path, str) and current_path else ".")
+        if normalized_current_path in visited:
+            continue
+        visited.add(normalized_current_path)
+        if not isinstance(current_entries, list):
+            continue
+        for entry in current_entries:
+            if isinstance(entry, dict):
+                name = entry.get("name")
+                is_dir = bool(entry.get("is_dir"))
+                is_file = bool(entry.get("is_file"))
+            elif isinstance(entry, str):
+                name = str(entry)
+                is_dir = False
+                is_file = True
+            else:
+                name = None
+                is_dir = False
+                is_file = False
+            if not isinstance(name, str) or not name:
+                continue
+            relative_name = os.path.join(prefix, name) if prefix else name
+            flattened_entries.append({
+                "name": relative_name,
+                "path": os.path.join(base_path, relative_name) if isinstance(base_path, str) and base_path else relative_name,
+                "is_dir": is_dir,
+                "is_file": is_file,
+            })
+            if is_dir:
+                child_path = os.path.join(current_path, name) if isinstance(current_path, str) and current_path else name
+                child_entries = _extract_list_dir_entries(list_dir(child_path, with_meta=True))
+                if isinstance(child_entries, list):
+                    pending.append((relative_name, child_path, child_entries))
+    return flattened_entries
+
+def list_directory(dir_path=".", path=None, recursive=False, with_meta=False, **kwargs):
+    path_alias = _pop_alias(kwargs, ("file_path", "target_path"))
+    recursive_alias = _pop_alias(kwargs, ("deep", "walk"))
+    include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, ("include_meta", "raw")), False))
+    target_path = _pick_first_non_none([path, path_alias, dir_path, "."])
+    should_recurse = bool(_resolve_with_alias(recursive, recursive_alias, False))
+    result = list_dir(target_path, with_meta=True)
+    entries = _extract_list_dir_entries(result)
     if isinstance(entries, list):
+        if should_recurse:
+            recursive_entries = _flatten_list_directory_entries(target_path, entries)
+            if include_meta:
+                return _remember_last_value({
+                    "ok": True,
+                    "data": {
+                        "path": target_path,
+                        "recursive": True,
+                        "entries": recursive_entries,
+                    },
+                })
+            return _remember_last_value([
+                entry.get("name")
+                for entry in recursive_entries
+                if isinstance(entry, dict) and isinstance(entry.get("name"), str)
+            ])
+        if include_meta:
+            return _remember_last_value(result)
         names = []
         for entry in entries:
             if isinstance(entry, dict):
@@ -804,6 +871,8 @@ def list_directory(dir_path=".", path=None):
             if isinstance(name, str):
                 names.append(name)
         return _remember_last_value(names)
+    if include_meta:
+        return _remember_last_value(result)
     return _remember_last_value(result)
 
 def _register_python_tool_module_aliases():
@@ -1202,7 +1271,8 @@ mod tests {
         assert!(PERSISTENT_PRELUDE.contains("types.ModuleType(\"gemini_cli_native_tools\")"));
         assert!(PERSISTENT_PRELUDE.contains("sys.modules[\"gemini_cli_native_tools\"] = module"));
         assert!(PERSISTENT_PRELUDE.contains("types.ModuleType(module_name)"));
-        assert!(PERSISTENT_PRELUDE.contains("for module_name in (\"gemini_cli_native_tools\", \"tools\")"));
+        assert!(PERSISTENT_PRELUDE
+            .contains("for module_name in (\"gemini_cli_native_tools\", \"tools\")"));
         assert!(PERSISTENT_PRELUDE.contains("sys.modules[module_name] = module"));
     }
 
