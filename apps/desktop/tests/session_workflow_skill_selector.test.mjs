@@ -224,9 +224,11 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(sessionSource, /contextMessages\?: MessageItem\[\];/);
   assert.match(sessionSource, /displayMessages\?: MessageItem\[\];/);
   assert.match(sessionSource, /displayMessages: MessageItem\[\];/);
-  assert.match(sessionSource, /const baseDisplayMessages = options\?\.displayMessages \|\| messages;/);
+  assert.match(sessionSource, /const currentDisplayMessages = messagesRef\.current;/);
+  assert.match(sessionSource, /const currentContextMessages = agentContextMessagesRef\.current;/);
+  assert.match(sessionSource, /const baseDisplayMessages = options\?\.displayMessages \|\| currentDisplayMessages;/);
   assert.match(sessionSource, /const baseContextMessages = options\?\.contextMessages\?\.length/);
-  assert.match(sessionSource, /: agentContextMessages\.length > 0/);
+  assert.match(sessionSource, /: currentContextMessages\.length > 0/);
   assert.match(sessionSource, /: buildPromptContextMessages\(\s*baseDisplayMessages,\s*assistantRunMetaMapRef\.current,\s*\)/s);
   assert.match(sessionSource, /const dccPreflight = await resolveDccPreflight\(\s*normalizedContent,\s*baseDisplayMessages,\s*baseContextMessages,\s*effectiveUsesDccModelingSkill,\s*options,\s*\);/s);
   assert.match(sessionSource, /if \(dccPreflight\.blocked\) \{\s*return;\s*\}/s);

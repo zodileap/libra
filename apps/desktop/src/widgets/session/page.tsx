@@ -4132,6 +4132,17 @@ export function SessionPage({
   );
   const activeSelectedWorkflowId = selectedWorkflow?.id || "";
 
+  // 描述：以下 refs 始终指向最新的执行策略与会话上下文，确保用户中途切换后，下一条消息立即按当前选择路由。
+  const executionSelectionRef = useRef<SessionExecutionSelection>(executionSelection);
+  const selectedWorkflowRef = useRef<AgentWorkflowDefinition | null>(selectedWorkflow);
+  const activeSelectedSkillIdsRef = useRef<string[]>(activeSelectedSkillIds);
+  const availableSkillsRef = useRef<AgentSkillItem[]>(availableSkills);
+
+  executionSelectionRef.current = executionSelection;
+  selectedWorkflowRef.current = selectedWorkflow;
+  activeSelectedSkillIdsRef.current = activeSelectedSkillIds;
+  availableSkillsRef.current = availableSkills;
+
   // 描述：以下 refs 用于维护流式渲染、去重、心跳与定时器状态，避免高频更新触发重复渲染。
   const streamMessageIdRef = useRef("");
   const stepRecordsRef = useRef<AgentStepRecord[]>([]);
@@ -5836,11 +5847,16 @@ export function SessionPage({
 
     const allowDangerousAction = Boolean(options?.allowDangerousAction);
     const appendUserMessage = options?.appendUserMessage !== false;
-    const baseDisplayMessages = options?.displayMessages || messages;
+    const currentDisplayMessages = messagesRef.current;
+    const currentContextMessages = agentContextMessagesRef.current;
+    const currentAvailableSkills = availableSkillsRef.current;
+    const currentSelectedSkillIds = activeSelectedSkillIdsRef.current;
+    const currentSelectedWorkflow = selectedWorkflowRef.current;
+    const baseDisplayMessages = options?.displayMessages || currentDisplayMessages;
     const baseContextMessages = options?.contextMessages?.length
       ? options.contextMessages
-      : agentContextMessages.length > 0
-        ? agentContextMessages
+      : currentContextMessages.length > 0
+        ? currentContextMessages
         : buildPromptContextMessages(
           baseDisplayMessages,
           assistantRunMetaMapRef.current,
@@ -5851,13 +5867,13 @@ export function SessionPage({
           .map((item) => String(item || "").trim())
           .filter((item) => item.length > 0),
       )).slice(0, 1)
-      : activeSelectedSkillIds;
-    const effectiveSelectedSessionSkills = availableSkills.filter((item) => effectiveSelectedSkillIds.includes(item.id));
+      : currentSelectedSkillIds;
+    const effectiveSelectedSessionSkills = currentAvailableSkills.filter((item) => effectiveSelectedSkillIds.includes(item.id));
     const activeWorkflow = options?.disableWorkflow
       ? null
       : options?.workflowIdOverride
         ? getAgentWorkflowById(options.workflowIdOverride) || workflows.find((item) => item.id === options.workflowIdOverride) || null
-        : selectedWorkflow;
+        : currentSelectedWorkflow;
     const effectiveUsesDccModelingSkill = effectiveSelectedSessionSkills.some((item) => isDccModelingSkill(item))
       || Boolean(
         (activeWorkflow?.graph?.nodes || []).some(
@@ -5958,7 +5974,7 @@ export function SessionPage({
     setAgentContextMessages(nextContextMessages);
 
     try {
-      const skillExecutionPlan = buildAgentWorkflowSkillExecutionPlan(activeWorkflow, availableSkills);
+      const skillExecutionPlan = buildAgentWorkflowSkillExecutionPlan(activeWorkflow, currentAvailableSkills);
       if (skillExecutionPlan.blockingIssues.length > 0) {
         throw new Error(t("工作流阶段前检查未通过：{{issues}}", {
           issues: skillExecutionPlan.blockingIssues.join("；"),
@@ -6003,7 +6019,7 @@ export function SessionPage({
       let currentStageAttempt = 0;
       while (currentStageIndex < (hasWorkflowStages ? totalWorkflowStageCount : 1)) {
         const currentStagePlan = hasWorkflowStages
-          ? buildAgentWorkflowSkillExecutionPlan(activeWorkflow, availableSkills, { stageIndex: currentStageIndex })
+          ? buildAgentWorkflowSkillExecutionPlan(activeWorkflow, currentAvailableSkills, { stageIndex: currentStageIndex })
           : skillExecutionPlan;
         const currentStageItem = currentStagePlan.activeItem;
         const scopedWorkflow = currentStageItem
@@ -6551,11 +6567,14 @@ export function SessionPage({
     if (!normalizedContent || sending) {
       return;
     }
+    const currentExecutionSelection = executionSelectionRef.current;
+    const currentSelectedWorkflow = selectedWorkflowRef.current;
+    const currentAvailableSkills = availableSkillsRef.current;
     const routeDecision = resolveSessionExecutionRoute({
       messageText: normalizedContent,
-      selection: executionSelection,
-      workflow: selectedWorkflow,
-      workflowPhaseCursor,
+      selection: currentExecutionSelection,
+      workflow: currentSelectedWorkflow,
+      workflowPhaseCursor: workflowPhaseCursorRef.current,
       hasPendingApproval: Boolean(activeApprovalId),
       hasPendingUserInput: Boolean(activeUserInputRequestId),
     });
@@ -6607,7 +6626,7 @@ export function SessionPage({
 
     if (routeDecision.routeKind === "workflow_partial") {
       const totalWorkflowStageCount = Math.max(
-        buildAgentWorkflowSkillExecutionPlan(selectedWorkflow, availableSkills).totalReadyCount,
+        buildAgentWorkflowSkillExecutionPlan(currentSelectedWorkflow, currentAvailableSkills).totalReadyCount,
         Number(routeDecision.stageIndex || 0) + 1,
       );
       const workflowPromptPreamble = [

@@ -77,7 +77,21 @@ test("TestSessionExecutionRoutingShouldSupportWorkflowSkillChatAndResumePaths", 
   // 描述：
   //
   //   - 会话页发送前必须先记录消息级执行路由，再按不同路由分别分流 prompt 构建与执行入口。
+  assert.match(sessionPageSource, /const executionSelectionRef = useRef<SessionExecutionSelection>\(executionSelection\);/);
+  assert.match(sessionPageSource, /executionSelectionRef\.current = executionSelection;/);
+  assert.match(sessionPageSource, /const selectedWorkflowRef = useRef<AgentWorkflowDefinition \| null>\(selectedWorkflow\);/);
+  assert.match(sessionPageSource, /selectedWorkflowRef\.current = selectedWorkflow;/);
+  assert.match(sessionPageSource, /const activeSelectedSkillIdsRef = useRef<string\[\]>\(activeSelectedSkillIds\);/);
+  assert.match(sessionPageSource, /activeSelectedSkillIdsRef\.current = activeSelectedSkillIds;/);
+  assert.match(sessionPageSource, /const availableSkillsRef = useRef<AgentSkillItem\[\]>\(availableSkills\);/);
+  assert.match(sessionPageSource, /availableSkillsRef\.current = availableSkills;/);
+  assert.match(sessionPageSource, /const currentExecutionSelection = executionSelectionRef\.current;/);
+  assert.match(sessionPageSource, /const currentSelectedWorkflow = selectedWorkflowRef\.current;/);
+  assert.match(sessionPageSource, /const currentAvailableSkills = availableSkillsRef\.current;/);
   assert.match(sessionPageSource, /const routeDecision = resolveSessionExecutionRoute\(\{/);
+  assert.match(sessionPageSource, /selection: currentExecutionSelection,/);
+  assert.match(sessionPageSource, /workflow: currentSelectedWorkflow,/);
+  assert.match(sessionPageSource, /workflowPhaseCursor: workflowPhaseCursorRef\.current,/);
   assert.match(sessionPageSource, /appendDebugFlowRecord\(\s*"ui",\s*"message_route",\s*t\("消息执行路由"\)/s);
   assert.match(sessionPageSource, /source: "workflow:route"/);
   assert.match(sessionPageSource, /if \(routeDecision\.routeKind === "resume_pending"\) \{/);
@@ -92,6 +106,12 @@ test("TestSessionExecutionRoutingShouldSupportWorkflowSkillChatAndResumePaths", 
   assert.match(sessionPageSource, /workflowStageIndex: 0,/);
   assert.match(sessionPageSource, /if \(routeDecision\.routeKind === "skill"\) \{/);
   assert.match(sessionPageSource, /disableWorkflow: true,/);
+  assert.match(sessionPageSource, /const currentSelectedSkillIds = activeSelectedSkillIdsRef\.current;/);
+  assert.match(sessionPageSource, /: currentSelectedSkillIds;/);
+  assert.match(sessionPageSource, /const effectiveSelectedSessionSkills = currentAvailableSkills\.filter/);
+  assert.match(sessionPageSource, /: currentSelectedWorkflow;/);
+  assert.match(sessionPageSource, /buildAgentWorkflowSkillExecutionPlan\(activeWorkflow, currentAvailableSkills\)/);
+  assert.match(sessionPageSource, /buildAgentWorkflowSkillExecutionPlan\(currentSelectedWorkflow, currentAvailableSkills\)\.totalReadyCount/);
   assert.match(sessionPageSource, /selectedSkillIdsOverride: routeDecision\.skillId \? \[routeDecision\.skillId\] : \[\],/);
   assert.match(sessionPageSource, /selectedSkillIdsOverride: \[\],/);
   assert.match(sessionPageSource, /const executionMode: AgentExecutionMode = options\?\.routeDecision\?\.routeKind === "chat"/);
