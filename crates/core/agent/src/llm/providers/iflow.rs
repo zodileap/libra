@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use std::time::Duration;
 
 const DEFAULT_IFLOW_BASE_URL: &str = "https://apis.iflow.cn/v1";
-const DEFAULT_IFLOW_MODEL: &str = "Qwen3-Coder";
+const DEFAULT_IFLOW_MODEL: &str = "qwen3-coder-plus";
 
 /// 描述：通过工作流重试引擎执行 iFlow OpenAI 兼容 API 调用。
 pub fn call_with_retry(
@@ -254,6 +254,7 @@ fn extract_iflow_usage(response: &Value) -> Option<LlmUsage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::llm::LlmProviderConfig;
     use crate::workflow::WorkflowRetryPolicy;
 
     /// 描述：验证 iFlow provider 缺失 API Key 时返回统一错误码，避免错误地进入远端请求阶段。
@@ -314,6 +315,30 @@ mod tests {
         assert_eq!(
             extract_iflow_response_content(&response).as_deref(),
             Some("hello iflow")
+        );
+    }
+
+    /// 描述：验证未显式指定模型时会回落到当前 iFlow 默认模型，确保桌面端空值与后端默认保持一致。
+    #[test]
+    fn should_use_default_iflow_model_when_provider_model_is_missing() {
+        assert_eq!(resolve_iflow_model(None), "qwen3-coder-plus");
+        assert_eq!(
+            resolve_iflow_model(Some(&LlmProviderConfig::default())),
+            "qwen3-coder-plus"
+        );
+    }
+
+    /// 描述：验证显式配置的 iFlow 模型会原样透传，避免默认值覆盖用户选择。
+    #[test]
+    fn should_use_custom_iflow_model_when_provider_model_is_present() {
+        let provider_config = LlmProviderConfig {
+            api_key: Some("test-key".to_string()),
+            model: Some("deepseek-v3.2".to_string()),
+            mode: None,
+        };
+        assert_eq!(
+            resolve_iflow_model(Some(&provider_config)),
+            "deepseek-v3.2"
         );
     }
 }

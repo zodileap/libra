@@ -38,9 +38,12 @@ test("TestAiKeyShouldSupportIflowProvider", () => {
   assert.match(sharedTypesSource, /modelName\?: string;/);
   assert.match(sharedTypesSource, /modeName\?: string;/);
   assert.match(catalogSource, /iflow: \[/);
-  assert.match(catalogSource, /value: "Qwen3-Coder"/);
-  assert.match(catalogSource, /value: "Kimi-K2"/);
-  assert.match(catalogSource, /value: "GLM4\.5"/);
+  assert.match(catalogSource, /value: "qwen3-coder-plus"/);
+  assert.match(catalogSource, /value: "qwen3-max"/);
+  assert.match(catalogSource, /value: "qwen3-vl-plus"/);
+  assert.match(catalogSource, /value: "qwen3-max-preview"/);
+  assert.match(catalogSource, /value: "kimi-k2"/);
+  assert.match(catalogSource, /value: "deepseek-v3\.2"/);
 
   // 描述：
   //
@@ -110,7 +113,7 @@ test("TestAiKeyShouldSupportIflowProvider", () => {
   assert.match(llmSource, /"iflow" \| "iflow-api" => LlmProvider::Iflow,/);
   assert.match(llmSource, /LlmProvider::Iflow => providers::iflow::call_with_retry\(/);
   assert.match(iflowProviderSource, /const DEFAULT_IFLOW_BASE_URL: &str = "https:\/\/apis\.iflow\.cn\/v1";/);
-  assert.match(iflowProviderSource, /const DEFAULT_IFLOW_MODEL: &str = "Qwen3-Coder";/);
+  assert.match(iflowProviderSource, /const DEFAULT_IFLOW_MODEL: &str = "qwen3-coder-plus";/);
   assert.match(iflowProviderSource, /"core\.agent\.llm\.iflow_api_key_missing"/);
   assert.match(iflowProviderSource, /"core\.agent\.llm\.iflow_failed"/);
   assert.match(pythonOrchestratorSource, /let provider_config = crate::llm::LlmProviderConfig \{/);

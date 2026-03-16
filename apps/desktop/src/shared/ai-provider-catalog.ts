@@ -46,10 +46,12 @@ const AI_PROVIDER_MODEL_OPTIONS: Record<AiProvider, AiProviderSelectOption[]> = 
     { value: "gemini-2.5-flash-lite", label: "gemini-2.5-flash-lite" },
   ],
   iflow: [
-    { value: "Qwen3-Coder", label: "Qwen3-Coder" },
-    { value: "Kimi-K2", label: "Kimi-K2" },
-    { value: "GLM4.5", label: "GLM4.5" },
-    { value: "GLM4.6", label: "GLM4.6" },
+    { value: "qwen3-coder-plus", label: "qwen3-coder-plus" },
+    { value: "qwen3-max", label: "qwen3-max" },
+    { value: "qwen3-vl-plus", label: "qwen3-vl-plus" },
+    { value: "qwen3-max-preview", label: "qwen3-max-preview" },
+    { value: "kimi-k2", label: "kimi-k2" },
+    { value: "deepseek-v3.2", label: "deepseek-v3.2" },
   ],
 };
 
@@ -76,7 +78,7 @@ const AI_PROVIDER_DEFAULT_MODEL_MAP: Record<AiProvider, string> = {
   codex: "",
   gemini: "",
   "gemini-cli": "",
-  iflow: "Qwen3-Coder",
+  iflow: "qwen3-coder-plus",
 };
 
 // 描述：
