@@ -664,7 +664,7 @@ fn build_python_workflow_prompt(
    SUMMARY: 本轮已完成的具体结果（必须是已执行事实，不是计划）\n\
    NEXT: 下一步要做什么（若 STATUS=DONE 则写“无”）\n\
 5. 禁止输出“我将会...”等计划性句子，计划应写成代码注释。\n\
-6. 禁止导入 `tools` / `gemini_cli_native_tools` / `codex_tools` / `openai_tools` 等外部工具模块，直接调用内置函数（如 list_directory/write_file/run_shell_command）。\n\
+6. 禁止导入 `tools` / `gemini_cli_native_tools` / `default_api` / `codex_tools` / `openai_tools` 等外部工具模块；这些工具函数已经预注入到全局作用域，直接调用即可（如 list_directory/write_file/run_shell_command）。\n\
 7. 可用内置工具：{toolset_block}\n\
 8. 工具调用前若不确定参数，必须先执行 `tool_search(\"工具名\", 1)` 查看签名与示例，再落地调用。\n\
 9. 关键签名示例：\n\
@@ -725,16 +725,17 @@ fn build_python_chat_prompt(
 2. 如需了解事实，可使用 list_dir/read_text/read_json/search_files/stat/glob/run_shell 等工具先读取当前项目，再在同一轮直接给出最终答复。\n\
 3. 脚本必须只完成与当前问题直接相关的一次读取/分析任务，完成后立即调用 `finish(...)` 结束。\n\
 4. `finish(...)` 的正文必须直接写面向用户的自然语言答复；禁止返回 STATUS/SUMMARY/NEXT 协议块、轮次说明、执行计划或过程总结模板。\n\
-5. 除非用户明确要求交付文件或修改代码，否则禁止调用 write_text/write_json/apply_patch/mkdir，也禁止把解释内容落盘到 Markdown/JSON/TODO 等项目文件。\n\
-6. 若确实需要运行命令，只做与回答直接相关的只读检查；不要执行会修改仓库状态、安装依赖或生成产物的命令。\n\
-7. 工具调用前若不确定参数，必须先执行 `tool_search(\"工具名\", 1)` 查看签名与示例，再落地调用。\n\
-8. 可用内置工具：{toolset_block}\n\
-9. 关键签名示例：\n\
+5. 禁止导入 `tools` / `gemini_cli_native_tools` / `default_api` / `codex_tools` / `openai_tools` 等外部工具模块；这些工具函数已经预注入到全局作用域，直接调用即可。\n\
+6. 除非用户明确要求交付文件或修改代码，否则禁止调用 write_text/write_json/apply_patch/mkdir，也禁止把解释内容落盘到 Markdown/JSON/TODO 等项目文件。\n\
+7. 若确实需要运行命令，只做与回答直接相关的只读检查；不要执行会修改仓库状态、安装依赖或生成产物的命令。\n\
+8. 工具调用前若不确定参数，必须先执行 `tool_search(\"工具名\", 1)` 查看签名与示例，再落地调用。\n\
+9. 可用内置工具：{toolset_block}\n\
+10. 关键签名示例：\n\
    - read_text(path)  # 默认返回文件 content 字符串；请显式写成 content = read_text(\"README.md\")，不要依赖 _ 接收上一条结果\n\
    - read_json(path)  # 默认返回 JSON data 对象；请显式写成 data = read_json(\"package.json\")，不要依赖 _ 接收上一条结果\n\
    - run_shell(command, timeout_secs=30)  # 默认返回含 stdout/stderr/status/success 的结果对象；优先读取 result.get(\"stdout\")/result.get(\"stderr\")/result.get(\"success\")\n\
    - finish(\"这里直接写给用户的最终答复\")\n\
-10. 若读取后仍无法确认事实，应在答复中明确说明“读取了什么、还缺什么”，不要编造目录结构、文件内容或执行结果。\n\
+11. 若读取后仍无法确认事实，应在答复中明确说明“读取了什么、还缺什么”，不要编造目录结构、文件内容或执行结果。\n\
 当前项目：{project_name_text}\n\
 当前已启用的 MCP：\n\
 {registered_mcp_context}\n\
@@ -4225,6 +4226,43 @@ print(f"alias items count: {len(items)}")
         .expect("alias tools script should execute successfully");
         assert!(result.message.contains("自动补全结果"));
         assert!(result.actions.iter().any(|item| item == "list_dir"));
+    }
+
+    /// 描述：验证历史 `default_api` 模块别名可正常导入内置工具，避免 Gemini 生成
+    /// `from default_api import ...` 时直接触发 `ModuleNotFoundError`。
+    #[test]
+    fn should_support_default_api_module_alias_imports() {
+        if resolve_python_command().is_err() {
+            return;
+        }
+        let script = r#"
+from default_api import finish, read_text, run_shell_command, write_text
+
+for tool_name, handler in {
+    "read_text": read_text,
+    "run_shell_command": run_shell_command,
+    "write_text": write_text,
+}.items():
+    if not callable(handler):
+        raise RuntimeError(f"default_api imported handler is not callable: {tool_name} -> {handler!r}")
+
+finish("default_api alias import ok")
+"#;
+        let result = execute_python_script(
+            PythonScriptExecutionRequest {
+                user_script: script,
+                workdir: None,
+                dcc_provider_addr: None,
+                available_mcps: &[],
+                policy: &crate::policy::AgentPolicy::default(),
+                trace_id: "test-trace".to_string(),
+                session_id: "test-session-default-api-alias-import".to_string(),
+            },
+            &mut |_| {},
+        )
+        .expect("default_api alias import should execute successfully");
+        assert_eq!(result.message, "default_api alias import ok");
+        assert!(result.actions.is_empty());
     }
 
     /// 描述：验证 `list_directory(...)` 兼容别名会返回目录名称数组，避免脚本执行 `items[0]` 时把工具响应对象误当列表触发 `KeyError: 0`。

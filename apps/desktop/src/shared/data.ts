@@ -74,6 +74,11 @@ const SESSION_AGENT_CONTEXT_MESSAGES_STORAGE_KEY = "libra.desktop.session.agent.
 
 // 描述:
 //
+//   - 会话长期记忆本地存储键；用于沉淀单会话内的偏好、决策与待办。
+const SESSION_MEMORY_STORAGE_KEY = "libra.desktop.session.memory";
+
+// 描述:
+//
 //   - 会话运行态本地存储键，用于恢复“执行中步骤流”与侧边栏运行标识。
 const SESSION_RUN_STATE_STORAGE_KEY = "libra.desktop.session.run.state";
 
@@ -180,6 +185,24 @@ interface StoredSessionMessageGroup {
 
 // 描述:
 //
+//   - 会话长期记忆快照；只绑定单个会话，用于跨轮复用稳定偏好、已确认决策与未完成事项。
+export interface SessionMemorySnapshot {
+  agentKey: AgentKey;
+  sessionId: string;
+  updatedAt: number;
+  lastProcessedMessageId: string;
+  preferences: string[];
+  decisions: string[];
+  todos: string[];
+}
+
+// 描述:
+//
+//   - 会话长期记忆存储结构。
+interface StoredSessionMemory extends SessionMemorySnapshot {}
+
+// 描述:
+//
 //   - 会话运行片段结构，供会话页恢复“步骤流”展示。
 export interface SessionRunSegment {
   key: string;
@@ -273,6 +296,9 @@ export interface SessionAiRawExchangeSnapshot {
   stepSummary?: string;
   turnIndex?: number;
   capturedAt?: number;
+  status?: "running" | "finished" | "failed";
+  traceId?: string;
+  stageTitle?: string;
 }
 
 // 描述:
@@ -790,6 +816,97 @@ function writeSessionAgentContextMessages(groups: StoredSessionMessageGroup[]) {
   window.localStorage.setItem(SESSION_AGENT_CONTEXT_MESSAGES_STORAGE_KEY, JSON.stringify(groups));
 }
 
+const SESSION_MEMORY_ENTRY_LIMIT = 12;
+
+// 描述:
+//
+//   - 规范化会话记忆条目列表，统一去空、去重并限制条数，避免长期会话无限膨胀。
+//
+// Params:
+//
+//   - value: 原始条目列表。
+//
+// Returns:
+//
+//   - 规范化后的条目列表。
+function normalizeSessionMemoryEntries(value: unknown): string[] {
+  return normalizeStringList(value).slice(0, SESSION_MEMORY_ENTRY_LIMIT);
+}
+
+// 描述:
+//
+//   - 规范化单条会话记忆快照；缺少 agent/session 标识时返回 null，避免写入脏数据。
+//
+// Params:
+//
+//   - input: 原始快照输入。
+//
+// Returns:
+//
+//   - 规范化后的快照；无效时返回 null。
+function normalizeSessionMemorySnapshot(input: unknown): SessionMemorySnapshot | null {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return null;
+  }
+  const value = input as Partial<SessionMemorySnapshot>;
+  const agentKey = value.agentKey === "agent" ? "agent" : "";
+  const sessionId = String(value.sessionId || "").trim();
+  if (!agentKey || !sessionId) {
+    return null;
+  }
+  return {
+    agentKey,
+    sessionId,
+    updatedAt: Number.isFinite(Number(value.updatedAt)) ? Number(value.updatedAt) : Date.now(),
+    lastProcessedMessageId: String(value.lastProcessedMessageId || "").trim(),
+    preferences: normalizeSessionMemoryEntries(value.preferences),
+    decisions: normalizeSessionMemoryEntries(value.decisions),
+    todos: normalizeSessionMemoryEntries(value.todos),
+  };
+}
+
+// 描述:
+//
+//   - 读取会话长期记忆列表。
+//
+// Returns:
+//
+//   - 会话长期记忆数组。
+function readSessionMemories(): StoredSessionMemory[] {
+  if (!IS_BROWSER) {
+    return [];
+  }
+  const raw = window.localStorage.getItem(SESSION_MEMORY_STORAGE_KEY);
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .map((item) => normalizeSessionMemorySnapshot(item))
+      .filter((item): item is StoredSessionMemory => Boolean(item));
+  } catch (_err) {
+    return [];
+  }
+}
+
+// 描述:
+//
+//   - 写入会话长期记忆列表。
+//
+// Params:
+//
+//   - items: 会话长期记忆数组。
+function writeSessionMemories(items: StoredSessionMemory[]) {
+  if (!IS_BROWSER) {
+    return;
+  }
+  window.localStorage.setItem(SESSION_MEMORY_STORAGE_KEY, JSON.stringify(items));
+}
+
 // 描述：向当前窗口广播会话运行态更新事件，供侧边栏与会话页协同刷新。
 //
 // Params:
@@ -948,6 +1065,17 @@ function readSessionDebugArtifacts(): StoredSessionDebugArtifact[] {
                         : undefined,
                       capturedAt: Number.isFinite(Number(exchangeRecord.capturedAt))
                         ? Number(exchangeRecord.capturedAt)
+                        : undefined,
+                      status: exchangeRecord.status === "running" || exchangeRecord.status === "failed"
+                        ? exchangeRecord.status
+                        : exchangeRecord.status === "finished"
+                          ? "finished"
+                          : undefined,
+                      traceId: typeof exchangeRecord.traceId === "string"
+                        ? String(exchangeRecord.traceId || "").trim() || undefined
+                        : undefined,
+                      stageTitle: typeof exchangeRecord.stageTitle === "string"
+                        ? String(exchangeRecord.stageTitle || "").trim() || undefined
                         : undefined,
                     };
                   })
@@ -2346,6 +2474,7 @@ export function removeAgentSession(agentKey: AgentKey, sessionId: string) {
   writeSessionAgentContextMessages(
     contextGroups.filter((item) => !(item.agentKey === agentKey && item.sessionId === sessionId)),
   );
+  removeSessionMemory(agentKey, sessionId);
   removeSessionRunState(agentKey, sessionId);
   removeSessionDebugArtifact(agentKey, sessionId);
 
@@ -2373,6 +2502,20 @@ export function getSessionAgentContextMessages(
     (item) => item.agentKey === agentKey && item.sessionId === sessionId,
   );
   return group?.messages || [];
+}
+
+// 描述：按智能体与会话 ID 读取本地会话长期记忆；未命中时返回 null。
+export function getSessionMemory(
+  agentKey: AgentKey,
+  sessionId: string,
+): SessionMemorySnapshot | null {
+  const normalizedSessionId = String(sessionId || "").trim();
+  if (!normalizedSessionId) {
+    return null;
+  }
+  return readSessionMemories().find(
+    (item) => item.agentKey === agentKey && item.sessionId === normalizedSessionId,
+  ) || null;
 }
 
 // 描述：写入会话消息并按会话维度覆盖。
@@ -2413,6 +2556,38 @@ export function upsertSessionAgentContextMessages(input: {
   const next = [nextGroup, ...groups.filter((item) => !(item.agentKey === input.agentKey && item.sessionId === input.sessionId))]
     .slice(0, 200);
   writeSessionAgentContextMessages(next);
+}
+
+// 描述：写入会话长期记忆并按会话维度覆盖，限制总存储分组数量。
+//
+// Params:
+//
+//   - input: 会话长期记忆快照。
+export function upsertSessionMemory(input: SessionMemorySnapshot) {
+  const nextItem = normalizeSessionMemorySnapshot(input);
+  if (!nextItem) {
+    return;
+  }
+  const items = readSessionMemories();
+  const next = [nextItem, ...items.filter((item) => !(item.agentKey === nextItem.agentKey && item.sessionId === nextItem.sessionId))]
+    .slice(0, 200);
+  writeSessionMemories(next);
+}
+
+// 描述：删除指定会话的长期记忆，供会话删除时同步清理。
+//
+// Params:
+//
+//   - agentKey: 智能体键。
+//   - sessionId: 会话 ID。
+export function removeSessionMemory(agentKey: AgentKey, sessionId: string) {
+  const normalizedSessionId = String(sessionId || "").trim();
+  if (!normalizedSessionId) {
+    return;
+  }
+  writeSessionMemories(
+    readSessionMemories().filter((item) => !(item.agentKey === agentKey && item.sessionId === normalizedSessionId)),
+  );
 }
 
 const RUN_STATE_TEXT_MAX_CHARS = 800;
@@ -2744,6 +2919,17 @@ export function upsertSessionDebugArtifact(input: SessionDebugArtifactSnapshot) 
                   : undefined,
                 capturedAt: Number.isFinite(Number(exchange.capturedAt))
                   ? Number(exchange.capturedAt)
+                  : undefined,
+                status: exchange.status === "running" || exchange.status === "failed"
+                  ? exchange.status
+                  : exchange.status === "finished"
+                    ? "finished"
+                    : undefined,
+                traceId: typeof exchange.traceId === "string"
+                  ? String(exchange.traceId || "").trim() || undefined
+                  : undefined,
+                stageTitle: typeof exchange.stageTitle === "string"
+                  ? String(exchange.stageTitle || "").trim() || undefined
                   : undefined,
               }))
             : [];

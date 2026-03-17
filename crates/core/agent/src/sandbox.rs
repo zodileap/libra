@@ -876,8 +876,9 @@ def list_directory(dir_path=".", path=None, recursive=False, with_meta=False, **
     return _remember_last_value(result)
 
 def _register_python_tool_module_aliases():
-    # 描述：兼容 Gemini 与通用 Python Agent 常见脚本习惯，允许 `from gemini_cli_native_tools import ...`
-    #   与 `from tools import ...` 直接工作，避免模型沿用旧模板时触发 ModuleNotFoundError。
+    # 描述：兼容 Gemini 与通用 Python Agent 常见脚本习惯，允许历史模板继续使用
+    #   `from gemini_cli_native_tools import ...`、`from tools import ...`、
+    #   `from default_api import ...` 等旧式导入，避免触发 ModuleNotFoundError。
     try:
         import types
         exports = {
@@ -909,7 +910,13 @@ def _register_python_tool_module_aliases():
             "tool_search": tool_search,
             "finish": finish,
         }
-        for module_name in ("gemini_cli_native_tools", "tools"):
+        for module_name in (
+            "gemini_cli_native_tools",
+            "tools",
+            "default_api",
+            "codex_tools",
+            "openai_tools",
+        ):
             module = types.ModuleType(module_name)
             for name, handler in exports.items():
                 setattr(module, name, handler)
@@ -1265,14 +1272,16 @@ mod tests {
     fn should_register_python_tool_module_aliases_in_prelude() {
         // 描述：
         //
-        //   - 沙盒预置脚本应同时注册 `gemini_cli_native_tools` 与 `tools` 两类兼容模块别名，
-        //     防止模型脚本沿用历史模板直接 import 时触发 ModuleNotFoundError。
+        //   - 沙盒预置脚本应同时注册 `gemini_cli_native_tools`、`tools`、`default_api`
+        //     与其他历史工具模块别名，防止模型脚本沿用旧模板直接 import 时触发
+        //     ModuleNotFoundError。
         assert!(PERSISTENT_PRELUDE.contains("_register_python_tool_module_aliases"));
-        assert!(PERSISTENT_PRELUDE.contains("types.ModuleType(\"gemini_cli_native_tools\")"));
-        assert!(PERSISTENT_PRELUDE.contains("sys.modules[\"gemini_cli_native_tools\"] = module"));
         assert!(PERSISTENT_PRELUDE.contains("types.ModuleType(module_name)"));
-        assert!(PERSISTENT_PRELUDE
-            .contains("for module_name in (\"gemini_cli_native_tools\", \"tools\")"));
+        assert!(PERSISTENT_PRELUDE.contains("\"gemini_cli_native_tools\""));
+        assert!(PERSISTENT_PRELUDE.contains("\"tools\""));
+        assert!(PERSISTENT_PRELUDE.contains("\"default_api\""));
+        assert!(PERSISTENT_PRELUDE.contains("\"codex_tools\""));
+        assert!(PERSISTENT_PRELUDE.contains("\"openai_tools\""));
         assert!(PERSISTENT_PRELUDE.contains("sys.modules[module_name] = module"));
     }
 

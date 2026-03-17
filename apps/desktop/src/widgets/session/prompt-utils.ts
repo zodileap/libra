@@ -1,4 +1,4 @@
-import type { ProjectWorkspaceCapabilityId, ProjectWorkspaceProfile } from "../../shared/data";
+import type { ProjectWorkspaceCapabilityId, ProjectWorkspaceProfile, SessionMemorySnapshot } from "../../shared/data";
 import { IS_BROWSER, STORAGE_KEYS } from "../../shared/constants";
 import { resolveDesktopTextVariants, translateDesktopText } from "../../shared/i18n";
 import { DESKTOP_TEXT_VARIANT_GROUPS } from "../../shared/i18n/messages";
@@ -335,6 +335,11 @@ export const AGENT_PROFILE_CONTEXT_ITEM_LIMIT = 4;
 
 // 描述：
 //
+//   - 会话记忆每个分组最多注入条数，避免长期对话的偏好/决策列表过长。
+export const AGENT_MEMORY_CONTEXT_ITEM_LIMIT = 6;
+
+// 描述：
+//
 //   - 结构化项目信息“按需注入”触发关键词；仅在模型明确需要项目语义基线时注入，避免首轮提示词冗长。
 export const AGENT_PROFILE_ON_DEMAND_KEYWORDS = resolveDesktopTextVariants(DESKTOP_TEXT_VARIANT_GROUPS.agentProfileOnDemand);
 
@@ -575,6 +580,46 @@ export function buildCodeProjectProfileContextLines(
 
 // 描述：
 //
+//   - 将单会话长期记忆转换为提示词上下文片段，补足短窗口历史以外的稳定偏好与决策。
+//
+// Params：
+//
+//   - sessionMemory: 当前会话记忆。
+//
+// Returns：
+//
+//   - 可拼接到提示词的行数组。
+export function buildSessionMemoryContextLines(
+  sessionMemory?: SessionMemorySnapshot | null,
+): string[] {
+  if (!sessionMemory) {
+    return [];
+  }
+
+  const lines: string[] = [translateDesktopText("【会话记忆】")];
+  const pushList = (label: string, items: string[]) => {
+    const normalized = items
+      .map((item) => String(item || "").trim())
+      .filter((item) => item.length > 0)
+      .slice(0, AGENT_MEMORY_CONTEXT_ITEM_LIMIT);
+    if (normalized.length === 0) {
+      return;
+    }
+    lines.push(`${label}：${normalized.join("；")}`);
+  };
+
+  pushList(translateDesktopText("用户偏好"), sessionMemory.preferences || []);
+  pushList(translateDesktopText("已确认决策"), sessionMemory.decisions || []);
+  pushList(translateDesktopText("未完成事项"), sessionMemory.todos || []);
+  if (lines.length === 1) {
+    return [];
+  }
+  lines.push("");
+  return lines;
+}
+
+// 描述：
+//
 //   - 从结构化分类中读取指定 facet 条目；若分类不存在则回退到兼容字段。
 //
 // Params:
@@ -767,6 +812,7 @@ export function isRetryOnlyPrompt(prompt: string): boolean {
 //   - historyMessages: 当前会话已存在的历史消息。
 //   - currentPrompt: 当前用户输入。
 //   - workspacePath: 当前会话绑定的项目目录路径。
+//   - sessionMemory: 当前会话长期记忆。
 //
 // Returns:
 //
@@ -777,6 +823,7 @@ export function buildSessionContextPrompt(
   workspacePath?: string,
   projectProfile?: ProjectWorkspaceProfile | null,
   enabledCapabilities: ProjectWorkspaceCapabilityId[] = [],
+  sessionMemory?: SessionMemorySnapshot | null,
   runtimeInfo?: DesktopRuntimeInfo | null,
 ): string {
   const normalizedCurrentPrompt = String(currentPrompt || "").trim();
@@ -798,6 +845,7 @@ export function buildSessionContextPrompt(
     normalizedCurrentPrompt,
     projectProfile,
   );
+  const memoryContextLines = buildSessionMemoryContextLines(sessionMemory);
   const historyLines = historyMessages
     .filter((item) => item.role === "user" || item.role === "assistant")
     .map((item) => ({
@@ -818,14 +866,16 @@ export function buildSessionContextPrompt(
         "",
         ...profileContextLines,
         ...frameworkReplacementContextLines,
+        ...memoryContextLines,
         translateDesktopText("【当前请求】"),
         normalizedCurrentPrompt,
       ].join("\n");
     }
-    if (profileContextLines.length > 0) {
+    if (profileContextLines.length > 0 || memoryContextLines.length > 0 || frameworkReplacementContextLines.length > 0) {
       return [
         ...profileContextLines,
         ...frameworkReplacementContextLines,
+        ...memoryContextLines,
         translateDesktopText("【当前请求】"),
         normalizedCurrentPrompt,
       ].join("\n");
@@ -848,6 +898,7 @@ export function buildSessionContextPrompt(
     ...workspaceLines,
     ...profileContextLines,
     ...frameworkReplacementContextLines,
+    ...memoryContextLines,
     translateDesktopText("【会话上下文】"),
     ...historyLines,
     "",

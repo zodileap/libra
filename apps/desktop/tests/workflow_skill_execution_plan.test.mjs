@@ -103,8 +103,8 @@ test("TestWorkflowSkillExecutionPlanShouldValidateRegistryStateAndBuildPrompt", 
   assert.match(sessionPageSource, /throw new Error\(t\("工作流阶段前检查未通过：\{\{issues\}\}", \{\s*issues: skillExecutionPlan\.blockingIssues\.join\("；"\),\s*\}\)\)/s);
   assert.doesNotMatch(sessionPageSource, /selectedWorkflowMissingRequiredCapabilities/);
   assert.match(sessionPageSource, /const latestProjectProfile = activeWorkspace\?\.id\s*\?\s*\(activeProjectProfile \|\| getProjectWorkspaceProfile\(activeWorkspace\.id\)\)\s*:\s*null;/s);
-  assert.match(sessionPageSource, /const currentRequestPrompt = buildSessionContextPrompt\(\s*nextContextMessages,\s*normalizedContent,\s*undefined,\s*latestProjectProfile,\s*activeWorkspaceEnabledCapabilities,\s*runtimeInfo,\s*\);/s);
-  assert.match(sessionPageSource, /const contextualRequestPrompt = buildSessionContextPrompt\(\s*nextContextMessages,\s*normalizedContent,\s*String\(activeWorkspace\?\.path \|\| ""\)\.trim\(\) \|\| undefined,\s*latestProjectProfile,\s*activeWorkspaceEnabledCapabilities,\s*runtimeInfo,\s*\);/s);
+  assert.match(sessionPageSource, /const currentRequestPrompt = buildSessionContextPrompt\(\s*nextContextMessages,\s*normalizedContent,\s*undefined,\s*latestProjectProfile,\s*activeWorkspaceEnabledCapabilities,\s*sessionMemoryRef\.current,\s*runtimeInfo,\s*\);/s);
+  assert.match(sessionPageSource, /const contextualRequestPrompt = buildSessionContextPrompt\(\s*nextContextMessages,\s*normalizedContent,\s*String\(activeWorkspace\?\.path \|\| ""\)\.trim\(\) \|\| undefined,\s*latestProjectProfile,\s*activeWorkspaceEnabledCapabilities,\s*sessionMemoryRef\.current,\s*runtimeInfo,\s*\);/s);
   assert.match(sessionPageSource, /const runtimeCapabilities = await getAgentRuntimeCapabilities\(\{/);
   assert.match(sessionPageSource, /workspaceRoot: String\(activeWorkspace\?\.path \|\| ""\)\.trim\(\) \|\| undefined,/);
   assert.match(sessionPageSource, /const hasWorkflowPlaywrightInteractiveSkill = \(scopedWorkflow\?\.graph\?\.nodes \|\| \[\]\)\.some/);

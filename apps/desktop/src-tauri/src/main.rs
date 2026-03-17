@@ -759,6 +759,34 @@ async fn call_ai_summary_command(
     })?
 }
 
+#[tauri::command]
+async fn call_ai_memory_command(
+    provider: Option<String>,
+    provider_api_key: Option<String>,
+    provider_model: Option<String>,
+    provider_mode: Option<String>,
+    prompt: String,
+    workdir: Option<String>,
+) -> Result<AgentSummaryResponse, DesktopProtocolError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        call_ai_memory_command_inner(
+            provider,
+            provider_api_key,
+            provider_model,
+            provider_mode,
+            prompt,
+            workdir,
+        )
+    })
+    .await
+    .map_err(|err| DesktopProtocolError {
+        code: "core.desktop.agent.memory_task_join_failed".to_string(),
+        message: format!("memory task join failed: {}", err),
+        suggestion: Some("请重试一次；如仍失败请重启应用".to_string()),
+        retryable: true,
+    })?
+}
+
 /// 描述：提取 panic payload 的可读信息，优先返回字符串消息，避免显示 Any 类型噪声。
 fn describe_panic_payload(payload: &(dyn Any + Send)) -> String {
     if let Some(message) = payload.downcast_ref::<&str>() {
@@ -1379,21 +1407,24 @@ fn run_agent_command_inner(
     })
 }
 
-/// 描述：直接调用当前 provider 生成执行总结，避免再经过 agent 编排导致多余的 planning / codegen 噪声。
-fn call_ai_summary_command_inner(
+/// 描述：直接调用当前 provider 生成纯文本结果，供执行总结与会话记忆提炼共用，避免再经过 agent 编排引入额外 planning/codegen 噪声。
+fn call_ai_text_command_inner(
     provider: Option<String>,
     provider_api_key: Option<String>,
     provider_model: Option<String>,
     provider_mode: Option<String>,
     prompt: String,
     workdir: Option<String>,
+    empty_prompt_code: &str,
+    empty_prompt_message: &str,
+    empty_prompt_suggestion: &str,
 ) -> Result<AgentSummaryResponse, DesktopProtocolError> {
     let normalized_prompt = prompt.trim().to_string();
     if normalized_prompt.is_empty() {
         return Err(DesktopProtocolError {
-            code: "core.desktop.agent.summary_prompt_empty".to_string(),
-            message: "summary prompt is empty".to_string(),
-            suggestion: Some("请先提供用于总结的执行记录。".to_string()),
+            code: empty_prompt_code.to_string(),
+            message: empty_prompt_message.to_string(),
+            suggestion: Some(empty_prompt_suggestion.to_string()),
             retryable: false,
         });
     }
@@ -1454,6 +1485,50 @@ fn call_ai_summary_command_inner(
         content: result.content.trim().to_string(),
         usage: Some(result.usage),
     })
+}
+
+/// 描述：直接调用当前 provider 生成执行总结，避免再经过 agent 编排导致多余的 planning / codegen 噪声。
+fn call_ai_summary_command_inner(
+    provider: Option<String>,
+    provider_api_key: Option<String>,
+    provider_model: Option<String>,
+    provider_mode: Option<String>,
+    prompt: String,
+    workdir: Option<String>,
+) -> Result<AgentSummaryResponse, DesktopProtocolError> {
+    call_ai_text_command_inner(
+        provider,
+        provider_api_key,
+        provider_model,
+        provider_mode,
+        prompt,
+        workdir,
+        "core.desktop.agent.summary_prompt_empty",
+        "summary prompt is empty",
+        "请先提供用于总结的执行记录。",
+    )
+}
+
+/// 描述：直接调用当前 provider 提炼会话记忆，复用统一纯文本模型调用链。
+fn call_ai_memory_command_inner(
+    provider: Option<String>,
+    provider_api_key: Option<String>,
+    provider_model: Option<String>,
+    provider_mode: Option<String>,
+    prompt: String,
+    workdir: Option<String>,
+) -> Result<AgentSummaryResponse, DesktopProtocolError> {
+    call_ai_text_command_inner(
+        provider,
+        provider_api_key,
+        provider_model,
+        provider_mode,
+        prompt,
+        workdir,
+        "core.desktop.agent.memory_prompt_empty",
+        "memory prompt is empty",
+        "请先提供用于提炼会话记忆的上下文。",
+    )
 }
 
 /// 描述：解析单条依赖规范，支持 `node:pkg@1.0.0`、`go:module@v1.0.0`、`java:group:artifact@1.0.0` 与无前缀写法。
@@ -3838,6 +3913,7 @@ fn main() {
             get_agent_runtime_capabilities,
             run_agent_command,
             call_ai_summary_command,
+            call_ai_memory_command,
             check_codex_cli_health,
             check_gemini_cli_health,
             check_git_cli_health,

@@ -193,7 +193,7 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(sessionSource, /const finalSummary = resolveFinalAssistantRunSummary\(/);
   assert.doesNotMatch(sessionSource, /finishAssistantRunMessage\(streamMessageId, "finished", t\("执行过程已完成。"\)\);/);
   assert.match(sessionSource, /const hasPendingWorkflowStages = \(\) => \{/);
-  assert.match(sessionSource, /if \(streamMessageIdRef\.current\) \{\s*setStreamingAssistantTarget\(t\("执行失败：\{\{reason\}\}", \{ reason \}\)\);\s*finishAssistantRunMessage\(\s*streamMessageIdRef\.current,\s*"failed",\s*t\("执行失败：\{\{reason\}\}", \{ reason \}\),\s*"failure",\s*\);/s);
+  assert.match(sessionSource, /if \(streamMessageIdRef\.current\) \{\s*const failedAssistantReply = t\("执行失败：\{\{reason\}\}", \{ reason \}\);\s*setStreamingAssistantTarget\(t\("执行失败：\{\{reason\}\}", \{ reason \}\)\);\s*finishAssistantRunMessage\(\s*streamMessageIdRef\.current,\s*"failed",\s*failedAssistantReply,\s*"failure",\s*\);/s);
   assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.STARTED\) \{\s*(?:agentLlmDeltaBufferRef\.current = "";\s*)?(?:setSessionAiResponseRaw\(""\);\s*)?setStreamingAssistantTarget\(t\("正在准备执行\.\.\."\)\);/s);
   assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.LLM_STARTED\) \{\s*(?:agentLlmDeltaBufferRef\.current = "";\s*)?(?:setSessionAiResponseRaw\(""\);\s*)?setStreamingAssistantTarget\(t\("正在生成执行结果…"\)\);/s);
   assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.LLM_FINISHED\) \{/);
@@ -242,8 +242,8 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(sessionSource, /runtimeInfo\?: DesktopRuntimeInfo \| null,/);
   assert.match(sessionSource, /const projectKnowledgeEnabled = enabledCapabilities\.includes\("project-knowledge"\);/);
   assert.match(sessionSource, /translateDesktopText\("路径：\{\{path\}\}", \{ path: normalizedWorkspacePath \}\)/);
-  assert.match(sessionSource, /buildSessionContextPrompt\(\s*nextContextMessages,\s*normalizedContent,\s*undefined,\s*latestProjectProfile,\s*activeWorkspaceEnabledCapabilities,\s*runtimeInfo,\s*\)/s);
-  assert.match(sessionSource, /buildSessionContextPrompt\(\s*nextContextMessages,\s*normalizedContent,\s*String\(activeWorkspace\?\.path \|\| ""\)\.trim\(\) \|\| undefined,\s*latestProjectProfile,\s*activeWorkspaceEnabledCapabilities,\s*runtimeInfo,\s*\)/s);
+  assert.match(sessionSource, /buildSessionContextPrompt\(\s*nextContextMessages,\s*normalizedContent,\s*undefined,\s*latestProjectProfile,\s*activeWorkspaceEnabledCapabilities,\s*sessionMemoryRef\.current,\s*runtimeInfo,\s*\)/s);
+  assert.match(sessionSource, /buildSessionContextPrompt\(\s*nextContextMessages,\s*normalizedContent,\s*String\(activeWorkspace\?\.path \|\| ""\)\.trim\(\) \|\| undefined,\s*latestProjectProfile,\s*activeWorkspaceEnabledCapabilities,\s*sessionMemoryRef\.current,\s*runtimeInfo,\s*\)/s);
   assert.match(sessionSource, /translateDesktopText\("系统：\{\{system\}\}"/);
   assert.match(sessionSource, /translateDesktopText\("命令约束：\{\{constraint\}\}"/);
   assert.doesNotMatch(sessionSource, /当前工作流缺少必需的项目能力/);

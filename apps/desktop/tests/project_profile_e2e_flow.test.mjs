@@ -40,7 +40,7 @@ test("TestE2ELocalWorkspaceCreateShouldBootstrapProfileAndInjectSessionContext",
   assert.match(sessionSource, /const latestProjectProfile = activeWorkspace\?\.id/);
   assert.match(sessionSource, /getProjectWorkspaceProfile\(activeWorkspace\.id\)/);
   assert.match(sessionSource, /const contextualRequestPrompt = buildSessionContextPrompt\(/);
-  assert.match(sessionSource, /latestProjectProfile,\s*activeWorkspaceEnabledCapabilities,\s*runtimeInfo,\s*\)/);
+  assert.match(sessionSource, /latestProjectProfile,\s*activeWorkspaceEnabledCapabilities,\s*sessionMemoryRef\.current,\s*runtimeInfo,\s*\)/);
 
   // 描述：
   //

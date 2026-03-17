@@ -63,6 +63,7 @@ export const COMMANDS = {
   RUN_AGENT_COMMAND: "run_agent_command",
   GET_AGENT_RUNTIME_CAPABILITIES: "get_agent_runtime_capabilities",
   CALL_AI_SUMMARY_COMMAND: "call_ai_summary_command",
+  CALL_AI_MEMORY_COMMAND: "call_ai_memory_command",
   CANCEL_AGENT_SESSION: "cancel_agent_session",
   RESET_AGENT_SANDBOX: "reset_agent_sandbox",
   APPROVE_AGENT_ACTION: "approve_agent_action",

@@ -56,6 +56,7 @@ test("TestSessionCopyShouldBeMovedToDevDebugPanel", () => {
   assert.match(sessionSource, /#### AI 原始收发/);
   assert.match(sessionSource, /##### 请求 \{\{index\}\}/);
   assert.match(sessionSource, /##### 响应 \{\{index\}\}/);
+  assert.match(sessionSource, /##### 响应 \{\{index\}\}（进行中）/);
   assert.match(sessionSource, /t\("- （未记录 AI 原始收发）"\)/);
   assert.doesNotMatch(sessionSource, /### 4\.1 全链路调试/);
   assert.doesNotMatch(sessionSource, /### 4\.2 Trace 记录/);
@@ -88,7 +89,7 @@ test("TestSessionCopyShouldBeMovedToDevDebugPanel", () => {
   assert.match(sessionSource, /sessionAiRawByMessage/);
   assert.match(sessionSource, /const assistantMessageId = String\(item\.id \|\| ""\)\.trim\(\);/);
   assert.match(sessionSource, /buildSessionAiRawExchangeText\(\s*assistantMessageId,/);
-  assert.match(sessionSource, /setSessionAiRawByMessage\(\(prev\) => \(\{/);
+  assert.match(sessionSource, /setSessionAiRawByMessage\(\(prev\) => \{/);
   assert.match(sessionSource, /buildSessionAiRawByMessageItem\(/);
   assert.match(sessionSource, /runMeta\.summarySource === "ai" && String\(runMeta\.summary \|\| ""\)\.trim\(\)/);
   assert.match(sessionSource, /visible_summary: visibleSummary,/);
@@ -127,6 +128,9 @@ test("TestSessionCopyShouldBeMovedToDevDebugPanel", () => {
   assert.match(sharedDataSource, /export interface SessionAiRawExchangeSnapshot/);
   assert.match(sharedDataSource, /export interface SessionAiRawByMessageSnapshot/);
   assert.match(sharedDataSource, /export interface SessionCallRecordSnapshot/);
+  assert.match(sharedDataSource, /status\?: "running" \| "finished" \| "failed";/);
+  assert.match(sharedDataSource, /traceId\?: string;/);
+  assert.match(sharedDataSource, /stageTitle\?: string;/);
   assert.match(sharedDataSource, /summarySource\?: "ai" \| "system" \| "failure";/);
   assert.match(sharedDataSource, /aiRawByMessage\?: Record<string, SessionAiRawByMessageSnapshot>;/);
   assert.match(sharedDataSource, /callRecords\?: SessionCallRecordSnapshot\[];/);
@@ -136,6 +140,12 @@ test("TestSessionCopyShouldBeMovedToDevDebugPanel", () => {
   assert.match(sharedDataSource, /const questions = sanitizeRunSegmentUserInputQuestions\(data\.questions\);/);
   assert.match(sharedDataSource, /const answers = sanitizeRunSegmentUserInputAnswers\(data\.answers\);/);
   assert.match(sharedDataSource, /const normalizedExchanges: SessionAiRawExchangeSnapshot\[] = exchanges\.length > 0/);
+  assert.match(sharedDataSource, /status: exchangeRecord\.status === "running" \|\| exchangeRecord\.status === "failed"/);
+  assert.match(sharedDataSource, /traceId: typeof exchangeRecord\.traceId === "string"/);
+  assert.match(sharedDataSource, /stageTitle: typeof exchangeRecord\.stageTitle === "string"/);
+  assert.match(sharedDataSource, /status: exchange\.status === "running" \|\| exchange\.status === "failed"/);
+  assert.match(sharedDataSource, /traceId: typeof exchange\.traceId === "string"/);
+  assert.match(sharedDataSource, /stageTitle: typeof exchange\.stageTitle === "string"/);
   assert.match(sharedDataSource, /callRecords = Array\.isArray\(item\.callRecords\)/);
   assert.match(sharedDataSource, /callRecords: \(input\.callRecords \|\| \[\]\)/);
 
