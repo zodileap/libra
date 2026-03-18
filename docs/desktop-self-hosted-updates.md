@@ -315,7 +315,7 @@ security find-identity -v -p codesigning
 如果你还没有 updater key，可在本机构建机生成：
 
 ```bash
-pnpm --dir /Users/yoho/code/zodileap-agen/apps/desktop exec tauri signer generate \
+pnpm --dir /Users/yoho/code/libra/apps/desktop exec tauri signer generate \
   --ci \
   -w "$HOME/.tauri/libra-desktop-updater.key" \
   -p '请改成你自己的强密码'
@@ -364,7 +364,7 @@ export TAURI_UPDATER_PUBLIC_KEY_PATH="$HOME/.tauri/libra-desktop-updater.key.pub
 只验证本地构建是否通过：
 
 ```bash
-pnpm -C /Users/yoho/code/zodileap-agen/apps/desktop build
+pnpm -C /Users/yoho/code/libra/apps/desktop build
 ```
 
 走正式发布脚本并同步版本号：

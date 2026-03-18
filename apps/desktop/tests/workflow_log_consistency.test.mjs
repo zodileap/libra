@@ -115,7 +115,7 @@ test("TestSessionLayoutShouldAlignUserRightAndAssistantLeft", () => {
 });
 
 test("TestRepositoryAgentsShouldDefineDesktopMessageTaxonomy", () => {
-  const source = readDesktopSource("../../Agents.md");
+  const source = readDesktopSource("../../AGENTS.md");
   const runSegmentSource = readDesktopSource("src/widgets/session/run-segment.tsx");
 
   // 描述:
