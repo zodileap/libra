@@ -100,8 +100,10 @@ test("TestSessionLayoutShouldAlignUserRightAndAssistantLeft", () => {
   assert.match(source, /\.desk-run-step-body \.desk-md-list\s*\{[\s\S]*list-style-position:\s*inside;[\s\S]*padding-inline-start:\s*0;/);
   assert.match(source, /\.desk-run-step-body \.desk-md-quote\s*\{[\s\S]*border-radius:\s*0;/);
   assert.match(markdownSource, /{index > 0 \? <br \/> : null}/);
-  assert.match(markdownSource, /const orderedStart = ordered \? Number\.parseInt\(listMatch\[1\], 10\) \|\| 1 : undefined;/);
-  assert.match(markdownSource, /<ListTag[\s\S]*start=\{orderedStart\}/s);
+  assert.match(markdownSource, /const LIST_ITEM_REGEX = \/\^\(\\s\*\)\(\[-\*\]\|\\d\+\\.\)\\s\+\(\.\+\)\$\/;/);
+  assert.match(markdownSource, /function normalizeOutlineListIndentation\(text: string\): string \{/);
+  assert.match(markdownSource, /function parseMarkdownListNode\(/);
+  assert.match(markdownSource, /<ListTag[\s\S]*start=\{list\.start\}/s);
   assert.match(source, /\.desk-run-step-rich\s*\{[\s\S]*color:\s*var\(--desk-run-text-tertiary\)/);
   assert.match(source, /\.desk-run-step-file-link\s*\{[\s\S]*max-inline-size:\s*min\(100%,\s*calc\(var\(--z-inset\)\s*\*\s*24\)\);/);
   assert.match(source, /\.desk-run-step-file-link\s*\{[\s\S]*text-overflow:\s*ellipsis;/);

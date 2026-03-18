@@ -90,6 +90,31 @@ fs.writeFileSync(capturePath, JSON.stringify({
 
 // 描述：
 //
+//   - 在临时 Tauri target 目录里写入一个引用旧工作区绝对路径的 build cache，模拟仓库重命名或 worktree 迁移后的脏缓存。
+//
+// Params:
+//
+//   - rootDir: 临时仓库根目录。
+//   - staleWorkspaceRoot: 旧工作区根目录。
+function writeStaleTauriTargetCache(rootDir, staleWorkspaceRoot) {
+  const staleBuildDir = path.join(rootDir, "apps", "desktop", "src-tauri", "target", "debug", "build", "tauri-stale", "out");
+  const staleTargetRoot = path.join(staleWorkspaceRoot, "apps", "desktop", "src-tauri", "target");
+
+  fs.mkdirSync(staleBuildDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(rootDir, "apps", "desktop", "src-tauri", "target", "debug", "build", "tauri-stale", "root-output"),
+    `${path.join(staleTargetRoot, "debug", "build", "tauri-stale", "out", "tauri-core-app-permission-files")}\n`,
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(rootDir, "apps", "desktop", "src-tauri", "target", "debug", "build", "tauri-stale", "output"),
+    `cargo:core:app__CORE_PLUGIN___PERMISSION_FILES_PATH=${path.join(staleTargetRoot, "debug", "build", "tauri-stale", "out", "tauri-core-app-permission-files")}\n`,
+    "utf8",
+  );
+}
+
+// 描述：
+//
 //   - 统一解析临时文件在当前系统中的真实路径，避免 macOS `/tmp` 与 `/private/tmp` 的别名差异导致断言误判。
 //
 // Params:
@@ -315,6 +340,47 @@ test("TestDesktopTauriRunnerShouldInjectLocalConfigIntoBuildCommand", () => {
     ]);
     assert.equal(capturedCommand.argv[7], "--config");
     assert.match(capturedCommand.argv[8], /tauri\.updater\.local\.conf\.json$/);
+  } finally {
+    fs.rmSync(fixture.rootDir, { recursive: true, force: true });
+  }
+});
+
+test("TestDesktopTauriRunnerShouldClearStaleWorkspaceTargetCache", () => {
+  const fixture = createTauriRunnerFixture();
+  const targetDir = path.join(fixture.rootDir, "apps", "desktop", "src-tauri", "target");
+
+  try {
+    writeStaleTauriTargetCache(fixture.rootDir, "/Users/yoho/code/zodileap-agen");
+
+    const output = execFileSync(
+      process.execPath,
+      [fixture.runnerPath, "dev"],
+      {
+        cwd: fixture.rootDir,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          npm_execpath: fixture.pnpmShimPath,
+          CAPTURE_PATH: fixture.capturePath,
+          HOME: fixture.rootDir,
+        },
+      },
+    );
+    const capturedCommand = JSON.parse(fs.readFileSync(fixture.capturePath, "utf8"));
+
+    // 描述：
+    //
+    //   - 当 `src-tauri/target` 内残留旧仓库绝对路径时，wrapper 应在调用 Tauri CLI 前自动清理缓存，避免权限文件继续指向失效路径。
+    assert.match(output, /Detected stale Tauri target cache from another workspace and cleared it:/);
+    assert.match(output, /zodileap-agen/);
+    assert.equal(fs.existsSync(targetDir), false);
+    assert.deepEqual(capturedCommand.argv.slice(0, 5), [
+      "--dir",
+      resolveRealPath(path.join(fixture.rootDir, "apps", "desktop")),
+      "exec",
+      "tauri",
+      "dev",
+    ]);
   } finally {
     fs.rmSync(fixture.rootDir, { recursive: true, force: true });
   }

@@ -441,6 +441,11 @@ body {
   min-width: 0;
 }
 
+.desk-project-workspace-label-invalid,
+.desk-session-invalid-workspace-text {
+  color: var(--z-color-text-secondary);
+}
+
 .desk-user-trigger:hover {
   background: var(--desk-sidebar-entry-hover-bg);
   border-color: var(--desk-sidebar-entry-hover-border);
@@ -2272,6 +2277,11 @@ body {
   margin-top: var(--z-inset-sm);
   display: grid;
   gap: var(--z-inset-sm);
+}
+
+.desk-run-body {
+  display: grid;
+  gap: var(--z-inset-xs);
 }
 
 .desk-run-segments {

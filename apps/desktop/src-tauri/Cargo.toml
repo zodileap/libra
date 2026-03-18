@@ -17,11 +17,12 @@ serde_yaml = "0.9"
 libra_mcp_model = { path = "../../../crates/core/mcp/model" }
 libra_agent_core = { path = "../../../crates/core/agent", features = ["with-mcp-model"] }
 libra_mcp_common = { path = "../../../crates/core/mcp/common" }
+libra_runtime_client = { path = "../../../crates/runtime/client" }
+libra_runtime_proto = { path = "../../../crates/runtime/proto" }
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 rfd = "0.15"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 sha2 = "0.10"
-
 
 
 

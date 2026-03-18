@@ -1,0 +1,11 @@
+{
+  "name": "@libra/cli",
+  "version": "0.1.5",
+  "type": "module",
+  "bin": {
+    "libra": "./bin/libra.mjs"
+  },
+  "scripts": {
+    "test:unit": "node --test ./tests/**/*.test.mjs"
+  }
+}

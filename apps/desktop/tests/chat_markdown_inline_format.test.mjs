@@ -15,7 +15,11 @@ import path from "node:path";
 //
 //   - UTF-8 文本内容。
 function readDesktopSource(relativePath) {
-  const absolutePath = path.resolve(process.cwd(), relativePath);
+  const currentDir = process.cwd();
+  const desktopRoot = currentDir.endsWith(path.join("apps", "desktop"))
+    ? currentDir
+    : path.resolve(currentDir, "apps", "desktop");
+  const absolutePath = path.resolve(desktopRoot, relativePath);
   return fs.readFileSync(absolutePath, "utf8");
 }
 

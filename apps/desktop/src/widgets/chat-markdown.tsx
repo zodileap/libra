@@ -30,7 +30,34 @@ const HEADING_REGEX = /^(#{1,6})\s+(.+)$/;
 // 描述:
 //
 //   - 匹配无序/有序列表项（"-"、"*"、"1." 等）。
-const LIST_REGEX = /^([-*]|\d+\.)\s+(.+)$/;
+const LIST_ITEM_REGEX = /^(\s*)([-*]|\d+\.)\s+(.+)$/;
+
+// 描述：
+//
+//   - 定义列表行解析结果，统一记录缩进、列表类型与正文文本。
+interface MarkdownListLineMatch {
+  indent: number;
+  marker: string;
+  ordered: boolean;
+  text: string;
+}
+
+// 描述：
+//
+//   - 定义嵌套列表节点，供文本块渲染阶段递归输出有序/无序列表。
+interface MarkdownListNode {
+  ordered: boolean;
+  start?: number;
+  items: MarkdownListItemNode[];
+}
+
+// 描述：
+//
+//   - 定义单个列表项节点；除正文外，还允许继续挂载子列表。
+interface MarkdownListItemNode {
+  text: string;
+  children: MarkdownListNode[];
+}
 
 // 描述:
 //
@@ -75,6 +102,107 @@ function splitMarkdownBlocks(content: string): MarkdownBlock[] {
   }
 
   return blocks;
+}
+
+// 描述：
+//
+//   - 计算 Markdown 行首缩进宽度；当前把 tab 统一折算为 4 个空格，避免层级判断受制表符影响。
+//
+// Params:
+//
+//   - rawIndent: 原始缩进片段。
+//
+// Returns:
+//
+//   - 归一化后的缩进宽度。
+function countMarkdownIndent(rawIndent: string): number {
+  return String(rawIndent || "").replace(/\t/g, "    ").length;
+}
+
+// 描述：
+//
+//   - 判断当前编号项是否更像“分级大纲标题”。对于“2. 范围与依赖：”这类标题，
+//     后面紧跟的短横线通常是它的子项，而不是新的顶层列表。
+//
+// Params:
+//
+//   - line: 当前原始文本行。
+//
+// Returns:
+//
+//   - true: 后续短横线列表应提升为当前编号项的子级。
+function shouldPromoteOutlineChildren(line: string): boolean {
+  return /^\s*\d+\.\s+.+[：:]$/u.test(String(line || "").trim());
+}
+
+// 描述：
+//
+//   - 对 AI 常见的“编号标题 + 紧随其后的短横线子项”进行缩进修正，
+//     把本来语义上属于子级的短横线列表补成可稳定解析的嵌套结构。
+//
+// Params:
+//
+//   - text: 原始 Markdown 文本。
+//
+// Returns:
+//
+//   - 修正后的 Markdown 文本。
+function normalizeOutlineListIndentation(text: string): string {
+  const lines = String(text || "").split("\n");
+  const normalizedLines = [...lines];
+
+  for (let lineIndex = 0; lineIndex < normalizedLines.length; lineIndex += 1) {
+    const currentLine = normalizedLines[lineIndex];
+    if (!shouldPromoteOutlineChildren(currentLine)) {
+      continue;
+    }
+    const currentListMatch = currentLine.match(LIST_ITEM_REGEX);
+    const parentIndent = currentListMatch ? countMarkdownIndent(currentListMatch[1]) : 0;
+
+    for (let nextIndex = lineIndex + 1; nextIndex < normalizedLines.length; nextIndex += 1) {
+      const nextLine = normalizedLines[nextIndex];
+      const trimmedNextLine = String(nextLine || "").trim();
+      if (!trimmedNextLine) {
+        break;
+      }
+      const nextListMatch = nextLine.match(LIST_ITEM_REGEX);
+      if (!nextListMatch) {
+        break;
+      }
+      const nextIndent = countMarkdownIndent(nextListMatch[1]);
+      const nextOrdered = /^\d+\.$/.test(nextListMatch[2]);
+      if (nextOrdered && nextIndent <= parentIndent) {
+        break;
+      }
+      normalizedLines[nextIndex] = `  ${nextLine}`;
+    }
+  }
+
+  return normalizedLines.join("\n");
+}
+
+// 描述：
+//
+//   - 解析单行 Markdown 列表项，统一提取缩进、标记与正文。
+//
+// Params:
+//
+//   - rawLine: 原始文本行。
+//
+// Returns:
+//
+//   - 命中的列表项结构；不匹配时返回 null。
+function parseMarkdownListLine(rawLine: string): MarkdownListLineMatch | null {
+  const listMatch = String(rawLine || "").match(LIST_ITEM_REGEX);
+  if (!listMatch) {
+    return null;
+  }
+  return {
+    indent: countMarkdownIndent(listMatch[1]),
+    marker: listMatch[2],
+    ordered: /^\d+\.$/.test(listMatch[2]),
+    text: listMatch[3],
+  };
 }
 
 // 描述:
@@ -218,6 +346,99 @@ function codeBlockHeight(code: string): string {
   return `calc(var(--z-inset) * ${blockUnits})`;
 }
 
+// 描述：
+//
+//   - 渲染单棵 Markdown 列表树，支持有序/无序列表与递归子列表。
+//
+// Params:
+//
+//   - list: 当前列表节点。
+//   - keyPrefix: 当前节点 key 前缀。
+//
+// Returns:
+//
+//   - React 可渲染的列表节点。
+function renderMarkdownListNode(list: MarkdownListNode, keyPrefix: string): ReactNode {
+  const ListTag = list.ordered ? "ol" : "ul";
+  return (
+    <ListTag
+      key={`${keyPrefix}-list`}
+      className="desk-md-list"
+      start={list.start}
+    >
+      {list.items.map((item, itemIndex) => (
+        <li key={`${keyPrefix}-item-${itemIndex}`}>
+          {renderInlineMarkdown(item.text)}
+          {item.children.map((child, childIndex) =>
+            renderMarkdownListNode(child, `${keyPrefix}-item-${itemIndex}-child-${childIndex}`))}
+        </li>
+      ))}
+    </ListTag>
+  );
+}
+
+// 描述：
+//
+//   - 按缩进层级递归消费连续列表行，生成嵌套列表树。
+//
+// Params:
+//
+//   - lines: 当前文本块的行数组。
+//   - startIndex: 当前列表开始位置。
+//   - expectedIndent: 当前层级应消费的缩进宽度。
+//
+// Returns:
+//
+//   - list: 当前层级生成的列表节点。
+//   - nextIndex: 列表消费结束后的下一行索引。
+function parseMarkdownListNode(
+  lines: string[],
+  startIndex: number,
+  expectedIndent: number,
+): { list: MarkdownListNode; nextIndex: number } {
+  const firstLine = parseMarkdownListLine(lines[startIndex]);
+  const ordered = Boolean(firstLine?.ordered);
+  const orderedStart = ordered && firstLine ? Number.parseInt(firstLine.marker, 10) || 1 : undefined;
+  const items: MarkdownListItemNode[] = [];
+  let lineIndex = startIndex;
+
+  while (lineIndex < lines.length) {
+    const listMatch = parseMarkdownListLine(lines[lineIndex]);
+    if (!listMatch) {
+      break;
+    }
+    if (listMatch.indent < expectedIndent) {
+      break;
+    }
+    if (listMatch.indent > expectedIndent) {
+      if (items.length === 0) {
+        break;
+      }
+      const nested = parseMarkdownListNode(lines, lineIndex, listMatch.indent);
+      items[items.length - 1].children.push(nested.list);
+      lineIndex = nested.nextIndex;
+      continue;
+    }
+    if (listMatch.ordered !== ordered) {
+      break;
+    }
+    items.push({
+      text: listMatch.text,
+      children: [],
+    });
+    lineIndex += 1;
+  }
+
+  return {
+    list: {
+      ordered,
+      start: orderedStart,
+      items,
+    },
+    nextIndex: lineIndex,
+  };
+}
+
 // 描述:
 //
 //   - 渲染 Markdown 文本块，支持段落、标题、引用和列表等结构。
@@ -231,7 +452,7 @@ function codeBlockHeight(code: string): string {
 //
 //   - 文本块对应的渲染节点。
 function renderTextBlock(text: string, blockIndex: number): ReactNode {
-  const lines = text.split("\n");
+  const lines = normalizeOutlineListIndentation(text).split("\n");
   const nodes: ReactNode[] = [];
   let paragraphLines: string[] = [];
   let lineIndex = 0;
@@ -298,31 +519,14 @@ function renderTextBlock(text: string, blockIndex: number): ReactNode {
       continue;
     }
 
-    const listMatch = line.match(LIST_REGEX);
+    const listMatch = parseMarkdownListLine(rawLine);
     if (listMatch) {
       flushParagraph();
-      const ordered = /^\d+\./.test(listMatch[1]);
-      const items: string[] = [];
-      const orderedStart = ordered ? Number.parseInt(listMatch[1], 10) || 1 : undefined;
-      while (lineIndex < lines.length) {
-        const itemLine = lines[lineIndex].trim();
-        const itemMatch = itemLine.match(LIST_REGEX);
-        if (!itemMatch) break;
-        items.push(itemMatch[2]);
-        lineIndex += 1;
-      }
-      const ListTag = ordered ? "ol" : "ul";
+      const parsedList = parseMarkdownListNode(lines, lineIndex, listMatch.indent);
       nodes.push(
-        <ListTag
-          key={`list-${blockIndex}-${lineIndex}`}
-          className="desk-md-list"
-          start={orderedStart}
-        >
-          {items.map((item, idx) => (
-            <li key={`li-${idx}`}>{renderInlineMarkdown(item)}</li>
-          ))}
-        </ListTag>
+        renderMarkdownListNode(parsedList.list, `list-${blockIndex}-${lineIndex}`)
       );
+      lineIndex = parsedList.nextIndex;
       continue;
     }
 

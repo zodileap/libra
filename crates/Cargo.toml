@@ -4,5 +4,10 @@ members = [
   "core/mcp/common",
   "core/mcp/code",
   "core/mcp/model",
+  "runtime/proto",
+  "runtime/store",
+  "runtime/server",
+  "runtime/client",
+  "runtime/cli",
 ]
 resolver = "2"

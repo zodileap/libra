@@ -72,6 +72,7 @@ export const COMMANDS = {
   CHECK_PROJECT_DEPENDENCY_RULES: "check_project_dependency_rules",
   APPLY_PROJECT_DEPENDENCY_RULE_UPGRADES: "apply_project_dependency_rule_upgrades",
   INSPECT_PROJECT_WORKSPACE_PROFILE_SEED: "inspect_project_workspace_profile_seed",
+  CHECK_PROJECT_WORKSPACE_PATHS: "check_project_workspace_paths",
   GET_DESKTOP_RUNTIME_INFO: "get_desktop_runtime_info",
   CHECK_DESKTOP_UPDATE: "check_desktop_update",
   START_DESKTOP_UPDATE_DOWNLOAD: "start_desktop_update_download",

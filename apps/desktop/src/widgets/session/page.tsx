@@ -72,6 +72,7 @@ import {
   buildUiHintFromProtocolError,
   mapProtocolUiHint,
 } from "../../shared/services/protocol-ui-hint";
+import { getProjectWorkspacePathStatusMap } from "../../shared/services/project-workspace-status";
 import type {
   AgentKey,
   AgentAssetRecord,
@@ -3708,34 +3709,6 @@ function buildAssistantFailureSummary(rawSummary: string): { detail: string; hin
 
 // 描述：
 //
-//   - 解析运行中底部指示器文案；优先展示当前助手消息中已经拿到的真实进度文本，
-//     避免离开会话后返回只能看到泛化的“正在思考…”。
-//
-// Params:
-//
-//   - messageText: 当前助手消息文本。
-//   - runMeta: 当前助手消息绑定的运行态。
-//
-// Returns:
-//
-//   - 底部运行中指示器文案。
-function resolveRunningIndicatorText(
-  messageText: string,
-  runMeta?: AssistantRunMeta,
-): string {
-  const normalizedMessageText = String(messageText || "").trim();
-  if (normalizedMessageText && normalizedMessageText !== translateDesktopText("正在思考…")) {
-    return normalizedMessageText;
-  }
-  const normalizedSummary = String(runMeta?.summary || "").trim();
-  if (normalizedSummary && normalizedSummary !== translateDesktopText("正在思考…")) {
-    return normalizedSummary;
-  }
-  return translateDesktopText("正在思考…");
-}
-
-// 描述：
-//
 //   - 判断运行中文案是否属于泛化占位；这些文本缺少具体进展语义，恢复会话时应优先让位给更具体的缓存消息或执行总结。
 //
 // Params:
@@ -3751,6 +3724,11 @@ function isGenericRunningIndicatorText(value: string): boolean {
     return true;
   }
   return normalizedValue === translateDesktopText("正在思考…")
+    || (
+      normalizedValue.startsWith(translateDesktopText("正在思考…"))
+      && normalizedValue.includes(translateDesktopText("（已等待约"))
+      && normalizedValue.endsWith(translateDesktopText(" 秒）"))
+    )
     || normalizedValue === translateDesktopText("正在准备执行...")
     || normalizedValue === translateDesktopText("正在生成执行结果…")
     || normalizedValue === translateDesktopText("正在整理输出...")
@@ -3785,6 +3763,71 @@ function isGenericFinishedRunSummaryText(value: string): boolean {
         || normalizedValue.startsWith("脚本执行完成（未产生可见输出，系统自动收尾）：")
       )
     );
+}
+
+// 描述：
+//
+//   - 解析当前助手消息应直接展示给用户的正文，优先保留真实正文，
+//     避免被“正在思考/执行完成”这类状态占位覆盖后导致正文在 UI 中消失。
+//
+// Params:
+//
+//   - messageText: 当前助手消息文本。
+//   - runMeta: 当前助手消息绑定的运行态。
+//
+// Returns:
+//
+//   - 可直接展示的正文；若当前仅有状态占位则返回空字符串。
+function resolveVisibleAssistantBodyText(
+  messageText: string,
+  runMeta?: AssistantRunMeta,
+): string {
+  const normalizedMessageText = String(messageText || "").trim();
+  if (
+    normalizedMessageText
+    && !isGenericRunningIndicatorText(normalizedMessageText)
+    && !isGenericFinishedRunSummaryText(normalizedMessageText)
+  ) {
+    return normalizedMessageText;
+  }
+  const normalizedSummary = String(runMeta?.summary || "").trim();
+  if (
+    normalizedSummary
+    && runMeta?.summarySource !== "failure"
+    && !isGenericRunningIndicatorText(normalizedSummary)
+    && !isGenericFinishedRunSummaryText(normalizedSummary)
+  ) {
+    return normalizedSummary;
+  }
+  return "";
+}
+
+// 描述：
+//
+//   - 解析运行中底部指示器文案；正文已单独显示时不再重复输出底部等待提示，
+//     无正文时再回退到运行态中的状态提示，避免同一句话在正文区与底部状态区重复出现。
+//
+// Params:
+//
+//   - messageText: 当前助手消息文本。
+//   - runMeta: 当前助手消息绑定的运行态。
+//
+// Returns:
+//
+//   - 底部运行中指示器文案。
+function resolveRunningIndicatorText(
+  messageText: string,
+  runMeta?: AssistantRunMeta,
+): string {
+  const visibleBodyText = resolveVisibleAssistantBodyText(messageText, runMeta);
+  if (visibleBodyText) {
+    return "";
+  }
+  const normalizedSummary = String(runMeta?.summary || "").trim();
+  if (normalizedSummary && normalizedSummary !== translateDesktopText("正在思考…")) {
+    return normalizedSummary;
+  }
+  return translateDesktopText("正在思考…");
 }
 
 // 描述：
@@ -3834,7 +3877,16 @@ function buildPromptContextMessages(
         return null;
       }
       const runMeta = normalizedMessageId ? runMetaMap[normalizedMessageId] : undefined;
-      const effectiveText = String(runMeta?.summary || item.text || "").trim();
+      const preferredSummaryText = runMeta?.summarySource === "ai"
+        ? String(runMeta.summary || "").trim()
+        : "";
+      const effectiveText = String(
+        preferredSummaryText
+        || resolveVisibleAssistantBodyText(item.text, runMeta)
+        || runMeta?.summary
+        || item.text
+        || "",
+      ).trim();
       if (!effectiveText) {
         return null;
       }
@@ -4070,6 +4122,7 @@ export function SessionPage({
     }
     return getProjectWorkspaceGroupById(workspaceId);
   }, [workspaceIdFromBinding, workspaceIdFromQuery, workspaceIdFromRouteState]);
+  const activeWorkspacePath = String(activeWorkspace?.path || "").trim();
   // 描述：提取当前会话一级目录名称，展示在标题后方。
   const workspaceGroupName = useMemo(() => {
     return String(activeWorkspace?.name || "").trim();
@@ -4083,10 +4136,13 @@ export function SessionPage({
   const sessionHeadParentHint = workspaceGroupName;
 
   const [activeProjectProfile, setActiveProjectProfile] = useState<ProjectWorkspaceProfile | null>(null);
+  const [activeWorkspacePathValid, setActiveWorkspacePathValid] = useState(true);
   const [sessionMemory, setSessionMemory] = useState<SessionMemorySnapshot | null>(null);
   const [desktopRuntimeInfo, setDesktopRuntimeInfo] = useState<DesktopRuntimeInfo | null>(null);
   const desktopRuntimeInfoRef = useRef<DesktopRuntimeInfo | null>(null);
   const sessionMemoryRef = useRef<SessionMemorySnapshot | null>(null);
+  const invalidWorkspacePromptMessage = t("项目目录已不存在，当前话题不能继续发送新消息。");
+  const isActiveWorkspacePathMissing = Boolean(activeWorkspace?.id && activeWorkspacePath && !activeWorkspacePathValid);
 
   // 描述：
   //
@@ -4112,6 +4168,72 @@ export function SessionPage({
     }
     setActiveProjectProfile(getProjectWorkspaceProfile(activeWorkspace.id));
   }, [activeWorkspace?.id]);
+
+  // 描述：
+  //
+  //   - 读取当前会话绑定项目目录的真实可用性，目录丢失时用于统一禁用输入框、发送按钮与重试链路。
+  //
+  // Params:
+  //
+  //   - workspacePath: 当前项目目录路径。
+  //
+  // Returns:
+  //
+  //   - 目录存在且仍为文件夹时返回 true。
+  const resolveActiveWorkspacePathValidity = useCallback(async (workspacePath: string): Promise<boolean> => {
+    const normalizedWorkspacePath = String(workspacePath || "").trim();
+    if (!normalizedWorkspacePath) {
+      return true;
+    }
+    const statusMap = await getProjectWorkspacePathStatusMap([normalizedWorkspacePath]);
+    return statusMap[normalizedWorkspacePath]?.valid !== false;
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    if (!activeWorkspacePath) {
+      setActiveWorkspacePathValid(true);
+      return () => {
+        disposed = true;
+      };
+    }
+    void resolveActiveWorkspacePathValidity(activeWorkspacePath).then((nextValid) => {
+      if (disposed) {
+        return;
+      }
+      setActiveWorkspacePathValid(nextValid);
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [activeWorkspacePath, resolveActiveWorkspacePathValidity]);
+
+  useEffect(() => {
+    if (!IS_BROWSER || !activeWorkspacePath) {
+      return;
+    }
+    let disposed = false;
+    const syncActiveWorkspacePathValidity = () => {
+      void resolveActiveWorkspacePathValidity(activeWorkspacePath).then((nextValid) => {
+        if (disposed) {
+          return;
+        }
+        setActiveWorkspacePathValid(nextValid);
+      });
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        syncActiveWorkspacePathValidity();
+      }
+    };
+    window.addEventListener("focus", syncActiveWorkspacePathValidity);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      disposed = true;
+      window.removeEventListener("focus", syncActiveWorkspacePathValidity);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [activeWorkspacePath, resolveActiveWorkspacePathValidity]);
 
   // 描述：
   //
@@ -4707,6 +4829,37 @@ export function SessionPage({
     streamRenderFrameRef.current = window.requestAnimationFrame(renderStreamingAssistantFrame);
   };
 
+  // 描述：更新当前运行消息的状态指示文案；该文案只进入运行态 summary，
+  //   - 不直接覆盖助手正文，避免 heartbeat / planning 把已经输出的正文重新抹掉。
+  //
+  // Params:
+  //
+  //   - targetText: 当前运行状态文案。
+  const setStreamingAssistantStatusTarget = (targetText: string) => {
+    const messageId = String(streamMessageIdRef.current || "").trim();
+    const normalizedTargetText = String(targetText || "").trim();
+    if (!messageId || !normalizedTargetText) {
+      return;
+    }
+    setAssistantRunMetaMap((prev) => {
+      const current = prev[messageId];
+      if (!current || current.status !== "running") {
+        return prev;
+      }
+      if (String(current.summary || "").trim() === normalizedTargetText) {
+        return prev;
+      }
+      return {
+        ...prev,
+        [messageId]: {
+          ...current,
+          summary: normalizedTargetText,
+          summarySource: undefined,
+        },
+      };
+    });
+  };
+
   // 描述：向指定助手消息追加一段执行轨迹，保持“说明 + 步骤”循环结构。
   const appendAssistantRunSegment = (messageId: string, segment: AssistantRunSegment) => {
     if (!messageId) {
@@ -4937,9 +5090,8 @@ export function SessionPage({
         // 描述：
         //
         //   - 心跳仅用于“正在思考”提示，不再写入执行步骤，避免产生无信息价值的噪声步骤。
-        setStreamingAssistantTarget(
+        setStreamingAssistantStatusTarget(
           String(heartbeatSegment.intro || "").trim() || t("智能体正在思考…"),
-          { immediate: assistantRunHeartbeatCountRef.current > 1 },
         );
         assistantRunLastActivityAtRef.current = Date.now();
       }
@@ -6374,13 +6526,13 @@ export function SessionPage({
       if (payload.kind === STREAM_KINDS.STARTED) {
         agentLlmDeltaBufferRef.current = "";
         setSessionAiResponseRaw("");
-        setStreamingAssistantTarget(t("正在准备执行..."));
+        setStreamingAssistantStatusTarget(t("正在准备执行..."));
         return;
       }
       if (payload.kind === STREAM_KINDS.LLM_STARTED) {
         agentLlmDeltaBufferRef.current = "";
         setSessionAiResponseRaw("");
-        setStreamingAssistantTarget(t("正在生成执行结果…"));
+        setStreamingAssistantStatusTarget(t("正在生成执行结果…"));
         return;
       }
       if (payload.kind === STREAM_KINDS.LLM_FINISHED) {
@@ -6409,14 +6561,14 @@ export function SessionPage({
           }
         }
         if (!agentStreamTextBufferRef.current.trim()) {
-          setStreamingAssistantTarget(t("正在整理输出..."));
+          setStreamingAssistantStatusTarget(t("正在整理输出..."));
         }
         return;
       }
       if (payload.kind === STREAM_KINDS.PLANNING) {
         const planningText = resolvePlanningDisplayText(payload);
         if (planningText) {
-          setStreamingAssistantTarget(planningText);
+          setStreamingAssistantStatusTarget(planningText);
         }
         return;
       }
@@ -6426,9 +6578,7 @@ export function SessionPage({
           String(payload.message || "").trim(),
           assistantRunHeartbeatCountRef.current,
         );
-        setStreamingAssistantTarget(heartbeatText, {
-          immediate: assistantRunHeartbeatCountRef.current > 1,
-        });
+        setStreamingAssistantStatusTarget(heartbeatText);
         return;
       }
       if (payload.kind === STREAM_KINDS.FINISHED) {
@@ -6758,9 +6908,27 @@ export function SessionPage({
     sessionId,
   ]);
 
+  // 描述：
+  //
+  //   - 当项目目录已被外部删除时，统一阻断当前话题的新执行请求，避免继续触发无效 workdir。
+  //
+  // Returns:
+  //
+  //   - true: 已命中阻断条件，调用方应立即停止继续执行。
+  const shouldBlockPromptExecutionForMissingWorkspace = () => {
+    if (!isActiveWorkspacePathMissing) {
+      return false;
+    }
+    setStatus(invalidWorkspacePromptMessage);
+    return true;
+  };
+
   const executePromptDirect = async (content: string, options?: ExecutePromptOptions) => {
     const normalizedContent = content.trim();
     if (!normalizedContent || sending) return;
+    if (shouldBlockPromptExecutionForMissingWorkspace()) {
+      return;
+    }
 
     const allowDangerousAction = Boolean(options?.allowDangerousAction);
     const appendUserMessage = options?.appendUserMessage !== false;
@@ -7073,7 +7241,7 @@ export function SessionPage({
           workflowPhaseCursorRef.current = nextWorkflowPhaseCursor;
           setWorkflowPhaseCursor(nextWorkflowPhaseCursor);
         }
-        setStreamingAssistantTarget(t("正在准备执行..."));
+        setStreamingAssistantStatusTarget(t("正在准备执行..."));
         startAssistantRunHeartbeat(streamMessageId);
 
         const latestProjectProfile = activeWorkspace?.id
@@ -7259,6 +7427,21 @@ export function SessionPage({
           };
         const effectiveResponseControl = completionDecision.control;
         const effectiveResponseDisplayMessage = completionDecision.displayMessage;
+        const responseControlLabel = responseControl === "done" ? t("完成") : t("继续");
+        const effectiveResponseControlLabel = effectiveResponseControl === "done" ? t("完成") : t("继续");
+        if (hasWorkflowStages && currentStageItem) {
+          appendTraceRecord({
+            traceId: response.trace_id || stageTraceId,
+            source: "workflow:stage_completion",
+            message: t("阶段 {{current}}/{{total}} 完成态：原始={{raw}}，校验后={{effective}}，原因={{reason}}", {
+              current: currentStageIndex + 1,
+              total: totalWorkflowStageCount,
+              raw: responseControlLabel,
+              effective: effectiveResponseControlLabel,
+              reason: completionDecision.reason || t("无"),
+            }),
+          });
+        }
         appendTraceRecord({
           traceId: response.trace_id,
           source: "agent:run",
@@ -9153,6 +9336,7 @@ const handleConfirmWorkflowSkillModal = () => {
       const failureSummary = runMeta.status === "failed"
         ? buildAssistantFailureSummary(runMeta.summary || message.text)
         : null;
+      const visibleBodyText = resolveVisibleAssistantBodyText(message.text, runMeta);
       const runSegmentsForRender: AssistantRunSegment[] = (() => {
         const normalizedRenderSegments = normalizeAssistantRunSegments(runMeta.segments);
         const normalizedSegments = normalizedRenderSegments
@@ -9233,7 +9417,9 @@ const handleConfirmWorkflowSkillModal = () => {
           hint: failureSummary.hint,
           action_label: t("重试本轮"),
         }
-        : runMeta.summarySource === "ai" && String(runMeta.summary || "").trim()
+        : runMeta.summarySource === "ai"
+          && String(runMeta.summary || "").trim()
+          && String(runMeta.summary || "").trim() !== visibleBodyText
           ? {
             type: "markdown" as const,
             content: runMeta.summary,
@@ -9245,10 +9431,14 @@ const handleConfirmWorkflowSkillModal = () => {
         status: runMeta.status,
         started_at: formatSessionCopyTime(runMeta.startedAt),
         finished_at: formatSessionCopyTime(runMeta.finishedAt),
+        visible_body: visibleBodyText || undefined,
         divider_title: runMeta.status === "running" ? undefined : dividerTitle,
         collapsed: runMeta.status === "running" ? undefined : runMeta.collapsed,
         visible_groups: visibleGroups,
-        running_indicator: runMeta.status === "running" && !hasPendingApprovalInRender && !hasPendingUserInputInRender
+        running_indicator: runMeta.status === "running"
+          && !hasPendingApprovalInRender
+          && !hasPendingUserInputInRender
+          && runningIndicatorText
           ? runningIndicatorText
           : undefined,
         visible_summary: visibleSummary,
@@ -9784,8 +9974,13 @@ const handleConfirmWorkflowSkillModal = () => {
               const failureSummary = runMeta?.status === "failed"
                 ? buildAssistantFailureSummary(runMeta.summary || message.text)
                 : null;
+              const visibleAssistantBodyText = runMeta
+                ? resolveVisibleAssistantBodyText(message.text, runMeta)
+                : "";
               const visibleRunSummaryText = runMeta?.summarySource === "ai"
-                ? String(runMeta.summary || "").trim()
+                ? String(runMeta.summary || "").trim() !== visibleAssistantBodyText
+                  ? String(runMeta.summary || "").trim()
+                  : ""
                 : "";
               const runSegmentsForRender: AssistantRunSegment[] = runMeta
                 ? (() => {
@@ -9885,10 +10080,15 @@ const handleConfirmWorkflowSkillModal = () => {
               };
               const messageContent = useRunLayout && runMeta ? (
                 <AriContainer className="desk-run-flow" padding={0}>
+                  {visibleAssistantBodyText ? (
+                    <AriContainer className="desk-run-body" padding={0}>
+                      <ChatMarkdown content={visibleAssistantBodyText} />
+                    </AriContainer>
+                  ) : null}
                   {runMeta.status === "running" ? (
                     <AriContainer className="desk-run-segments" padding={0}>
                       {runSegmentGroups.map((group) => renderRunSegmentGroup(group))}
-                      {!hasPendingApprovalInRender && !hasPendingUserInputInRender ? (
+                      {!hasPendingApprovalInRender && !hasPendingUserInputInRender && runningIndicatorText ? (
                         <AriContainer className="desk-run-thinking-indicator" padding={0}>
                           <AriTypography
                             className="desk-run-step desk-run-step-running"
@@ -10355,11 +10555,19 @@ const handleConfirmWorkflowSkillModal = () => {
             </AriCard>
           ) : null}
           <AriCard className="desk-prompt-card desk-session-prompt-card">
+            {isActiveWorkspacePathMissing ? (
+              <AriTypography
+                className="desk-session-invalid-workspace-text"
+                variant="caption"
+                value={invalidWorkspacePromptMessage}
+              />
+            ) : null}
             <AriInput.TextArea
               className="desk-session-prompt-input"
               value={input}
               onChange={setInput}
               variant="embedded"
+              disabled={isActiveWorkspacePathMissing}
               onKeyDown={handlePromptInputKeyDown}
               rows={3}
               autoSize={{ minRows: 3, maxRows: 10 }}
@@ -10380,7 +10588,7 @@ const handleConfirmWorkflowSkillModal = () => {
                   type="text"
                   icon="add"
                   className="desk-prompt-icon-btn"
-                  disabled={sending}
+                  disabled={sending || isActiveWorkspacePathMissing}
                 />
                 <AriSelect
                   className="desk-prompt-toolbar-select desk-prompt-toolbar-select-provider"
@@ -10450,6 +10658,7 @@ const handleConfirmWorkflowSkillModal = () => {
                 shape="round"
                 icon={sending ? "pause" : "arrow_upward"}
                 className="desk-prompt-icon-btn"
+                disabled={!sending && isActiveWorkspacePathMissing}
                 onClick={handlePromptPrimaryAction}
               />
             </AriFlex>

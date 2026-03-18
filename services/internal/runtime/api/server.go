@@ -9,6 +9,7 @@ import (
 
 	configs "github.com/zodileap/libra/services/internal/runtime/configs"
 	service "github.com/zodileap/libra/services/internal/runtime/service"
+	specs "github.com/zodileap/libra/services/internal/runtime/specs"
 )
 
 // 描述：统一响应包结构，保持与 Desktop 现有后端解析逻辑兼容。
@@ -18,20 +19,40 @@ type envelope[T any] struct {
 	Data    T      `json:"data"`
 }
 
+// 描述：workflow HTTP 路由依赖的最小业务接口，便于测试注入假实现并避免依赖真实 sidecar。
+type workflowServiceGateway interface {
+	CreateSession(req specs.WorkflowSessionCreateReq) (specs.WorkflowSessionCreateResp, error)
+	ListSession(req specs.WorkflowSessionListReq) (specs.WorkflowSessionListResp, error)
+	GetSession(req specs.WorkflowSessionGetReq) (specs.WorkflowSessionGetResp, error)
+	UpdateSessionStatus(req specs.WorkflowSessionStatusUpdateReq) (specs.WorkflowSessionStatusUpdateResp, error)
+	CreateSessionMessage(req specs.WorkflowSessionMessageCreateReq) (specs.WorkflowSessionMessageCreateResp, error)
+	ListSessionMessage(req specs.WorkflowSessionMessageListReq) (specs.WorkflowSessionMessageListResp, error)
+	CreateSandbox(req specs.WorkflowSandboxCreateReq) (specs.WorkflowSandboxCreateResp, error)
+	GetSandbox(req specs.WorkflowSandboxGetReq) (specs.WorkflowSandboxGetResp, error)
+	RecycleSandbox(req specs.WorkflowSandboxRecycleReq) (specs.WorkflowSandboxRecycleResp, error)
+	CreatePreview(req specs.WorkflowPreviewCreateReq) (specs.WorkflowPreviewCreateResp, error)
+	GetPreview(req specs.WorkflowPreviewGetReq) (specs.WorkflowPreviewGetResp, error)
+	ExpirePreview(req specs.WorkflowPreviewExpireReq) (specs.WorkflowPreviewExpireResp, error)
+	CheckDesktopUpdate(req specs.WorkflowDesktopUpdateCheckReq) (specs.WorkflowDesktopUpdateCheckResp, error)
+}
+
 // 描述：运行时 HTTP 服务器，负责路由注册、请求解析和统一响应输出。
 type Server struct {
-	workflow       *service.WorkflowService
+	workflow       workflowServiceGateway
+	sidecar        runtimeSidecarGateway
 	allowedOrigins []string
 }
 
 // 描述：按配置创建运行时 HTTP 处理器。
 func NewHandler(cfg configs.Config) (http.Handler, error) {
-	workflow, err := service.NewWorkflowService(cfg.DataDir)
-	if err != nil {
-		return nil, err
-	}
+	sidecar := service.NewRuntimeSidecarClient(service.RuntimeSidecarClientConfig{
+		Addr:       cfg.RuntimeSidecarAddr,
+		DataDir:    cfg.DataDir,
+		RuntimeBin: cfg.RuntimeSidecarBin,
+	})
 	server := &Server{
-		workflow:       workflow,
+		workflow:       service.NewWorkflowService(sidecar),
+		sidecar:        sidecar,
 		allowedOrigins: cfg.AllowedOrigins,
 	}
 	mux := http.NewServeMux()
@@ -48,6 +69,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/workflow/v1/session/messages", s.handleSessionMessageList)
 	mux.HandleFunc("/workflow/v1/sandbox", s.handleSandbox)
 	mux.HandleFunc("/workflow/v1/preview", s.handlePreview)
+	mux.HandleFunc("/workflow/v1/runtime-stream", s.handleRuntimeStream)
 	mux.HandleFunc("/workflow/v1/desktop-update/check", s.handleDesktopUpdateCheck)
 }
 

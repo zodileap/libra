@@ -7,8 +7,7 @@ use crate::sandbox::{
 };
 use crate::{
     AgentExecutionMode, AgentRegisteredMcp, AgentRunRequest, AgentRunResult, AgentStreamEvent,
-    QuestionPrompt,
-    UserInputResolution,
+    QuestionPrompt, UserInputResolution,
 };
 use libra_mcp_common::{
     now_millis, ProtocolAssetRecord, ProtocolError, ProtocolEventRecord, ProtocolStepRecord,
@@ -533,7 +532,10 @@ fn run_agent_with_python_chat(
         code: "llm_python_chat_codegen".to_string(),
         status: ProtocolStepStatus::Success,
         elapsed_ms: llm_finished_at.saturating_sub(llm_started_at),
-        summary: format!("普通对话：provider={} 已生成单轮 Python 脚本", request.provider),
+        summary: format!(
+            "普通对话：provider={} 已生成单轮 Python 脚本",
+            request.provider
+        ),
         error: None,
         data: Some(json!({
             "execution_mode": request.execution_mode.as_str(),
@@ -1317,21 +1319,30 @@ fn parse_turn_result_envelope(
     } else {
         summary.clone()
     };
-    let lower_message = normalized.to_lowercase();
-    let has_continue_signal = status_line.eq_ignore_ascii_case("continue")
-        || lower_message.contains("[continue]")
-        || lower_message.contains("status: continue")
-        || normalized.contains("下一步")
-        || normalized.contains("继续")
-        || normalized.contains("待完成")
-        || normalized.contains("未完成");
-    let has_done_signal = status_line.eq_ignore_ascii_case("done")
-        || lower_message.contains("[done]")
-        || lower_message.contains("status: done")
-        || normalized.contains("全部完成")
-        || normalized.contains("已完成全部");
+    let explicit_control = if status_line.eq_ignore_ascii_case("continue") {
+        Some(TurnControl::Continue)
+    } else if status_line.eq_ignore_ascii_case("done") {
+        Some(TurnControl::Done)
+    } else {
+        None
+    };
+    let weak_signal_source = detail_message.as_str();
+    let lower_weak_signal_source = weak_signal_source.to_lowercase();
+    let has_continue_signal = explicit_control.is_none()
+        && (lower_weak_signal_source.contains("[continue]")
+            || lower_weak_signal_source.contains("status: continue")
+            || weak_signal_source.contains("继续")
+            || weak_signal_source.contains("待完成")
+            || weak_signal_source.contains("未完成"));
+    let has_done_signal = explicit_control.is_none()
+        && (lower_weak_signal_source.contains("[done]")
+            || lower_weak_signal_source.contains("status: done")
+            || weak_signal_source.contains("全部完成")
+            || weak_signal_source.contains("已完成全部"));
 
-    let mut control = if has_continue_signal {
+    let mut control = if let Some(explicit_control) = explicit_control {
+        explicit_control
+    } else if has_continue_signal {
         TurnControl::Continue
     } else if has_done_signal {
         TurnControl::Done
@@ -5626,6 +5637,55 @@ NEXT: 进入接口建模
         assert_eq!(envelope.control, TurnControl::Done);
         assert_eq!(envelope.summary, "代码与测试均已完成");
         assert_eq!(envelope.next, "无");
+    }
+
+    /// 描述：验证显式 `STATUS: DONE` 不会再被 `NEXT:` 中的“下一步”误判为继续，复现 workflow 阶段误续跑场景。
+    #[test]
+    fn should_prefer_explicit_done_status_over_next_line_continue_keywords() {
+        let message = "STATUS: DONE\nSUMMARY: 已完成需求分析\nNEXT: 根据分析结果，进入下一步工作流阶段（前端架构设计与接口建模）。";
+        let envelope = parse_turn_result_envelope(message, "", &[], &[], 1, 6);
+        assert_eq!(envelope.control, TurnControl::Done);
+        assert_eq!(
+            envelope.next,
+            "根据分析结果，进入下一步工作流阶段（前端架构设计与接口建模）。"
+        );
+    }
+
+    /// 描述：验证显式 `STATUS: DONE` 在正文出现“继续查看下一步”这类弱信号时仍保持完成态，避免正文关键字覆盖协议字段。
+    #[test]
+    fn should_prefer_explicit_done_status_over_detail_continue_keywords() {
+        let message = r#"STATUS: DONE
+SUMMARY: 已完成需求分析
+NEXT: 无
+
+继续查看下一步前，请先确认本阶段输出已记录。"#;
+        let envelope = parse_turn_result_envelope(message, "", &[], &[], 1, 6);
+        assert_eq!(envelope.control, TurnControl::Done);
+        assert_eq!(
+            envelope.display_message,
+            "继续查看下一步前，请先确认本阶段输出已记录。"
+        );
+    }
+
+    /// 描述：验证显式 `STATUS: CONTINUE` 在正文出现“已完成全部”这类完成态弱信号时仍保持继续，避免协议字段被正文覆盖。
+    #[test]
+    fn should_prefer_explicit_continue_status_over_detail_done_keywords() {
+        let message = r#"STATUS: CONTINUE
+SUMMARY: 已完成需求分析
+NEXT: 进入接口建模
+
+当前仅已完成全部草稿整理，正式实现仍待继续。"#;
+        let envelope = parse_turn_result_envelope(message, "", &[], &[], 1, 6);
+        assert_eq!(envelope.control, TurnControl::Continue);
+        assert_eq!(envelope.next, "进入接口建模");
+    }
+
+    /// 描述：验证缺少显式 `STATUS:` 时，仍会基于正文中的弱信号推断继续态，保留原有兜底行为。
+    #[test]
+    fn should_preserve_weak_signal_fallback_without_explicit_status() {
+        let message = "继续处理剩余页面联调与异常路径。";
+        let envelope = parse_turn_result_envelope(message, "", &[], &[], 1, 6);
+        assert_eq!(envelope.control, TurnControl::Continue);
     }
 
     /// 描述：验证最终结果载荷可从 JSON 包装格式正确解析出多行消息，保障 STATUS/SUMMARY/NEXT 协议完整透传。

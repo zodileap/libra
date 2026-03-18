@@ -19,21 +19,25 @@ use dcc_runtime::{
     DccRuntimeStatusResponse, check_dcc_runtime_status_inner, prepare_dcc_runtime_inner,
 };
 use libra_agent_core::{
-    AgentExecutionMode, AgentRegisteredMcp, AgentRunRequest, AgentRuntimeCapabilities,
-    AgentStreamEvent,
-    UserInputAnswer, UserInputResolution, detect_agent_runtime_capabilities,
-    llm::{
-        LlmGatewayPolicy, LlmProviderConfig, LlmUsage, call_model_with_policy_and_config,
-        parse_provider,
-    },
+    AgentExecutionMode, AgentRegisteredMcp, AgentRuntimeCapabilities, UserInputAnswer,
+    llm::LlmUsage,
     platform::{
         CommandCandidate, resolve_codex_command_candidates, resolve_gemini_command_candidates,
         resolve_python_command_candidates,
     },
-    run_agent_with_protocol_error_stream,
 };
 use libra_mcp_common::{
-    ProtocolAssetRecord, ProtocolError, ProtocolEventRecord, ProtocolStepRecord, ProtocolUiHint,
+    ProtocolAssetRecord, ProtocolError, ProtocolEventRecord, ProtocolStepRecord,
+    ProtocolStepStatus, ProtocolUiHint, ProtocolUiHintAction, ProtocolUiHintActionIntent,
+    ProtocolUiHintLevel,
+};
+use libra_runtime_client::{
+    RuntimeClientConfig, RuntimeClientError, RuntimeClientManager, RuntimeLaunchMode,
+};
+use libra_runtime_proto::runtime::{
+    self, CallModelRequest, DetectCapabilitiesRequest, RegisteredMcp as RuntimeRegisteredMcp,
+    RunStartRequest, RuntimeCapabilities as RuntimeCapabilitiesPayload, RuntimeContext,
+    UserInputAnswer as RuntimeUserInputAnswer,
 };
 use mcp_registry::{
     list_enabled_mcp_registrations, list_registered_mcps, remove_mcp_registration,
@@ -47,6 +51,7 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::io::{Read, Write};
+use std::net::SocketAddr;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -78,6 +83,14 @@ struct DesktopRuntimeInfoResponse {
     arch: String,
 }
 
+#[derive(Serialize, Clone)]
+struct ProjectWorkspacePathStatusResponse {
+    path: String,
+    exists: bool,
+    is_dir: bool,
+    valid: bool,
+}
+
 #[derive(Deserialize, Clone)]
 struct DesktopUpdateDownloadRequest {
     version: String,
@@ -104,12 +117,6 @@ struct DesktopUpdateState {
     message: String,
     download_path: Option<String>,
     checksum_sha256: Option<String>,
-}
-
-/// 描述：返回智能体会话取消标记表，用于跨命令处理主动取消竞态。
-fn cancelled_agent_sessions() -> &'static Mutex<HashSet<String>> {
-    static CANCELLED_AGENT_SESSIONS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-    CANCELLED_AGENT_SESSIONS.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
 /// 描述：返回桌面端更新状态存储，统一管理下载/安装流程状态。
@@ -177,37 +184,6 @@ fn set_desktop_update_state(mutator: impl FnOnce(&mut DesktopUpdateState)) {
 /// 描述：将 updater 检查/安装错误归一化为用户可读文案，避免直接暴露底层错误细节。
 fn build_desktop_update_error_message(error: impl std::fmt::Display) -> String {
     format!("更新失败：{}", error)
-}
-
-/// 描述：标记会话为“用户主动取消”，供执行线程在错误归一阶段识别。
-fn mark_agent_session_cancelled(session_id: &str) {
-    if session_id.trim().is_empty() {
-        return;
-    }
-    if let Ok(mut set) = cancelled_agent_sessions().lock() {
-        set.insert(session_id.to_string());
-    }
-}
-
-/// 描述：消费会话取消标记，返回是否命中并在命中后清除，避免影响后续新任务。
-fn take_agent_session_cancelled(session_id: &str) -> bool {
-    if session_id.trim().is_empty() {
-        return false;
-    }
-    if let Ok(mut set) = cancelled_agent_sessions().lock() {
-        return set.remove(session_id);
-    }
-    false
-}
-
-/// 描述：在新任务开始前清理旧取消标记，防止历史取消状态串扰。
-fn clear_agent_session_cancelled(session_id: &str) {
-    if session_id.trim().is_empty() {
-        return;
-    }
-    if let Ok(mut set) = cancelled_agent_sessions().lock() {
-        set.remove(session_id);
-    }
 }
 
 #[derive(Serialize)]
@@ -864,6 +840,260 @@ fn build_runtime_registered_mcps(
     Ok(runtime_mcps)
 }
 
+/// 描述：解析桌面端统一 runtime 的监听地址；允许通过环境变量覆盖，默认使用本地回环地址。
+fn resolve_desktop_runtime_addr() -> Result<SocketAddr, DesktopProtocolError> {
+    env::var("LIBRA_DESKTOP_RUNTIME_ADDR")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "127.0.0.1:46329".to_string())
+        .parse::<SocketAddr>()
+        .map_err(|err| DesktopProtocolError {
+            code: "core.desktop.runtime.addr_invalid".to_string(),
+            message: format!("desktop runtime addr is invalid: {}", err),
+            suggestion: Some("请检查 LIBRA_DESKTOP_RUNTIME_ADDR 配置。".to_string()),
+            retryable: false,
+        })
+}
+
+/// 描述：返回桌面端 runtime 数据目录；优先使用应用数据目录，不可用时回退到系统临时目录。
+fn resolve_desktop_runtime_data_dir(app: &tauri::AppHandle) -> PathBuf {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|path| path.join("runtime"))
+        .unwrap_or_else(|| env::temp_dir().join("libra").join("desktop-runtime"))
+}
+
+/// 描述：返回桌面端复用的统一 runtime 客户端管理器，首次访问时按嵌入式模式初始化。
+fn desktop_runtime_manager(
+    app: &tauri::AppHandle,
+) -> Result<RuntimeClientManager, DesktopProtocolError> {
+    static MANAGER: OnceLock<RuntimeClientManager> = OnceLock::new();
+    if let Some(manager) = MANAGER.get() {
+        return Ok(manager.clone());
+    }
+
+    let mut config = RuntimeClientConfig::new(
+        resolve_desktop_runtime_addr()?,
+        resolve_desktop_runtime_data_dir(app),
+    );
+    config.launch_mode = RuntimeLaunchMode::Embedded;
+    // 描述：桌面端嵌入式 runtime 首次启动需要完成 SQLite 打开与 gRPC 监听，
+    // 冷启动时 10 秒偶发不足，这里放宽超时避免把“仍在启动”误判成连接失败。
+    config.startup_timeout = Duration::from_secs(30);
+    let manager = RuntimeClientManager::new(config);
+    let _ = MANAGER.set(manager.clone());
+    Ok(manager)
+}
+
+/// 描述：把 core MCP 注册项转换为 runtime 协议载荷，供 gRPC 请求复用。
+fn core_registered_mcp_to_runtime_payload(value: &AgentRegisteredMcp) -> RuntimeRegisteredMcp {
+    RuntimeRegisteredMcp {
+        id: value.id.clone(),
+        template_id: value.template_id.clone(),
+        name: value.name.clone(),
+        domain: value.domain.clone(),
+        software: value.software.clone(),
+        capabilities: value.capabilities.clone(),
+        priority: value.priority,
+        supports_import: value.supports_import,
+        supports_export: value.supports_export,
+        transport: value.transport.clone(),
+        command: value.command.clone(),
+        args: value.args.clone(),
+        env: value.env.clone(),
+        cwd: value.cwd.clone(),
+        url: value.url.clone(),
+        headers: value.headers.clone(),
+        runtime_kind: value.runtime_kind.clone(),
+        official_provider: value.official_provider.clone(),
+        runtime_ready: value.runtime_ready,
+        runtime_hint: value.runtime_hint.clone().unwrap_or_default(),
+    }
+}
+
+/// 描述：把 core 运行时能力快照转换为 runtime 协议载荷。
+fn core_runtime_capabilities_to_runtime_payload(
+    value: &AgentRuntimeCapabilities,
+) -> RuntimeCapabilitiesPayload {
+    RuntimeCapabilitiesPayload {
+        native_js_repl: value.native_js_repl,
+        native_browser_tools: value.native_browser_tools,
+        playwright_mcp_server_id: value.playwright_mcp_server_id.clone(),
+        playwright_mcp_ready: value.playwright_mcp_ready,
+        playwright_mcp_name: value.playwright_mcp_name.clone(),
+        interactive_mode: value.interactive_mode.as_str().to_string(),
+        skip_reason: value.skip_reason.clone(),
+    }
+}
+
+/// 描述：把 runtime 协议能力快照转换为桌面端沿用的 core 类型。
+fn runtime_capabilities_payload_to_core(
+    value: &RuntimeCapabilitiesPayload,
+) -> AgentRuntimeCapabilities {
+    AgentRuntimeCapabilities {
+        native_js_repl: value.native_js_repl,
+        native_browser_tools: value.native_browser_tools,
+        playwright_mcp_server_id: value.playwright_mcp_server_id.clone(),
+        playwright_mcp_ready: value.playwright_mcp_ready,
+        playwright_mcp_name: value.playwright_mcp_name.clone(),
+        interactive_mode: match value.interactive_mode.trim() {
+            "native" => libra_agent_core::AgentInteractiveMode::Native,
+            "mcp" => libra_agent_core::AgentInteractiveMode::Mcp,
+            _ => libra_agent_core::AgentInteractiveMode::None,
+        },
+        skip_reason: value.skip_reason.clone(),
+    }
+}
+
+/// 描述：把 runtime 客户端错误转换为桌面端结构化错误，统一保持前端现有消费口径。
+fn runtime_client_error_to_desktop(error: RuntimeClientError) -> DesktopProtocolError {
+    DesktopProtocolError {
+        code: error.code,
+        message: error.message,
+        suggestion: Some("请重试一次；如仍失败请检查本地 Runtime 状态。".to_string()),
+        retryable: true,
+    }
+}
+
+/// 描述：把 runtime 侧的用户输入答案协议转换为 gRPC 载荷。
+fn core_user_input_answer_to_runtime_payload(value: &UserInputAnswer) -> RuntimeUserInputAnswer {
+    RuntimeUserInputAnswer {
+        question_id: value.question_id.clone(),
+        answer_type: value.answer_type.clone(),
+        option_index: value.option_index.map(|item| item as i32).unwrap_or(-1),
+        option_label: value.option_label.clone().unwrap_or_default(),
+        value: value.value.clone(),
+    }
+}
+
+/// 描述：把 runtime `LlmUsage` 转换为桌面端沿用的 core `LlmUsage` 结构。
+fn runtime_usage_to_core(value: Option<runtime::LlmUsage>) -> Option<LlmUsage> {
+    value.map(|item| LlmUsage {
+        prompt_tokens: item.prompt_tokens,
+        completion_tokens: item.completion_tokens,
+        total_tokens: item.total_tokens,
+    })
+}
+
+/// 描述：把 runtime 协议错误结构转换为 core 协议错误。
+fn runtime_protocol_error_to_core(value: Option<runtime::ProtocolErrorRecord>) -> Option<ProtocolError> {
+    value.map(|item| ProtocolError {
+        code: item.code,
+        message: item.message,
+        suggestion: if item.suggestion.trim().is_empty() {
+            None
+        } else {
+            Some(item.suggestion)
+        },
+        retryable: item.retryable,
+    })
+}
+
+/// 描述：把 runtime `StepRecord` 转换为桌面端当前复用的 core 协议结构。
+fn runtime_step_record_to_core(value: &runtime::ProtocolStepRecord) -> ProtocolStepRecord {
+    ProtocolStepRecord {
+        index: value.index as usize,
+        code: value.code.clone(),
+        status: match value.status.trim() {
+            "failed" => ProtocolStepStatus::Failed,
+            "skipped" => ProtocolStepStatus::Skipped,
+            "manual" => ProtocolStepStatus::Manual,
+            _ => ProtocolStepStatus::Success,
+        },
+        elapsed_ms: value.elapsed_ms as u128,
+        summary: value.summary.clone(),
+        error: runtime_protocol_error_to_core(value.error.clone()),
+        data: if value.data_json.trim().is_empty() {
+            None
+        } else {
+            serde_json::from_str(value.data_json.as_str()).ok()
+        },
+    }
+}
+
+/// 描述：把 runtime `EventRecord` 转换为桌面端当前复用的 core 协议结构。
+fn runtime_event_record_to_core(value: &runtime::ProtocolEventRecord) -> ProtocolEventRecord {
+    ProtocolEventRecord {
+        event: value.event.clone(),
+        step_index: if value.has_step_index {
+            Some(value.step_index as usize)
+        } else {
+            None
+        },
+        timestamp_ms: value.timestamp_ms as u128,
+        message: value.message.clone(),
+    }
+}
+
+/// 描述：把 runtime `AssetRecord` 转换为桌面端当前复用的 core 协议结构。
+fn runtime_asset_record_to_core(value: &runtime::ProtocolAssetRecord) -> ProtocolAssetRecord {
+    ProtocolAssetRecord {
+        kind: value.kind.clone(),
+        path: value.path.clone(),
+        version: value.version,
+        meta: if value.meta_json.trim().is_empty() {
+            None
+        } else {
+            serde_json::from_str(value.meta_json.as_str()).ok()
+        },
+    }
+}
+
+/// 描述：把 runtime `UiHint` 转换为桌面端当前复用的 core 协议结构。
+fn runtime_ui_hint_to_core(value: Option<runtime::ProtocolUiHint>) -> Option<ProtocolUiHint> {
+    value.map(|item| ProtocolUiHint {
+        key: item.key,
+        level: match item.level.trim() {
+            "warning" => ProtocolUiHintLevel::Warning,
+            "danger" => ProtocolUiHintLevel::Danger,
+            _ => ProtocolUiHintLevel::Info,
+        },
+        title: item.title,
+        message: item.message,
+        actions: item
+            .actions
+            .iter()
+            .map(|action| ProtocolUiHintAction {
+                key: action.key.clone(),
+                label: action.label.clone(),
+                intent: match action.intent.trim() {
+                    "primary" => ProtocolUiHintActionIntent::Primary,
+                    "danger" => ProtocolUiHintActionIntent::Danger,
+                    _ => ProtocolUiHintActionIntent::Default,
+                },
+            })
+            .collect(),
+        context: if item.context_json.trim().is_empty() {
+            None
+        } else {
+            serde_json::from_str(item.context_json.as_str()).ok()
+        },
+    })
+}
+
+/// 描述：把 runtime 最终执行结果转换为前端沿用的 `AgentRunResponse`。
+fn runtime_result_to_desktop_response(value: runtime::AgentRunResult) -> AgentRunResponse {
+    AgentRunResponse {
+        trace_id: value.trace_id,
+        control: value.control,
+        message: value.message,
+        display_message: value.display_message,
+        usage: runtime_usage_to_core(value.usage),
+        actions: value.actions,
+        exported_file: if value.exported_file.trim().is_empty() {
+            None
+        } else {
+            Some(value.exported_file)
+        },
+        steps: value.steps.iter().map(runtime_step_record_to_core).collect(),
+        events: value.events.iter().map(runtime_event_record_to_core).collect(),
+        assets: value.assets.iter().map(runtime_asset_record_to_core).collect(),
+        ui_hint: runtime_ui_hint_to_core(value.ui_hint),
+    }
+}
+
 /// 描述：解析智能体请求的工作目录，统一兼容绝对路径、相对路径与缺省回退逻辑。
 ///
 /// Params:
@@ -918,7 +1148,23 @@ fn get_agent_runtime_capabilities_inner(
 ) -> Result<AgentRuntimeCapabilities, DesktopProtocolError> {
     let selected_workdir = resolve_agent_selected_workdir(workdir)?;
     let available_mcps = build_runtime_registered_mcps(&app, Some(selected_workdir.as_path()))?;
-    Ok(detect_agent_runtime_capabilities(&available_mcps))
+    let runtime = desktop_runtime_manager(&app)?;
+    let response = tauri::async_runtime::block_on(async move {
+        runtime
+            .detect_capabilities(DetectCapabilitiesRequest {
+                available_mcps: available_mcps
+                    .iter()
+                    .map(core_registered_mcp_to_runtime_payload)
+                    .collect(),
+            })
+            .await
+    })
+    .map_err(runtime_client_error_to_desktop)?;
+    Ok(response
+        .capabilities
+        .as_ref()
+        .map(runtime_capabilities_payload_to_core)
+        .unwrap_or_default())
 }
 
 fn run_agent_command_inner(
@@ -939,12 +1185,6 @@ fn run_agent_command_inner(
     runtime_capabilities: Option<AgentRuntimeCapabilities>,
     execution_mode: Option<String>,
 ) -> Result<AgentRunResponse, DesktopProtocolError> {
-    fn is_cancelled_protocol_error(code: &str) -> bool {
-        code == "core.agent.python.orchestration_timeout"
-            || code == "core.agent.request_cancelled"
-            || code == "core.agent.human_approval_timeout"
-    }
-
     fn normalize_agent_execution_mode(value: Option<String>) -> AgentExecutionMode {
         match value
             .as_deref()
@@ -964,15 +1204,13 @@ fn run_agent_command_inner(
         .filter(|value| !value.is_empty())
         .unwrap_or("trace-unknown")
         .to_string();
+    let normalized_session_id = session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("desktop-{}", trace_id));
     let normalized_execution_mode = normalize_agent_execution_mode(execution_mode);
-    if let Some(session) = session_id.as_deref() {
-        clear_agent_session_cancelled(session);
-        // 描述：
-        //
-        //   - 每次新的顶层请求都从干净的 Python 沙盒开始，避免上一轮执行残留状态
-        //     （如未消费输出、挂起工具结果或解释器上下文）串扰后续请求。
-        libra_agent_core::sandbox::SANDBOX_REGISTRY.reset(session);
-    }
     let log = |level: &str, stage: &str, message: String| {
         eprintln!("[agent][{}][{}][{}] {}", trace_id, level, stage, message);
         let payload = AgentLogEvent {
@@ -1051,8 +1289,30 @@ fn run_agent_command_inner(
         format!("output_dir={}", selected_output_dir.to_string_lossy()),
     );
     let available_mcps = build_runtime_registered_mcps(&app, Some(selected_workdir.as_path()))?;
-    let resolved_runtime_capabilities = runtime_capabilities
-        .unwrap_or_else(|| detect_agent_runtime_capabilities(&available_mcps));
+    let runtime_manager = desktop_runtime_manager(&app)?;
+    tauri::async_runtime::block_on(async {
+        runtime_manager.ensure_started().await
+    })
+    .map_err(runtime_client_error_to_desktop)?;
+    let resolved_runtime_capabilities = if let Some(value) = runtime_capabilities {
+        value
+    } else {
+        tauri::async_runtime::block_on(async {
+            runtime_manager
+                .detect_capabilities(DetectCapabilitiesRequest {
+                    available_mcps: available_mcps
+                        .iter()
+                        .map(core_registered_mcp_to_runtime_payload)
+                        .collect(),
+                })
+                .await
+        })
+        .map_err(runtime_client_error_to_desktop)?
+        .capabilities
+        .as_ref()
+        .map(runtime_capabilities_payload_to_core)
+        .unwrap_or_default()
+    };
     log(
         "debug",
         "request",
@@ -1067,310 +1327,246 @@ fn run_agent_command_inner(
         ),
     );
 
-    emit_agent_text_stream_event(
-        &app,
-        AgentTextStreamEvent {
-            trace_id: trace_id.clone(),
-            session_id: session_id.clone(),
-            kind: "started".to_string(),
-            message: "LLM 执行已开始".to_string(),
-            delta: None,
-            data: None,
-        },
-    );
-
-    let result = run_agent_with_protocol_error_stream(
-        AgentRunRequest {
-            trace_id: trace_id.clone(),
-            session_id: session_id.clone().unwrap_or_else(|| "default".to_string()),
-            agent_key,
-            provider: provider.unwrap_or_else(|| "codex".to_string()),
-            provider_api_key,
-            provider_model,
-            provider_mode,
-            prompt,
-            project_name,
-            model_export_enabled: model_export_enabled.unwrap_or(false),
-            dcc_provider_addr,
-            output_dir: Some(selected_output_dir.to_string_lossy().to_string()),
-            workdir: Some(selected_workdir.to_string_lossy().to_string()),
-            available_mcps,
-            runtime_capabilities: resolved_runtime_capabilities,
-            execution_mode: normalized_execution_mode,
-        },
-        |stream_event| {
-            let kind = stream_event.kind().to_string();
-            match stream_event {
-                AgentStreamEvent::LlmStarted { provider } => {
-                    emit_agent_text_stream_event(
-                        &app,
-                        AgentTextStreamEvent {
-                            trace_id: trace_id.clone(),
-                            session_id: session_id.clone(),
-                            kind,
-                            message: format!("provider={} started", provider),
-                            delta: None,
-                            data: None,
-                        },
-                    );
-                }
-                AgentStreamEvent::LlmDelta { content } => {
-                    emit_agent_text_stream_event(
-                        &app,
-                        AgentTextStreamEvent {
-                            trace_id: trace_id.clone(),
-                            session_id: session_id.clone(),
-                            kind,
-                            message: "chunk".to_string(),
-                            delta: Some(content),
-                            data: None,
-                        },
-                    );
-                }
-                AgentStreamEvent::LlmFinished { provider } => {
-                    emit_agent_text_stream_event(
-                        &app,
-                        AgentTextStreamEvent {
-                            trace_id: trace_id.clone(),
-                            session_id: session_id.clone(),
-                            kind,
-                            message: format!("provider={} finished", provider),
-                            delta: None,
-                            data: None,
-                        },
-                    );
-                }
-                AgentStreamEvent::Planning { message } => {
-                    emit_agent_text_stream_event(
-                        &app,
-                        AgentTextStreamEvent {
-                            trace_id: trace_id.clone(),
-                            session_id: session_id.clone(),
-                            kind,
-                            message,
-                            delta: None,
-                            data: None,
-                        },
-                    );
-                }
-                AgentStreamEvent::ToolCallStarted {
-                    name,
-                    args,
-                    args_data,
-                } => {
-                    let args_preview =
-                        truncate_agent_stream_text(args.as_str(), AGENT_STREAM_ARGS_MAX_CHARS);
-                    emit_agent_text_stream_event(
-                        &app,
-                        AgentTextStreamEvent {
-                            trace_id: trace_id.clone(),
-                            session_id: session_id.clone(),
-                            kind,
-                            message: format!("正在执行工具: {}", name),
-                            delta: None,
-                            data: Some(json!({
-                                "name": name,
-                                "args": args_preview,
-                                "args_data": args_data,
-                            })),
-                        },
-                    );
-                }
-                AgentStreamEvent::ToolCallFinished {
-                    name,
-                    ok,
-                    result,
-                    result_data,
-                } => {
-                    emit_agent_text_stream_event(
-                        &app,
-                        AgentTextStreamEvent {
-                            trace_id: trace_id.clone(),
-                            session_id: session_id.clone(),
-                            kind,
-                            message: format!(
-                                "工具 {} 执行{}",
-                                name,
-                                if ok { "成功" } else { "失败" }
-                            ),
-                            delta: None,
-                            data: Some(json!({
-                                "name": name,
-                                "ok": ok,
-                                "result": result,
-                                "result_data": result_data,
-                            })),
-                        },
-                    );
-                }
-                AgentStreamEvent::RequireApproval {
-                    approval_id,
-                    tool_name,
-                    tool_args,
-                } => {
-                    let tool_args_preview = truncate_agent_stream_text(
-                        tool_args.as_str(),
-                        AGENT_STREAM_APPROVAL_ARGS_MAX_CHARS,
-                    );
-                    emit_agent_text_stream_event(
-                        &app,
-                        AgentTextStreamEvent {
-                            trace_id: trace_id.clone(),
-                            session_id: session_id.clone(),
-                            kind,
-                            message: format!("操作待授权: {}", tool_name),
-                            delta: None,
-                            data: Some(json!({
-                                "approval_id": approval_id,
-                                "tool_name": tool_name,
-                                "tool_args": tool_args_preview,
-                            })),
-                        },
-                    );
-                }
-                AgentStreamEvent::RequestUserInput {
-                    request_id,
-                    questions,
-                } => {
-                    let question_count = questions.len();
-                    emit_agent_text_stream_event(
-                        &app,
-                        AgentTextStreamEvent {
-                            trace_id: trace_id.clone(),
-                            session_id: session_id.clone(),
-                            kind,
-                            message: format!("正在询问 {} 个问题", question_count),
-                            delta: None,
-                            data: Some(json!({
-                                "request_id": request_id,
-                                "questions": questions,
-                            })),
-                        },
-                    );
-                }
-                AgentStreamEvent::Heartbeat { message } => {
-                    emit_agent_text_stream_event(
-                        &app,
-                        AgentTextStreamEvent {
-                            trace_id: trace_id.clone(),
-                            session_id: session_id.clone(),
-                            kind,
-                            message,
-                            delta: None,
-                            data: None,
-                        },
-                    );
-                }
-                AgentStreamEvent::Final { message } => {
-                    emit_agent_text_stream_event(
-                        &app,
-                        AgentTextStreamEvent {
-                            trace_id: trace_id.clone(),
-                            session_id: session_id.clone(),
-                            kind,
-                            message,
-                            delta: None,
-                            data: None,
-                        },
-                    );
-                }
-                AgentStreamEvent::Cancelled { message } => {
-                    emit_agent_text_stream_event(
-                        &app,
-                        AgentTextStreamEvent {
-                            trace_id: trace_id.clone(),
-                            session_id: session_id.clone(),
-                            kind,
-                            message: message.clone(),
-                            delta: None,
-                            data: Some(json!({ "source": "core", "message": message })),
-                        },
-                    );
-                }
-                AgentStreamEvent::Error { code, message } => {
-                    emit_agent_text_stream_event(
-                        &app,
-                        AgentTextStreamEvent {
-                            trace_id: trace_id.clone(),
-                            session_id: session_id.clone(),
-                            kind,
-                            message: format!("{}: {}", code, message),
-                            delta: None,
-                            data: Some(json!({ "code": code })),
-                        },
-                    );
-                }
-            }
-        },
-    );
+    let result = tauri::async_runtime::block_on(async {
+        runtime_manager
+            .run_session(
+                RunStartRequest {
+                    context: Some(RuntimeContext {
+                        tenant_id: "desktop-local".to_string(),
+                        user_id: "desktop-user".to_string(),
+                        project_id: project_name
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .unwrap_or("default")
+                            .to_string(),
+                        session_id: normalized_session_id.clone(),
+                        run_id: String::new(),
+                        trace_id: trace_id.clone(),
+                    }),
+                    agent_key: agent_key.clone(),
+                    provider: provider.clone().unwrap_or_else(|| "codex".to_string()),
+                    provider_api_key: provider_api_key.clone().unwrap_or_default(),
+                    provider_model: provider_model.clone().unwrap_or_default(),
+                    provider_mode: provider_mode.clone().unwrap_or_default(),
+                    prompt: prompt.clone(),
+                    project_name: project_name.clone().unwrap_or_default(),
+                    model_export_enabled: model_export_enabled.unwrap_or(false),
+                    dcc_provider_addr: dcc_provider_addr.clone().unwrap_or_default(),
+                    output_dir: selected_output_dir.to_string_lossy().to_string(),
+                    workdir: selected_workdir.to_string_lossy().to_string(),
+                    available_mcps: available_mcps
+                        .iter()
+                        .map(core_registered_mcp_to_runtime_payload)
+                        .collect(),
+                    runtime_capabilities: Some(core_runtime_capabilities_to_runtime_payload(
+                        &resolved_runtime_capabilities,
+                    )),
+                    execution_mode: normalized_execution_mode.as_str().to_string(),
+                },
+                |stream_event| {
+                    match stream_event.kind.as_str() {
+                        "started" | "llm_started" | "llm_finished" | "planning" | "heartbeat" | "final" => {
+                            emit_agent_text_stream_event(
+                                &app,
+                                AgentTextStreamEvent {
+                                    trace_id: trace_id.clone(),
+                                    session_id: Some(normalized_session_id.clone()),
+                                    kind: stream_event.kind.clone(),
+                                    message: stream_event.message.clone(),
+                                    delta: None,
+                                    data: None,
+                                },
+                            );
+                        }
+                        "delta" => {
+                            emit_agent_text_stream_event(
+                                &app,
+                                AgentTextStreamEvent {
+                                    trace_id: trace_id.clone(),
+                                    session_id: Some(normalized_session_id.clone()),
+                                    kind: stream_event.kind.clone(),
+                                    message: stream_event.message.clone(),
+                                    delta: Some(stream_event.delta.clone()),
+                                    data: None,
+                                },
+                            );
+                        }
+                        "tool_call_started" => {
+                            let args_preview = truncate_agent_stream_text(
+                                stream_event.tool_args.as_str(),
+                                AGENT_STREAM_ARGS_MAX_CHARS,
+                            );
+                            let args_data = if stream_event.tool_args_data_json.trim().is_empty() {
+                                serde_json::Value::Null
+                            } else {
+                                serde_json::from_str(stream_event.tool_args_data_json.as_str())
+                                    .unwrap_or(serde_json::Value::Null)
+                            };
+                            emit_agent_text_stream_event(
+                                &app,
+                                AgentTextStreamEvent {
+                                    trace_id: trace_id.clone(),
+                                    session_id: Some(normalized_session_id.clone()),
+                                    kind: stream_event.kind.clone(),
+                                    message: format!("正在执行工具: {}", stream_event.tool_name),
+                                    delta: None,
+                                    data: Some(json!({
+                                        "name": stream_event.tool_name,
+                                        "args": args_preview,
+                                        "args_data": args_data,
+                                    })),
+                                },
+                            );
+                        }
+                        "tool_call_finished" => {
+                            let result_data = if stream_event.tool_result_data_json.trim().is_empty() {
+                                serde_json::Value::Null
+                            } else {
+                                serde_json::from_str(stream_event.tool_result_data_json.as_str())
+                                    .unwrap_or(serde_json::Value::Null)
+                            };
+                            emit_agent_text_stream_event(
+                                &app,
+                                AgentTextStreamEvent {
+                                    trace_id: trace_id.clone(),
+                                    session_id: Some(normalized_session_id.clone()),
+                                    kind: stream_event.kind.clone(),
+                                    message: format!(
+                                        "工具 {} 执行{}",
+                                        stream_event.tool_name,
+                                        if stream_event.ok { "成功" } else { "失败" }
+                                    ),
+                                    delta: None,
+                                    data: Some(json!({
+                                        "name": stream_event.tool_name,
+                                        "ok": stream_event.ok,
+                                        "result": stream_event.result,
+                                        "result_data": result_data,
+                                    })),
+                                },
+                            );
+                        }
+                        "require_approval" => {
+                            let tool_args_preview = truncate_agent_stream_text(
+                                stream_event.tool_args.as_str(),
+                                AGENT_STREAM_APPROVAL_ARGS_MAX_CHARS,
+                            );
+                            emit_agent_text_stream_event(
+                                &app,
+                                AgentTextStreamEvent {
+                                    trace_id: trace_id.clone(),
+                                    session_id: Some(normalized_session_id.clone()),
+                                    kind: stream_event.kind.clone(),
+                                    message: format!("操作待授权: {}", stream_event.tool_name),
+                                    delta: None,
+                                    data: Some(json!({
+                                        "approval_id": stream_event.message,
+                                        "tool_name": stream_event.tool_name,
+                                        "tool_args": tool_args_preview,
+                                    })),
+                                },
+                            );
+                        }
+                        "request_user_input" => {
+                            let questions = stream_event
+                                .questions
+                                .iter()
+                                .map(|question| {
+                                    json!({
+                                        "id": question.id,
+                                        "header": question.header,
+                                        "question": question.question,
+                                        "options": question.options.iter().map(|option| {
+                                            json!({
+                                                "label": option.label,
+                                                "description": option.description,
+                                            })
+                                        }).collect::<Vec<_>>(),
+                                    })
+                                })
+                                .collect::<Vec<_>>();
+                            emit_agent_text_stream_event(
+                                &app,
+                                AgentTextStreamEvent {
+                                    trace_id: trace_id.clone(),
+                                    session_id: Some(normalized_session_id.clone()),
+                                    kind: stream_event.kind.clone(),
+                                    message: format!("正在询问 {} 个问题", questions.len()),
+                                    delta: None,
+                                    data: Some(json!({
+                                        "request_id": stream_event.message,
+                                        "questions": questions,
+                                    })),
+                                },
+                            );
+                        }
+                        "cancelled" | "error" => {
+                            emit_agent_text_stream_event(
+                                &app,
+                                AgentTextStreamEvent {
+                                    trace_id: trace_id.clone(),
+                                    session_id: Some(normalized_session_id.clone()),
+                                    kind: stream_event.kind.clone(),
+                                    message: stream_event.message.clone(),
+                                    delta: None,
+                                    data: Some(json!({ "code": stream_event.code })),
+                                },
+                            );
+                        }
+                        _ => {}
+                    }
+                },
+            )
+            .await
+    });
 
     let result = match result {
-        Ok(mut value) => {
-            let normalized_message = value.message.trim().to_string();
-            if normalized_message.is_empty() {
-                if value.actions.is_empty() {
-                    return Err(DesktopProtocolError {
-                        code: "core.desktop.agent.empty_result".to_string(),
-                        message: "执行结束但未返回任何结果，请重试。".to_string(),
-                        suggestion: Some(
-                            "建议检查当前工作流技能配置，或切换模型后重试。若问题持续，请复制会话内容用于排查。"
-                                .to_string(),
-                        ),
-                        retryable: true,
-                    });
-                }
-                value.message = format!("执行完成（工具调用 {} 次）", value.actions.len());
+        Ok(value) => {
+            let response = runtime_result_to_desktop_response(value);
+            let normalized_message = response.message.trim().to_string();
+            if normalized_message.is_empty() && response.actions.is_empty() {
+                return Err(DesktopProtocolError {
+                    code: "core.desktop.agent.empty_result".to_string(),
+                    message: "执行结束但未返回任何结果，请重试。".to_string(),
+                    suggestion: Some(
+                        "建议检查当前工作流技能配置，或切换模型后重试。若问题持续，请复制会话内容用于排查。"
+                            .to_string(),
+                    ),
+                    retryable: true,
+                });
             }
             log(
                 "info",
                 "result",
                 format!(
                     "actions={}, exported_file={}",
-                    if value.actions.is_empty() {
+                    if response.actions.is_empty() {
                         "none".to_string()
                     } else {
-                        value.actions.join(",")
+                        response.actions.join(",")
                     },
-                    value.exported_file.as_deref().unwrap_or("-")
+                    response.exported_file.as_deref().unwrap_or("-")
                 ),
             );
-            value
+            response
         }
         Err(err) => {
-            let cancelled_by_user = session_id
-                .as_deref()
-                .map(take_agent_session_cancelled)
-                .unwrap_or(false);
-            let protocol_err =
-                if cancelled_by_user && !is_cancelled_protocol_error(err.code.as_str()) {
-                    ProtocolError::new("core.agent.request_cancelled", "任务已取消（用户主动终止）")
-                        .with_suggestion("如需继续，请重新发起任务")
-                } else {
-                    err
-                };
-            log("error", "result", protocol_err.to_string());
-            emit_agent_text_stream_event(
-                &app,
-                AgentTextStreamEvent {
-                    trace_id: trace_id.clone(),
-                    session_id: session_id.clone(),
-                    kind: if is_cancelled_protocol_error(protocol_err.code.as_str()) {
-                        "cancelled".to_string()
-                    } else {
-                        "error".to_string()
+            log("error", "result", format!("{}: {}", err.code, err.message));
+            if err.code.starts_with("runtime.client") {
+                emit_agent_text_stream_event(
+                    &app,
+                    AgentTextStreamEvent {
+                        trace_id: trace_id.clone(),
+                        session_id: Some(normalized_session_id.clone()),
+                        kind: "error".to_string(),
+                        message: err.message.clone(),
+                        delta: None,
+                        data: Some(json!({ "code": err.code.clone() })),
                     },
-                    message: protocol_err.message.clone(),
-                    delta: None,
-                    data: Some(json!({ "code": protocol_err.code.clone() })),
-                },
-            );
-            if let Some(session) = session_id.as_deref() {
-                // 描述：
-                //
-                //   - 异常终止后立即回收当前会话沙盒，避免故障状态污染下一次同会话执行。
-                libra_agent_core::sandbox::SANDBOX_REGISTRY.reset(session);
+                );
             }
-            return Err(protocol_err.into());
+            return Err(runtime_client_error_to_desktop(err));
         }
     };
 
@@ -1378,19 +1574,13 @@ fn run_agent_command_inner(
         &app,
         AgentTextStreamEvent {
             trace_id: trace_id.clone(),
-            session_id: session_id.clone(),
+            session_id: Some(normalized_session_id),
             kind: "finished".to_string(),
             message: "智能体执行完成".to_string(),
             delta: None,
             data: None,
         },
     );
-    if let Some(session) = session_id.as_deref() {
-        // 描述：
-        //
-        //   - 当前顶层请求结束后释放会话沙盒，保证下一次用户发送从全新解释器开始。
-        libra_agent_core::sandbox::SANDBOX_REGISTRY.reset(session);
-    }
 
     Ok(AgentRunResponse {
         trace_id,
@@ -1455,35 +1645,30 @@ fn call_ai_text_command_inner(
         });
     }
 
-    let provider_name = provider.unwrap_or_else(|| "codex".to_string());
-    let provider_config = LlmProviderConfig {
-        api_key: provider_api_key
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
-        model: provider_model
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
-        mode: provider_mode
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
-    };
-    let result = call_model_with_policy_and_config(
-        parse_provider(provider_name.as_str()),
-        normalized_prompt.as_str(),
-        Some(selected_workdir.to_string_lossy().as_ref()),
-        LlmGatewayPolicy::from_env(),
-        Some(&provider_config),
-    )
-    .map_err(|err| DesktopProtocolError {
-        code: err.code,
-        message: err.message,
-        suggestion: err.suggestion,
-        retryable: err.retryable,
-    })?;
+    let runtime_addr = resolve_desktop_runtime_addr()?;
+    let mut runtime_config =
+        RuntimeClientConfig::new(runtime_addr, env::temp_dir().join("libra").join("desktop-runtime-summary"));
+    runtime_config.launch_mode = RuntimeLaunchMode::Embedded;
+    // 描述：总结调用与主会话共用嵌入式 runtime，同样需要放宽冷启动等待时间。
+    runtime_config.startup_timeout = Duration::from_secs(30);
+    let runtime_manager = RuntimeClientManager::new(runtime_config);
+    let result = tauri::async_runtime::block_on(async {
+        runtime_manager
+            .call_model(CallModelRequest {
+                provider: provider.unwrap_or_else(|| "codex".to_string()),
+                provider_api_key: provider_api_key.unwrap_or_default(),
+                provider_model: provider_model.unwrap_or_default(),
+                provider_mode: provider_mode.unwrap_or_default(),
+                prompt: normalized_prompt.clone(),
+                workdir: selected_workdir.to_string_lossy().to_string(),
+            })
+            .await
+    })
+    .map_err(runtime_client_error_to_desktop)?;
 
     Ok(AgentSummaryResponse {
         content: result.content.trim().to_string(),
-        usage: Some(result.usage),
+        usage: runtime_usage_to_core(result.usage),
     })
 }
 
@@ -3089,6 +3274,47 @@ async fn inspect_project_workspace_profile_seed(
     .map_err(|err| format!("项目结构化初始化分析任务异常: {}", err))?
 }
 
+/// 描述：批量检查项目目录是否仍然存在，供前端灰显失效项目并禁用继续发送。
+fn check_project_workspace_paths_inner(
+    paths: Vec<String>,
+) -> Result<Vec<ProjectWorkspacePathStatusResponse>, String> {
+    let current_dir = env::current_dir().map_err(|err| format!("读取当前目录失败: {}", err))?;
+    let mut seen_paths: HashSet<String> = HashSet::new();
+    let mut results: Vec<ProjectWorkspacePathStatusResponse> = Vec::new();
+
+    for raw_path in paths {
+        let normalized_path = raw_path.trim().to_string();
+        if normalized_path.is_empty() || !seen_paths.insert(normalized_path.clone()) {
+            continue;
+        }
+        let selected_path = PathBuf::from(normalized_path.as_str());
+        let resolved_path = if selected_path.is_absolute() {
+            selected_path
+        } else {
+            current_dir.join(selected_path)
+        };
+        let exists = resolved_path.exists();
+        let is_dir = exists && resolved_path.is_dir();
+        results.push(ProjectWorkspacePathStatusResponse {
+            path: normalized_path,
+            exists,
+            is_dir,
+            valid: is_dir,
+        });
+    }
+
+    Ok(results)
+}
+
+#[tauri::command]
+async fn check_project_workspace_paths(
+    paths: Vec<String>,
+) -> Result<Vec<ProjectWorkspacePathStatusResponse>, String> {
+    tauri::async_runtime::spawn_blocking(move || check_project_workspace_paths_inner(paths))
+        .await
+        .map_err(|err| format!("检查项目目录任务异常: {}", err))?
+}
+
 #[tauri::command]
 async fn check_codex_cli_health(minimum_version: Option<String>) -> CodexCliHealthResponse {
     tauri::async_runtime::spawn_blocking(move || check_codex_cli_health_inner(minimum_version))
@@ -3793,22 +4019,37 @@ fn install_downloaded_desktop_update() -> Result<DesktopUpdateStateResponse, Str
 }
 
 #[tauri::command]
-fn get_agent_sandbox_metrics(
+async fn get_agent_sandbox_metrics(
+    app: tauri::AppHandle,
     session_id: String,
 ) -> Result<Option<libra_agent_core::sandbox::SandboxMetrics>, String> {
-    Ok(libra_agent_core::sandbox::SANDBOX_REGISTRY.get_metrics(&session_id))
+    let runtime = desktop_runtime_manager(&app).map_err(|err| err.message)?;
+    let response = runtime
+        .get_sandbox_metrics(session_id)
+        .await
+        .map_err(|err| err.message)?;
+    Ok(response.metrics.map(|item| libra_agent_core::sandbox::SandboxMetrics {
+        memory_bytes: item.memory_bytes,
+        uptime_secs: item.uptime_secs,
+    }))
 }
 
 #[tauri::command]
-fn reset_agent_sandbox(session_id: String) -> Result<(), String> {
-    libra_agent_core::sandbox::SANDBOX_REGISTRY.reset(&session_id);
-    Ok(())
+async fn reset_agent_sandbox(app: tauri::AppHandle, session_id: String) -> Result<(), String> {
+    let runtime = desktop_runtime_manager(&app).map_err(|err| err.message)?;
+    runtime
+        .reset_sandbox(session_id)
+        .await
+        .map_err(|err| err.message)
 }
 
 #[tauri::command]
-fn cancel_agent_session(app: tauri::AppHandle, session_id: String) -> Result<bool, String> {
-    mark_agent_session_cancelled(&session_id);
-    libra_agent_core::sandbox::SANDBOX_REGISTRY.reset(&session_id);
+async fn cancel_agent_session(app: tauri::AppHandle, session_id: String) -> Result<bool, String> {
+    let runtime = desktop_runtime_manager(&app).map_err(|err| err.message)?;
+    runtime
+        .cancel_run(session_id.as_str())
+        .await
+        .map_err(|err| err.message)?;
     emit_agent_text_stream_event(
         &app,
         AgentTextStreamEvent {
@@ -3825,18 +4066,22 @@ fn cancel_agent_session(app: tauri::AppHandle, session_id: String) -> Result<boo
 }
 
 #[tauri::command]
-fn approve_agent_action(id: String, approved: bool) -> Result<bool, String> {
-    let outcome = if approved {
-        libra_agent_core::ApprovalOutcome::Approved
-    } else {
-        libra_agent_core::ApprovalOutcome::Rejected
-    };
-    let ok = libra_agent_core::APPROVAL_REGISTRY.submit_decision(&id, outcome);
-    Ok(ok)
+async fn approve_agent_action(
+    app: tauri::AppHandle,
+    id: String,
+    approved: bool,
+) -> Result<bool, String> {
+    let runtime = desktop_runtime_manager(&app).map_err(|err| err.message)?;
+    runtime
+        .submit_approval(id.as_str(), approved)
+        .await
+        .map_err(|err| err.message)?;
+    Ok(true)
 }
 
 #[tauri::command]
-fn resolve_agent_user_input(
+async fn resolve_agent_user_input(
+    app: tauri::AppHandle,
     id: String,
     resolution: String,
     answers: Option<Vec<UserInputAnswer>>,
@@ -3875,14 +4120,19 @@ fn resolve_agent_user_input(
             return Err("预设选项回答必须携带 option_label".to_string());
         }
     }
-    let ok = libra_agent_core::USER_INPUT_REGISTRY.submit_resolution(
-        &normalized_id,
-        UserInputResolution {
-            resolution: normalized_resolution,
-            answers: normalized_answers,
-        },
-    );
-    Ok(ok)
+    let runtime = desktop_runtime_manager(&app).map_err(|err| err.message)?;
+    runtime
+        .submit_user_input(
+            normalized_id.as_str(),
+            normalized_resolution.as_str(),
+            normalized_answers
+                .iter()
+                .map(core_user_input_answer_to_runtime_payload)
+                .collect(),
+        )
+        .await
+        .map_err(|err| err.message)?;
+    Ok(true)
 }
 
 fn main() {
@@ -3924,6 +4174,7 @@ fn main() {
             check_project_dependency_rules,
             apply_project_dependency_rule_upgrades,
             inspect_project_workspace_profile_seed,
+            check_project_workspace_paths,
             approve_agent_action,
             resolve_agent_user_input,
             get_desktop_runtime_info,

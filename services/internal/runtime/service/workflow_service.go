@@ -1,16 +1,17 @@
 package service
 
 import (
-	"crypto/rand"
-	"encoding/hex"
+	"context"
 	"fmt"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	runtimepb "github.com/zodileap/libra/sdk/go/libra_runtime/runtimepb"
 	specs "github.com/zodileap/libra/services/internal/runtime/specs"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -24,20 +25,38 @@ const (
 	defaultDesktopUpdateChannel = "stable"
 	// 描述：默认激活状态，保持与 Desktop 当前会话筛选逻辑兼容。
 	defaultActiveStatus = 1
+	// 描述：services 通过 sidecar 调用 runtime 时默认租户标识。
+	defaultRuntimeTenantID = "local"
+	// 描述：services 通过 sidecar 调用 runtime 时默认项目标识。
+	defaultRuntimeProjectID = "default"
+	// 描述：services 调用 runtime sidecar 的统一超时时间。
+	runtimeRequestTimeout = 10 * time.Second
 )
 
-// 描述：Runtime 业务工作流服务，聚合会话、消息、Sandbox、Preview 与桌面更新检查能力。
-type WorkflowService struct {
-	store *stateStore
+// 描述：workflow 业务层依赖的 runtime 管理面接口，便于生产代码接 sidecar、测试代码接假实现。
+type WorkflowRuntimeGateway interface {
+	CreateSession(ctx context.Context, request *runtimepb.CreateSessionRequest) (*runtimepb.CreateSessionResponse, error)
+	ListSessions(ctx context.Context, request *runtimepb.ListSessionsRequest) (*runtimepb.ListSessionsResponse, error)
+	GetSession(ctx context.Context, request *runtimepb.GetSessionRequest) (*runtimepb.GetSessionResponse, error)
+	UpdateSessionStatus(ctx context.Context, request *runtimepb.UpdateSessionStatusRequest) (*runtimepb.UpdateSessionStatusResponse, error)
+	CreateMessage(ctx context.Context, request *runtimepb.CreateMessageRequest) (*runtimepb.CreateMessageResponse, error)
+	ListMessages(ctx context.Context, request *runtimepb.ListMessagesRequest) (*runtimepb.ListMessagesResponse, error)
+	ListSandboxes(ctx context.Context, request *runtimepb.ListSandboxesRequest) (*runtimepb.ListSandboxesResponse, error)
+	CreateSandbox(ctx context.Context, request *runtimepb.CreateSandboxRequest) (*runtimepb.CreateSandboxResponse, error)
+	RecycleSandbox(ctx context.Context, request *runtimepb.RecycleSandboxRequest) (*runtimepb.RecycleSandboxResponse, error)
+	ListPreviews(ctx context.Context, request *runtimepb.ListPreviewsRequest) (*runtimepb.ListPreviewsResponse, error)
+	CreatePreview(ctx context.Context, request *runtimepb.CreatePreviewRequest) (*runtimepb.CreatePreviewResponse, error)
+	ExpirePreview(ctx context.Context, request *runtimepb.ExpirePreviewRequest) (*runtimepb.ExpirePreviewResponse, error)
 }
 
-// 描述：创建 Runtime 业务工作流服务实例，并初始化本地状态存储。
-func NewWorkflowService(dataDir string) (*WorkflowService, error) {
-	store, err := newStateStore(dataDir)
-	if err != nil {
-		return nil, err
-	}
-	return &WorkflowService{store: store}, nil
+// 描述：Runtime 业务工作流服务，负责把既有 REST 语义桥接到统一 runtime sidecar 管理面。
+type WorkflowService struct {
+	runtime WorkflowRuntimeGateway
+}
+
+// 描述：创建 Runtime 业务工作流服务实例，底层固定依赖统一 runtime sidecar。
+func NewWorkflowService(runtime WorkflowRuntimeGateway) *WorkflowService {
+	return &WorkflowService{runtime: runtime}
 }
 
 // 描述：创建会话，并为 Desktop 返回立即可用的基础会话实体。
@@ -51,24 +70,23 @@ func (s *WorkflowService) CreateSession(req specs.WorkflowSessionCreateReq) (spe
 		return specs.WorkflowSessionCreateResp{}, newValidationError("agentCode 不能为空")
 	}
 
-	return withWrite(s.store, func(state *runtimeState) (specs.WorkflowSessionCreateResp, error) {
-		now := nowRFC3339()
-		session := specs.RuntimeSessionEntity{
-			ID:        newID(),
-			UserID:    userID,
-			AgentCode: agentCode,
-			Status:    defaultStatus(req.Status),
-			CreatedAt: now,
-			LastAt:    now,
-		}
-		state.Sessions[session.ID] = session
-		logRuntimeAuditEvent("workflow.session.created", map[string]string{
-			"userId":    userID,
-			"sessionId": session.ID,
-			"agentCode": agentCode,
-		})
-		return specs.WorkflowSessionCreateResp{Session: session}, nil
+	ctx, cancel := runtimeCallContext()
+	defer cancel()
+	response, err := s.runtime.CreateSession(ctx, &runtimepb.CreateSessionRequest{
+		TenantId:  defaultRuntimeTenantID,
+		UserId:    userID,
+		ProjectId: defaultRuntimeProjectID,
+		AgentCode: agentCode,
+		Status:    int32(defaultStatus(req.Status)),
 	})
+	if err != nil {
+		return specs.WorkflowSessionCreateResp{}, mapRuntimeError("创建会话失败", err)
+	}
+	session, err := requireSessionRecord(response.GetSession())
+	if err != nil {
+		return specs.WorkflowSessionCreateResp{}, err
+	}
+	return specs.WorkflowSessionCreateResp{Session: mapRuntimeSession(session)}, nil
 }
 
 // 描述：查询会话列表，按最近更新时间倒序返回，支持用户、智能体和状态筛选。
@@ -78,32 +96,27 @@ func (s *WorkflowService) ListSession(req specs.WorkflowSessionListReq) (specs.W
 		return specs.WorkflowSessionListResp{}, newValidationError("userId 不能为空")
 	}
 
-	return withRead(s.store, func(state *runtimeState) (specs.WorkflowSessionListResp, error) {
-		list := make([]specs.RuntimeSessionEntity, 0)
-		for _, item := range state.Sessions {
-			if item.DeletedAt != "" {
-				continue
-			}
-			if item.UserID != userID {
-				continue
-			}
-			if req.AgentCode != nil && strings.TrimSpace(*req.AgentCode) != "" && item.AgentCode != strings.TrimSpace(*req.AgentCode) {
-				continue
-			}
-			if req.Status != nil && item.Status != *req.Status {
-				continue
-			}
-			list = append(list, item)
-		}
-
-		sort.Slice(list, func(i int, j int) bool {
-			return list[i].LastAt > list[j].LastAt
-		})
-		if req.ByLastAt != nil && *req.ByLastAt < 0 {
-			slicesReverseSession(list)
-		}
-		return specs.WorkflowSessionListResp{List: list}, nil
+	ctx, cancel := runtimeCallContext()
+	defer cancel()
+	response, err := s.runtime.ListSessions(ctx, &runtimepb.ListSessionsRequest{
+		TenantId:  defaultRuntimeTenantID,
+		UserId:    userID,
+		ProjectId: defaultRuntimeProjectID,
+		AgentCode: trimOptionalString(req.AgentCode),
+		Status:    optionalStatusInt32(req.Status),
 	})
+	if err != nil {
+		return specs.WorkflowSessionListResp{}, mapRuntimeError("查询会话列表失败", err)
+	}
+
+	list := make([]specs.RuntimeSessionEntity, 0, len(response.GetList()))
+	for _, item := range response.GetList() {
+		list = append(list, mapRuntimeSession(item))
+	}
+	if req.ByLastAt != nil && *req.ByLastAt < 0 {
+		slicesReverseSession(list)
+	}
+	return specs.WorkflowSessionListResp{List: list}, nil
 }
 
 // 描述：查询会话详情，并校验会话归属关系。
@@ -114,13 +127,11 @@ func (s *WorkflowService) GetSession(req specs.WorkflowSessionGetReq) (specs.Wor
 		return specs.WorkflowSessionGetResp{}, newValidationError("sessionId 和 userId 不能为空")
 	}
 
-	return withRead(s.store, func(state *runtimeState) (specs.WorkflowSessionGetResp, error) {
-		session, err := mustSessionOwnerLocked(state, sessionID, userID)
-		if err != nil {
-			return specs.WorkflowSessionGetResp{}, err
-		}
-		return specs.WorkflowSessionGetResp{Session: session}, nil
-	})
+	session, err := s.getOwnedSession(sessionID, userID)
+	if err != nil {
+		return specs.WorkflowSessionGetResp{}, err
+	}
+	return specs.WorkflowSessionGetResp{Session: mapRuntimeSession(session)}, nil
 }
 
 // 描述：更新会话状态，并刷新最后更新时间。
@@ -130,22 +141,24 @@ func (s *WorkflowService) UpdateSessionStatus(req specs.WorkflowSessionStatusUpd
 	if userID == "" || sessionID == "" {
 		return specs.WorkflowSessionStatusUpdateResp{}, newValidationError("sessionId 和 userId 不能为空")
 	}
+	if _, err := s.getOwnedSession(sessionID, userID); err != nil {
+		return specs.WorkflowSessionStatusUpdateResp{}, err
+	}
 
-	return withWrite(s.store, func(state *runtimeState) (specs.WorkflowSessionStatusUpdateResp, error) {
-		session, err := mustSessionOwnerLocked(state, sessionID, userID)
-		if err != nil {
-			return specs.WorkflowSessionStatusUpdateResp{}, err
-		}
-		session.Status = req.Status
-		session.LastAt = nowRFC3339()
-		state.Sessions[session.ID] = session
-		logRuntimeAuditEvent("workflow.session.status.updated", map[string]string{
-			"userId":    userID,
-			"sessionId": session.ID,
-			"status":    strconv.Itoa(req.Status),
-		})
-		return specs.WorkflowSessionStatusUpdateResp{Session: session}, nil
+	ctx, cancel := runtimeCallContext()
+	defer cancel()
+	response, err := s.runtime.UpdateSessionStatus(ctx, &runtimepb.UpdateSessionStatusRequest{
+		SessionId: sessionID,
+		Status:    int32(req.Status),
 	})
+	if err != nil {
+		return specs.WorkflowSessionStatusUpdateResp{}, mapRuntimeError("更新会话状态失败", err)
+	}
+	session, err := requireSessionRecord(response.GetSession())
+	if err != nil {
+		return specs.WorkflowSessionStatusUpdateResp{}, err
+	}
+	return specs.WorkflowSessionStatusUpdateResp{Session: mapRuntimeSession(session)}, nil
 }
 
 // 描述：写入会话消息，并同步刷新会话的最后更新时间。
@@ -163,27 +176,26 @@ func (s *WorkflowService) CreateSessionMessage(req specs.WorkflowSessionMessageC
 	if content == "" {
 		return specs.WorkflowSessionMessageCreateResp{}, newValidationError("content 不能为空")
 	}
+	if _, err := s.getOwnedSession(sessionID, userID); err != nil {
+		return specs.WorkflowSessionMessageCreateResp{}, err
+	}
 
-	return withWrite(s.store, func(state *runtimeState) (specs.WorkflowSessionMessageCreateResp, error) {
-		session, err := mustSessionOwnerLocked(state, sessionID, userID)
-		if err != nil {
-			return specs.WorkflowSessionMessageCreateResp{}, err
-		}
-
-		state.MessageSeq++
-		message := specs.WorkflowSessionMessageItem{
-			MessageId: strconv.FormatInt(state.MessageSeq, 10),
-			SessionId: sessionID,
-			UserId:    userID,
-			Role:      role,
-			Content:   content,
-			CreatedAt: nowRFC3339(),
-		}
-		state.Messages[sessionID] = append(state.Messages[sessionID], message)
-		session.LastAt = message.CreatedAt
-		state.Sessions[session.ID] = session
-		return specs.WorkflowSessionMessageCreateResp{Message: message}, nil
+	ctx, cancel := runtimeCallContext()
+	defer cancel()
+	response, err := s.runtime.CreateMessage(ctx, &runtimepb.CreateMessageRequest{
+		SessionId: sessionID,
+		UserId:    userID,
+		Role:      role,
+		Content:   content,
 	})
+	if err != nil {
+		return specs.WorkflowSessionMessageCreateResp{}, mapRuntimeError("写入会话消息失败", err)
+	}
+	message := response.GetMessage()
+	if message == nil {
+		return specs.WorkflowSessionMessageCreateResp{}, newInternalError("写入会话消息失败", fmt.Errorf("runtime 返回空消息"))
+	}
+	return specs.WorkflowSessionMessageCreateResp{Message: mapRuntimeMessage(message)}, nil
 }
 
 // 描述：分页查询会话消息，并确保不同用户无法跨会话读取消息。
@@ -194,29 +206,30 @@ func (s *WorkflowService) ListSessionMessage(req specs.WorkflowSessionMessageLis
 		return specs.WorkflowSessionMessageListResp{}, newValidationError("sessionId 和 userId 不能为空")
 	}
 	page, pageSize := normalizePagination(req.Page, req.PageSize)
+	if _, err := s.getOwnedSession(sessionID, userID); err != nil {
+		return specs.WorkflowSessionMessageListResp{}, err
+	}
 
-	return withRead(s.store, func(state *runtimeState) (specs.WorkflowSessionMessageListResp, error) {
-		if _, err := mustSessionOwnerLocked(state, sessionID, userID); err != nil {
-			return specs.WorkflowSessionMessageListResp{}, err
-		}
-
-		messages := append([]specs.WorkflowSessionMessageItem(nil), state.Messages[sessionID]...)
-		total := len(messages)
-		start := (page - 1) * pageSize
-		if start >= total {
-			return specs.WorkflowSessionMessageListResp{List: []specs.WorkflowSessionMessageItem{}, Total: total, Page: page, PageSize: pageSize}, nil
-		}
-		end := start + pageSize
-		if end > total {
-			end = total
-		}
-		return specs.WorkflowSessionMessageListResp{
-			List:     messages[start:end],
-			Total:    total,
-			Page:     page,
-			PageSize: pageSize,
-		}, nil
+	ctx, cancel := runtimeCallContext()
+	defer cancel()
+	response, err := s.runtime.ListMessages(ctx, &runtimepb.ListMessagesRequest{
+		SessionId: sessionID,
+		Page:      int32(page),
+		PageSize:  int32(pageSize),
 	})
+	if err != nil {
+		return specs.WorkflowSessionMessageListResp{}, mapRuntimeError("查询会话消息失败", err)
+	}
+	list := make([]specs.WorkflowSessionMessageItem, 0, len(response.GetList()))
+	for _, item := range response.GetList() {
+		list = append(list, mapRuntimeMessage(item))
+	}
+	return specs.WorkflowSessionMessageListResp{
+		List:     list,
+		Total:    int(response.GetTotal()),
+		Page:     int(response.GetPage()),
+		PageSize: int(response.GetPageSize()),
+	}, nil
 }
 
 // 描述：创建 Sandbox 实例，并要求会话归属当前用户。
@@ -226,24 +239,26 @@ func (s *WorkflowService) CreateSandbox(req specs.WorkflowSandboxCreateReq) (spe
 	if userID == "" || sessionID == "" {
 		return specs.WorkflowSandboxCreateResp{}, newValidationError("sessionId 和 userId 不能为空")
 	}
+	if _, err := s.getOwnedSession(sessionID, userID); err != nil {
+		return specs.WorkflowSandboxCreateResp{}, err
+	}
 
-	return withWrite(s.store, func(state *runtimeState) (specs.WorkflowSandboxCreateResp, error) {
-		if _, err := mustSessionOwnerLocked(state, sessionID, userID); err != nil {
-			return specs.WorkflowSandboxCreateResp{}, err
-		}
-		now := nowRFC3339()
-		sandbox := specs.RuntimeSandboxEntity{
-			ID:          newID(),
-			SessionID:   sessionID,
-			ContainerID: trimOptionalString(req.ContainerId),
-			PreviewURL:  trimOptionalString(req.PreviewUrl),
-			Status:      defaultStatus(req.Status),
-			CreatedAt:   now,
-			LastAt:      now,
-		}
-		state.Sandboxes[sandbox.ID] = sandbox
-		return specs.WorkflowSandboxCreateResp{Sandbox: sandbox}, nil
+	ctx, cancel := runtimeCallContext()
+	defer cancel()
+	response, err := s.runtime.CreateSandbox(ctx, &runtimepb.CreateSandboxRequest{
+		SessionId:   sessionID,
+		ContainerId: trimOptionalString(req.ContainerId),
+		PreviewUrl:  trimOptionalString(req.PreviewUrl),
+		Status:      int32(defaultStatus(req.Status)),
 	})
+	if err != nil {
+		return specs.WorkflowSandboxCreateResp{}, mapRuntimeError("创建 sandbox 失败", err)
+	}
+	sandbox := response.GetSandbox()
+	if sandbox == nil {
+		return specs.WorkflowSandboxCreateResp{}, newInternalError("创建 sandbox 失败", fmt.Errorf("runtime 返回空 sandbox"))
+	}
+	return specs.WorkflowSandboxCreateResp{Sandbox: mapRuntimeSandbox(sandbox)}, nil
 }
 
 // 描述：查询 Sandbox 列表，并对结果执行当前用户的会话归属过滤。
@@ -256,25 +271,11 @@ func (s *WorkflowService) GetSandbox(req specs.WorkflowSandboxGetReq) (specs.Wor
 		return specs.WorkflowSandboxGetResp{}, newValidationError("sandboxId 或 sessionId 至少一个必填")
 	}
 
-	return withRead(s.store, func(state *runtimeState) (specs.WorkflowSandboxGetResp, error) {
-		list := make([]specs.RuntimeSandboxEntity, 0)
-		for _, sandbox := range state.Sandboxes {
-			if sandbox.DeletedAt != "" {
-				continue
-			}
-			if req.SandboxId != nil && strings.TrimSpace(*req.SandboxId) != "" && sandbox.ID != strings.TrimSpace(*req.SandboxId) {
-				continue
-			}
-			if req.SessionId != nil && strings.TrimSpace(*req.SessionId) != "" && sandbox.SessionID != strings.TrimSpace(*req.SessionId) {
-				continue
-			}
-			if _, err := mustSessionOwnerLocked(state, sandbox.SessionID, userID); err != nil {
-				continue
-			}
-			list = append(list, sandbox)
-		}
-		return specs.WorkflowSandboxGetResp{List: list}, nil
-	})
+	list, err := s.listOwnedSandboxes(trimOptionalString(req.SandboxId), trimOptionalString(req.SessionId), userID)
+	if err != nil {
+		return specs.WorkflowSandboxGetResp{}, err
+	}
+	return specs.WorkflowSandboxGetResp{List: list}, nil
 }
 
 // 描述：回收 Sandbox，并同步移除其关联的预览地址记录。
@@ -287,34 +288,25 @@ func (s *WorkflowService) RecycleSandbox(req specs.WorkflowSandboxRecycleReq) (s
 		return specs.WorkflowSandboxRecycleResp{}, newValidationError("sandboxId 或 sessionId 至少一个必填")
 	}
 
-	return withWrite(s.store, func(state *runtimeState) (specs.WorkflowSandboxRecycleResp, error) {
-		removed := false
-		for id, sandbox := range state.Sandboxes {
-			if sandbox.DeletedAt != "" {
-				continue
-			}
-			if req.SandboxId != nil && strings.TrimSpace(*req.SandboxId) != "" && sandbox.ID != strings.TrimSpace(*req.SandboxId) {
-				continue
-			}
-			if req.SessionId != nil && strings.TrimSpace(*req.SessionId) != "" && sandbox.SessionID != strings.TrimSpace(*req.SessionId) {
-				continue
-			}
-			if _, err := mustSessionOwnerLocked(state, sandbox.SessionID, userID); err != nil {
-				continue
-			}
-			delete(state.Sandboxes, id)
-			for previewID, preview := range state.Previews {
-				if preview.SandboxID == id {
-					delete(state.Previews, previewID)
-				}
-			}
-			removed = true
+	list, err := s.listOwnedSandboxes(trimOptionalString(req.SandboxId), trimOptionalString(req.SessionId), userID)
+	if err != nil {
+		return specs.WorkflowSandboxRecycleResp{}, err
+	}
+	if len(list) == 0 {
+		return specs.WorkflowSandboxRecycleResp{}, newNotFoundError("未找到可回收的 sandbox")
+	}
+
+	for _, item := range list {
+		ctx, cancel := runtimeCallContext()
+		_, recycleErr := s.runtime.RecycleSandbox(ctx, &runtimepb.RecycleSandboxRequest{
+			SandboxId: item.ID,
+		})
+		cancel()
+		if recycleErr != nil {
+			return specs.WorkflowSandboxRecycleResp{}, mapRuntimeError("回收 sandbox 失败", recycleErr)
 		}
-		if !removed {
-			return specs.WorkflowSandboxRecycleResp{}, newNotFoundError("未找到可回收的 sandbox")
-		}
-		return specs.WorkflowSandboxRecycleResp{Success: true}, nil
-	})
+	}
+	return specs.WorkflowSandboxRecycleResp{Success: true}, nil
 }
 
 // 描述：创建预览地址，并要求目标 Sandbox 必须归属于当前用户。
@@ -328,24 +320,26 @@ func (s *WorkflowService) CreatePreview(req specs.WorkflowPreviewCreateReq) (spe
 	if url == "" {
 		return specs.WorkflowPreviewCreateResp{}, newValidationError("url 不能为空")
 	}
+	if _, err := s.getOwnedSandbox(sandboxID, userID); err != nil {
+		return specs.WorkflowPreviewCreateResp{}, err
+	}
 
-	return withWrite(s.store, func(state *runtimeState) (specs.WorkflowPreviewCreateResp, error) {
-		if _, err := mustSandboxOwnerLocked(state, sandboxID, userID); err != nil {
-			return specs.WorkflowPreviewCreateResp{}, err
-		}
-		now := nowRFC3339()
-		preview := specs.RuntimePreviewEntity{
-			ID:        newID(),
-			SandboxID: sandboxID,
-			URL:       url,
-			Status:    defaultStatus(req.Status),
-			ExpiresAt: resolvePreviewExpireAt(req.Expiration),
-			CreatedAt: now,
-			LastAt:    now,
-		}
-		state.Previews[preview.ID] = preview
-		return specs.WorkflowPreviewCreateResp{Preview: preview}, nil
+	ctx, cancel := runtimeCallContext()
+	defer cancel()
+	response, err := s.runtime.CreatePreview(ctx, &runtimepb.CreatePreviewRequest{
+		SandboxId:      sandboxID,
+		Url:            url,
+		Status:         int32(defaultStatus(req.Status)),
+		ExpirationSecs: optionalExpiration(req.Expiration),
 	})
+	if err != nil {
+		return specs.WorkflowPreviewCreateResp{}, mapRuntimeError("创建预览地址失败", err)
+	}
+	preview := response.GetPreview()
+	if preview == nil {
+		return specs.WorkflowPreviewCreateResp{}, newInternalError("创建预览地址失败", fmt.Errorf("runtime 返回空 preview"))
+	}
+	return specs.WorkflowPreviewCreateResp{Preview: mapRuntimePreview(preview)}, nil
 }
 
 // 描述：查询预览地址列表，并根据 Sandbox 归属过滤数据。
@@ -358,25 +352,11 @@ func (s *WorkflowService) GetPreview(req specs.WorkflowPreviewGetReq) (specs.Wor
 		return specs.WorkflowPreviewGetResp{}, newValidationError("previewId 或 sandboxId 至少一个必填")
 	}
 
-	return withRead(s.store, func(state *runtimeState) (specs.WorkflowPreviewGetResp, error) {
-		list := make([]specs.RuntimePreviewEntity, 0)
-		for _, preview := range state.Previews {
-			if preview.DeletedAt != "" {
-				continue
-			}
-			if req.PreviewId != nil && strings.TrimSpace(*req.PreviewId) != "" && preview.ID != strings.TrimSpace(*req.PreviewId) {
-				continue
-			}
-			if req.SandboxId != nil && strings.TrimSpace(*req.SandboxId) != "" && preview.SandboxID != strings.TrimSpace(*req.SandboxId) {
-				continue
-			}
-			if _, err := mustSandboxOwnerLocked(state, preview.SandboxID, userID); err != nil {
-				continue
-			}
-			list = append(list, preview)
-		}
-		return specs.WorkflowPreviewGetResp{List: list}, nil
-	})
+	list, err := s.listOwnedPreviews(trimOptionalString(req.PreviewId), trimOptionalString(req.SandboxId), userID)
+	if err != nil {
+		return specs.WorkflowPreviewGetResp{}, err
+	}
+	return specs.WorkflowPreviewGetResp{List: list}, nil
 }
 
 // 描述：让预览地址失效，支持按预览 ID 或 Sandbox ID 批量移除。
@@ -389,29 +369,25 @@ func (s *WorkflowService) ExpirePreview(req specs.WorkflowPreviewExpireReq) (spe
 		return specs.WorkflowPreviewExpireResp{}, newValidationError("previewId 或 sandboxId 至少一个必填")
 	}
 
-	return withWrite(s.store, func(state *runtimeState) (specs.WorkflowPreviewExpireResp, error) {
-		removed := false
-		for id, preview := range state.Previews {
-			if preview.DeletedAt != "" {
-				continue
-			}
-			if req.PreviewId != nil && strings.TrimSpace(*req.PreviewId) != "" && preview.ID != strings.TrimSpace(*req.PreviewId) {
-				continue
-			}
-			if req.SandboxId != nil && strings.TrimSpace(*req.SandboxId) != "" && preview.SandboxID != strings.TrimSpace(*req.SandboxId) {
-				continue
-			}
-			if _, err := mustSandboxOwnerLocked(state, preview.SandboxID, userID); err != nil {
-				continue
-			}
-			delete(state.Previews, id)
-			removed = true
+	list, err := s.listOwnedPreviews(trimOptionalString(req.PreviewId), trimOptionalString(req.SandboxId), userID)
+	if err != nil {
+		return specs.WorkflowPreviewExpireResp{}, err
+	}
+	if len(list) == 0 {
+		return specs.WorkflowPreviewExpireResp{}, newNotFoundError("未找到可失效的预览地址")
+	}
+
+	for _, item := range list {
+		ctx, cancel := runtimeCallContext()
+		_, expireErr := s.runtime.ExpirePreview(ctx, &runtimepb.ExpirePreviewRequest{
+			PreviewId: item.ID,
+		})
+		cancel()
+		if expireErr != nil {
+			return specs.WorkflowPreviewExpireResp{}, mapRuntimeError("失效预览地址失败", expireErr)
 		}
-		if !removed {
-			return specs.WorkflowPreviewExpireResp{}, newNotFoundError("未找到可失效的预览地址")
-		}
-		return specs.WorkflowPreviewExpireResp{Success: true}, nil
-	})
+	}
+	return specs.WorkflowPreviewExpireResp{Success: true}, nil
 }
 
 // 描述：检查桌面端是否存在可更新版本，并返回对应平台下载地址。
@@ -437,6 +413,177 @@ func (s *WorkflowService) CheckDesktopUpdate(req specs.WorkflowDesktopUpdateChec
 	}
 	resp.HasUpdate = compareSemverVersion(currentVersion, latestVersion) < 0
 	return resp, nil
+}
+
+// 描述：读取单个会话并校验其归属当前用户，避免 services 侧跨用户透传 runtime 数据。
+func (s *WorkflowService) getOwnedSession(sessionID string, userID string) (*runtimepb.RuntimeSessionRecord, error) {
+	ctx, cancel := runtimeCallContext()
+	defer cancel()
+	response, err := s.runtime.GetSession(ctx, &runtimepb.GetSessionRequest{SessionId: sessionID})
+	if err != nil {
+		return nil, mapRuntimeError("查询会话失败", err)
+	}
+	session, err := requireSessionRecord(response.GetSession())
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(session.GetUserId()) != userID {
+		return nil, newForbiddenError("会话不属于当前用户")
+	}
+	return session, nil
+}
+
+// 描述：读取单个 Sandbox 并校验其所属会话归属当前用户。
+func (s *WorkflowService) getOwnedSandbox(sandboxID string, userID string) (*runtimepb.RuntimeSandboxRecord, error) {
+	ctx, cancel := runtimeCallContext()
+	defer cancel()
+	response, err := s.runtime.ListSandboxes(ctx, &runtimepb.ListSandboxesRequest{
+		SandboxId: sandboxID,
+	})
+	if err != nil {
+		return nil, mapRuntimeError("查询 sandbox 失败", err)
+	}
+	for _, item := range response.GetList() {
+		if item.GetId() != sandboxID {
+			continue
+		}
+		if _, err := s.getOwnedSession(item.GetSessionId(), userID); err != nil {
+			return nil, err
+		}
+		return item, nil
+	}
+	return nil, newNotFoundError("Sandbox 不存在")
+}
+
+// 描述：按条件查询当前用户可见的 Sandbox 列表，并按当前接口约定过滤掉他人会话数据。
+func (s *WorkflowService) listOwnedSandboxes(sandboxID string, sessionID string, userID string) ([]specs.RuntimeSandboxEntity, error) {
+	ctx, cancel := runtimeCallContext()
+	defer cancel()
+	response, err := s.runtime.ListSandboxes(ctx, &runtimepb.ListSandboxesRequest{
+		SandboxId: sandboxID,
+		SessionId: sessionID,
+	})
+	if err != nil {
+		return nil, mapRuntimeError("查询 sandbox 失败", err)
+	}
+	list := make([]specs.RuntimeSandboxEntity, 0, len(response.GetList()))
+	for _, item := range response.GetList() {
+		if _, err := s.getOwnedSession(item.GetSessionId(), userID); err != nil {
+			continue
+		}
+		list = append(list, mapRuntimeSandbox(item))
+	}
+	return list, nil
+}
+
+// 描述：按条件查询当前用户可见的 Preview 列表，并通过 Sandbox 归属做最终过滤。
+func (s *WorkflowService) listOwnedPreviews(previewID string, sandboxID string, userID string) ([]specs.RuntimePreviewEntity, error) {
+	ctx, cancel := runtimeCallContext()
+	defer cancel()
+	response, err := s.runtime.ListPreviews(ctx, &runtimepb.ListPreviewsRequest{
+		PreviewId: previewID,
+		SandboxId: sandboxID,
+	})
+	if err != nil {
+		return nil, mapRuntimeError("查询预览地址失败", err)
+	}
+	list := make([]specs.RuntimePreviewEntity, 0, len(response.GetList()))
+	for _, item := range response.GetList() {
+		if _, err := s.getOwnedSandbox(item.GetSandboxId(), userID); err != nil {
+			continue
+		}
+		list = append(list, mapRuntimePreview(item))
+	}
+	return list, nil
+}
+
+// 描述：统一创建 runtime sidecar RPC 上下文，避免 handler 直接持有长连接阻塞。
+func runtimeCallContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), runtimeRequestTimeout)
+}
+
+// 描述：把 runtime 会话协议结构转换为 services 对外响应实体。
+func mapRuntimeSession(item *runtimepb.RuntimeSessionRecord) specs.RuntimeSessionEntity {
+	return specs.RuntimeSessionEntity{
+		ID:        item.GetId(),
+		UserID:    item.GetUserId(),
+		AgentCode: item.GetAgentCode(),
+		Status:    int(item.GetStatus()),
+		CreatedAt: item.GetCreatedAt(),
+		LastAt:    item.GetLastAt(),
+		DeletedAt: item.GetDeletedAt(),
+	}
+}
+
+// 描述：把 runtime 消息协议结构转换为 services 对外响应实体。
+func mapRuntimeMessage(item *runtimepb.RuntimeMessageRecord) specs.WorkflowSessionMessageItem {
+	return specs.WorkflowSessionMessageItem{
+		MessageId: item.GetMessageId(),
+		SessionId: item.GetSessionId(),
+		UserId:    item.GetUserId(),
+		Role:      item.GetRole(),
+		Content:   item.GetContent(),
+		CreatedAt: item.GetCreatedAt(),
+	}
+}
+
+// 描述：把 runtime Sandbox 协议结构转换为 services 对外响应实体。
+func mapRuntimeSandbox(item *runtimepb.RuntimeSandboxRecord) specs.RuntimeSandboxEntity {
+	return specs.RuntimeSandboxEntity{
+		ID:          item.GetId(),
+		SessionID:   item.GetSessionId(),
+		ContainerID: item.GetContainerId(),
+		PreviewURL:  item.GetPreviewUrl(),
+		Status:      int(item.GetStatus()),
+		CreatedAt:   item.GetCreatedAt(),
+		LastAt:      item.GetLastAt(),
+		DeletedAt:   item.GetDeletedAt(),
+	}
+}
+
+// 描述：把 runtime Preview 协议结构转换为 services 对外响应实体。
+func mapRuntimePreview(item *runtimepb.RuntimePreviewRecord) specs.RuntimePreviewEntity {
+	return specs.RuntimePreviewEntity{
+		ID:        item.GetId(),
+		SandboxID: item.GetSandboxId(),
+		URL:       item.GetUrl(),
+		Status:    int(item.GetStatus()),
+		ExpiresAt: item.GetExpiresAt(),
+		CreatedAt: item.GetCreatedAt(),
+		LastAt:    item.GetLastAt(),
+		DeletedAt: item.GetDeletedAt(),
+	}
+}
+
+// 描述：校验 runtime 返回的会话记录非空，避免上层收到半初始化结果。
+func requireSessionRecord(item *runtimepb.RuntimeSessionRecord) (*runtimepb.RuntimeSessionRecord, error) {
+	if item == nil {
+		return nil, newInternalError("查询会话失败", fmt.Errorf("runtime 返回空会话"))
+	}
+	return item, nil
+}
+
+// 描述：把 gRPC/runtime 错误统一映射为当前 services 对外使用的 HTTP/业务错误。
+func mapRuntimeError(message string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if grpcStatus, ok := status.FromError(err); ok {
+		switch grpcStatus.Code() {
+		case codes.NotFound:
+			return newNotFoundError(grpcStatus.Message())
+		case codes.PermissionDenied:
+			return newForbiddenError(grpcStatus.Message())
+		case codes.InvalidArgument:
+			return newValidationError(grpcStatus.Message())
+		default:
+			return newInternalError(message, err)
+		}
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "not found") {
+		return newNotFoundError(err.Error())
+	}
+	return newInternalError(message, err)
 }
 
 // 描述：归一化分页参数。
@@ -560,39 +707,6 @@ func parseSemverParts(raw string) []int {
 	return parts
 }
 
-// 描述：校验会话是否归属当前用户。
-func mustSessionOwnerLocked(state *runtimeState, sessionID string, userID string) (specs.RuntimeSessionEntity, error) {
-	session, ok := state.Sessions[sessionID]
-	if !ok || session.DeletedAt != "" {
-		return specs.RuntimeSessionEntity{}, newNotFoundError("会话不存在")
-	}
-	if session.UserID != userID {
-		return specs.RuntimeSessionEntity{}, newForbiddenError("会话不属于当前用户")
-	}
-	return session, nil
-}
-
-// 描述：校验 Sandbox 是否归属当前用户。
-func mustSandboxOwnerLocked(state *runtimeState, sandboxID string, userID string) (specs.RuntimeSandboxEntity, error) {
-	sandbox, ok := state.Sandboxes[sandboxID]
-	if !ok || sandbox.DeletedAt != "" {
-		return specs.RuntimeSandboxEntity{}, newNotFoundError("Sandbox 不存在")
-	}
-	if _, err := mustSessionOwnerLocked(state, sandbox.SessionID, userID); err != nil {
-		return specs.RuntimeSandboxEntity{}, err
-	}
-	return sandbox, nil
-}
-
-// 描述：生成开源版 runtime 所需的随机字符串 ID，避免依赖外部 ID 包。
-func newID() string {
-	payload := make([]byte, 16)
-	if _, err := rand.Read(payload); err != nil {
-		return fmt.Sprintf("libra-%d", time.Now().UnixNano())
-	}
-	return hex.EncodeToString(payload)
-}
-
 // 描述：返回当前 UTC 时间的 RFC3339 字符串，保证前后端时间格式统一。
 func nowRFC3339() string {
 	return time.Now().UTC().Format(time.RFC3339)
@@ -617,7 +731,15 @@ func defaultStatus(raw *int) int {
 	return *raw
 }
 
-// 描述：归一化可选字符串字段，避免将空白字符串持久化到状态文件。
+// 描述：把可选整型状态转换为 proto 请求值，nil 时回退到 0 表示“不筛选/默认态”。
+func optionalStatusInt32(raw *int) int32 {
+	if raw == nil {
+		return 0
+	}
+	return int32(*raw)
+}
+
+// 描述：归一化可选字符串字段，避免向 runtime 透传空白字符串。
 func trimOptionalString(raw *string) string {
 	if raw == nil {
 		return ""
@@ -625,15 +747,15 @@ func trimOptionalString(raw *string) string {
 	return strings.TrimSpace(*raw)
 }
 
-// 描述：计算预览过期时间，未提供时返回空字符串表示长期有效。
-func resolvePreviewExpireAt(expiration *int64) string {
-	if expiration == nil || *expiration <= 0 {
-		return ""
+// 描述：把可选预览过期秒数转换为 proto 请求字段，未传时回退到 0。
+func optionalExpiration(raw *int64) int64 {
+	if raw == nil {
+		return 0
 	}
-	return time.Now().UTC().Add(time.Duration(*expiration) * time.Second).Format(time.RFC3339)
+	return *raw
 }
 
-// 描述：原地反转会话切片，用于支持按更新时间升序查看。
+// 描述：对会话列表执行原地倒序，兼容现有 byLastAt<0 的查询约定。
 func slicesReverseSession(list []specs.RuntimeSessionEntity) {
 	for left, right := 0, len(list)-1; left < right; left, right = left+1, right-1 {
 		list[left], list[right] = list[right], list[left]

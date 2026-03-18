@@ -11,8 +11,12 @@ import path from "node:path";
 //
 //   - 0: `main.rs` 的 UTF-8 文本内容。
 function readTauriSource() {
+  const currentDir = process.cwd();
+  const desktopRoot = currentDir.endsWith(path.join("apps", "desktop"))
+    ? currentDir
+    : path.resolve(currentDir, "apps", "desktop");
   return fs.readFileSync(
-    path.resolve(process.cwd(), "src-tauri/src/main.rs"),
+    path.resolve(desktopRoot, "src-tauri/src/main.rs"),
     "utf8",
   );
 }

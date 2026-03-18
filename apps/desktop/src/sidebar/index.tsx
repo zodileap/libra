@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -90,6 +90,7 @@ import {
   translateDesktopText,
   useDesktopI18n,
 } from "../shared/i18n";
+import { getProjectWorkspacePathStatusMap } from "../shared/services/project-workspace-status";
 import { SidebarBackHeader } from "./widgets/sidebar-back-header";
 import { UserHoverMenu } from "./widgets/user-hover-menu";
 
@@ -760,6 +761,7 @@ function AgentSidebar({
   const [hoveredDeleteSessionId, setHoveredDeleteSessionId] = useState("");
   const [hoveredContextMenuActionKey, setHoveredContextMenuActionKey] = useState("");
   const [workspaceGroups, setWorkspaceGroups] = useState<ProjectWorkspaceGroup[]>([]);
+  const [workspacePathValidityById, setWorkspacePathValidityById] = useState<Record<string, boolean>>({});
   const [projectWorkspaceExpandedKeys, setProjectWorkspaceExpandedKeys] = useState<string[]>([]);
   const [openWorkspaceActionMenuId, setOpenWorkspaceActionMenuId] = useState("");
   const [creatingWorkspaceSessionId, setCreatingWorkspaceSessionId] = useState("");
@@ -846,6 +848,27 @@ function AgentSidebar({
     }
     setWorkspaceGroups(listProjectWorkspaceGroups());
   };
+
+  // 描述：批量解析当前项目目录的有效性，目录缺失时返回 false，供侧边栏灰显与禁用“新增话题”复用。
+  //
+  // Params:
+  //
+  //   - groups: 当前项目目录列表。
+  //
+  // Returns:
+  //
+  //   - 以 workspaceId 为键的目录有效性映射。
+  const resolveWorkspacePathValidityById = useCallback(async (
+    groups: ProjectWorkspaceGroup[],
+  ): Promise<Record<string, boolean>> => {
+    if (groups.length === 0) {
+      return {};
+    }
+    const statusMap = await getProjectWorkspacePathStatusMap(groups.map((item) => item.path));
+    return Object.fromEntries(
+      groups.map((group) => [group.id, statusMap[group.path]?.valid !== false]),
+    );
+  }, []);
 
   // 描述：拉取当前智能体的会话列表。
   const refreshSessions = async () => {
@@ -1423,6 +1446,13 @@ function AgentSidebar({
     if (!workspaceId || !isProjectAgent || creatingWorkspaceSessionId) {
       return;
     }
+    if (workspacePathValidityById[workspaceId] === false) {
+      AriMessage.warning({
+        content: t("项目目录已不存在，请先恢复目录后再新建话题。"),
+        duration: 2500,
+      });
+      return;
+    }
     setCreatingWorkspaceSessionId(workspaceId);
     try {
       const created = await createRuntimeSession(user.id, "agent");
@@ -1615,70 +1645,80 @@ function AgentSidebar({
     if (!isProjectAgent) {
       return [];
     }
-    return workspaceSessionGroups.map((group) => ({
-      key: buildWorkspaceMenuKey(group.workspace.id),
-      label: group.workspace.name,
-      icon: "folder",
-      actions: (
-        <AriFlex align="center" space={4}>
-          <AriPopover
-            trigger="click"
-            open={openWorkspaceActionMenuId === group.workspace.id}
-            onOpenChange={(nextOpen) => {
-              setOpenWorkspaceActionMenuId(nextOpen ? group.workspace.id : "");
-            }}
-            position="bottom"
-            content={(
-              <AriMenu
-                items={[
-                  { key: "delete", label: t("删除"), icon: "delete", fillIcon: "delete_fill" },
-                ]}
-                onSelect={(key: string) => {
-                  setOpenWorkspaceActionMenuId("");
-                  if (key === "delete") {
-                    handleDeleteWorkspace(group.workspace.id);
-                  }
-                }}
+    return workspaceSessionGroups.map((group) => {
+      const workspacePathInvalid = workspacePathValidityById[group.workspace.id] === false;
+      return {
+        key: buildWorkspaceMenuKey(group.workspace.id),
+        label: (
+          <AriTypography
+            className={workspacePathInvalid ? "desk-project-workspace-label-invalid" : undefined}
+            variant="body"
+            value={group.workspace.name}
+          />
+        ),
+        icon: "folder",
+        actions: (
+          <AriFlex align="center" space={4}>
+            <AriPopover
+              trigger="click"
+              open={openWorkspaceActionMenuId === group.workspace.id}
+              onOpenChange={(nextOpen) => {
+                setOpenWorkspaceActionMenuId(nextOpen ? group.workspace.id : "");
+              }}
+              position="bottom"
+              content={(
+                <AriMenu
+                  items={[
+                    { key: "delete", label: t("删除"), icon: "delete", fillIcon: "delete_fill" },
+                  ]}
+                  onSelect={(key: string) => {
+                    setOpenWorkspaceActionMenuId("");
+                    if (key === "delete") {
+                      handleDeleteWorkspace(group.workspace.id);
+                    }
+                  }}
+                />
+              )}
+            >
+              <AriButton
+                size="sm"
+                type="text"
+                ghost
+                icon="more_horiz"
+                aria-label={t("项目更多操作")}
               />
-            )}
-          >
+            </AriPopover>
             <AriButton
               size="sm"
               type="text"
               ghost
-              icon="more_horiz"
-              aria-label={t("项目更多操作")}
+              icon="settings"
+              aria-label={t("项目设置")}
+              onClick={() => {
+                setOpenWorkspaceActionMenuId("");
+                openWorkspaceSettingsPage(group.workspace.id);
+              }}
             />
-          </AriPopover>
-          <AriButton
-            size="sm"
-            type="text"
-            ghost
-            icon="settings"
-            aria-label={t("项目设置")}
-            onClick={() => {
-              setOpenWorkspaceActionMenuId("");
-              openWorkspaceSettingsPage(group.workspace.id);
-            }}
-          />
-          <AriButton
-            size="sm"
-            type="text"
-            ghost
-            icon="edit"
-            aria-label={t("在项目内新增话题")}
-            disabled={creatingWorkspaceSessionId === group.workspace.id}
-            onClick={() => {
-              setOpenWorkspaceActionMenuId("");
-              void handleCreateSessionInWorkspace(group.workspace.id);
-            }}
-          />
-        </AriFlex>
-      ),
-      actionsVisibility: "hover",
-      children: buildSessionMenuItems(group.sessions),
-    }));
+            <AriButton
+              size="sm"
+              type="text"
+              ghost
+              icon="edit"
+              aria-label={t("在项目内新增话题")}
+              disabled={creatingWorkspaceSessionId === group.workspace.id || workspacePathInvalid}
+              onClick={() => {
+                setOpenWorkspaceActionMenuId("");
+                void handleCreateSessionInWorkspace(group.workspace.id);
+              }}
+            />
+          </AriFlex>
+        ),
+        actionsVisibility: "hover",
+        children: buildSessionMenuItems(group.sessions),
+      };
+    });
   }, [
+    workspacePathValidityById,
     workspaceSessionGroups,
     creatingWorkspaceSessionId,
     deletingSessionId,
@@ -1883,6 +1923,52 @@ function AgentSidebar({
       window.removeEventListener(PROJECT_WORKSPACE_GROUPS_UPDATED_EVENT, onProjectWorkspaceGroupsUpdated as EventListener);
     };
   }, [isProjectAgent, location.pathname, selectedSessionKey]);
+
+  useEffect(() => {
+    let disposed = false;
+    if (!isProjectAgent) {
+      setWorkspacePathValidityById({});
+      return () => {
+        disposed = true;
+      };
+    }
+    void resolveWorkspacePathValidityById(workspaceGroups).then((nextMap) => {
+      if (disposed) {
+        return;
+      }
+      setWorkspacePathValidityById(nextMap);
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [isProjectAgent, resolveWorkspacePathValidityById, workspaceGroups]);
+
+  useEffect(() => {
+    if (!isProjectAgent || !IS_BROWSER || workspaceGroups.length === 0) {
+      return;
+    }
+    let disposed = false;
+    const syncWorkspacePathValidity = () => {
+      void resolveWorkspacePathValidityById(workspaceGroups).then((nextMap) => {
+        if (disposed) {
+          return;
+        }
+        setWorkspacePathValidityById(nextMap);
+      });
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        syncWorkspacePathValidity();
+      }
+    };
+    window.addEventListener("focus", syncWorkspacePathValidity);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      disposed = true;
+      window.removeEventListener("focus", syncWorkspacePathValidity);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [isProjectAgent, resolveWorkspacePathValidityById, workspaceGroups]);
 
   useEffect(() => {
     if (!IS_BROWSER) {

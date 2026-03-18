@@ -8,9 +8,11 @@ import (
 
 // 描述：运行时服务配置，负责统一承载监听地址、数据目录与跨域配置。
 type Config struct {
-	Addr           string
-	DataDir        string
-	AllowedOrigins []string
+	Addr               string
+	DataDir            string
+	AllowedOrigins     []string
+	RuntimeSidecarAddr string
+	RuntimeSidecarBin  string
 }
 
 // 描述：从环境变量加载运行时服务配置，并为开源环境提供默认值。
@@ -22,9 +24,11 @@ func Load() Config {
 	}
 
 	return Config{
-		Addr:           ":" + port,
-		DataDir:        dataDir,
-		AllowedOrigins: parseAllowedOrigins(os.Getenv("LIBRA_RUNTIME_ALLOWED_ORIGINS")),
+		Addr:               ":" + port,
+		DataDir:            dataDir,
+		AllowedOrigins:     parseAllowedOrigins(os.Getenv("LIBRA_RUNTIME_ALLOWED_ORIGINS")),
+		RuntimeSidecarAddr: normalizeSidecarAddr(os.Getenv("LIBRA_RUNTIME_SIDECAR_ADDR"), "127.0.0.1:46329"),
+		RuntimeSidecarBin:  strings.TrimSpace(os.Getenv("LIBRA_RUNTIME_SIDECAR_BIN")),
 	}
 }
 
@@ -57,4 +61,13 @@ func parseAllowedOrigins(raw string) []string {
 		return []string{"*"}
 	}
 	return origins
+}
+
+// 描述：归一化 sidecar gRPC 地址，避免空值时服务侧无法自动拉起 runtime。
+func normalizeSidecarAddr(raw string, fallback string) string {
+	addr := strings.TrimSpace(raw)
+	if addr == "" {
+		return fallback
+	}
+	return addr
 }

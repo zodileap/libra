@@ -2,29 +2,124 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
-	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
-	configs "github.com/zodileap/libra/services/internal/runtime/configs"
+	service "github.com/zodileap/libra/services/internal/runtime/service"
+	specs "github.com/zodileap/libra/services/internal/runtime/specs"
 )
 
-// 描述：校验 workflow 会话与消息接口在独立运行时服务中可用。
+// 描述：校验 workflow 会话与消息接口在 sidecar-only 时代仍保持既有 REST 形态，并且不再创建 runtime-state.json。
 func TestWorkflowSessionLifecycle(t *testing.T) {
 	t.Parallel()
 
-	handler, err := NewHandler(configs.Config{
-		Addr:           ":10002",
-		DataDir:        filepath.Join(t.TempDir(), "runtime"),
-		AllowedOrigins: []string{"*"},
-	})
-	if err != nil {
-		t.Fatalf("创建 handler 失败: %v", err)
+	dataDir := filepath.Join(t.TempDir(), "runtime")
+	type sessionRecord struct {
+		ID        string
+		UserID    string
+		AgentCode string
+		Status    int
+	}
+	type messageRecord struct {
+		MessageID string
+		SessionID string
+		UserID    string
+		Role      string
+		Content   string
+	}
+	sessions := map[string]sessionRecord{}
+	messages := map[string][]messageRecord{}
+	messageSeq := 0
+
+	workflow := &fakeWorkflowService{
+		createSessionFn: func(req specs.WorkflowSessionCreateReq) (specs.WorkflowSessionCreateResp, error) {
+			session := sessionRecord{
+				ID:        "sess-1",
+				UserID:    req.UserId,
+				AgentCode: req.AgentCode,
+				Status:    1,
+			}
+			if req.Status != nil {
+				session.Status = *req.Status
+			}
+			sessions[session.ID] = session
+			return specs.WorkflowSessionCreateResp{
+				Session: specs.RuntimeSessionEntity{
+					ID:        session.ID,
+					UserID:    session.UserID,
+					AgentCode: session.AgentCode,
+					Status:    session.Status,
+				},
+			}, nil
+		},
+		listSessionFn: func(req specs.WorkflowSessionListReq) (specs.WorkflowSessionListResp, error) {
+			list := make([]specs.RuntimeSessionEntity, 0, len(sessions))
+			for _, item := range sessions {
+				if item.UserID != req.UserId {
+					continue
+				}
+				if req.AgentCode != nil && strings.TrimSpace(*req.AgentCode) != "" && item.AgentCode != strings.TrimSpace(*req.AgentCode) {
+					continue
+				}
+				if req.Status != nil && item.Status != *req.Status {
+					continue
+				}
+				list = append(list, specs.RuntimeSessionEntity{
+					ID:        item.ID,
+					UserID:    item.UserID,
+					AgentCode: item.AgentCode,
+					Status:    item.Status,
+				})
+			}
+			return specs.WorkflowSessionListResp{List: list}, nil
+		},
+		createSessionMessageFn: func(req specs.WorkflowSessionMessageCreateReq) (specs.WorkflowSessionMessageCreateResp, error) {
+			messageSeq++
+			record := messageRecord{
+				MessageID: strconv.Itoa(messageSeq),
+				SessionID: req.SessionId,
+				UserID:    req.UserId,
+				Role:      req.Role,
+				Content:   req.Content,
+			}
+			messages[req.SessionId] = append(messages[req.SessionId], record)
+			return specs.WorkflowSessionMessageCreateResp{
+				Message: specs.WorkflowSessionMessageItem{
+					MessageId: record.MessageID,
+					SessionId: record.SessionID,
+					UserId:    record.UserID,
+					Role:      record.Role,
+					Content:   record.Content,
+				},
+			}, nil
+		},
+		listSessionMessageFn: func(req specs.WorkflowSessionMessageListReq) (specs.WorkflowSessionMessageListResp, error) {
+			list := messages[req.SessionId]
+			response := make([]specs.WorkflowSessionMessageItem, 0, len(list))
+			for _, item := range list {
+				response = append(response, specs.WorkflowSessionMessageItem{
+					MessageId: item.MessageID,
+					SessionId: item.SessionID,
+					UserId:    item.UserID,
+					Role:      item.Role,
+					Content:   item.Content,
+				})
+			}
+			return specs.WorkflowSessionMessageListResp{
+				List:     response,
+				Total:    len(response),
+				Page:     1,
+				PageSize: 20,
+			}, nil
+		},
 	}
 
-	server := httptest.NewServer(handler)
+	server := newRuntimeAPITestServer(t, workflow, nil)
 	defer server.Close()
 
 	createResp := requestJSON[struct {
@@ -82,6 +177,11 @@ func TestWorkflowSessionLifecycle(t *testing.T) {
 	if messagesResp.Data.Total != 1 || len(messagesResp.Data.List) != 1 || messagesResp.Data.List[0].Content != "hello" {
 		t.Fatalf("查询消息结果错误: %+v", messagesResp.Data)
 	}
+
+	_, statErr := os.Stat(filepath.Join(dataDir, "runtime-state.json"))
+	if !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("不应再创建 runtime-state.json: err=%v", statErr)
+	}
 }
 
 // 描述：校验桌面端更新检查优先读取新的 LIBRA 环境变量。
@@ -91,16 +191,7 @@ func TestWorkflowDesktopUpdateCheckUsesLibraEnv(t *testing.T) {
 	t.Setenv("LIBRA_DESKTOP_RELEASE_NOTES", "runtime update")
 	t.Setenv("LIBRA_DESKTOP_PUBLISHED_AT", "2026-03-07T12:00:00Z")
 
-	handler, err := NewHandler(configs.Config{
-		Addr:           ":10002",
-		DataDir:        filepath.Join(t.TempDir(), "runtime"),
-		AllowedOrigins: []string{"*"},
-	})
-	if err != nil {
-		t.Fatalf("创建 handler 失败: %v", err)
-	}
-
-	server := httptest.NewServer(handler)
+	server := newRuntimeAPITestServer(t, service.NewWorkflowService(nil), nil)
 	defer server.Close()
 
 	resp := requestJSON[struct {

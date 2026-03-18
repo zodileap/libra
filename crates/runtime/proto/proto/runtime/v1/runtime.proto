@@ -1,0 +1,451 @@
+syntax = "proto3";
+
+package libra.runtime.v1;
+
+option go_package = "github.com/zodileap/libra/sdk/go/libra_runtime/runtimepb;runtimepb";
+option java_package = "com.libra.runtime.v1";
+option java_multiple_files = true;
+
+service RuntimeService {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc DetectCapabilities(DetectCapabilitiesRequest) returns (DetectCapabilitiesResponse);
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
+  rpc UpdateSessionStatus(UpdateSessionStatusRequest) returns (UpdateSessionStatusResponse);
+  rpc CreateMessage(CreateMessageRequest) returns (CreateMessageResponse);
+  rpc ListMessages(ListMessagesRequest) returns (ListMessagesResponse);
+  rpc ListSandboxes(ListSandboxesRequest) returns (ListSandboxesResponse);
+  rpc CreateSandbox(CreateSandboxRequest) returns (CreateSandboxResponse);
+  rpc RecycleSandbox(RecycleSandboxRequest) returns (RecycleSandboxResponse);
+  rpc ListPreviews(ListPreviewsRequest) returns (ListPreviewsResponse);
+  rpc CreatePreview(CreatePreviewRequest) returns (CreatePreviewResponse);
+  rpc ExpirePreview(ExpirePreviewRequest) returns (ExpirePreviewResponse);
+  rpc Run(stream RunControlRequest) returns (stream RunEvent);
+  rpc CancelRun(CancelRunRequest) returns (CancelRunResponse);
+  rpc SubmitApproval(SubmitApprovalRequest) returns (SubmitApprovalResponse);
+  rpc SubmitUserInput(SubmitUserInputRequest) returns (SubmitUserInputResponse);
+  rpc CallModel(CallModelRequest) returns (CallModelResponse);
+  rpc GetSandboxMetrics(GetSandboxMetricsRequest) returns (GetSandboxMetricsResponse);
+  rpc ResetSandbox(ResetSandboxRequest) returns (ResetSandboxResponse);
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string version = 1;
+  string runtime_id = 2;
+  bool ready = 3;
+}
+
+message RuntimeContext {
+  string tenant_id = 1;
+  string user_id = 2;
+  string project_id = 3;
+  string session_id = 4;
+  string run_id = 5;
+  string trace_id = 6;
+}
+
+message RegisteredMcp {
+  string id = 1;
+  string template_id = 2;
+  string name = 3;
+  string domain = 4;
+  string software = 5;
+  repeated string capabilities = 6;
+  int64 priority = 7;
+  bool supports_import = 8;
+  bool supports_export = 9;
+  string transport = 10;
+  string command = 11;
+  repeated string args = 12;
+  map<string, string> env = 13;
+  string cwd = 14;
+  string url = 15;
+  map<string, string> headers = 16;
+  string runtime_kind = 17;
+  string official_provider = 18;
+  bool runtime_ready = 19;
+  string runtime_hint = 20;
+}
+
+message RuntimeCapabilities {
+  bool native_js_repl = 1;
+  bool native_browser_tools = 2;
+  string playwright_mcp_server_id = 3;
+  bool playwright_mcp_ready = 4;
+  string playwright_mcp_name = 5;
+  string interactive_mode = 6;
+  string skip_reason = 7;
+}
+
+message DetectCapabilitiesRequest {
+  repeated RegisteredMcp available_mcps = 1;
+}
+
+message DetectCapabilitiesResponse {
+  RuntimeCapabilities capabilities = 1;
+}
+
+message QuestionOption {
+  string label = 1;
+  string description = 2;
+}
+
+message QuestionPrompt {
+  string id = 1;
+  string header = 2;
+  string question = 3;
+  repeated QuestionOption options = 4;
+}
+
+message UserInputAnswer {
+  string question_id = 1;
+  string answer_type = 2;
+  int32 option_index = 3;
+  string option_label = 4;
+  string value = 5;
+}
+
+message RuntimeSessionRecord {
+  string id = 1;
+  string tenant_id = 2;
+  string user_id = 3;
+  string project_id = 4;
+  string agent_code = 5;
+  int32 status = 6;
+  string created_at = 7;
+  string last_at = 8;
+  string deleted_at = 9;
+}
+
+message RuntimeMessageRecord {
+  string message_id = 1;
+  string session_id = 2;
+  string user_id = 3;
+  string role = 4;
+  string content = 5;
+  string created_at = 6;
+}
+
+message RuntimeSandboxRecord {
+  string id = 1;
+  string session_id = 2;
+  string container_id = 3;
+  string preview_url = 4;
+  int32 status = 5;
+  string created_at = 6;
+  string last_at = 7;
+  string deleted_at = 8;
+}
+
+message RuntimePreviewRecord {
+  string id = 1;
+  string sandbox_id = 2;
+  string url = 3;
+  int32 status = 4;
+  string expires_at = 5;
+  string created_at = 6;
+  string last_at = 7;
+  string deleted_at = 8;
+}
+
+message CreateSessionRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+  string project_id = 3;
+  string agent_code = 4;
+  int32 status = 5;
+}
+
+message CreateSessionResponse {
+  RuntimeSessionRecord session = 1;
+}
+
+message ListSessionsRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+  string project_id = 3;
+  string agent_code = 4;
+  int32 status = 5;
+}
+
+message ListSessionsResponse {
+  repeated RuntimeSessionRecord list = 1;
+}
+
+message GetSessionRequest {
+  string session_id = 1;
+}
+
+message GetSessionResponse {
+  RuntimeSessionRecord session = 1;
+}
+
+message UpdateSessionStatusRequest {
+  string session_id = 1;
+  int32 status = 2;
+}
+
+message UpdateSessionStatusResponse {
+  RuntimeSessionRecord session = 1;
+}
+
+message CreateMessageRequest {
+  string session_id = 1;
+  string user_id = 2;
+  string role = 3;
+  string content = 4;
+}
+
+message CreateMessageResponse {
+  RuntimeMessageRecord message = 1;
+}
+
+message ListMessagesRequest {
+  string session_id = 1;
+  int32 page = 2;
+  int32 page_size = 3;
+}
+
+message ListMessagesResponse {
+  repeated RuntimeMessageRecord list = 1;
+  int32 total = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+}
+
+message ListSandboxesRequest {
+  string sandbox_id = 1;
+  string session_id = 2;
+}
+
+message ListSandboxesResponse {
+  repeated RuntimeSandboxRecord list = 1;
+}
+
+message CreateSandboxRequest {
+  string session_id = 1;
+  string container_id = 2;
+  string preview_url = 3;
+  int32 status = 4;
+}
+
+message CreateSandboxResponse {
+  RuntimeSandboxRecord sandbox = 1;
+}
+
+message RecycleSandboxRequest {
+  string sandbox_id = 1;
+  string session_id = 2;
+}
+
+message RecycleSandboxResponse {
+  bool ok = 1;
+  uint32 recycled_count = 2;
+}
+
+message ListPreviewsRequest {
+  string preview_id = 1;
+  string sandbox_id = 2;
+}
+
+message ListPreviewsResponse {
+  repeated RuntimePreviewRecord list = 1;
+}
+
+message CreatePreviewRequest {
+  string sandbox_id = 1;
+  string url = 2;
+  int32 status = 3;
+  int64 expiration_secs = 4;
+}
+
+message CreatePreviewResponse {
+  RuntimePreviewRecord preview = 1;
+}
+
+message ExpirePreviewRequest {
+  string preview_id = 1;
+  string sandbox_id = 2;
+}
+
+message ExpirePreviewResponse {
+  bool ok = 1;
+  uint32 expired_count = 2;
+}
+
+message RunStartRequest {
+  RuntimeContext context = 1;
+  string agent_key = 2;
+  string provider = 3;
+  string provider_api_key = 4;
+  string provider_model = 5;
+  string provider_mode = 6;
+  string prompt = 7;
+  string project_name = 8;
+  bool model_export_enabled = 9;
+  string dcc_provider_addr = 10;
+  string output_dir = 11;
+  string workdir = 12;
+  repeated RegisteredMcp available_mcps = 13;
+  RuntimeCapabilities runtime_capabilities = 14;
+  string execution_mode = 15;
+}
+
+message CancelRunRequest {
+  string session_id = 1;
+  string run_id = 2;
+}
+
+message CancelRunResponse {
+  bool ok = 1;
+}
+
+message SubmitApprovalRequest {
+  string approval_id = 1;
+  bool approved = 2;
+}
+
+message SubmitApprovalResponse {
+  bool ok = 1;
+}
+
+message SubmitUserInputRequest {
+  string request_id = 1;
+  string resolution = 2;
+  repeated UserInputAnswer answers = 3;
+}
+
+message SubmitUserInputResponse {
+  bool ok = 1;
+}
+
+message RunControlRequest {
+  oneof payload {
+    RunStartRequest start_run = 1;
+    CancelRunRequest cancel_run = 2;
+    SubmitApprovalRequest submit_approval = 3;
+    SubmitUserInputRequest submit_user_input = 4;
+  }
+}
+
+message ProtocolErrorRecord {
+  string code = 1;
+  string message = 2;
+  string suggestion = 3;
+  bool retryable = 4;
+}
+
+message ProtocolStepRecord {
+  uint32 index = 1;
+  string code = 2;
+  string status = 3;
+  uint64 elapsed_ms = 4;
+  string summary = 5;
+  ProtocolErrorRecord error = 6;
+  string data_json = 7;
+}
+
+message ProtocolEventRecord {
+  string event = 1;
+  uint32 step_index = 2;
+  bool has_step_index = 3;
+  uint64 timestamp_ms = 4;
+  string message = 5;
+}
+
+message ProtocolAssetRecord {
+  string kind = 1;
+  string path = 2;
+  uint64 version = 3;
+  string meta_json = 4;
+}
+
+message ProtocolUiHintAction {
+  string key = 1;
+  string label = 2;
+  string intent = 3;
+}
+
+message ProtocolUiHint {
+  string key = 1;
+  string level = 2;
+  string title = 3;
+  string message = 4;
+  repeated ProtocolUiHintAction actions = 5;
+  string context_json = 6;
+}
+
+message LlmUsage {
+  uint32 prompt_tokens = 1;
+  uint32 completion_tokens = 2;
+  uint32 total_tokens = 3;
+}
+
+message AgentRunResult {
+  string trace_id = 1;
+  string control = 2;
+  string message = 3;
+  string display_message = 4;
+  LlmUsage usage = 5;
+  repeated string actions = 6;
+  string exported_file = 7;
+  repeated ProtocolStepRecord steps = 8;
+  repeated ProtocolEventRecord events = 9;
+  repeated ProtocolAssetRecord assets = 10;
+  ProtocolUiHint ui_hint = 11;
+}
+
+message RunEvent {
+  string trace_id = 1;
+  string session_id = 2;
+  string kind = 3;
+  string message = 4;
+  string delta = 5;
+  string code = 6;
+  string tool_name = 7;
+  string tool_args = 8;
+  string result = 9;
+  bool ok = 10;
+  repeated QuestionPrompt questions = 11;
+  AgentRunResult final_result = 12;
+  string tool_args_data_json = 13;
+  string tool_result_data_json = 14;
+}
+
+message CallModelRequest {
+  string provider = 1;
+  string provider_api_key = 2;
+  string provider_model = 3;
+  string provider_mode = 4;
+  string prompt = 5;
+  string workdir = 6;
+}
+
+message CallModelResponse {
+  string content = 1;
+  LlmUsage usage = 2;
+}
+
+message GetSandboxMetricsRequest {
+  string session_id = 1;
+}
+
+message SandboxMetrics {
+  uint64 memory_bytes = 1;
+  uint64 uptime_secs = 2;
+}
+
+message GetSandboxMetricsResponse {
+  SandboxMetrics metrics = 1;
+}
+
+message ResetSandboxRequest {
+  string session_id = 1;
+}
+
+message ResetSandboxResponse {
+  bool ok = 1;
+}

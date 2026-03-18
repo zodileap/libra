@@ -1,0 +1,13 @@
+[package]
+name = "libra_runtime_store"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+libra_runtime_proto = { path = "../proto" }
+rusqlite = { version = "0.32", features = ["bundled"] }
+time = { version = "0.3", features = ["formatting"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"

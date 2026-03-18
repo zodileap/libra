@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 )
 
@@ -20,18 +19,27 @@ type backendEnvelope[T any] struct {
 func TestUnifiedBackendShouldServeAllDomainsOnSingleAddress(t *testing.T) {
 	t.Parallel()
 
-	dataRoot := t.TempDir()
-	handler, err := NewHandler(Config{
-		Addr:           ":10001",
-		BaseURL:        "http://127.0.0.1:10001",
-		AllowedOrigins: []string{"*"},
-		AccountDataDir: filepath.Join(dataRoot, "account"),
-		RuntimeDataDir: filepath.Join(dataRoot, "runtime"),
-		SetupDataDir:   filepath.Join(dataRoot, "setup"),
-		Version:        "0.1.0",
-	})
-	if err != nil {
-		t.Fatalf("创建 unified backend handler 失败: %v", err)
+	handler := &dispatchHandler{
+		account: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(backendEnvelope[map[string]any]{
+				Code:    200,
+				Message: "ok",
+				Data:    map[string]any{"initialized": false},
+			})
+		}),
+		runtime: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(backendEnvelope[map[string]any]{
+				Code:    200,
+				Message: "ok",
+				Data: map[string]any{
+					"session": map[string]any{"id": "sess-1"},
+				},
+			})
+		}),
+		setup: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("<html><body>setup</body></html>"))
+		}),
 	}
 
 	server := httptest.NewServer(handler)

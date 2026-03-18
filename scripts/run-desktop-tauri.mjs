@@ -11,6 +11,7 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(SCRIPT_DIR, "..");
 const DESKTOP_DIR = path.join(ROOT_DIR, "apps", "desktop");
 const TAURI_DIR = path.join(DESKTOP_DIR, "src-tauri");
+const TAURI_TARGET_DIR = path.join(TAURI_DIR, "target");
 const DEFAULT_UPDATER_PRIVATE_KEY_PATH = path.join(os.homedir(), ".tauri", "libra-desktop-updater.key");
 const DEFAULT_UPDATER_PUBLIC_KEY_PATH = `${DEFAULT_UPDATER_PRIVATE_KEY_PATH}.pub`;
 const PNPM_COMMAND = resolvePnpmCommand();
@@ -251,6 +252,125 @@ function resolvePnpmCommand() {
 
 // 描述：
 //
+//   - 统一标准化路径分隔符，避免 Windows 与 POSIX 路径格式差异导致缓存路径比较失真。
+//
+// Params:
+//
+//   - value: 待比较的原始路径文本。
+//
+// Returns:
+//
+//   - 使用 `/` 作为分隔符的标准化路径文本。
+function normalizePathSeparators(value) {
+  return String(value || "").replaceAll("\\", "/");
+}
+
+// 描述：
+//
+//   - 递归收集指定目录下给定文件名的文件路径，供检查 Cargo/Tauri 构建缓存中的绝对路径引用复用。
+//
+// Params:
+//
+//   - rootDir: 起始目录。
+//   - acceptedFileNames: 允许匹配的文件名集合。
+//
+// Returns:
+//
+//   - 命中的文件绝对路径列表。
+function collectFilesByName(rootDir, acceptedFileNames) {
+  if (!fs.existsSync(rootDir)) {
+    return [];
+  }
+
+  const matches = [];
+  const pendingDirs = [rootDir];
+
+  while (pendingDirs.length > 0) {
+    const currentDir = pendingDirs.pop();
+    if (!currentDir) {
+      continue;
+    }
+
+    for (const entry of fs.readdirSync(currentDir, { withFileTypes: true })) {
+      const absolutePath = path.join(currentDir, entry.name);
+
+      if (entry.isDirectory()) {
+        pendingDirs.push(absolutePath);
+        continue;
+      }
+
+      if (acceptedFileNames.has(entry.name)) {
+        matches.push(absolutePath);
+      }
+    }
+  }
+
+  return matches;
+}
+
+// 描述：
+//
+//   - 检测 `src-tauri/target` 下是否残留来自其他 worktree 或旧仓库路径的 Tauri 权限缓存。
+//   - 这类缓存会把插件权限文件定位到已不存在的绝对路径，导致 `tauri dev/build` 在 build script 阶段直接失败。
+//
+// Params:
+//
+//   - targetDir: 待检查的 Tauri target 目录。
+//     default: 当前仓库的 `apps/desktop/src-tauri/target`
+//
+// Returns:
+//
+//   - sourceFilePath: 命中旧路径引用的缓存文件路径。
+//   - referencePath: 缓存中引用的旧 target 绝对路径。
+//   - 未命中时返回 `null`。
+function resolveStaleTauriTargetReference(targetDir = TAURI_TARGET_DIR) {
+  const debugBuildDir = path.join(targetDir, "debug", "build");
+  const candidateFiles = collectFilesByName(debugBuildDir, new Set(["output", "root-output"]));
+  const normalizedTargetDir = `${normalizePathSeparators(targetDir)}/`;
+  const targetPathPattern = /(?:[A-Za-z]:)?\/[^\s"'`]+\/apps\/desktop\/src-tauri\/target\/[^\s"'`]*/g;
+
+  for (const filePath of candidateFiles) {
+    const source = normalizePathSeparators(fs.readFileSync(filePath, "utf8"));
+    const referencedPaths = source.match(targetPathPattern) || [];
+
+    for (const referencePath of referencedPaths) {
+      if (!referencePath.startsWith(normalizedTargetDir)) {
+        return {
+          sourceFilePath: filePath,
+          referencePath,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+// 描述：
+//
+//   - 在真正调用 Tauri CLI 前自动清理指向旧仓库绝对路径的 target 缓存，避免用户手动 `cargo clean`。
+//
+// Params:
+//
+//   - targetDir: 待修复的 Tauri target 目录。
+//     default: 当前仓库的 `apps/desktop/src-tauri/target`
+//
+// Returns:
+//
+//   - 命中旧缓存时返回对应的来源文件与旧路径信息，并完成清理。
+//   - 未命中时返回 `null`。
+function repairStaleTauriTargetCache(targetDir = TAURI_TARGET_DIR) {
+  const staleReference = resolveStaleTauriTargetReference(targetDir);
+  if (!staleReference) {
+    return null;
+  }
+
+  fs.rmSync(targetDir, { recursive: true, force: true });
+  return staleReference;
+}
+
+// 描述：
+//
 //   - 将本地覆盖配置通过 `--config` 注入到 Tauri CLI，保证开源默认配置与本地私有配置分离。
 //
 // Params:
@@ -283,6 +403,7 @@ function buildTauriCommand(argv, configPaths = []) {
 //
 //   - 运行 Desktop Tauri CLI，并在需要时打印当前命中的本地覆盖配置，便于核对本机打包实际使用的配置来源。
 function main() {
+  const staleTargetCache = repairStaleTauriTargetCache();
   const localConfigPaths = resolveLocalTauriConfigPaths();
   const { pubkey: updaterPubkey, source: updaterPubkeySource } = resolveLocalUpdaterPublicKey(process.env);
   const ephemeralUpdaterConfig = createEphemeralUpdaterConfig(updaterPubkey);
@@ -299,6 +420,15 @@ function main() {
 
   if (updaterPubkeySource) {
     process.stdout.write(`Using local updater public key source:\n  - ${updaterPubkeySource}\n`);
+  }
+
+  if (staleTargetCache) {
+    process.stdout.write(
+      `Detected stale Tauri target cache from another workspace and cleared it:\n`
+      + `  - cached reference: ${staleTargetCache.referencePath}\n`
+      + `  - source file: ${staleTargetCache.sourceFilePath}\n`
+      + `  - removed target dir: ${TAURI_TARGET_DIR}\n`,
+    );
   }
 
   try {

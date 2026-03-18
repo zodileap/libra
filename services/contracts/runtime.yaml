@@ -3,44 +3,107 @@ domain: runtime
 route_prefix: /workflow/v1
 source:
   handler: services/internal/runtime/api/workflow.go
+  stream_handler: services/internal/runtime/api/runtime_stream.go
   specs: services/internal/runtime/specs/workflow.go
   service: services/internal/runtime/service/workflow_service.go
+  configs: services/internal/runtime/configs/config.go
+  sidecar_sdk: sdk/go/libra_runtime/client.go
+  sidecar_adapter: services/internal/runtime/service/sidecar_client.go
+  sidecar_proto: crates/runtime/proto/proto/runtime/v1/runtime.proto
+  runtime_store: crates/runtime/store/src/lib.rs
+  runtime_audit: crates/runtime/server/src/audit.rs
   errors: services/internal/runtime/service/errors.go
   api_errors: services/internal/runtime/service/api_errors.go
-  storage: services/internal/runtime/service/store.go
+runtime_gateway:
+  mode: sidecar_only
+  host_role: business_gateway_and_auth
+  sidecar_transport: grpc
+  sidecar_runtime_storage:
+    type: sqlite
+    path: <runtime data dir>/runtime.db
+  sidecar_runtime_audit_log:
+    type: jsonl
+    path: <runtime data dir>/logs/runtime-audit.jsonl
+  public_stream:
+    transport: websocket
+    path: /workflow/v1/runtime-stream
+    client_commands:
+      - run.start
+      - run.cancel
+      - approval.submit
+      - user_input.submit
+    server_events:
+      - started
+      - delta
+      - tool_call_started
+      - tool_call_finished
+      - require_approval
+      - request_user_input
+      - final
+      - cancelled
+      - error
+compatibility:
+  pre_1_0_policy: no_forward_compatibility_by_default
+  replacement_rule: delete_replaced_legacy_implementations_directly
 conventions:
   envelope_ref: services/contracts/backend.yaml#/schemas/SuccessEnvelope
   error_envelope_ref: services/contracts/backend.yaml#/schemas/ErrorEnvelope
   auth: none
   content_type: application/json
+env:
+  LIBRA_RUNTIME_SIDECAR_ADDR:
+    default: 127.0.0.1:46329
+    description: gRPC address used by services to connect to the unified Rust runtime sidecar
+  LIBRA_RUNTIME_SIDECAR_BIN:
+    required: false
+    description: optional runtime sidecar binary path override for server hosts and integration tests
 storage:
-  type: local_json_file
-  path: services/data/runtime/runtime-state.json
-  file_permissions: "0644"
-  root_object: runtimeState
-  fields:
-    messageSeq:
-      type: integer
-      required: true
-      description: monotonically increasing message id counter
-    sessions:
-      type: map
-      key: session id
-      value_schema: RuntimeSessionEntity
-    messages:
-      type: map
-      key: session id
-      value:
-        type: array
-        items_schema: WorkflowSessionMessageItem
-    sandboxes:
-      type: map
-      key: sandbox id
-      value_schema: RuntimeSandboxEntity
-    previews:
-      type: map
-      key: preview id
-      value_schema: RuntimePreviewEntity
+  primary:
+    type: sqlite
+    path: <runtime data dir>/runtime.db
+    owner: crates/runtime/store
+    tables:
+      - sessions
+      - messages
+      - runs
+      - sandboxes
+      - previews
+  audit:
+    type: jsonl
+    path: <runtime data dir>/logs/runtime-audit.jsonl
+    owner: crates/runtime/server
+    append_only: true
+    required_fields:
+      - timestamp
+      - level
+      - category
+      - event
+      - runtime_id
+      - tenant_id
+      - user_id
+      - project_id
+      - session_id
+      - run_id
+      - trace_id
+      - status
+      - tool_name
+      - duration_ms
+      - error_code
+      - error_message
+      - summary
+      - meta
+    redact_rules:
+      - provider_api_key
+      - env
+      - headers
+      - token
+      - secret
+    content_policy:
+      prompt: store_length_only
+      llm_output: store_length_only
+      tool_args: store_keys_only
+      tool_result: store_keys_or_length_only
+      user_input_free_text: forbidden
 runtime_rules:
   default_status:
     type: integer
@@ -816,6 +879,89 @@ endpoints:
           code: 404001
           message: 未找到可失效的预览地址
           data: {}
+  - operation_id: runtimeStream
+    method: GET
+    path: /workflow/v1/runtime-stream
+    auth: none
+    transport: websocket
+    request:
+      command_envelope:
+        type_field: type
+        payload_field: payload
+        encoding: protojson
+      commands:
+        run.start:
+          payload_message: libra.runtime.v1.RunStartRequest
+          required_fields:
+            - context.tenantId
+            - context.userId
+            - context.projectId
+            - context.sessionId
+            - agentKey
+            - provider
+            - prompt
+        run.cancel:
+          payload_message: libra.runtime.v1.CancelRunRequest
+        approval.submit:
+          payload_message: libra.runtime.v1.SubmitApprovalRequest
+        user_input.submit:
+          payload_message: libra.runtime.v1.SubmitUserInputRequest
+    response:
+      event_envelope:
+        type_field: type
+        payload_field: payload
+        encoding: protojson
+      event_payloads:
+        started: libra.runtime.v1.RunEvent
+        delta: libra.runtime.v1.RunEvent
+        tool_call_started: libra.runtime.v1.RunEvent
+        tool_call_finished: libra.runtime.v1.RunEvent
+        require_approval: libra.runtime.v1.RunEvent
+        request_user_input: libra.runtime.v1.RunEvent
+        final: libra.runtime.v1.RunEvent
+        cancelled: libra.runtime.v1.RunEvent
+        error: libra.runtime.v1.RunEvent | { message: string }
+    errors:
+      - bad_request
+      - internal_error
+    examples:
+      request:
+        headers:
+          Upgrade: websocket
+          Connection: Upgrade
+        commands:
+          - type: run.start
+            payload:
+              context:
+                tenantId: tenant_example_01
+                userId: usr_example_admin
+                projectId: project_example_01
+                sessionId: sess_example_01
+              agentKey: agent-code-default
+              provider: codex
+              prompt: 请分析当前项目中的运行时适配边界
+      success:
+        events:
+          - type: started
+            payload:
+              traceId: trace_example_01
+              sessionId: sess_example_01
+              kind: started
+              message: runtime run started
+          - type: delta
+            payload:
+              traceId: trace_example_01
+              sessionId: sess_example_01
+              kind: delta
+              delta: 正在读取仓库结构...
+          - type: final
+            payload:
+              traceId: trace_example_01
+              sessionId: sess_example_01
+              kind: final
+              finalResult:
+                traceId: trace_example_01
+                displayMessage: 分析完成
   - operation_id: checkDesktopUpdate
     method: GET
     path: /workflow/v1/desktop-update/check
