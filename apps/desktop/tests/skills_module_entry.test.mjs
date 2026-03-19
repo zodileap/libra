@@ -3,6 +3,19 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 
+// 描述：统一规范源码与资源文本换行符，避免 Windows checkout 的 `CRLF` 影响结构断言。
+//
+// Params:
+//
+//   - source: 原始文本内容。
+//
+// Returns:
+//
+//   - 统一替换为 `LF` 的文本内容。
+function normalizeLineEndings(source) {
+  return String(source).replace(/\r\n/g, "\n");
+}
+
 // 描述：
 //
 //   - 读取 Desktop 源码文件，用于技能模块入口与页面结构回归校验。
@@ -16,7 +29,7 @@ import path from "node:path";
 //   - UTF-8 文本内容。
 function readDesktopSource(relativePath) {
   const absolutePath = path.resolve(process.cwd(), relativePath);
-  return fs.readFileSync(absolutePath, "utf8");
+  return normalizeLineEndings(fs.readFileSync(absolutePath, "utf8"));
 }
 
 // 描述：
@@ -71,7 +84,7 @@ function readBuiltinSkillResource(skillId, relativePath) {
     skillId,
     relativePath,
   );
-  return fs.readFileSync(absolutePath, "utf8");
+  return normalizeLineEndings(fs.readFileSync(absolutePath, "utf8"));
 }
 
 test("TestSkillsModuleShouldExposeRouteAndSidebarEntry", () => {

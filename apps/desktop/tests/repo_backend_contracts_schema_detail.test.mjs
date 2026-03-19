@@ -3,6 +3,19 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 
+// 描述：统一规范文本换行符，避免 Windows checkout 产生的 `CRLF` 让结构断言误判。
+//
+// Params:
+//
+//   - source: 原始文本内容。
+//
+// Returns:
+//
+//   - 统一替换为 `LF` 的文本内容。
+function normalizeLineEndings(source) {
+  return String(source).replace(/\r\n/g, "\n");
+}
+
 // 描述：根据当前执行目录推导仓库根路径，兼容在仓库根和 apps/desktop 下运行测试。
 //
 // Returns:
@@ -26,7 +39,7 @@ function resolveRepoRoot() {
 //
 //   - UTF-8 文本内容。
 function readContract(relativePath) {
-  return fs.readFileSync(path.resolve(resolveRepoRoot(), relativePath), "utf8");
+  return normalizeLineEndings(fs.readFileSync(path.resolve(resolveRepoRoot(), relativePath), "utf8"));
 }
 
 test("TestBackendContractShouldDefineUnifiedEnvelopeAndSyncRules", () => {

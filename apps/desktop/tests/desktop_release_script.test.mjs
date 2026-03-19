@@ -316,6 +316,7 @@ test("TestDesktopTauriRunnerShouldInjectLocalConfigIntoBuildCommand", () => {
           npm_execpath: fixture.pnpmShimPath,
           CAPTURE_PATH: fixture.capturePath,
           HOME: fixture.rootDir,
+          TAURI_UPDATER_PUBLIC_KEY_PATH: fixture.publicKeyPath,
         },
       },
     );
