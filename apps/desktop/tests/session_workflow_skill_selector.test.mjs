@@ -194,14 +194,14 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.doesNotMatch(sessionSource, /finishAssistantRunMessage\(streamMessageId, "finished", t\("执行过程已完成。"\)\);/);
   assert.match(sessionSource, /const hasPendingWorkflowStages = \(\) => \{/);
   assert.match(sessionSource, /if \(streamMessageIdRef\.current\) \{\s*const failedAssistantReply = t\("执行失败：\{\{reason\}\}", \{ reason \}\);\s*setStreamingAssistantTarget\(t\("执行失败：\{\{reason\}\}", \{ reason \}\)\);\s*finishAssistantRunMessage\(\s*streamMessageIdRef\.current,\s*"failed",\s*failedAssistantReply,\s*"failure",\s*\);/s);
-  assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.STARTED\) \{\s*(?:agentLlmDeltaBufferRef\.current = "";\s*)?(?:setSessionAiResponseRaw\(""\);\s*)?setStreamingAssistantTarget\(t\("正在准备执行\.\.\."\)\);/s);
-  assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.LLM_STARTED\) \{\s*(?:agentLlmDeltaBufferRef\.current = "";\s*)?(?:setSessionAiResponseRaw\(""\);\s*)?setStreamingAssistantTarget\(t\("正在生成执行结果…"\)\);/s);
+  assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.STARTED\) \{\s*(?:agentLlmDeltaBufferRef\.current = "";\s*)?(?:setSessionAiResponseRaw\(""\);\s*)?setStreamingAssistantStatusTarget\(t\("正在准备执行\.\.\."\)\);/s);
+  assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.LLM_STARTED\) \{\s*(?:agentLlmDeltaBufferRef\.current = "";\s*)?(?:setSessionAiResponseRaw\(""\);\s*)?setStreamingAssistantStatusTarget\(t\("正在生成执行结果…"\)\);/s);
   assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.LLM_FINISHED\) \{/);
   assert.match(sessionSource, /function buildAssistantHeartbeatDisplayText\(/);
   assert.match(sessionSource, /function resolvePlanningDisplayText\(/);
   assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.PLANNING\) \{\s*const planningText = resolvePlanningDisplayText\(payload\);/s);
   assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.HEARTBEAT\) \{\s*assistantRunHeartbeatCountRef\.current \+= 1;/s);
-  assert.match(sessionSource, /setStreamingAssistantTarget\(heartbeatText,\s*\{\s*immediate: assistantRunHeartbeatCountRef\.current > 1,\s*\}\);/s);
+  assert.match(sessionSource, /setStreamingAssistantStatusTarget\(heartbeatText\);/);
   assert.match(sessionSource, /if \(\s*payload\.kind === STREAM_KINDS\.DELTA[\s\S]*payload\.kind === STREAM_KINDS\.STARTED[\s\S]*payload\.kind === STREAM_KINDS\.LLM_STARTED[\s\S]*payload\.kind === STREAM_KINDS\.LLM_FINISHED[\s\S]*return null;\s*\}/s);
   assert.match(sessionSource, /buildSessionContextPrompt\(/);
   assert.match(sessionSource, /const \[executionSelection, setExecutionSelection\] = useState<SessionExecutionSelection>\(\(\) =>/);

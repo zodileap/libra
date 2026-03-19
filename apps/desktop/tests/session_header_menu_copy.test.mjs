@@ -91,7 +91,8 @@ test("TestSessionCopyShouldBeMovedToDevDebugPanel", () => {
   assert.match(sessionSource, /buildSessionAiRawExchangeText\(\s*assistantMessageId,/);
   assert.match(sessionSource, /setSessionAiRawByMessage\(\(prev\) => \{/);
   assert.match(sessionSource, /buildSessionAiRawByMessageItem\(/);
-  assert.match(sessionSource, /runMeta\.summarySource === "ai" && String\(runMeta\.summary \|\| ""\)\.trim\(\)/);
+  assert.match(sessionSource, /runMeta\.summarySource === "ai"\s*&& String\(runMeta\.summary \|\| ""\)\.trim\(\)/);
+  assert.match(sessionSource, /String\(runMeta\.summary \|\| ""\)\.trim\(\) !== visibleBodyText/);
   assert.match(sessionSource, /visible_summary: visibleSummary,/);
   assert.match(sessionSource, /data: step\.data,/);
   assert.match(sessionSource, /upsertSessionDebugArtifact\(\{/);

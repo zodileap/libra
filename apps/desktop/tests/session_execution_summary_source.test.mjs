@@ -59,7 +59,8 @@ test("TestWorkflowExecutionSummaryShouldOnlyUseRealAiSummary", () => {
   //
   //   - visible_summary 只允许来自真实 AI summary；没有 AI summary 时必须省略。
   assert.match(sessionSource, /const visibleSummary = runMeta\.status === "failed" && failureSummary/);
-  assert.match(sessionSource, /runMeta\.summarySource === "ai" && String\(runMeta\.summary \|\| ""\)\.trim\(\)/);
+  assert.match(sessionSource, /runMeta\.summarySource === "ai"\s*&& String\(runMeta\.summary \|\| ""\)\.trim\(\)/);
+  assert.match(sessionSource, /String\(runMeta\.summary \|\| ""\)\.trim\(\) !== visibleBodyText/);
   assert.match(sessionSource, /visible_summary: visibleSummary,/);
   assert.doesNotMatch(sessionSource, /visible_summary:\s*\{\s*type:\s*"markdown",\s*content:\s*runMeta\.summary \|\| message\.text/s);
 });

@@ -23,6 +23,7 @@ test("TestAgentUserInputBridgeShouldMapCoreEventAndResolveInTauri", () => {
   const constantsSource = readDesktopSource("src/shared/constants.ts");
   const typesSource = readDesktopSource("src/shared/types.ts");
   const tauriSource = readDesktopSource("src-tauri/src/main.rs");
+  const runtimeServerSource = readDesktopSource("../../crates/runtime/server/src/lib.rs");
 
   // 描述：
   //
@@ -37,22 +38,27 @@ test("TestAgentUserInputBridgeShouldMapCoreEventAndResolveInTauri", () => {
 
   // 描述：
   //
-  //   - Tauri 事件桥接必须把 core 的 RequestUserInput 透传成文本流事件，并附带 request_id 与 questions。
-  assert.match(tauriSource, /AgentStreamEvent::RequestUserInput \{/);
-  assert.match(tauriSource, /message: format!\("正在询问 \{\} 个问题", question_count\)/);
-  assert.match(tauriSource, /"request_id": request_id,/);
+  //   - runtime 服务必须先把 core 的 RequestUserInput 转成统一 run event，Tauri 再透传为文本流事件，并附带 request_id 与 questions。
+  assert.match(runtimeServerSource, /AgentStreamEvent::RequestUserInput \{/);
+  assert.match(runtimeServerSource, /kind: "request_user_input"\.to_string\(\),/);
+  assert.match(runtimeServerSource, /message: request_id\.clone\(\),/);
+  assert.match(runtimeServerSource, /questions:\s*questions[\s\S]*core_question_prompt_to_proto/s);
+  assert.match(tauriSource, /"request_user_input" => \{/);
+  assert.match(tauriSource, /message: format!\("正在询问 \{\} 个问题", questions\.len\(\)\)/);
+  assert.match(tauriSource, /"request_id": stream_event\.message,/);
   assert.match(tauriSource, /"questions": questions,/);
 
   // 描述：
   //
-  //   - resolve_agent_user_input 命令必须校验 resolution 与 answers，并注册到 generate_handler。
-  assert.match(tauriSource, /fn resolve_agent_user_input\(/);
+  //   - resolve_agent_user_input 命令必须校验 resolution 与 answers，并通过 runtime 写回 core 的 USER_INPUT_REGISTRY。
+  assert.match(tauriSource, /async fn resolve_agent_user_input\(/);
   assert.match(tauriSource, /if normalized_resolution != "answered" && normalized_resolution != "ignored" \{/);
   assert.match(tauriSource, /if normalized_resolution == "answered" && normalized_answers\.is_empty\(\) \{/);
   assert.match(tauriSource, /if answer\.question_id\.trim\(\)\.is_empty\(\) \{/);
   assert.match(tauriSource, /if answer\.value\.trim\(\)\.is_empty\(\) \{/);
   assert.match(tauriSource, /if normalized_answer_type != "option" && normalized_answer_type != "custom" \{/);
   assert.match(tauriSource, /if normalized_answer_type == "option"/);
-  assert.match(tauriSource, /USER_INPUT_REGISTRY\.submit_resolution\(/);
+  assert.match(tauriSource, /\.submit_user_input\(/);
+  assert.match(runtimeServerSource, /USER_INPUT_REGISTRY\.submit_resolution\(/);
   assert.match(tauriSource, /resolve_agent_user_input,/);
 });

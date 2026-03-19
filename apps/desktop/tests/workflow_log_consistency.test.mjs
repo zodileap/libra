@@ -183,7 +183,9 @@ test("TestSessionPageShouldRenderCollapsibleRunDividerAndSummary", () => {
   assert.match(messagesSource, /"已记录当前阶段结果。": "已记录当前阶段结果。"/);
   assert.match(source, /const workflowSummaryResult = workflowCompletionDigest\s*\?\s*await requestWorkflowExecutionSummary\(/s);
   assert.match(source, /finishAssistantRunMessage\(\s*streamMessageId,\s*"finished",\s*workflowSummaryResult\.summary,\s*workflowSummaryResult\.summarySource,\s*\)/s);
-  assert.match(source, /const visibleRunSummaryText = runMeta\?\.summarySource === "ai"\s*\?\s*String\(runMeta\.summary \|\| ""\)\.trim\(\)\s*:\s*"";/s);
+  assert.match(source, /const visibleRunSummaryText = runMeta\?\.summarySource === "ai"/);
+  assert.match(source, /String\(runMeta\.summary \|\| ""\)\.trim\(\)/);
+  assert.match(source, /String\(runMeta\.summary \|\| ""\)\.trim\(\) !== visibleAssistantBodyText/);
   assert.match(source, /content=\{visibleRunSummaryText\}/);
   assert.doesNotMatch(source, /visible_summary:\s*\{\s*type:\s*"markdown",\s*content:\s*runMeta\.summary \|\| message\.text/s);
   assert.doesNotMatch(source, /finishAssistantRunMessage\(streamMessageId, "finished", t\("执行过程已完成。"\)\);/);
@@ -335,18 +337,18 @@ test("TestTauriShouldExposeProjectWorkspaceGitCommands", () => {
 
 test("TestTauriShouldExposeCancelAgentSessionCommand", () => {
   const source = readDesktopSource("src-tauri/src/main.rs");
+  const runtimeServerSource = readDesktopSource("../../crates/runtime/server/src/lib.rs");
 
   // 描述:
   //
-  //   - Tauri 层应暴露主动取消会话命令，并向前端派发 cancelled 事件与统一取消错误码。
-  assert.match(source, /fn cancel_agent_session\(app: tauri::AppHandle, session_id: String\)/);
-  assert.match(source, /fn mark_agent_session_cancelled\(session_id: &str\)/);
-  assert.match(source, /fn take_agent_session_cancelled\(session_id: &str\) -> bool/);
-  assert.match(source, /mark_agent_session_cancelled\(&session_id\);/);
-  assert.match(source, /cancelled_by_user && !is_cancelled_protocol_error\(err\.code\.as_str\(\)\)/);
+  //   - Tauri 层应暴露主动取消会话命令；runtime 服务需真正记录取消态、重置沙盒，并向前端派发 cancelled 事件与统一取消错误码。
+  assert.match(source, /async fn cancel_agent_session\(app: tauri::AppHandle, session_id: String\)/);
+  assert.match(source, /runtime[\s\S]*?\.cancel_run\(session_id\.as_str\(\)\)/s);
   assert.match(source, /kind: "cancelled"\.to_string\(\)/);
   assert.match(source, /"core\.agent\.request_cancelled"/);
   assert.match(source, /cancel_agent_session,/);
+  assert.match(runtimeServerSource, /self\.mark_cancelled\(payload\.session_id\.as_str\(\)\);/);
+  assert.match(runtimeServerSource, /libra_agent_core::sandbox::SANDBOX_REGISTRY\.reset\(payload\.session_id\.as_str\(\)\);/);
 });
 
 test("TestTauriShouldRejectEmptyAgentRunResultPayload", () => {
@@ -354,10 +356,12 @@ test("TestTauriShouldRejectEmptyAgentRunResultPayload", () => {
 
   // 描述:
   //
-  //   - 当核心返回空消息且无动作时，桌面层应判定为失败，避免前端出现“执行完成但无任何产物”的假成功状态。
+  //   - 当 runtime 返回空消息且无动作时，桌面层应判定为失败，避免前端出现“执行完成但无任何产物”的假成功状态。
   assert.match(source, /core\.desktop\.agent\.empty_result/);
   assert.match(source, /执行结束但未返回任何结果，请重试。/);
-  assert.match(source, /value\.message = format!\("执行完成（工具调用 \{\} 次）", value\.actions\.len\(\)\);/);
+  assert.match(source, /fn runtime_result_to_desktop_response\(value: runtime::AgentRunResult\) -> AgentRunResponse \{/);
+  assert.match(source, /message: value\.message,/);
+  assert.doesNotMatch(source, /执行完成（工具调用 \{\} 次）/);
 });
 
 test("TestDevDebugFloatShouldUseCompactCopyFirstPanel", () => {

@@ -618,6 +618,7 @@ test("TestMcpRegistryShouldInjectRuntimeIntoUnifiedAgentAndPromptGuidance", () =
   const serviceIndexSource = readDesktopSource("src/modules/common/services/index.ts");
   const constantsSource = readDesktopSource("src/shared/constants.ts");
   const tauriMainSource = readDesktopSource("src-tauri/src/main.rs");
+  const runtimeServerSource = readDesktopSource("../../crates/runtime/server/src/lib.rs");
   const coreLibSource = readDesktopSource("../../crates/core/agent/src/lib.rs");
   const coreToolSource = readDesktopSource("../../crates/core/agent/src/tools/mcp.rs");
   const corePromptSource = readDesktopSource("../../crates/core/agent/src/python_orchestrator.rs");
@@ -626,17 +627,18 @@ test("TestMcpRegistryShouldInjectRuntimeIntoUnifiedAgentAndPromptGuidance", () =
 
   // 描述：
   //
-  //   - Tauri 侧应先暴露统一运行时能力查询命令，并在执行统一智能体前注入能力快照与启用中的 MCP 注册项。
+  //   - Tauri 侧应先暴露统一运行时能力查询命令；Desktop 通过 runtime 探测能力，runtime 服务再调用 core 统一能力解析器。
   assert.match(constantsSource, /GET_AGENT_RUNTIME_CAPABILITIES: "get_agent_runtime_capabilities"/);
   assert.match(tauriMainSource, /async fn get_agent_runtime_capabilities/);
   assert.match(tauriMainSource, /get_agent_runtime_capabilities_inner/);
-  assert.match(tauriMainSource, /detect_agent_runtime_capabilities\(&available_mcps\)/);
+  assert.match(tauriMainSource, /detect_capabilities\(DetectCapabilitiesRequest \{/);
+  assert.match(runtimeServerSource, /detect_agent_runtime_capabilities\(mcps\.as_slice\(\)\)/);
   assert.match(tauriMainSource, /runtime_capabilities: Option<AgentRuntimeCapabilities>/);
   assert.match(tauriMainSource, /get_agent_runtime_capabilities,/);
   assert.match(tauriMainSource, /build_runtime_registered_mcps/);
   assert.match(tauriMainSource, /list_enabled_mcp_registrations/);
-  assert.match(tauriMainSource, /available_mcps,/);
-  assert.match(tauriMainSource, /runtime_capabilities: resolved_runtime_capabilities,/);
+  assert.match(tauriMainSource, /available_mcps:\s*available_mcps/);
+  assert.match(tauriMainSource, /runtime_capabilities: Some\(core_runtime_capabilities_to_runtime_payload\(/);
   assert.match(tauriMainSource, /interactive_mode=/);
 
   // 描述：

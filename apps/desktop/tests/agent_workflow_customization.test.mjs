@@ -396,10 +396,11 @@ test("TestWorkflowPagesShouldUseListLayoutInSettings", () => {
 test("TestUnifiedAgentCommandsShouldBeCanonical", () => {
   const source = readDesktopSource("src-tauri/src/main.rs");
   const constantsSource = readDesktopSource("src/shared/constants.ts");
+  const runtimeServerSource = readDesktopSource("../../crates/runtime/server/src/lib.rs");
 
   // 描述：
   //
-  //   - Tauri 与前端常量层应只暴露统一智能体执行命令，避免继续扩散历史双入口命名。
+  //   - 前端常量、Tauri 入口与 runtime 服务应只暴露统一智能体执行命令，避免继续扩散历史双入口命名。
   assert.match(constantsSource, /RUN_AGENT_COMMAND: "run_agent_command"/);
   assert.match(constantsSource, /CANCEL_AGENT_SESSION: "cancel_agent_session"/);
   assert.match(constantsSource, /APPROVE_AGENT_ACTION: "approve_agent_action"/);
@@ -407,12 +408,16 @@ test("TestUnifiedAgentCommandsShouldBeCanonical", () => {
   assert.match(constantsSource, /GET_AGENT_SANDBOX_METRICS: "get_agent_sandbox_metrics"/);
   assert.match(source, /async fn run_agent_command\(/);
   assert.match(source, /fn run_agent_command_inner\(/);
-  assert.match(source, /if let Some\(session\) = session_id\.as_deref\(\) \{\s*clear_agent_session_cancelled\(session\);\s*[\s\S]*?SANDBOX_REGISTRY\.reset\(session\);/s);
-  assert.match(source, /if let Some\(session\) = session_id\.as_deref\(\) \{\s*\/\/ 描述：[\s\S]*?当前顶层请求结束后释放会话沙盒[\s\S]*?SANDBOX_REGISTRY\.reset\(session\);/s);
-  assert.match(source, /fn cancel_agent_session\(app: tauri::AppHandle, session_id: String\)/);
-  assert.match(source, /fn approve_agent_action\(/);
-  assert.match(source, /fn reset_agent_sandbox\(/);
-  assert.match(source, /fn get_agent_sandbox_metrics\(/);
+  assert.match(source, /runtime_manager[\s\S]*?\.run_session\(/s);
+  assert.match(source, /build_runtime_registered_mcps/);
+  assert.match(source, /async fn cancel_agent_session\(app: tauri::AppHandle, session_id: String\)/);
+  assert.match(source, /runtime[\s\S]*?\.cancel_run\(session_id\.as_str\(\)\)/s);
+  assert.match(source, /async fn approve_agent_action\(/);
+  assert.match(source, /async fn reset_agent_sandbox\(/);
+  assert.match(source, /async fn get_agent_sandbox_metrics\(/);
+  assert.match(runtimeServerSource, /self\.mark_cancelled\(payload\.session_id\.as_str\(\)\);/);
+  assert.match(runtimeServerSource, /libra_agent_core::sandbox::SANDBOX_REGISTRY\.reset\(payload\.session_id\.as_str\(\)\);/);
+  assert.match(runtimeServerSource, /libra_agent_core::sandbox::SANDBOX_REGISTRY\.reset\(session\.id\.as_str\(\)\);/);
 });
 
 test("TestWorkflowCanvasSidebarAndFloatingActionsShouldMatchUxRules", () => {

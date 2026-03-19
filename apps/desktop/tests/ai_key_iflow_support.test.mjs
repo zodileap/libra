@@ -27,6 +27,7 @@ test("TestAiKeyShouldSupportIflowProvider", () => {
   const sessionSource = readWorkspaceSource("src/widgets/session/page.tsx");
   const messagesSource = readWorkspaceSource("src/shared/i18n/messages.ts");
   const tauriSource = readWorkspaceSource("src-tauri/src/main.rs");
+  const runtimeServerSource = readWorkspaceSource("../../crates/runtime/server/src/lib.rs");
   const llmSource = readWorkspaceSource("../../crates/core/agent/src/llm.rs");
   const iflowProviderSource = readWorkspaceSource("../../crates/core/agent/src/llm/providers/iflow.rs");
   const pythonOrchestratorSource = readWorkspaceSource("../../crates/core/agent/src/python_orchestrator.rs");
@@ -98,11 +99,12 @@ test("TestAiKeyShouldSupportIflowProvider", () => {
 
   // 描述：
   //
-  //   - Tauri 命令层与 core request 结构应接收 provider_api_key / provider_model / provider_mode，并继续透传给 agent。
+  //   - Tauri 命令层与 runtime/core request 结构应接收 provider_api_key / provider_model / provider_mode，并继续透传给 agent。
   assert.match(tauriSource, /provider_api_key: Option<String>,/);
   assert.match(tauriSource, /provider_model: Option<String>,/);
   assert.match(tauriSource, /provider_mode: Option<String>,/);
-  assert.match(tauriSource, /AgentRunRequest \{[\s\S]*provider_api_key,[\s\S]*provider_model,[\s\S]*provider_mode,[\s\S]*\}/);
+  assert.match(tauriSource, /RunStartRequest \{[\s\S]*provider_api_key:[\s\S]*provider_model:[\s\S]*provider_mode:[\s\S]*\}/);
+  assert.match(runtimeServerSource, /AgentRunRequest \{[\s\S]*provider_api_key:[\s\S]*provider_model:[\s\S]*provider_mode:[\s\S]*\}/);
 
   // 描述：
   //
