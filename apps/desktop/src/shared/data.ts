@@ -219,6 +219,22 @@ export interface SessionRunSegment {
 
 // 描述:
 //
+//   - 会话运行时间线项类型；统一限定运行消息内部只允许 Markdown、结构化状态、分割线和状态卡片四种可见元素。
+export type SessionRunTimelineItemKind = "markdown" | "structured" | "divider" | "card";
+
+// 描述:
+//
+//   - 会话运行时间线项结构；用于按严格顺序恢复与渲染单条运行消息内部的所有可见内容。
+export interface SessionRunTimelineItem {
+  id: string;
+  seq: number;
+  kind: SessionRunTimelineItemKind;
+  status: "running" | "finished" | "failed";
+  payload: Record<string, unknown>;
+}
+
+// 描述:
+//
 //   - 会话运行元数据结构，按消息维度记录执行状态。
 export interface SessionRunMeta {
   status: "running" | "finished" | "failed";
@@ -228,6 +244,9 @@ export interface SessionRunMeta {
   summary: string;
   summarySource?: "ai" | "system" | "failure";
   segments: SessionRunSegment[];
+  timeline: SessionRunTimelineItem[];
+  nextSeq: number;
+  previewText: string;
 }
 
 // 描述：
@@ -247,6 +266,42 @@ export interface SessionWorkflowPhaseCursorSnapshot {
 
 // 描述:
 //
+//   - 等待队列项使用的执行选择快照；与会话当前选择解耦，保证入队后仍按原配置执行。
+export interface SessionQueuedPromptExecutionSelectionSnapshot {
+  kind: "none" | "workflow" | "skill";
+  workflowId?: string;
+  skillId?: string;
+}
+
+// 描述:
+//
+//   - 等待队列项的执行配置快照；用于在真正开始执行时恢复入队当下的 AI 与策略选择。
+export interface SessionQueuedPromptExecutionSnapshot {
+  provider: string;
+  modelName: string;
+  modeName: string;
+  executionSelection: SessionQueuedPromptExecutionSelectionSnapshot;
+  workflowId: string;
+  skillIds: string[];
+  workspaceId: string;
+  resolvedDccSoftware?: string;
+  resolvedCrossDccSoftwares?: string[];
+}
+
+// 描述:
+//
+//   - 当前会话等待队列中的单个输入项；仅在真正开始执行时才写入 transcript 消息。
+export interface SessionQueuedPromptItem {
+  id: string;
+  prompt: string;
+  createdAt: number;
+  updatedAt: number;
+  status: "queued" | "preempting";
+  executionSnapshot: SessionQueuedPromptExecutionSnapshot;
+}
+
+// 描述:
+//
 //   - 会话运行态快照结构。
 export interface SessionRunStateSnapshot {
   agentKey: AgentKey;
@@ -254,6 +309,7 @@ export interface SessionRunStateSnapshot {
   activeMessageId: string;
   sending: boolean;
   runMetaMap: Record<string, SessionRunMeta>;
+  queuedPrompts?: SessionQueuedPromptItem[];
   sessionApprovedToolNames?: string[];
   workflowPhaseCursor?: SessionWorkflowPhaseCursorSnapshot | null;
   updatedAt: number;
@@ -934,6 +990,105 @@ function emitSessionRunStateUpdated(input?: {
 // Returns:
 //
 //   - 会话运行态数组。
+function normalizeQueuedPromptExecutionSelectionSnapshot(
+  value: unknown,
+): SessionQueuedPromptExecutionSelectionSnapshot {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { kind: "none" };
+  }
+  const source = value as {
+    kind?: string;
+    workflowId?: string;
+    skillId?: string;
+  };
+  const kind = String(source.kind || "").trim();
+  if (kind === "workflow") {
+    const workflowId = String(source.workflowId || "").trim();
+    if (workflowId) {
+      return {
+        kind: "workflow",
+        workflowId,
+      };
+    }
+  }
+  if (kind === "skill") {
+    const skillId = String(source.skillId || "").trim();
+    if (skillId) {
+      return {
+        kind: "skill",
+        skillId,
+      };
+    }
+  }
+  return { kind: "none" };
+}
+
+// 描述：
+//
+//   - 归一化等待队列执行快照，确保持久化恢复后字段结构稳定、可直接参与执行调度。
+function normalizeQueuedPromptExecutionSnapshot(
+  value: unknown,
+): SessionQueuedPromptExecutionSnapshot {
+  const source = value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+  return {
+    provider: String(source.provider || "").trim(),
+    modelName: String(source.modelName || "").trim(),
+    modeName: String(source.modeName || "").trim(),
+    executionSelection: normalizeQueuedPromptExecutionSelectionSnapshot(source.executionSelection),
+    workflowId: String(source.workflowId || "").trim(),
+    skillIds: Array.isArray(source.skillIds)
+      ? Array.from(new Set(
+        source.skillIds
+          .map((item) => String(item || "").trim())
+          .filter((item) => Boolean(item)),
+      ))
+      : [],
+    workspaceId: String(source.workspaceId || "").trim(),
+    resolvedDccSoftware: String(source.resolvedDccSoftware || "").trim() || undefined,
+    resolvedCrossDccSoftwares: Array.isArray(source.resolvedCrossDccSoftwares)
+      ? Array.from(new Set(
+        source.resolvedCrossDccSoftwares
+          .map((item) => String(item || "").trim().toLowerCase())
+          .filter((item) => Boolean(item)),
+      ))
+      : [],
+  };
+}
+
+// 描述：
+//
+//   - 归一化等待队列项，过滤空文本与脏值，避免异常缓存阻断当前会话恢复。
+function normalizeQueuedPromptItems(
+  items: unknown,
+): SessionQueuedPromptItem[] {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+  return items
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return null;
+      }
+      const source = item as Record<string, unknown>;
+      const id = String(source.id || "").trim();
+      const prompt = String(source.prompt || "").trim();
+      if (!id || !prompt) {
+        return null;
+      }
+      return {
+        id,
+        prompt,
+        createdAt: Number(source.createdAt || Date.now()),
+        updatedAt: Number(source.updatedAt || Date.now()),
+        status: source.status === "preempting" ? "preempting" : "queued",
+        executionSnapshot: normalizeQueuedPromptExecutionSnapshot(source.executionSnapshot),
+      } satisfies SessionQueuedPromptItem;
+    })
+    .filter((item): item is SessionQueuedPromptItem => Boolean(item));
+}
+
 function readSessionRunStates(): StoredSessionRunState[] {
   if (!IS_BROWSER) {
     return [];
@@ -955,6 +1110,7 @@ function readSessionRunStates(): StoredSessionRunState[] {
         activeMessageId: String(item.activeMessageId || "").trim(),
         sending: Boolean(item.sending),
         runMetaMap: typeof item.runMetaMap === "object" && item.runMetaMap ? item.runMetaMap : {},
+        queuedPrompts: normalizeQueuedPromptItems(item.queuedPrompts),
         sessionApprovedToolNames: Array.isArray(item.sessionApprovedToolNames)
           ? Array.from(new Set(
             item.sessionApprovedToolNames
@@ -2618,42 +2774,40 @@ function sanitizeRunSegmentUserInputQuestions(
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const questions = value
-    .map((item) => {
-      if (!item || typeof item !== "object") {
-        return null;
-      }
-      const raw = item as Record<string, unknown>;
-      const options = Array.isArray(raw.options)
-        ? raw.options
-          .map((option) => {
-            if (!option || typeof option !== "object") {
-              return null;
-            }
-            const rawOption = option as Record<string, unknown>;
-            const label = truncateRunStateText(String(rawOption.label || ""), 120);
-            const description = truncateRunStateText(String(rawOption.description || ""), 240);
-            if (!label || !description) {
-              return null;
-            }
-            return { label, description };
-          })
-          .filter((option): option is Record<string, unknown> => Boolean(option))
-        : [];
-      const id = truncateRunStateText(String(raw.id || ""), 120);
-      const header = truncateRunStateText(String(raw.header || ""), 120);
-      const question = truncateRunStateText(String(raw.question || ""), 400);
-      if (!id || !header || !question || options.length === 0) {
-        return null;
-      }
-      return {
-        id,
-        header,
-        question,
-        options,
-      };
-    })
-    .filter((question): question is Record<string, unknown> => Boolean(question));
+  const questions: Array<Record<string, unknown>> = [];
+  value.forEach((item) => {
+    if (!item || typeof item !== "object") {
+      return;
+    }
+    const raw = item as Record<string, unknown>;
+    const options: Array<Record<string, unknown>> = [];
+    if (Array.isArray(raw.options)) {
+      raw.options.forEach((option) => {
+        if (!option || typeof option !== "object") {
+          return;
+        }
+        const rawOption = option as Record<string, unknown>;
+        const label = truncateRunStateText(String(rawOption.label || ""), 120);
+        const description = truncateRunStateText(String(rawOption.description || ""), 240);
+        if (!label || !description) {
+          return;
+        }
+        options.push({ label, description });
+      });
+    }
+    const id = truncateRunStateText(String(raw.id || ""), 120);
+    const header = truncateRunStateText(String(raw.header || ""), 120);
+    const question = truncateRunStateText(String(raw.question || ""), 400);
+    if (!id || !header || !question || options.length === 0) {
+      return;
+    }
+    questions.push({
+      id,
+      header,
+      question,
+      options,
+    });
+  });
   return questions.length > 0 ? questions : undefined;
 }
 
@@ -2666,35 +2820,34 @@ function sanitizeRunSegmentUserInputAnswers(
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const answers = value
-    .map((item) => {
-      if (!item || typeof item !== "object") {
-        return null;
-      }
-      const raw = item as Record<string, unknown>;
-      const questionId = truncateRunStateText(String(raw.question_id || ""), 120);
-      const answerType = truncateRunStateText(String(raw.answer_type || ""), 32);
-      const optionLabel = typeof raw.option_label === "string"
-        ? truncateRunStateText(raw.option_label, 120)
-        : undefined;
-      const valueText = truncateRunStateText(String(raw.value || ""), 400);
-      if (!questionId || !answerType || !valueText) {
-        return null;
-      }
-      const nextAnswer: Record<string, unknown> = {
-        question_id: questionId,
-        answer_type: answerType,
-        value: valueText,
-      };
-      if (Number.isFinite(Number(raw.option_index))) {
-        nextAnswer.option_index = Math.max(0, Math.floor(Number(raw.option_index)));
-      }
-      if (optionLabel) {
-        nextAnswer.option_label = optionLabel;
-      }
-      return nextAnswer;
-    })
-    .filter((answer): answer is Record<string, unknown> => Boolean(answer));
+  const answers: Array<Record<string, unknown>> = [];
+  value.forEach((item) => {
+    if (!item || typeof item !== "object") {
+      return;
+    }
+    const raw = item as Record<string, unknown>;
+    const questionId = truncateRunStateText(String(raw.question_id || ""), 120);
+    const answerType = truncateRunStateText(String(raw.answer_type || ""), 32);
+    const optionLabel = typeof raw.option_label === "string"
+      ? truncateRunStateText(raw.option_label, 120)
+      : undefined;
+    const valueText = truncateRunStateText(String(raw.value || ""), 400);
+    if (!questionId || !answerType || !valueText) {
+      return;
+    }
+    const nextAnswer: Record<string, unknown> = {
+      question_id: questionId,
+      answer_type: answerType,
+      value: valueText,
+    };
+    if (Number.isFinite(Number(raw.option_index))) {
+      nextAnswer.option_index = Math.max(0, Math.floor(Number(raw.option_index)));
+    }
+    if (optionLabel) {
+      nextAnswer.option_label = optionLabel;
+    }
+    answers.push(nextAnswer);
+  });
   return answers.length > 0 ? answers : undefined;
 }
 
@@ -2769,6 +2922,73 @@ function sanitizeRunSegmentDataForStorage(
 
 // 描述：
 //
+//   - 在写入本地时间线前规整 payload 字段，避免大对象或无关字段把运行态快照撑大。
+//
+// Params:
+//
+//   - kind: 时间线项类型。
+//   - payload: 原始时间线 payload。
+//
+// Returns:
+//
+//   - 规整后的 payload；若无有效字段则返回空对象。
+function sanitizeRunTimelinePayloadForStorage(
+  kind: SessionRunTimelineItemKind,
+  payload: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  const rawPayload = payload && typeof payload === "object" ? payload : {};
+  const next: Record<string, unknown> = {};
+  if (kind === "markdown") {
+    if (typeof rawPayload.content === "string") {
+      next.content = truncateRunStateText(rawPayload.content, RUN_STATE_TEXT_MAX_CHARS);
+    }
+    return next;
+  }
+  if (kind === "divider") {
+    if (typeof rawPayload.title === "string") {
+      next.title = truncateRunStateText(rawPayload.title, RUN_STATE_TEXT_MAX_CHARS);
+    }
+    return next;
+  }
+  if (kind === "card") {
+    if (typeof rawPayload.title === "string") {
+      next.title = truncateRunStateText(rawPayload.title, 120);
+    }
+    if (typeof rawPayload.detail === "string") {
+      next.detail = truncateRunStateText(rawPayload.detail, RUN_STATE_DETAIL_MAX_CHARS);
+    }
+    if (typeof rawPayload.hint === "string") {
+      next.hint = truncateRunStateText(rawPayload.hint, RUN_STATE_DETAIL_MAX_CHARS);
+    }
+    if (typeof rawPayload.action_label === "string") {
+      next.action_label = truncateRunStateText(rawPayload.action_label, 80);
+    }
+    return next;
+  }
+  if (typeof rawPayload.intro === "string") {
+    next.intro = truncateRunStateText(rawPayload.intro, RUN_STATE_TEXT_MAX_CHARS);
+  }
+  if (typeof rawPayload.text === "string") {
+    next.text = truncateRunStateText(rawPayload.text, RUN_STATE_TEXT_MAX_CHARS);
+  }
+  if (typeof rawPayload.detail === "string") {
+    next.detail = truncateRunStateText(rawPayload.detail, RUN_STATE_DETAIL_MAX_CHARS);
+  }
+  if (typeof rawPayload.status === "string") {
+    next.status = rawPayload.status === "failed"
+      ? "failed"
+      : rawPayload.status === "finished"
+        ? "finished"
+        : "running";
+  }
+  if (rawPayload.data && typeof rawPayload.data === "object") {
+    next.data = sanitizeRunSegmentDataForStorage(rawPayload.data as Record<string, unknown>);
+  }
+  return next;
+}
+
+// 描述：
+//
 //   - 在写入本地会话运行态前做字段级收敛，避免无关 payload 过大。
 //   - 这里不再裁掉旧片段，确保前端执行过程历史在软件重开后仍能完整恢复。
 function sanitizeRunMetaMapForStorage(
@@ -2801,6 +3021,37 @@ function sanitizeRunMetaMapForStorage(
             ),
           }))
           .filter((segment) => segment.key || segment.intro || segment.step);
+        const timeline = (Array.isArray(meta.timeline) ? meta.timeline : [])
+          .map((item, index) => {
+            const kind = item.kind === "markdown"
+              ? "markdown"
+              : item.kind === "divider"
+                ? "divider"
+                : item.kind === "card"
+                  ? "card"
+                  : "structured";
+            const payload = sanitizeRunTimelinePayloadForStorage(
+              kind,
+              item.payload && typeof item.payload === "object"
+                ? (item.payload as Record<string, unknown>)
+                : undefined,
+            );
+            if (Object.keys(payload).length === 0) {
+              return null;
+            }
+            return {
+              id: truncateRunStateText(String(item.id || `timeline-${index + 1}`), 120),
+              seq: Math.max(0, Math.floor(Number(item.seq || index + 1))),
+              kind,
+              status: item.status === "failed"
+                ? "failed"
+                : item.status === "finished"
+                  ? "finished"
+                  : "running",
+              payload,
+            } satisfies SessionRunTimelineItem;
+          })
+          .filter((item): item is SessionRunTimelineItem => Boolean(item));
         return [
           normalizedMessageId,
           {
@@ -2817,11 +3068,66 @@ function sanitizeRunMetaMapForStorage(
                   ? "system"
                   : undefined,
             segments,
+            timeline,
+            nextSeq: Math.max(
+              1,
+              Math.floor(Number(meta.nextSeq || timeline.length + 1)),
+            ),
+            previewText: truncateRunStateText(String(meta.previewText || ""), RUN_STATE_SUMMARY_MAX_CHARS),
           } as SessionRunMeta,
         ] as const;
       })
       .filter((item): item is readonly [string, SessionRunMeta] => Boolean(item)),
   );
+}
+
+// 描述：
+//
+//   - 在写入本地会话运行态前裁剪等待队列项，避免提示词与快照无限增长导致 localStorage 膨胀。
+function sanitizeQueuedPromptItemsForStorage(
+  items: SessionQueuedPromptItem[],
+): SessionQueuedPromptItem[] {
+  const sanitized: SessionQueuedPromptItem[] = [];
+  (Array.isArray(items) ? items : []).forEach((item) => {
+    const normalizedId = String(item.id || "").trim();
+    const normalizedPrompt = truncateRunStateText(String(item.prompt || "").trim(), RUN_STATE_DETAIL_MAX_CHARS);
+    if (!normalizedId || !normalizedPrompt) {
+      return;
+    }
+    const executionSelection = normalizeQueuedPromptExecutionSelectionSnapshot(
+      item.executionSnapshot?.executionSelection,
+    );
+    sanitized.push({
+      id: normalizedId,
+      prompt: normalizedPrompt,
+      createdAt: Number(item.createdAt || Date.now()),
+      updatedAt: Number(item.updatedAt || Date.now()),
+      status: item.status === "preempting" ? "preempting" : "queued",
+      executionSnapshot: {
+        provider: truncateRunStateText(String(item.executionSnapshot?.provider || "").trim(), 120),
+        modelName: truncateRunStateText(String(item.executionSnapshot?.modelName || "").trim(), 240),
+        modeName: truncateRunStateText(String(item.executionSnapshot?.modeName || "").trim(), 120),
+        executionSelection,
+        workflowId: truncateRunStateText(String(item.executionSnapshot?.workflowId || "").trim(), 240),
+        skillIds: Array.from(new Set(
+          (item.executionSnapshot?.skillIds || [])
+            .map((skillId) => truncateRunStateText(String(skillId || "").trim(), 240))
+            .filter((skillId) => Boolean(skillId)),
+        )),
+        workspaceId: truncateRunStateText(String(item.executionSnapshot?.workspaceId || "").trim(), 240),
+        resolvedDccSoftware: truncateRunStateText(
+          String(item.executionSnapshot?.resolvedDccSoftware || "").trim().toLowerCase(),
+          120,
+        ) || undefined,
+        resolvedCrossDccSoftwares: Array.from(new Set(
+          (item.executionSnapshot?.resolvedCrossDccSoftwares || [])
+            .map((software) => truncateRunStateText(String(software || "").trim().toLowerCase(), 120))
+            .filter((software) => Boolean(software)),
+        )),
+      },
+    });
+  });
+  return sanitized.slice(0, 100);
 }
 
 // 描述：写入会话运行态快照，供会话页恢复执行中步骤与侧边栏运行标识。
@@ -2835,6 +3141,7 @@ export function upsertSessionRunState(input: SessionRunStateSnapshot) {
     ...input,
     activeMessageId: String(input.activeMessageId || "").trim(),
     runMetaMap: sanitizeRunMetaMapForStorage(input.runMetaMap || {}),
+    queuedPrompts: sanitizeQueuedPromptItemsForStorage(input.queuedPrompts || []),
     sessionApprovedToolNames: Array.from(new Set(
       (input.sessionApprovedToolNames || [])
         .map((toolName) => String(toolName || "").trim().toLowerCase())

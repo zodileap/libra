@@ -1747,6 +1747,73 @@ body {
   gap: var(--z-inset-xs);
 }
 
+.desk-action-slot-queue {
+  gap: var(--z-inset-sm);
+}
+
+.desk-session-queue-head {
+  min-width: 0;
+  gap: var(--z-inset-sm);
+}
+
+.desk-session-queue-list {
+  display: grid;
+  gap: var(--z-inset-xs);
+}
+
+.desk-session-queue-item {
+  border-radius: var(--z-border-radius);
+  background: color-mix(in srgb, var(--desk-subtle-surface) 84%, transparent);
+}
+
+.desk-session-queue-item.is-preempting {
+  background: color-mix(in srgb, var(--z-color-bg-active) 86%, transparent);
+}
+
+.desk-session-queue-item.is-editing {
+  box-shadow: inset 0 0 0 var(--desk-border-width) color-mix(in srgb, var(--z-color-border-brand) 82%, transparent);
+}
+
+.desk-session-queue-item-body {
+  display: grid;
+  gap: var(--z-inset-xs);
+}
+
+.desk-session-queue-item-head {
+  min-width: 0;
+  gap: var(--z-inset-sm);
+}
+
+.desk-session-queue-item-strategy {
+  min-width: 0;
+  color: var(--z-color-text-secondary);
+}
+
+.desk-session-queue-item-status {
+  flex-shrink: 0;
+  padding: 0 var(--z-inset-xs);
+  border-radius: var(--z-border-radius-sm);
+  border: var(--desk-border-width) solid color-mix(in srgb, var(--z-color-border-glass) 88%, transparent);
+  background: color-mix(in srgb, var(--desk-panel-surface) 92%, transparent);
+}
+
+.desk-session-queue-item-status-queued {
+  color: var(--z-color-text-secondary);
+}
+
+.desk-session-queue-item-status-preempting {
+  color: var(--z-color-text);
+}
+
+.desk-session-queue-item-preview {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.desk-session-queue-item-actions {
+  flex-wrap: wrap;
+}
+
 .desk-todo-dock-head {
   min-width: 0;
 }

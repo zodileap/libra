@@ -58,7 +58,11 @@ import {
   type ProjectWorkspaceCapabilityId,
   type SessionCallRecordSnapshot,
   type SessionMemorySnapshot,
+  type SessionQueuedPromptExecutionSelectionSnapshot,
+  type SessionQueuedPromptExecutionSnapshot,
+  type SessionQueuedPromptItem,
   type SessionRunMeta as PersistedSessionRunMeta,
+  type SessionRunTimelineItem as PersistedSessionRunTimelineItem,
   type SessionWorkflowPhaseCursorSnapshot,
 } from "../../shared/data";
 import { updateRuntimeSessionStatus } from "../../shared/services/backend-api";
@@ -213,6 +217,9 @@ interface ExecutePromptOptions {
   workflowPromptPreamble?: string;
   disableWorkflow?: boolean;
   selectedSkillIdsOverride?: string[];
+  providerOverride?: string;
+  modelNameOverride?: string;
+  modeNameOverride?: string;
   routeDecision?: SessionExecutionRouteDecision;
 }
 
@@ -269,6 +276,233 @@ interface SessionMemoryModelPayload {
 interface AgentSandboxMetrics {
   memory_bytes: number;
   uptime_secs: number;
+}
+
+// 描述：
+//
+//   - 将当前会话执行选择冻结为等待队列快照，避免后续切换策略后影响已入队项。
+//
+// Params:
+//
+//   - selection: 当前会话执行选择。
+//
+// Returns:
+//
+//   - 可序列化的执行选择快照。
+function buildQueuedPromptExecutionSelectionSnapshot(
+  selection: SessionExecutionSelection,
+): SessionQueuedPromptExecutionSelectionSnapshot {
+  if (selection.kind === "workflow") {
+    return {
+      kind: "workflow",
+      workflowId: String(selection.workflowId || "").trim(),
+    };
+  }
+  if (selection.kind === "skill") {
+    return {
+      kind: "skill",
+      skillId: String(selection.skillId || "").trim(),
+    };
+  }
+  return { kind: "none" };
+}
+
+// 描述：
+//
+//   - 基于当前会话配置构建等待队列执行快照，确保队列项稍后执行时仍沿用入队当时的 AI / 工作流 / 技能策略。
+function buildQueuedPromptExecutionSnapshot(input: {
+  provider: string;
+  modelName: string;
+  modeName: string;
+  executionSelection: SessionExecutionSelection;
+  workflowId: string;
+  skillIds: string[];
+  workspaceId: string;
+  resolvedDccSoftware?: string;
+  resolvedCrossDccSoftwares?: string[];
+}): SessionQueuedPromptExecutionSnapshot {
+  return {
+    provider: String(input.provider || "").trim(),
+    modelName: String(input.modelName || "").trim(),
+    modeName: String(input.modeName || "").trim(),
+    executionSelection: buildQueuedPromptExecutionSelectionSnapshot(input.executionSelection),
+    workflowId: String(input.workflowId || "").trim(),
+    skillIds: Array.from(new Set(
+      (input.skillIds || [])
+        .map((item) => String(item || "").trim())
+        .filter((item) => Boolean(item)),
+    )),
+    workspaceId: String(input.workspaceId || "").trim(),
+    resolvedDccSoftware: String(input.resolvedDccSoftware || "").trim().toLowerCase() || undefined,
+    resolvedCrossDccSoftwares: Array.from(new Set(
+      (input.resolvedCrossDccSoftwares || [])
+        .map((item) => String(item || "").trim().toLowerCase())
+        .filter((item) => Boolean(item)),
+    )),
+  };
+}
+
+// 描述：
+//
+//   - 生成新的等待队列项；真实 transcript 消息仍要等到项目真正开始执行时才写入。
+function buildQueuedPromptItem(
+  prompt: string,
+  executionSnapshot: SessionQueuedPromptExecutionSnapshot,
+): SessionQueuedPromptItem {
+  const timestamp = Date.now();
+  return {
+    id: `queued-${timestamp}-${Math.random().toString(36).slice(2, 8)}`,
+    prompt: String(prompt || "").trim(),
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    status: "queued",
+    executionSnapshot,
+  };
+}
+
+// 描述：
+//
+//   - 解析等待队列项对应的执行参数；真正开始执行时复用现有执行器，不新增 runtime 协议。
+function resolveQueuedPromptExecuteOptions(
+  item: SessionQueuedPromptItem,
+): ExecutePromptOptions {
+  const executionSelection = item.executionSnapshot.executionSelection;
+  const workflowId = String(item.executionSnapshot.workflowId || executionSelection.workflowId || "").trim();
+  const skillIds = Array.from(new Set(
+    (item.executionSnapshot.skillIds || [])
+      .map((skillId) => String(skillId || "").trim())
+      .filter((skillId) => Boolean(skillId)),
+  ));
+  if (executionSelection.kind === "workflow" && workflowId) {
+    return {
+      appendUserMessage: true,
+      disableWorkflow: false,
+      workflowIdOverride: workflowId,
+      workflowStageIndex: 0,
+      selectedSkillIdsOverride: [],
+      providerOverride: item.executionSnapshot.provider,
+      modelNameOverride: item.executionSnapshot.modelName,
+      modeNameOverride: item.executionSnapshot.modeName,
+      resolvedDccSoftware: item.executionSnapshot.resolvedDccSoftware,
+      resolvedCrossDccSoftwares: item.executionSnapshot.resolvedCrossDccSoftwares || [],
+    };
+  }
+  if (executionSelection.kind === "skill") {
+    return {
+      appendUserMessage: true,
+      disableWorkflow: true,
+      selectedSkillIdsOverride: skillIds,
+      providerOverride: item.executionSnapshot.provider,
+      modelNameOverride: item.executionSnapshot.modelName,
+      modeNameOverride: item.executionSnapshot.modeName,
+      resolvedDccSoftware: item.executionSnapshot.resolvedDccSoftware,
+      resolvedCrossDccSoftwares: item.executionSnapshot.resolvedCrossDccSoftwares || [],
+    };
+  }
+  return {
+    appendUserMessage: true,
+    disableWorkflow: true,
+    selectedSkillIdsOverride: [],
+    providerOverride: item.executionSnapshot.provider,
+    modelNameOverride: item.executionSnapshot.modelName,
+    modeNameOverride: item.executionSnapshot.modeName,
+    resolvedDccSoftware: item.executionSnapshot.resolvedDccSoftware,
+    resolvedCrossDccSoftwares: item.executionSnapshot.resolvedCrossDccSoftwares || [],
+  };
+}
+
+// 描述：
+//
+//   - 统一把指定等待项标记为“即将开始”，并清理其他等待项的 preempting 状态，确保抢占目标唯一。
+function markQueuedPromptItemPreempting(
+  items: SessionQueuedPromptItem[],
+  targetId: string,
+): SessionQueuedPromptItem[] {
+  const normalizedTargetId = String(targetId || "").trim();
+  return (items || []).map((item) => ({
+    ...item,
+    status: item.id === normalizedTargetId ? "preempting" : "queued",
+  }));
+}
+
+// 描述：
+//
+//   - 按“抢占项优先，其余保持原序”规则挑选下一个等待项。
+function pickNextQueuedPromptItem(
+  items: SessionQueuedPromptItem[],
+): SessionQueuedPromptItem | null {
+  const preemptingItem = (items || []).find((item) => item.status === "preempting");
+  if (preemptingItem) {
+    return preemptingItem;
+  }
+  return (items || [])[0] || null;
+}
+
+// 描述：
+//
+//   - 从等待队列中移除指定项；真正开始执行前先移除，避免页面刷新后误判为尚未消费。
+function removeQueuedPromptItemById(
+  items: SessionQueuedPromptItem[],
+  targetId: string,
+): SessionQueuedPromptItem[] {
+  const normalizedTargetId = String(targetId || "").trim();
+  return (items || []).filter((item) => item.id !== normalizedTargetId);
+}
+
+// 描述：
+//
+//   - 调整等待队列顺序；首版只支持置顶、上移、下移三种显式动作，避免引入拖拽复杂度。
+function reorderQueuedPromptItems(
+  items: SessionQueuedPromptItem[],
+  targetId: string,
+  action: "top" | "up" | "down",
+): SessionQueuedPromptItem[] {
+  const normalizedTargetId = String(targetId || "").trim();
+  const currentIndex = (items || []).findIndex((item) => item.id === normalizedTargetId);
+  if (currentIndex < 0) {
+    return items || [];
+  }
+  const nextItems = [...(items || [])];
+  const [targetItem] = nextItems.splice(currentIndex, 1);
+  if (!targetItem) {
+    return items || [];
+  }
+  if (action === "top") {
+    nextItems.unshift(targetItem);
+    return nextItems;
+  }
+  const nextIndex = action === "up"
+    ? Math.max(0, currentIndex - 1)
+    : Math.min(nextItems.length, currentIndex + 1);
+  nextItems.splice(nextIndex, 0, targetItem);
+  return nextItems;
+}
+
+// 描述：
+//
+//   - 生成等待队列项的策略展示文案，统一复用工作流/技能快照，而不是读取当前界面的即时选择。
+function resolveQueuedPromptStrategyLabel(
+  item: SessionQueuedPromptItem,
+  workflows: AgentWorkflowDefinition[],
+  availableSkills: AgentSkillItem[],
+  t: ReturnType<typeof useDesktopI18n>["t"],
+): string {
+  const executionSelection = item.executionSnapshot.executionSelection;
+  if (executionSelection.kind === "workflow") {
+    const workflowId = String(item.executionSnapshot.workflowId || executionSelection.workflowId || "").trim();
+    const workflowName = workflows.find((workflow) => workflow.id === workflowId)?.name || workflowId;
+    return workflowName
+      ? t("工作流：{{workflow}}", { workflow: workflowName })
+      : t("普通对话");
+  }
+  if (executionSelection.kind === "skill") {
+    const skillId = String(executionSelection.skillId || item.executionSnapshot.skillIds[0] || "").trim();
+    const skillName = availableSkills.find((skill) => skill.id === skillId)?.title || skillId;
+    return skillName
+      ? t("技能：{{skill}}", { skill: skillName })
+      : t("普通对话");
+  }
+  return t("普通对话");
 }
 
 // 描述：
@@ -1436,8 +1670,8 @@ function buildDccRoutingPromptBlock(
       software: item.software,
       providers: item.providerIds.join(", "),
       priority: item.priority,
-      supportsImport: item.supportsImport,
-      supportsExport: item.supportsExport,
+      supportsImport: String(item.supportsImport),
+      supportsExport: String(item.supportsExport),
       capabilities,
     });
   });
@@ -1550,8 +1784,24 @@ interface AssistantRunSegmentStep {
 interface AssistantRunSegmentGroup {
   key: string;
   title: string;
-  kind?: "default" | "divider";
+  kind?: "default" | "divider" | "markdown";
   steps: AssistantRunSegmentStep[];
+}
+
+// 描述:
+//
+//   - 定义单条运行消息内部的统一时间线项类型；所有可见内容都必须按该时间线顺序渲染。
+type AssistantRunTimelineItemKind = "markdown" | "structured" | "divider" | "card";
+
+// 描述:
+//
+//   - 定义单条运行消息内部的统一时间线项结构。
+interface AssistantRunTimelineItem {
+  id: string;
+  seq: number;
+  kind: AssistantRunTimelineItemKind;
+  status: "running" | "finished" | "failed";
+  payload: Record<string, unknown>;
 }
 
 // 描述:
@@ -1565,6 +1815,9 @@ interface AssistantRunMeta {
   summary: string;
   summarySource?: "ai" | "system" | "failure";
   segments: AssistantRunSegment[];
+  timeline: AssistantRunTimelineItem[];
+  nextSeq: number;
+  previewText: string;
 }
 
 // 描述:
@@ -3386,10 +3639,10 @@ function buildRunSegmentGroups(segments: AssistantRunSegment[]): AssistantRunSeg
       groups.push({
         key: `run-group-${groups.length}-${title}`,
         title,
-        kind: "default",
+        kind: "markdown",
         steps: [],
       });
-      activeGroupIndex = groups.length - 1;
+      activeGroupIndex = -1;
       return;
     }
 
@@ -3542,7 +3795,465 @@ function buildRunSegmentGroups(segments: AssistantRunSegment[]): AssistantRunSeg
       kind: group.kind,
       steps: group.steps.filter((step) => String(step.text || "").trim()),
     }))
-    .filter((group) => group.kind === "divider" || group.steps.length > 0);
+    .filter((group) => group.kind === "divider" || group.kind === "markdown" || group.steps.length > 0);
+}
+
+// 描述：
+//
+//   - 生成单条运行消息的预览文本；优先使用时间线尾部的正文/卡片，再回退到最新结构化步骤。
+//
+// Params:
+//
+//   - timeline: 已规整的时间线项。
+//   - summaryText: 当前运行总结。
+//
+// Returns:
+//
+//   - 用于侧边栏和恢复态的简洁预览文本。
+function resolveAssistantRunTimelinePreviewText(
+  timeline: AssistantRunTimelineItem[],
+  summaryText: string,
+): string {
+  for (const item of [...timeline].sort((left, right) => right.seq - left.seq)) {
+    if (item.kind === "card") {
+      const detail = String(item.payload.detail || "").trim();
+      const title = String(item.payload.title || "").trim();
+      if (detail) {
+        return detail;
+      }
+      if (title) {
+        return title;
+      }
+      continue;
+    }
+    if (item.kind === "markdown") {
+      const content = String(item.payload.content || "").trim();
+      if (content) {
+        return content;
+      }
+      continue;
+    }
+    if (item.kind === "structured") {
+      const text = String(item.payload.text || "").trim();
+      if (text) {
+        return text;
+      }
+    }
+  }
+  return String(summaryText || "").trim();
+}
+
+// 描述：
+//
+//   - 判断运行片段在统一时间线中是否应隐藏；主要过滤纯占位步骤，避免恢复后时间线被无效等待文案撑满。
+//
+// Params:
+//
+//   - intro: 片段标题。
+//   - step: 片段正文。
+//   - status: 片段状态。
+//
+// Returns:
+//
+//   - true: 当前片段只属于低价值占位，不应写入时间线。
+function shouldHideRunSegmentInTimeline(
+  intro: string,
+  step: string,
+  status: AssistantRunSegmentStatus,
+): boolean {
+  if (status === "failed") {
+    return false;
+  }
+  const normalizedIntro = String(intro || "").trim();
+  const normalizedStep = String(step || "").trim();
+  if (!normalizedIntro && !normalizedStep) {
+    return true;
+  }
+  if (
+    normalizedStep === translateDesktopText("当前步骤仍在执行，请稍候。")
+    || normalizedStep === translateDesktopText("执行仍在进行中，正在同步最新状态。")
+    || normalizedStep.includes(translateDesktopText("规划中：正在确认本次操作所需的工具链与任务顺序"))
+    || normalizedStep.includes(translateDesktopText("规划中：正在确认本次操作所需的工具链"))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+// 描述：
+//
+//   - 规整单条时间线项，统一清洗类型、状态与 payload，避免恢复旧快照时出现非法元素。
+//
+// Params:
+//
+//   - item: 原始时间线项。
+//   - index: 当前索引。
+//
+// Returns:
+//
+//   - 规整后的时间线项；无有效 payload 时返回 null。
+function normalizeAssistantRunTimelineItem(
+  item: Partial<AssistantRunTimelineItem> | Partial<PersistedSessionRunTimelineItem> | null | undefined,
+  index: number,
+): AssistantRunTimelineItem | null {
+  if (!item) {
+    return null;
+  }
+  const kind = item.kind === "markdown"
+    ? "markdown"
+    : item.kind === "divider"
+      ? "divider"
+      : item.kind === "card"
+        ? "card"
+        : item.kind === "structured"
+          ? "structured"
+          : "";
+  if (!kind) {
+    return null;
+  }
+  const rawPayload = item.payload && typeof item.payload === "object"
+    ? (item.payload as Record<string, unknown>)
+    : {};
+  const payload: Record<string, unknown> = {};
+  if (kind === "markdown") {
+    const content = String(rawPayload.content || "").trim();
+    if (!content) {
+      return null;
+    }
+    payload.content = content;
+  } else if (kind === "divider") {
+    const title = String(rawPayload.title || "").trim();
+    if (!title) {
+      return null;
+    }
+    payload.title = title;
+  } else if (kind === "card") {
+    const title = String(rawPayload.title || "").trim();
+    const detail = String(rawPayload.detail || "").trim();
+    const hint = String(rawPayload.hint || "").trim();
+    const actionLabel = String(rawPayload.action_label || "").trim();
+    if (!title && !detail) {
+      return null;
+    }
+    if (title) {
+      payload.title = title;
+    }
+    if (detail) {
+      payload.detail = detail;
+    }
+    if (hint) {
+      payload.hint = hint;
+    }
+    if (actionLabel) {
+      payload.action_label = actionLabel;
+    }
+  } else {
+    const intro = String(rawPayload.intro || "").trim();
+    const text = String(rawPayload.text || "").trim();
+    const detail = String(rawPayload.detail || "").trim();
+    if (!intro && !text && !detail) {
+      return null;
+    }
+    if (intro) {
+      payload.intro = intro;
+    }
+    if (text) {
+      payload.text = text;
+    }
+    if (detail) {
+      payload.detail = detail;
+    }
+    if (rawPayload.data && typeof rawPayload.data === "object") {
+      payload.data = rawPayload.data as Record<string, unknown>;
+    }
+  }
+  return {
+    id: String(item.id || `timeline-${index + 1}`).trim() || `timeline-${index + 1}`,
+    seq: Math.max(1, Math.floor(Number(item.seq || index + 1))),
+    kind,
+    status: item.status === "failed"
+      ? "failed"
+      : item.status === "finished"
+        ? "finished"
+        : "running",
+    payload,
+  };
+}
+
+// 描述：
+//
+//   - 规范化运行片段标题，兼容历史“泛化标题”并输出更具体的排查语义；
+//   - 该函数必须保持模块级可用，供时间线构建与复制上下文等公共流程复用。
+//
+// Params:
+//
+//   - intro: 原始片段标题。
+//   - step: 原始片段步骤描述。
+//
+// Returns:
+//
+//   - 规范化后的片段标题。
+function normalizeRunSegmentIntroForCopy(intro: string, step: string): string {
+  const normalizedIntro = String(intro || "").trim();
+  const normalizedStep = String(step || "").trim();
+  if (!normalizedIntro) {
+    return translateDesktopText("执行片段");
+  }
+  if (normalizedIntro === translateDesktopText("正在处理当前步骤")) {
+    if (normalizedStep.includes("provider=") && normalizedStep.includes("started")) {
+      return translateDesktopText("模型开始生成脚本");
+    }
+    if (normalizedStep.includes("provider=") && normalizedStep.includes("finished")) {
+      return translateDesktopText("模型脚本生成完成");
+    }
+    return translateDesktopText("步骤处理中");
+  }
+  if (normalizedIntro === translateDesktopText("当前步骤已完成")) {
+    if (normalizedStep.includes("provider=") && normalizedStep.includes("finished")) {
+      return translateDesktopText("模型脚本生成完成");
+    }
+    return translateDesktopText("步骤执行完成");
+  }
+  if (normalizedIntro === translateDesktopText("智能体正在思考")) {
+    return translateDesktopText("规划执行策略");
+  }
+  return normalizedIntro;
+}
+
+// 描述：
+//
+//   - 将当前运行态规整为单一时间线；统一按顺序输出 Markdown、结构化状态、分割线与状态卡片，
+//   - 避免“顶部正文 + 中段步骤 + 底部总结”这种固定布局导致后发内容跑到前面。
+//
+// Params:
+//
+//   - messageText: 当前助手消息正文。
+//   - runMeta: 当前运行态。
+//
+// Returns:
+//
+//   - 规整后的时间线、下一序号与预览文本。
+function buildAssistantRunTimelineState(
+  messageText: string,
+  runMeta: Omit<AssistantRunMeta, "timeline" | "nextSeq" | "previewText">,
+): Pick<AssistantRunMeta, "timeline" | "nextSeq" | "previewText"> {
+  const normalizedMessageText = String(messageText || "").trim();
+  const failureSummary = runMeta.status === "failed"
+    ? buildAssistantFailureSummary(runMeta.summary || normalizedMessageText)
+    : null;
+  const visibleRunSummaryText = resolveVisibleCompletedRunSummaryText(normalizedMessageText, runMeta);
+  const messageKey = String(runMeta.startedAt || Date.now());
+  const runSegmentsForRender: AssistantRunSegment[] = (() => {
+    const normalizedRenderSegments = normalizeAssistantRunSegments(runMeta.segments);
+    const normalizedSegments = normalizedRenderSegments
+      .map((segment) => {
+        const intro = isInitialThinkingSegment(segment)
+          ? ""
+          : normalizeRunSegmentIntroForCopy(segment.intro, segment.step);
+        const step = String(segment.step || "").trim() || translateDesktopText("（空步骤）");
+        return {
+          ...segment,
+          intro,
+          step,
+        };
+      })
+      .filter((segment) => !shouldHideRunSegmentInTimeline(segment.intro, segment.step, segment.status));
+    if (normalizedSegments.length > 0) {
+      return normalizedSegments;
+    }
+    if (runMeta.status === "running") {
+      return [{
+        key: `fallback-running-${messageKey}`,
+        intro: translateDesktopText("执行进行中"),
+        step: translateDesktopText("等待执行状态回传…"),
+        status: "running",
+      }];
+    }
+    const fallbackStep = String(runMeta.summary || normalizedMessageText || "").trim()
+      || translateDesktopText("（本轮未记录可展示的执行片段）");
+    return [{
+      key: `fallback-summary-${messageKey}`,
+      intro: translateDesktopText("执行过程摘要"),
+      step: fallbackStep,
+      status: runMeta.status === "failed" ? "failed" : "finished",
+    }];
+  })();
+  const groups = buildRunSegmentGroups(runSegmentsForRender);
+  const timeline: AssistantRunTimelineItem[] = [];
+  let nextSeq = 1;
+  groups.forEach((group) => {
+    if (group.kind === "markdown") {
+      const content = String(group.title || "").trim();
+      if (!content) {
+        return;
+      }
+      timeline.push({
+        id: `${group.key}-markdown`,
+        seq: nextSeq,
+        kind: "markdown",
+        status: "finished",
+        payload: {
+          content,
+        },
+      });
+      nextSeq += 1;
+      return;
+    }
+    if (group.kind === "divider") {
+      const title = String(group.title || "").trim();
+      if (!title) {
+        return;
+      }
+      timeline.push({
+        id: `${group.key}-divider`,
+        seq: nextSeq,
+        kind: "divider",
+        status: "finished",
+        payload: {
+          title,
+        },
+      });
+      nextSeq += 1;
+      return;
+    }
+    group.steps.forEach((step, stepIndex) => {
+      const segmentKind = step.data && typeof step.data.__segment_kind === "string"
+        ? String(step.data.__segment_kind || "").trim()
+        : "";
+      if (
+        runMeta.status !== "running"
+        && (
+          segmentKind === STREAM_KINDS.ERROR
+          || segmentKind === STREAM_KINDS.CANCELLED
+          || segmentKind === STREAM_KINDS.FINAL
+        )
+      ) {
+        return;
+      }
+      const intro = stepIndex === 0 ? String(group.title || "").trim() : "";
+      timeline.push({
+        id: `${group.key}-${step.key}`,
+        seq: nextSeq,
+        kind: "structured",
+        status: step.status,
+        payload: {
+          intro,
+          text: step.text,
+          detail: step.detail,
+          data: step.data,
+        },
+      });
+      nextSeq += 1;
+    });
+  });
+  if (runMeta.status === "failed" && failureSummary) {
+    timeline.push({
+      id: `terminal-card-${nextSeq}`,
+      seq: nextSeq,
+      kind: "card",
+      status: "failed",
+      payload: {
+        title: translateDesktopText("执行失败"),
+        detail: failureSummary.detail,
+        hint: failureSummary.hint,
+        action_label: translateDesktopText("重试本轮"),
+      },
+    });
+    nextSeq += 1;
+  } else if (visibleRunSummaryText) {
+    timeline.push({
+      id: `terminal-markdown-${nextSeq}`,
+      seq: nextSeq,
+      kind: "markdown",
+      status: runMeta.status === "failed" ? "failed" : "finished",
+      payload: {
+        content: visibleRunSummaryText,
+      },
+    });
+    nextSeq += 1;
+  }
+  return {
+    timeline,
+    nextSeq,
+    previewText: resolveAssistantRunTimelinePreviewText(timeline, runMeta.summary),
+  };
+}
+
+// 描述：
+//
+//   - 为当前运行态补齐时间线、下一序号与预览文本；用于实时更新与持久化前统一收口。
+//
+// Params:
+//
+//   - messageText: 当前助手消息正文。
+//   - runMeta: 当前运行态。
+//
+// Returns:
+//
+//   - 带完整时间线字段的运行态。
+function syncAssistantRunMetaTimeline(
+  messageText: string,
+  runMeta: Omit<AssistantRunMeta, "timeline" | "nextSeq" | "previewText">,
+): AssistantRunMeta {
+  const timelineState = buildAssistantRunTimelineState(messageText, runMeta);
+  return {
+    ...runMeta,
+    ...timelineState,
+  };
+}
+
+// 描述：
+//
+//   - 返回当前运行态的可渲染时间线；当持久化快照尚未带 timeline 时，实时按旧字段做一次最佳努力转换。
+//
+// Params:
+//
+//   - messageText: 当前助手消息正文。
+//   - runMeta: 当前运行态。
+//
+// Returns:
+//
+//   - 按 seq 升序排列的时间线项。
+function resolveRenderableAssistantRunTimeline(
+  messageText: string,
+  runMeta?: AssistantRunMeta,
+): AssistantRunTimelineItem[] {
+  if (!runMeta) {
+    return [];
+  }
+  const normalizedTimeline = (runMeta.timeline || [])
+    .map((item, index) => normalizeAssistantRunTimelineItem(item, index))
+    .filter((item): item is AssistantRunTimelineItem => Boolean(item))
+    .sort((left, right) => left.seq - right.seq);
+  if (normalizedTimeline.length > 0) {
+    return normalizedTimeline;
+  }
+  return buildAssistantRunTimelineState(messageText, runMeta).timeline;
+}
+
+// 描述：
+//
+//   - 在折叠态下仅保留时间线尾部的终态项，避免再次出现“后发总结跑到顶部”的双区块布局。
+//
+// Params:
+//
+//   - timeline: 全量时间线。
+//   - collapsed: 当前是否折叠。
+//   - status: 当前运行态状态。
+//
+// Returns:
+//
+//   - 当前应显示的时间线项。
+function resolveVisibleAssistantRunTimeline(
+  timeline: AssistantRunTimelineItem[],
+  collapsed: boolean,
+  status: AssistantRunMeta["status"],
+): AssistantRunTimelineItem[] {
+  if (status === "running" || !collapsed) {
+    return timeline;
+  }
+  const lastSeq = timeline.reduce((maxValue, item) => Math.max(maxValue, item.seq), 0);
+  return timeline.filter((item) => item.kind === "card" || (item.kind === "markdown" && item.seq === lastSeq));
 }
 
 // 描述：根据智能体文本流事件判断当前执行阶段，用于无事件时的“心跳提示”文案。
@@ -3783,14 +4494,20 @@ function resolveVisibleAssistantBodyText(
   runMeta?: AssistantRunMeta,
 ): string {
   const normalizedMessageText = String(messageText || "").trim();
+  const normalizedSummary = String(runMeta?.summary || "").trim();
+  const shouldHideDuplicatedNonAiSummaryBody =
+    Boolean(runMeta?.summarySource)
+    && runMeta?.summarySource !== "ai"
+    && normalizedMessageText.length > 0
+    && normalizedMessageText === normalizedSummary;
   if (
     normalizedMessageText
+    && !shouldHideDuplicatedNonAiSummaryBody
     && !isGenericRunningIndicatorText(normalizedMessageText)
     && !isGenericFinishedRunSummaryText(normalizedMessageText)
   ) {
     return normalizedMessageText;
   }
-  const normalizedSummary = String(runMeta?.summary || "").trim();
   if (
     normalizedSummary
     && runMeta?.summarySource !== "failure"
@@ -3800,6 +4517,94 @@ function resolveVisibleAssistantBodyText(
     return normalizedSummary;
   }
   return "";
+}
+
+// 描述：
+//
+//   - 解析执行完成后应展示在分割线下方的总结文本。
+//   - 失败总结统一交给失败卡片渲染；AI 正文若已直接显示，也不再重复渲染同一份总结。
+//
+// Params:
+//
+//   - messageText: 当前助手消息文本。
+//   - runMeta: 当前助手消息绑定的运行态。
+//
+// Returns:
+//
+//   - 执行完成后的可见总结；若不应额外显示则返回空字符串。
+function resolveVisibleCompletedRunSummaryText(
+  _messageText: string,
+  runMeta?: AssistantRunMeta,
+): string {
+  if (!runMeta || runMeta.status === "running" || runMeta.summarySource === "failure") {
+    return "";
+  }
+  const normalizedSummary = String(runMeta.summary || "").trim();
+  if (
+    !normalizedSummary
+    || isGenericRunningIndicatorText(normalizedSummary)
+    || isGenericFinishedRunSummaryText(normalizedSummary)
+  ) {
+    return "";
+  }
+  return normalizedSummary;
+}
+
+// 描述：
+//
+//   - 从运行时间线中提炼适合继续传给模型的助手上下文文本；优先采用 AI 总结，其次使用时间线尾部的 Markdown 或结构化结论，
+//   - 避免再从 message.text 顶部正文或系统占位摘要反推运行消息内容。
+//
+// Params:
+//
+//   - messageText: 当前助手消息正文。
+//   - runMeta: 当前运行态。
+//
+// Returns:
+//
+//   - 适合作为上下文的助手文本。
+function resolveAssistantRunContextText(
+  messageText: string,
+  runMeta?: AssistantRunMeta,
+): string {
+  const normalizedMessageText = String(messageText || "").trim();
+  if (!runMeta) {
+    return normalizedMessageText;
+  }
+  const preferredSummaryText = runMeta.summarySource === "ai"
+    ? String(runMeta.summary || "").trim()
+    : "";
+  if (preferredSummaryText && !isGenericFinishedRunSummaryText(preferredSummaryText)) {
+    return preferredSummaryText;
+  }
+  const normalizedTimeline = (runMeta.timeline || [])
+    .map((item, index) => normalizeAssistantRunTimelineItem(item, index))
+    .filter((item): item is AssistantRunTimelineItem => Boolean(item))
+    .sort((left, right) => left.seq - right.seq);
+  for (const item of [...normalizedTimeline].reverse()) {
+    if (item.kind === "markdown") {
+      const content = String(item.payload.content || "").trim();
+      if (content && !isGenericFinishedRunSummaryText(content) && !isGenericRunningIndicatorText(content)) {
+        return content;
+      }
+      continue;
+    }
+    if (item.kind === "structured") {
+      const text = String(item.payload.text || "").trim();
+      if (text && !isGenericFinishedRunSummaryText(text) && !isGenericRunningIndicatorText(text)) {
+        return text;
+      }
+    }
+  }
+  const previewText = String(runMeta.previewText || "").trim();
+  if (previewText && !isGenericFinishedRunSummaryText(previewText) && !isGenericRunningIndicatorText(previewText)) {
+    return previewText;
+  }
+  const visibleBodyText = resolveVisibleAssistantBodyText(normalizedMessageText, runMeta);
+  if (visibleBodyText) {
+    return visibleBodyText;
+  }
+  return normalizedMessageText;
 }
 
 // 描述：
@@ -3877,16 +4682,7 @@ function buildPromptContextMessages(
         return null;
       }
       const runMeta = normalizedMessageId ? runMetaMap[normalizedMessageId] : undefined;
-      const preferredSummaryText = runMeta?.summarySource === "ai"
-        ? String(runMeta.summary || "").trim()
-        : "";
-      const effectiveText = String(
-        preferredSummaryText
-        || resolveVisibleAssistantBodyText(item.text, runMeta)
-        || runMeta?.summary
-        || item.text
-        || "",
-      ).trim();
+      const effectiveText = String(resolveAssistantRunContextText(item.text, runMeta) || "").trim();
       if (!effectiveText) {
         return null;
       }
@@ -3925,21 +4721,12 @@ function resolveRecoveredAssistantMessageText(
       messages.find((item) => item.role === "assistant" && String(item.id || "").trim() === normalizedMessageId)?.text || "",
     ).trim()
     : "";
-  const summaryText = String(runMeta?.summary || "").trim();
-  const lastStepText = String(runMeta?.segments.slice(-1)[0]?.step || "").trim();
-  if (summaryText && (!storedMessageText || isGenericRunningIndicatorText(storedMessageText))) {
-    return summaryText;
-  }
   if (storedMessageText) {
     return storedMessageText;
   }
-  if (summaryText) {
-    return summaryText;
-  }
-  if (lastStepText) {
-    return lastStepText;
-  }
-  return translateDesktopText("等待工具返回本步结果…");
+  return resolveAssistantRunContextText("", runMeta)
+    || String(runMeta?.previewText || "").trim()
+    || translateDesktopText("等待工具返回本步结果…");
 }
 
 // 描述：
@@ -3972,7 +4759,10 @@ function isGeminiProviderNotImplementedError(raw: string): boolean {
 // Returns:
 //
 //   - 页面可用的运行态。
-function normalizePersistedRunMeta(input: PersistedSessionRunMeta): AssistantRunMeta {
+function normalizePersistedRunMeta(
+  input: PersistedSessionRunMeta,
+  fallbackMessageText = "",
+): AssistantRunMeta {
   const segments = Array.isArray(input.segments)
     ? normalizeAssistantRunSegments(
       input.segments.map<AssistantRunSegment>((item) => ({
@@ -3996,7 +4786,7 @@ function normalizePersistedRunMeta(input: PersistedSessionRunMeta): AssistantRun
       })),
     )
     : [];
-  return {
+  const normalizedBaseMeta = {
     status: input.status === "failed" ? "failed" : input.status === "finished" ? "finished" : "running",
     startedAt: Number(input.startedAt || Date.now()),
     finishedAt: input.finishedAt ? Number(input.finishedAt) : undefined,
@@ -4010,6 +4800,22 @@ function normalizePersistedRunMeta(input: PersistedSessionRunMeta): AssistantRun
           ? "system"
           : undefined,
     segments,
+  } satisfies Omit<AssistantRunMeta, "timeline" | "nextSeq" | "previewText">;
+  const normalizedTimeline = Array.isArray(input.timeline)
+    ? input.timeline
+      .map((item, index) => normalizeAssistantRunTimelineItem(item, index))
+      .filter((item): item is AssistantRunTimelineItem => Boolean(item))
+      .sort((left, right) => left.seq - right.seq)
+    : [];
+  const fallbackTimelineState = buildAssistantRunTimelineState(fallbackMessageText, normalizedBaseMeta);
+  return {
+    ...normalizedBaseMeta,
+    timeline: normalizedTimeline.length > 0 ? normalizedTimeline : fallbackTimelineState.timeline,
+    nextSeq: Math.max(
+      1,
+      Math.floor(Number(input.nextSeq || 0)) || (normalizedTimeline.length > 0 ? normalizedTimeline.length + 1 : fallbackTimelineState.nextSeq),
+    ),
+    previewText: String(input.previewText || "").trim() || fallbackTimelineState.previewText,
   };
 }
 
@@ -4303,6 +5109,8 @@ export function SessionPage({
   const [messages, setMessages] = useState<MessageItem[]>([]);
   const [agentContextMessages, setAgentContextMessages] = useState<MessageItem[]>([]);
   const [assistantRunMetaMap, setAssistantRunMetaMap] = useState<Record<string, AssistantRunMeta>>({});
+  const [queuedPrompts, setQueuedPrompts] = useState<SessionQueuedPromptItem[]>([]);
+  const [editingQueuedPromptId, setEditingQueuedPromptId] = useState("");
   const [userInputDraftMap, setUserInputDraftMap] = useState<
     Record<string, Record<string, AgentUserInputDraftAnswer>>
   >({});
@@ -4532,6 +5340,53 @@ export function SessionPage({
     (provider: string) => isAiProvider(provider) && supportsAiProviderModeSelection(provider),
     [],
   );
+  // 描述：
+  //
+  //   - 解析本次执行应使用的 AI 配置；普通发送使用当前会话选择，等待队列执行则可覆盖为入队快照。
+  //
+  // Params:
+  //
+  //   - overrides: Provider / 模型 / 模式覆盖值。
+  //
+  // Returns:
+  //
+  //   - 本次执行的 Provider、模型、模式与 API Key 上下文。
+  const resolveAiExecutionConfig = useCallback((
+    overrides?: {
+      providerOverride?: string;
+      modelNameOverride?: string;
+      modeNameOverride?: string;
+    },
+  ) => {
+    const provider = String(
+      overrides?.providerOverride || selectedAi?.provider || selectedProvider || "codex",
+    ).trim() || "codex";
+    const matchedAiKey = availableAiKeys.find((item) => item.provider === provider) || selectedAi || null;
+    const providerApiKey = provider === "codex" || provider === "gemini-cli"
+      ? undefined
+      : String(matchedAiKey?.keyValue || "").trim() || undefined;
+    const providerModel = supportsProviderModelConfig(provider)
+      ? String((overrides?.modelNameOverride ?? selectedModelName) || "").trim() || undefined
+      : undefined;
+    const providerMode = supportsProviderModeConfig(provider)
+      ? String((overrides?.modeNameOverride ?? selectedModeName) || "").trim() || undefined
+      : undefined;
+    return {
+      provider,
+      providerApiKey,
+      providerModel,
+      providerMode,
+      providerLabel: String(matchedAiKey?.providerLabel || provider).trim(),
+    };
+  }, [
+    availableAiKeys,
+    selectedAi,
+    selectedModelName,
+    selectedModeName,
+    selectedProvider,
+    supportsProviderModelConfig,
+    supportsProviderModeConfig,
+  ]);
   // 描述：按 Provider 生成模型下拉选项，并补回历史自定义值。
   //
   // Params:
@@ -4708,12 +5563,23 @@ export function SessionPage({
   const agentLlmResponseRawRef = useRef("");
   const autoPromptDispatchedRef = useRef(false);
   const assistantRunMetaMapRef = useRef<Record<string, AssistantRunMeta>>({});
+  const queuedPromptsRef = useRef<SessionQueuedPromptItem[]>([]);
   const messagesRef = useRef<MessageItem[]>([]);
   const agentContextMessagesRef = useRef<MessageItem[]>([]);
   const sessionMemoryInFlightMessageIdSetRef = useRef<Set<string>>(new Set());
   const sendingRef = useRef(false);
   const sessionApprovedToolNameSetRef = useRef<Set<string>>(new Set());
   const workflowPhaseCursorRef = useRef<SessionWorkflowPhaseCursorSnapshot | null>(null);
+  const queuedPromptDispatchingRef = useRef(false);
+  const currentRunAiConfigRef = useRef<{
+    provider: string;
+    modelName: string;
+    modeName: string;
+  }>({
+    provider: "",
+    modelName: "",
+    modeName: "",
+  });
 
   // 描述：停止当前会话流式渲染调度，避免会话切换后残留异步刷新。
   const stopStreamTypingTimer = () => {
@@ -4849,13 +5715,14 @@ export function SessionPage({
       if (String(current.summary || "").trim() === normalizedTargetText) {
         return prev;
       }
+      const syncedMeta = syncAssistantRunMetaTimeline("", {
+        ...current,
+        summary: normalizedTargetText,
+        summarySource: undefined,
+      });
       return {
         ...prev,
-        [messageId]: {
-          ...current,
-          summary: normalizedTargetText,
-          summarySource: undefined,
-        },
+        [messageId]: syncedMeta,
       };
     });
   };
@@ -5000,12 +5867,13 @@ export function SessionPage({
           },
         };
       });
+      const syncedMeta = syncAssistantRunMetaTimeline("", {
+        ...current,
+        segments: normalizeAssistantRunSegments([...normalizedSegments, segment]),
+      });
       const nextRunMetaMap = {
         ...prev,
-        [messageId]: {
-          ...current,
-          segments: normalizeAssistantRunSegments([...normalizedSegments, segment]),
-        },
+        [messageId]: syncedMeta,
       };
       assistantRunMetaMapRef.current = nextRunMetaMap;
       return nextRunMetaMap;
@@ -5018,6 +5886,27 @@ export function SessionPage({
   useEffect(() => {
     assistantRunMetaMapRef.current = assistantRunMetaMap;
   }, [assistantRunMetaMap]);
+
+  // 描述：
+  //
+  //   - 同步等待队列 ref，供自动调度器与会话切换清理逻辑读取最新待执行项。
+  useEffect(() => {
+    queuedPromptsRef.current = queuedPrompts;
+  }, [queuedPrompts]);
+
+  // 描述：
+  //
+  //   - 若当前编辑中的等待项已被删除或消费，自动退出编辑态并清空输入框的“更新”语义。
+  useEffect(() => {
+    if (!editingQueuedPromptId) {
+      return;
+    }
+    const stillExists = queuedPrompts.some((item) => item.id === editingQueuedPromptId);
+    if (stillExists) {
+      return;
+    }
+    setEditingQueuedPromptId("");
+  }, [editingQueuedPromptId, queuedPrompts]);
 
   // 描述：
   //
@@ -5121,14 +6010,14 @@ export function SessionPage({
       }
       return {
         ...prev,
-        [messageId]: {
+        [messageId]: syncAssistantRunMetaTimeline("", {
           ...current,
           status,
           finishedAt,
           collapsed: status === "finished",
           summary: summary.trim(),
           summarySource,
-        },
+        }),
       };
     });
   };
@@ -5468,16 +6357,16 @@ export function SessionPage({
     }
     sessionMemoryInFlightMessageIdSetRef.current.add(normalizedMessageId);
 
-    const provider = selectedAi?.provider || "codex";
-    const providerApiKey = provider === "codex" || provider === "gemini-cli"
-      ? undefined
-      : String(selectedAi?.keyValue || "").trim() || undefined;
-    const providerModel = supportsProviderModelConfig(provider)
-      ? String(selectedModelName || "").trim() || undefined
-      : undefined;
-    const providerMode = supportsProviderModeConfig(provider)
-      ? String(selectedModeName || "").trim() || undefined
-      : undefined;
+    const {
+      provider,
+      providerApiKey,
+      providerModel,
+      providerMode,
+    } = resolveAiExecutionConfig({
+      providerOverride: currentRunAiConfigRef.current.provider,
+      modelNameOverride: currentRunAiConfigRef.current.modelName,
+      modeNameOverride: currentRunAiConfigRef.current.modeName,
+    });
     const memoryPrompt = buildSessionMemoryExtractionPrompt(
       currentMemory,
       normalizedUserPrompt,
@@ -5691,16 +6580,16 @@ export function SessionPage({
       };
     }
 
-    const provider = selectedAi?.provider || "codex";
-    const providerApiKey = provider === "codex" || provider === "gemini-cli"
-      ? undefined
-      : String(selectedAi?.keyValue || "").trim() || undefined;
-    const providerModel = supportsProviderModelConfig(provider)
-      ? String(selectedModelName || "").trim() || undefined
-      : undefined;
-    const providerMode = supportsProviderModeConfig(provider)
-      ? String(selectedModeName || "").trim() || undefined
-      : undefined;
+    const {
+      provider,
+      providerApiKey,
+      providerModel,
+      providerMode,
+    } = resolveAiExecutionConfig({
+      providerOverride: currentRunAiConfigRef.current.provider,
+      modelNameOverride: currentRunAiConfigRef.current.modelName,
+      modeNameOverride: currentRunAiConfigRef.current.modeName,
+    });
     const summaryPrompt = buildWorkflowExecutionSummaryPrompt(
       workflowName,
       normalizedDigest,
@@ -5928,6 +6817,10 @@ export function SessionPage({
     setTraceRecords([]);
     setDebugFlowRecords([]);
     setAssistantRunMetaMap({});
+    queuedPromptsRef.current = [];
+    setQueuedPrompts([]);
+    setEditingQueuedPromptId("");
+    queuedPromptDispatchingRef.current = false;
     setSessionApprovedToolNames([]);
     workflowPhaseCursorRef.current = null;
     setWorkflowPhaseCursor(null);
@@ -5939,6 +6832,11 @@ export function SessionPage({
     setSending(false);
     setPendingDangerousPrompt("");
     setPendingDangerousToken("");
+    currentRunAiConfigRef.current = {
+      provider: "",
+      modelName: "",
+      modeName: "",
+    };
     if (!sessionId) {
       // 描述：新建会话时不注入默认欢迎语，仅保留空线程与输入框。
       setMessages([]);
@@ -5960,6 +6858,9 @@ export function SessionPage({
         .map((toolName) => normalizeApprovalToolName(String(toolName || "")))
         .filter((toolName) => Boolean(toolName))
       : [];
+    const restoredQueuedPrompts = Array.isArray(runSnapshot?.queuedPrompts)
+      ? runSnapshot.queuedPrompts
+      : [];
     const restoredWorkflowPhaseCursor = runSnapshot?.workflowPhaseCursor && typeof runSnapshot.workflowPhaseCursor === "object"
       ? {
         workflowId: String(runSnapshot.workflowPhaseCursor.workflowId || "").trim(),
@@ -5974,6 +6875,8 @@ export function SessionPage({
       }
       : null;
     setSessionApprovedToolNames(Array.from(new Set(restoredSessionApprovedToolNames)));
+    queuedPromptsRef.current = restoredQueuedPrompts;
+    setQueuedPrompts(restoredQueuedPrompts);
     workflowPhaseCursorRef.current = restoredWorkflowPhaseCursor;
     setWorkflowPhaseCursor(restoredWorkflowPhaseCursor);
     let nextMessages: MessageItem[] = stored.length > 0 ? stored : [];
@@ -6024,7 +6927,12 @@ export function SessionPage({
     }
     if (runSnapshot && runSnapshot.runMetaMap && Object.keys(runSnapshot.runMetaMap).length > 0) {
       normalizedRunMetaMap = Object.fromEntries(
-        Object.entries(runSnapshot.runMetaMap).map(([messageId, meta]) => [messageId, normalizePersistedRunMeta(meta)]),
+        Object.entries(runSnapshot.runMetaMap).map(([messageId, meta]) => {
+          const fallbackMessageText = String(
+            nextMessages.find((item) => item.role === "assistant" && String(item.id || "").trim() === String(messageId || "").trim())?.text || "",
+          ).trim();
+          return [messageId, normalizePersistedRunMeta(meta, fallbackMessageText)];
+        }),
       );
       setAssistantRunMetaMap(normalizedRunMetaMap);
       const recoveredMessageId = String(runSnapshot.activeMessageId || "").trim()
@@ -6033,7 +6941,6 @@ export function SessionPage({
       if (recoveredMessageId) {
         const recoveredMeta = normalizedRunMetaMap[recoveredMessageId];
         const recoveredText = resolveRecoveredAssistantMessageText(nextMessages, recoveredMessageId, recoveredMeta);
-        nextMessages = upsertAssistantMessageById(nextMessages, recoveredMessageId, recoveredText);
         streamMessageIdRef.current = recoveredMessageId;
         streamDisplayedTextRef.current = recoveredText;
         streamLatestTextRef.current = recoveredText;
@@ -6090,6 +6997,7 @@ export function SessionPage({
       ));
       if (
         Object.keys(assistantRunMetaMapRef.current).length === 0
+        && queuedPromptsRef.current.length === 0
         && normalizedSessionApprovedToolNames.length === 0
         && !workflowPhaseCursorRef.current
       ) {
@@ -6102,6 +7010,7 @@ export function SessionPage({
         activeMessageId: String(streamMessageIdRef.current || "").trim(),
         sending: sendingRef.current,
         runMetaMap: assistantRunMetaMapRef.current,
+        queuedPrompts: queuedPromptsRef.current,
         sessionApprovedToolNames: normalizedSessionApprovedToolNames,
         workflowPhaseCursor: workflowPhaseCursorRef.current,
         updatedAt: Date.now(),
@@ -6148,6 +7057,7 @@ export function SessionPage({
     ));
     if (
       Object.keys(assistantRunMetaMap).length === 0
+      && queuedPrompts.length === 0
       && normalizedSessionApprovedToolNames.length === 0
       && !workflowPhaseCursor
     ) {
@@ -6166,6 +7076,7 @@ export function SessionPage({
         activeMessageId: String(streamMessageIdRef.current || "").trim(),
         sending,
         runMetaMap: assistantRunMetaMap,
+        queuedPrompts,
         sessionApprovedToolNames: normalizedSessionApprovedToolNames,
         workflowPhaseCursor,
         updatedAt: Date.now(),
@@ -6179,6 +7090,7 @@ export function SessionPage({
     hydratedSessionKey,
     messagesHydrated,
     normalizedAgentKey,
+    queuedPrompts,
     sending,
     sessionApprovedToolNames,
     sessionId,
@@ -6639,7 +7551,6 @@ export function SessionPage({
             2,
           ),
         );
-        setStreamingAssistantTarget(cancelledSummary);
         finishAssistantRunMessage(streamMessageIdRef.current, "finished", cancelledSummary, "system");
         setStatus(cancelledSummary);
         setSending(false);
@@ -6671,7 +7582,6 @@ export function SessionPage({
             },
           );
         }
-        setStreamingAssistantTarget(agentStreamTextBufferRef.current);
         return;
       }
       if (payload.kind === STREAM_KINDS.ERROR) {
@@ -6700,7 +7610,6 @@ export function SessionPage({
               },
             );
           }
-          setStreamingAssistantTarget(cancelledSummary);
           finishAssistantRunMessage(streamMessageIdRef.current, "finished", cancelledSummary, "system");
           setStatus(cancelledSummary);
           setSending(false);
@@ -6729,7 +7638,6 @@ export function SessionPage({
             },
           );
         }
-        setStreamingAssistantTarget(errorSummary);
         finishAssistantRunMessage(streamMessageIdRef.current, "failed", errorSummary, "failure");
         setStatus(errorSummary);
         setSending(false);
@@ -7012,7 +7920,21 @@ export function SessionPage({
       }
     }
 
-    const provider = selectedAi?.provider || "codex";
+    const {
+      provider,
+      providerApiKey,
+      providerModel,
+      providerMode,
+    } = resolveAiExecutionConfig({
+      providerOverride: options?.providerOverride,
+      modelNameOverride: options?.modelNameOverride,
+      modeNameOverride: options?.modeNameOverride,
+    });
+    currentRunAiConfigRef.current = {
+      provider,
+      modelName: providerModel || "",
+      modeName: providerMode || "",
+    };
     const activeWorkflowName = activeWorkflow?.name || resolvedSessionUiConfig.workflowFallbackLabel;
     const activeWorkflowId = activeWorkflow?.id || "";
     const outputDir = undefined;
@@ -7215,7 +8137,7 @@ export function SessionPage({
             ]);
           return {
             ...prev,
-            [streamMessageId]: {
+            [streamMessageId]: syncAssistantRunMetaTimeline("", {
               status: "running",
               startedAt: shouldPreserveExistingWorkflowSegments && currentMeta
                 ? currentMeta.startedAt
@@ -7225,7 +8147,7 @@ export function SessionPage({
               summary: "",
               summarySource: undefined,
               segments,
-            },
+            }),
           };
         });
         if (activeWorkflow && currentStageItem && totalWorkflowStageCount > 0) {
@@ -7313,15 +8235,9 @@ export function SessionPage({
           agentKey: normalizedAgentKey,
           sessionId,
           provider,
-          providerApiKey: provider === "codex" || provider === "gemini-cli"
-            ? undefined
-            : String(selectedAi?.keyValue || "").trim() || undefined,
-          providerModel: supportsProviderModelConfig(provider)
-            ? String(selectedModelName || "").trim() || undefined
-            : undefined,
-          providerMode: supportsProviderModeConfig(provider)
-            ? String(selectedModeName || "").trim() || undefined
-            : undefined,
+          providerApiKey,
+          providerModel,
+          providerMode,
           prompt: agentPrompt,
           traceId: stageTraceId,
           projectName: title,
@@ -7616,7 +8532,6 @@ export function SessionPage({
           ),
         );
         if (streamMessageIdRef.current) {
-          setStreamingAssistantTarget(cancelledSummary);
           finishAssistantRunMessage(streamMessageIdRef.current, "finished", cancelledSummary, "system");
         }
         setStatus(cancelledSummary);
@@ -7673,7 +8588,6 @@ export function SessionPage({
       }
       if (streamMessageIdRef.current) {
         const failedAssistantReply = t("执行失败：{{reason}}", { reason });
-        setStreamingAssistantTarget(t("执行失败：{{reason}}", { reason }));
         finishAssistantRunMessage(
           streamMessageIdRef.current,
           "failed",
@@ -7828,8 +8742,16 @@ export function SessionPage({
   };
 
   const sendMessage = async () => {
-    const content = input.trim();
-    if (!content || sending) {
+    const content = String(input || "").trim();
+    if (!content) {
+      return;
+    }
+    if (editingQueuedPromptId) {
+      await handleCommitQueuedPromptEdit();
+      return;
+    }
+    if (sending || hasPendingExecutionBlocker) {
+      enqueueQueuedPrompt(content);
       return;
     }
     await executePrompt(content, { allowDangerousAction: false, appendUserMessage: true });
@@ -8052,7 +8974,6 @@ export function SessionPage({
       await invoke(COMMANDS.CANCEL_AGENT_SESSION, { sessionId });
       const cancelledSummary = t("任务已取消（用户主动终止）");
       if (streamMessageIdRef.current) {
-        setStreamingAssistantTarget(cancelledSummary);
         finishAssistantRunMessage(streamMessageIdRef.current, "finished", cancelledSummary, "system");
       }
       setStatus(cancelledSummary);
@@ -8065,8 +8986,12 @@ export function SessionPage({
     }
   };
 
-  // 描述：统一处理输入区主按钮动作，空闲时发送消息，执行中时触发取消。
+  // 描述：统一处理输入区主按钮动作；编辑等待项时优先更新，执行中保留取消，其余场景按发送/入队逻辑处理。
   const handlePromptPrimaryAction = () => {
+    if (editingQueuedPromptId) {
+      void handleCommitQueuedPromptEdit();
+      return;
+    }
     if (sending) {
       void handleCancelCurrentRun();
       return;
@@ -8139,10 +9064,10 @@ export function SessionPage({
           });
           return [
             messageId,
-            {
+            syncAssistantRunMetaTimeline("", {
               ...meta,
               segments: nextSegments,
-            },
+            }),
           ] as const;
         }),
       ),
@@ -8187,10 +9112,10 @@ export function SessionPage({
           });
           return [
             messageId,
-            {
+            syncAssistantRunMetaTimeline("", {
               ...meta,
               segments: nextSegments,
-            },
+            }),
           ] as const;
         }),
       ),
@@ -8583,6 +9508,197 @@ export function SessionPage({
       title: workflowPhaseCursor.currentNodeTitle || t("未命名阶段"),
     })
     : t("会话内任务计划会随执行自动更新。");
+  const hasPendingExecutionBlocker = Boolean(
+    activeApprovalId
+    || activeUserInputRequestId
+    || pendingDccSelection
+    || dependencyRuleConfirmState,
+  );
+
+  // 描述：
+  //
+  //   - 基于当前输入区与执行选择构建等待队列快照，确保入队后仍按原 AI / 工作流 / 技能策略运行。
+  const buildCurrentQueuedPromptSnapshot = useCallback(() => {
+    const currentAiConfig = resolveAiExecutionConfig();
+    return buildQueuedPromptExecutionSnapshot({
+      provider: currentAiConfig.provider,
+      modelName: currentAiConfig.providerModel || "",
+      modeName: currentAiConfig.providerMode || "",
+      executionSelection,
+      workflowId: activeSelectedWorkflowId,
+      skillIds: activeSelectedSkillIds,
+      workspaceId: String(activeWorkspace?.id || "").trim(),
+      resolvedDccSoftware: selectedDccSoftware,
+    });
+  }, [
+    activeSelectedSkillIds,
+    activeSelectedWorkflowId,
+    activeWorkspace?.id,
+    executionSelection,
+    resolveAiExecutionConfig,
+    selectedDccSoftware,
+  ]);
+
+  // 描述：
+  //
+  //   - 把当前输入内容加入等待队列；只持久化到当前会话运行态，不提前写入 transcript。
+  const enqueueQueuedPrompt = useCallback((prompt: string) => {
+    const normalizedPrompt = String(prompt || "").trim();
+    if (!normalizedPrompt) {
+      return;
+    }
+    const nextItem = buildQueuedPromptItem(
+      normalizedPrompt,
+      buildCurrentQueuedPromptSnapshot(),
+    );
+    setQueuedPrompts((prev) => [...prev, nextItem]);
+    setEditingQueuedPromptId("");
+    setInput("");
+    setStatus(t("已加入等待队列"));
+  }, [buildCurrentQueuedPromptSnapshot, t]);
+
+  // 描述：
+  //
+  //   - 把等待项内容加载到输入框，进入“更新等待项”语义；策略快照保持不变。
+  const handleEditQueuedPrompt = useCallback((queueItemId: string) => {
+    const normalizedQueueItemId = String(queueItemId || "").trim();
+    const targetItem = queuedPrompts.find((item) => item.id === normalizedQueueItemId);
+    if (!targetItem) {
+      return;
+    }
+    setEditingQueuedPromptId(normalizedQueueItemId);
+    setInput(targetItem.prompt);
+    setStatus(t("已载入等待项，修改后可更新"));
+  }, [queuedPrompts, t]);
+
+  // 描述：
+  //
+  //   - 提交对等待项文本的更新；只改正文与更新时间，不改变队列顺序和策略快照。
+  const handleCommitQueuedPromptEdit = useCallback(async () => {
+    const normalizedQueueItemId = String(editingQueuedPromptId || "").trim();
+    const normalizedPrompt = String(input || "").trim();
+    if (!normalizedQueueItemId || !normalizedPrompt) {
+      return;
+    }
+    setQueuedPrompts((prev) => prev.map((item) => (
+      item.id === normalizedQueueItemId
+        ? {
+          ...item,
+          prompt: normalizedPrompt,
+          updatedAt: Date.now(),
+        }
+        : item
+    )));
+    setEditingQueuedPromptId("");
+    setInput("");
+    setStatus(t("已更新等待项"));
+  }, [editingQueuedPromptId, input, t]);
+
+  // 描述：
+  //
+  //   - 删除指定等待项；若当前正在编辑同一项，则一并退出编辑态。
+  const handleDeleteQueuedPrompt = useCallback((queueItemId: string) => {
+    const normalizedQueueItemId = String(queueItemId || "").trim();
+    if (!normalizedQueueItemId) {
+      return;
+    }
+    setQueuedPrompts((prev) => removeQueuedPromptItemById(prev, normalizedQueueItemId));
+    if (editingQueuedPromptId === normalizedQueueItemId) {
+      setEditingQueuedPromptId("");
+      setInput("");
+    }
+    setStatus(t("已删除等待项"));
+  }, [editingQueuedPromptId, t]);
+
+  // 描述：
+  //
+  //   - 调整等待队列顺序；首版仅提供显式上移、下移、置顶，避免拖拽引入额外复杂度。
+  const handleReorderQueuedPrompt = useCallback((
+    queueItemId: string,
+    action: "top" | "up" | "down",
+  ) => {
+    const normalizedQueueItemId = String(queueItemId || "").trim();
+    if (!normalizedQueueItemId) {
+      return;
+    }
+    setQueuedPrompts((prev) => reorderQueuedPromptItems(prev, normalizedQueueItemId, action));
+    setStatus(t("已调整等待顺序"));
+  }, [t]);
+
+  // 描述：
+  //
+  //   - 立即开始指定等待项；若当前仍在执行，则先取消当前执行并把目标项标记为抢占优先。
+  const handleStartQueuedPromptNow = useCallback((queueItemId: string) => {
+    const normalizedQueueItemId = String(queueItemId || "").trim();
+    if (!normalizedQueueItemId) {
+      return;
+    }
+    setQueuedPrompts((prev) => markQueuedPromptItemPreempting(prev, normalizedQueueItemId));
+    if (editingQueuedPromptId === normalizedQueueItemId) {
+      setEditingQueuedPromptId("");
+      setInput("");
+    }
+    setStatus(t("正在中断当前执行并切换"));
+    if (sendingRef.current) {
+      void handleCancelCurrentRun();
+    }
+  }, [editingQueuedPromptId, handleCancelCurrentRun, t]);
+
+  // 描述：
+  //
+  //   - 消费指定等待项并启动真实执行；只有在正式开跑时才补写用户消息与运行轨迹。
+  const runQueuedPromptItem = useCallback(async (item: SessionQueuedPromptItem) => {
+    const normalizedQueueItemId = String(item.id || "").trim();
+    const normalizedPrompt = String(item.prompt || "").trim();
+    if (!normalizedQueueItemId || !normalizedPrompt) {
+      return;
+    }
+    setQueuedPrompts((prev) => removeQueuedPromptItemById(prev, normalizedQueueItemId));
+    if (editingQueuedPromptId === normalizedQueueItemId) {
+      setEditingQueuedPromptId("");
+      setInput("");
+    }
+    setStatus(t("当前执行结束，开始处理等待项"));
+    const queueOptions = resolveQueuedPromptExecuteOptions(item);
+    await executePromptDirect(
+      normalizedPrompt,
+      queueOptions,
+    );
+  }, [editingQueuedPromptId, executePromptDirect, t]);
+
+  // 描述：
+  //
+  //   - 当前执行收敛后自动消费等待队列；仅在没有审批、用户提问、DCC 选择或依赖确认阻断时触发。
+  useEffect(() => {
+    if (!sessionId || !messagesHydrated || hydratedSessionKey !== sessionStorageKey) {
+      return;
+    }
+    if (queuedPromptDispatchingRef.current || sending || hasPendingExecutionBlocker || isActiveWorkspacePathMissing) {
+      return;
+    }
+    const nextItem = pickNextQueuedPromptItem(queuedPrompts);
+    if (!nextItem) {
+      return;
+    }
+    queuedPromptDispatchingRef.current = true;
+    void (async () => {
+      try {
+        await runQueuedPromptItem(nextItem);
+      } finally {
+        queuedPromptDispatchingRef.current = false;
+      }
+    })();
+  }, [
+    hasPendingExecutionBlocker,
+    hydratedSessionKey,
+    isActiveWorkspacePathMissing,
+    messagesHydrated,
+    queuedPrompts,
+    runQueuedPromptItem,
+    sending,
+    sessionId,
+    sessionStorageKey,
+  ]);
 
   // 描述：
   //
@@ -9243,43 +10359,6 @@ const handleConfirmWorkflowSkillModal = () => {
     }, null, 2), "json");
   };
 
-  // 描述：规范化运行片段标题，兼容历史“泛化标题”并输出更具体的排查语义。
-  //
-  // Params:
-  //
-  //   - intro: 原始片段标题。
-  //   - step: 原始片段步骤描述。
-  //
-  // Returns:
-  //
-  //   - 规范化后的片段标题。
-  const normalizeRunSegmentIntroForCopy = (intro: string, step: string) => {
-    const normalizedIntro = String(intro || "").trim();
-    const normalizedStep = String(step || "").trim();
-    if (!normalizedIntro) {
-      return t("执行片段");
-    }
-    if (normalizedIntro === t("正在处理当前步骤")) {
-      if (normalizedStep.includes("provider=") && normalizedStep.includes("started")) {
-        return t("模型开始生成脚本");
-      }
-      if (normalizedStep.includes("provider=") && normalizedStep.includes("finished")) {
-        return t("模型脚本生成完成");
-      }
-      return t("步骤处理中");
-    }
-    if (normalizedIntro === t("当前步骤已完成")) {
-      if (normalizedStep.includes("provider=") && normalizedStep.includes("finished")) {
-        return t("模型脚本生成完成");
-      }
-      return t("步骤执行完成");
-    }
-    if (normalizedIntro === t("智能体正在思考")) {
-      return t("规划执行策略");
-    }
-    return normalizedIntro;
-  };
-
   // 描述：判断运行片段是否属于排查价值较低的噪声信息，复制时自动过滤。
   //
   // Params:
@@ -9330,118 +10409,84 @@ const handleConfirmWorkflowSkillModal = () => {
         return [];
       }
       const messageKey = String(message.id || `message-${index}`);
-      const dividerTitle = runMeta.status === "failed"
-        ? t("执行中断，用时 {{duration}}", { duration: formatElapsedDuration(runMeta.startedAt, runMeta.finishedAt) })
-        : t("已完成，用时 {{duration}}", { duration: formatElapsedDuration(runMeta.startedAt, runMeta.finishedAt) });
-      const failureSummary = runMeta.status === "failed"
-        ? buildAssistantFailureSummary(runMeta.summary || message.text)
-        : null;
-      const visibleBodyText = resolveVisibleAssistantBodyText(message.text, runMeta);
-      const runSegmentsForRender: AssistantRunSegment[] = (() => {
-        const normalizedRenderSegments = normalizeAssistantRunSegments(runMeta.segments);
-        const normalizedSegments = normalizedRenderSegments
-          .map((segment) => {
-            const intro = isInitialThinkingSegment(segment)
-              ? ""
-              : normalizeRunSegmentIntroForCopy(segment.intro, segment.step);
-            const step = String(segment.step || "").trim() || t("（空步骤）");
-            return {
-              ...segment,
-              intro,
-              step,
-            };
-          })
-          .filter((segment) => !shouldHideRunSegmentInCopy(segment.intro, segment.step, segment.status));
-        if (normalizedSegments.length > 0) {
-          return normalizedSegments;
-        }
-        if (runMeta.status === "running") {
-          return [{
-            key: `fallback-running-${messageKey}`,
-            intro: t("执行进行中"),
-            step: t("等待执行状态回传…"),
-            status: "running",
-          }];
-        }
-        const fallbackStep = String(runMeta.summary || message.text || "").trim()
-          || t("（本轮未记录可展示的执行片段）");
-        return [{
-          key: `fallback-summary-${messageKey}`,
-          intro: t("执行过程摘要"),
-          step: fallbackStep,
-          status: runMeta.status === "failed" ? "failed" : "finished",
-        }];
-      })();
+      const renderableTimeline = resolveRenderableAssistantRunTimeline(message.text, runMeta);
+      const visibleTimeline = resolveVisibleAssistantRunTimeline(
+        renderableTimeline,
+        Boolean(runMeta.collapsed),
+        runMeta.status,
+      );
       const hasPendingApprovalInRender = runMeta.status === "running"
-        && runSegmentsForRender.some(
-          (segment) => segment.status === "running" && isApprovalPendingSegment(segment),
-        );
+        && renderableTimeline.some((item) => {
+          if (item.kind !== "structured") {
+            return false;
+          }
+          const payloadData = item.payload.data && typeof item.payload.data === "object"
+            ? (item.payload.data as Record<string, unknown>)
+            : undefined;
+          return item.status === "running" && isApprovalPendingSegment({
+            key: item.id,
+            intro: String(item.payload.intro || ""),
+            step: String(item.payload.text || ""),
+            status: item.status,
+            detail: String(item.payload.detail || ""),
+            data: payloadData,
+          });
+        });
       const hasPendingUserInputInRender = runMeta.status === "running"
-        && runSegmentsForRender.some(
-          (segment) => segment.status === "running" && isUserInputPendingSegment(segment),
-        );
-      const runSegmentGroups = buildRunSegmentGroups(runSegmentsForRender);
+        && renderableTimeline.some((item) => {
+          if (item.kind !== "structured") {
+            return false;
+          }
+          const payloadData = item.payload.data && typeof item.payload.data === "object"
+            ? (item.payload.data as Record<string, unknown>)
+            : undefined;
+          return item.status === "running" && isUserInputPendingSegment({
+            key: item.id,
+            intro: String(item.payload.intro || ""),
+            step: String(item.payload.text || ""),
+            status: item.status,
+            detail: String(item.payload.detail || ""),
+            data: payloadData,
+          });
+        });
       const runningIndicatorText = resolveRunningIndicatorText(message.text, runMeta);
-      const visibleGroups = runMeta.status === "running" || !runMeta.collapsed
-        ? runSegmentGroups.map((group) => {
-          if (group.kind === "divider") {
-            return {
-              kind: "divider",
-              title: group.title,
-            };
-          }
+      const visibleTimelineItems = visibleTimeline.map((item) => {
+        if (item.kind === "structured") {
+          const detailKey = `${messageKey}:${item.id}`;
+          const detailExpanded = Boolean(expandedRunSegmentDetailMap[detailKey]);
           return {
-            kind: group.kind,
-            title: group.title,
-            steps: group.steps.map((step) => {
-              const segmentKeyPrefix = runMeta.status === "running" ? "" : "collapsed-";
-              const detailKey = `${messageKey}:${segmentKeyPrefix}${step.key}`;
-              const detailExpanded = Boolean(expandedRunSegmentDetailMap[detailKey]);
-              return {
-                key: step.key,
-                status: step.status,
-                text: step.text,
-                data: step.data,
-                detail_expanded: detailExpanded,
-                detail: detailExpanded ? step.detail : undefined,
-              };
-            }),
+            kind: item.kind,
+            seq: item.seq,
+            status: item.status,
+            intro: String(item.payload.intro || "").trim() || undefined,
+            key: item.id,
+            text: String(item.payload.text || "").trim() || undefined,
+            data: item.payload.data,
+            detail_expanded: detailExpanded,
+            detail: detailExpanded ? String(item.payload.detail || "").trim() || undefined : undefined,
           };
-        })
-        : [];
-      const visibleSummary = runMeta.status === "failed" && failureSummary
-        ? {
-          type: "failure" as const,
-          title: t("执行失败"),
-          detail: failureSummary.detail,
-          hint: failureSummary.hint,
-          action_label: t("重试本轮"),
         }
-        : runMeta.summarySource === "ai"
-          && String(runMeta.summary || "").trim()
-          && String(runMeta.summary || "").trim() !== visibleBodyText
-          ? {
-            type: "markdown" as const,
-            content: runMeta.summary,
-          }
-          : undefined;
+        return {
+          kind: item.kind,
+          seq: item.seq,
+          status: item.status,
+          payload: item.payload,
+        };
+      });
       return [{
         message_index: index + 1,
         message_id: message.id,
         status: runMeta.status,
         started_at: formatSessionCopyTime(runMeta.startedAt),
         finished_at: formatSessionCopyTime(runMeta.finishedAt),
-        visible_body: visibleBodyText || undefined,
-        divider_title: runMeta.status === "running" ? undefined : dividerTitle,
         collapsed: runMeta.status === "running" ? undefined : runMeta.collapsed,
-        visible_groups: visibleGroups,
+        visible_timeline: visibleTimelineItems,
         running_indicator: runMeta.status === "running"
           && !hasPendingApprovalInRender
           && !hasPendingUserInputInRender
           && runningIndicatorText
           ? runningIndicatorText
           : undefined,
-        visible_summary: visibleSummary,
       }];
     });
   };
@@ -9629,6 +10674,15 @@ const handleConfirmWorkflowSkillModal = () => {
       void handleDeleteSessionByHeaderMenu();
     }
   };
+  const editingQueuedPrompt = editingQueuedPromptId
+    ? queuedPrompts.find((item) => item.id === editingQueuedPromptId) || null
+    : null;
+  const promptPrimaryActionIcon = editingQueuedPrompt ? "check" : sending ? "pause" : "arrow_upward";
+  const promptPrimaryActionAriaLabel = editingQueuedPrompt
+    ? t("更新等待项")
+    : sending
+      ? t("取消当前执行")
+      : t("发送");
 
   const sessionHeaderNode = (
     <AriContainer className="desk-session-head-wrap" padding={0} data-tauri-drag-region>
@@ -9966,71 +11020,51 @@ const handleConfirmWorkflowSkillModal = () => {
               const useRunLayout =
                 message.role === "assistant" && Boolean(runMeta);
               const messageKey = String(message.id || `message-${index}`);
-              const dividerTitle = runMeta
-                ? runMeta.status === "failed"
-                    ? t("执行中断，用时 {{duration}}", { duration: formatElapsedDuration(runMeta.startedAt, runMeta.finishedAt) })
-                  : t("已完成，用时 {{duration}}", { duration: formatElapsedDuration(runMeta.startedAt, runMeta.finishedAt) })
-                : "";
-              const failureSummary = runMeta?.status === "failed"
-                ? buildAssistantFailureSummary(runMeta.summary || message.text)
-                : null;
-              const visibleAssistantBodyText = runMeta
-                ? resolveVisibleAssistantBodyText(message.text, runMeta)
-                : "";
-              const visibleRunSummaryText = runMeta?.summarySource === "ai"
-                ? String(runMeta.summary || "").trim() !== visibleAssistantBodyText
-                  ? String(runMeta.summary || "").trim()
-                  : ""
-                : "";
-              const runSegmentsForRender: AssistantRunSegment[] = runMeta
-                ? (() => {
-                  const normalizedRenderSegments = normalizeAssistantRunSegments(runMeta.segments);
-                  const normalizedSegments = normalizedRenderSegments
-                    .map((segment) => {
-                      const intro = isInitialThinkingSegment(segment)
-                        ? ""
-                        : normalizeRunSegmentIntroForCopy(segment.intro, segment.step);
-                      const step = String(segment.step || "").trim() || t("（空步骤）");
-                      return {
-                        ...segment,
-                        intro,
-                        step,
-                      };
-                    })
-                    .filter((segment) => !shouldHideRunSegmentInCopy(segment.intro, segment.step, segment.status));
-                  if (normalizedSegments.length > 0) {
-                    return normalizedSegments;
-                  }
-                  if (runMeta.status === "running") {
-                    return [{
-                      key: `fallback-running-${messageKey}`,
-                      intro: t("执行进行中"),
-                      step: t("等待执行状态回传…"),
-                      status: "running",
-                    }];
-                  }
-                  const fallbackStep = String(runMeta.summary || message.text || "").trim()
-                    || t("（本轮未记录可展示的执行片段）");
-                  return [{
-                    key: `fallback-summary-${messageKey}`,
-                    intro: t("执行过程摘要"),
-                    step: fallbackStep,
-                    status: runMeta.status === "failed" ? "failed" : "finished",
-                  }];
-                })()
+              const renderableTimeline = runMeta
+                ? resolveRenderableAssistantRunTimeline(message.text, runMeta)
+                : [];
+              const visibleTimeline = runMeta
+                ? resolveVisibleAssistantRunTimeline(
+                  renderableTimeline,
+                  Boolean(runMeta.collapsed),
+                  runMeta.status,
+                )
                 : [];
               const hasPendingApprovalInRender = runMeta?.status === "running"
-                && runSegmentsForRender.some(
-                  (segment) => segment.status === "running" && isApprovalPendingSegment(segment),
-                );
+                && renderableTimeline.some((item) => {
+                  if (item.kind !== "structured") {
+                    return false;
+                  }
+                  return item.status === "running" && isApprovalPendingSegment({
+                    key: item.id,
+                    intro: String(item.payload.intro || ""),
+                    step: String(item.payload.text || ""),
+                    status: item.status,
+                    detail: String(item.payload.detail || ""),
+                    data: item.payload.data && typeof item.payload.data === "object"
+                      ? (item.payload.data as Record<string, unknown>)
+                      : undefined,
+                  });
+                });
               const hasPendingUserInputInRender = runMeta?.status === "running"
-                && runSegmentsForRender.some(
-                  (segment) => segment.status === "running" && isUserInputPendingSegment(segment),
-                );
-              const runSegmentGroups = buildRunSegmentGroups(runSegmentsForRender);
+                && renderableTimeline.some((item) => {
+                  if (item.kind !== "structured") {
+                    return false;
+                  }
+                  return item.status === "running" && isUserInputPendingSegment({
+                    key: item.id,
+                    intro: String(item.payload.intro || ""),
+                    step: String(item.payload.text || ""),
+                    status: item.status,
+                    detail: String(item.payload.detail || ""),
+                    data: item.payload.data && typeof item.payload.data === "object"
+                      ? (item.payload.data as Record<string, unknown>)
+                      : undefined,
+                  });
+                });
               const runningIndicatorText = resolveRunningIndicatorText(message.text, runMeta);
-              const renderRunSegment = (segment: AssistantRunSegmentStep, segmentKeyPrefix = "") => {
-                const segmentDomKey = `${segmentKeyPrefix}${segment.key}`;
+              const renderRunSegment = (segment: AssistantRunSegmentStep) => {
+                const segmentDomKey = segment.key;
                 const detailKey = `${messageKey}:${segmentDomKey}`;
                 const detailExpanded = Boolean(expandedRunSegmentDetailMap[detailKey]);
                 return (
@@ -10047,47 +11081,105 @@ const handleConfirmWorkflowSkillModal = () => {
                   />
                 );
               };
-              const renderRunSegmentGroup = (group: AssistantRunSegmentGroup, segmentKeyPrefix = "") => {
-                if (group.kind === "divider") {
+              const renderRunTimelineItem = (item: AssistantRunTimelineItem) => {
+                if (item.kind === "markdown") {
+                  return (
+                    <AriContainer key={item.id} className="desk-run-body" padding={0}>
+                      <ChatMarkdown content={String(item.payload.content || "")} />
+                    </AriContainer>
+                  );
+                }
+                if (item.kind === "divider") {
                   return (
                     <AriContainer
-                      key={`${segmentKeyPrefix}${group.key}`}
+                      key={item.id}
                       className="desk-run-divider desk-run-divider-static desk-run-stage-divider"
                       padding={0}
                     >
                       <span className="desk-run-divider-line" />
                       <span className="desk-run-divider-text">
-                        {group.title}
+                        {String(item.payload.title || "")}
                       </span>
                       <span className="desk-run-divider-line" />
                     </AriContainer>
                   );
                 }
+                if (item.kind === "card") {
+                  return (
+                    <AriContainer
+                      key={item.id}
+                      className={`desk-run-summary ${item.status === "failed" ? "desk-run-summary-failed" : ""}`}
+                      padding={0}
+                    >
+                      <AriContainer className="desk-run-failure-card">
+                        <AriFlex className="desk-run-failure-head" align="center" space={8}>
+                          <AriIcon name="error" />
+                          <AriTypography
+                            variant="h4"
+                            value={String(item.payload.title || t("执行失败"))}
+                          />
+                        </AriFlex>
+                        {String(item.payload.detail || "").trim() ? (
+                          <AriTypography
+                            className="desk-run-failure-detail"
+                            variant="caption"
+                            value={String(item.payload.detail || "")}
+                          />
+                        ) : null}
+                        {String(item.payload.hint || "").trim() ? (
+                          <AriTypography
+                            className="desk-run-failure-hint"
+                            variant="caption"
+                            value={String(item.payload.hint || "")}
+                          />
+                        ) : null}
+                        {item.status === "failed" ? (
+                          <AriFlex className="desk-run-failure-actions" justify="flex-end" space={8}>
+                            <AriButton
+                              size="sm"
+                              icon="refresh"
+                              label={String(item.payload.action_label || t("重试本轮"))}
+                              disabled={sending}
+                              onClick={() => {
+                                void handleRetryAssistantMessage(index);
+                              }}
+                            />
+                          </AriFlex>
+                        ) : null}
+                      </AriContainer>
+                    </AriContainer>
+                  );
+                }
+                const structuredStep: AssistantRunSegmentStep = {
+                  key: item.id,
+                  status: item.status,
+                  text: String(item.payload.text || ""),
+                  detail: String(item.payload.detail || ""),
+                  data: item.payload.data && typeof item.payload.data === "object"
+                    ? (item.payload.data as Record<string, unknown>)
+                    : undefined,
+                };
+                const intro = String(item.payload.intro || "").trim();
                 return (
-                  <AriContainer key={`${segmentKeyPrefix}${group.key}`} className="desk-run-group" padding={0}>
-                    {String(group.title || "").trim() ? (
+                  <AriContainer key={item.id} className="desk-run-group" padding={0}>
+                    {intro ? (
                       <AriTypography
                         className="desk-run-intro"
                         variant="body"
-                        value={group.title}
+                        value={intro}
                       />
                     ) : null}
                     <AriContainer className="desk-run-group-steps" padding={0}>
-                      {group.steps.map((step) => renderRunSegment(step, segmentKeyPrefix))}
+                      {renderRunSegment(structuredStep)}
                     </AriContainer>
                   </AriContainer>
                 );
               };
               const messageContent = useRunLayout && runMeta ? (
                 <AriContainer className="desk-run-flow" padding={0}>
-                  {visibleAssistantBodyText ? (
-                    <AriContainer className="desk-run-body" padding={0}>
-                      <ChatMarkdown content={visibleAssistantBodyText} />
-                    </AriContainer>
-                  ) : null}
                   {runMeta.status === "running" ? (
                     <AriContainer className="desk-run-segments" padding={0}>
-                      {runSegmentGroups.map((group) => renderRunSegmentGroup(group))}
+                      {visibleTimeline.map((item) => renderRunTimelineItem(item))}
                       {!hasPendingApprovalInRender && !hasPendingUserInputInRender && runningIndicatorText ? (
                         <AriContainer className="desk-run-thinking-indicator" padding={0}>
                           <AriTypography
@@ -10111,7 +11203,7 @@ const handleConfirmWorkflowSkillModal = () => {
                       >
                         <span className="desk-run-divider-line" />
                         <span className="desk-run-divider-text">
-                          {dividerTitle}
+                          {t("执行轨迹")}
                         </span>
                         <span
                           className={`desk-run-divider-arrow ${runMeta.collapsed ? "" : "open"}`}
@@ -10120,46 +11212,9 @@ const handleConfirmWorkflowSkillModal = () => {
                         </span>
                         <span className="desk-run-divider-line" />
                       </button>
-                      {!runMeta.collapsed ? (
+                      {visibleTimeline.length > 0 ? (
                         <AriContainer className="desk-run-segments desk-run-segments-collapsed" padding={0}>
-                          {runSegmentGroups.map((group) => renderRunSegmentGroup(group, "collapsed-"))}
-                        </AriContainer>
-                      ) : null}
-                      {(runMeta.status === "failed" && failureSummary) || visibleRunSummaryText ? (
-                        <AriContainer className={`desk-run-summary ${runMeta.status === "failed" ? "desk-run-summary-failed" : ""}`} padding={0}>
-                          {runMeta.status === "failed" && failureSummary ? (
-                          <AriContainer className="desk-run-failure-card">
-                            <AriFlex className="desk-run-failure-head" align="center" space={8}>
-                              <AriIcon name="error" />
-                              <AriTypography variant="h4" value={t("执行失败")} />
-                            </AriFlex>
-                            <AriTypography
-                              className="desk-run-failure-detail"
-                              variant="caption"
-                              value={failureSummary.detail}
-                            />
-                            <AriTypography
-                              className="desk-run-failure-hint"
-                              variant="caption"
-                              value={failureSummary.hint}
-                            />
-                            <AriFlex className="desk-run-failure-actions" justify="flex-end" space={8}>
-                              <AriButton
-                                size="sm"
-                                icon="refresh"
-                                label={t("重试本轮")}
-                                disabled={sending}
-                                onClick={() => {
-                                  void handleRetryAssistantMessage(index);
-                                }}
-                              />
-                            </AriFlex>
-                          </AriContainer>
-                        ) : (
-                          <ChatMarkdown
-                            content={visibleRunSummaryText}
-                          />
-                        )}
+                          {visibleTimeline.map((item) => renderRunTimelineItem(item))}
                         </AriContainer>
                       ) : null}
                     </>
@@ -10242,6 +11297,132 @@ const handleConfirmWorkflowSkillModal = () => {
         </AriContainer>
 
         <AriContainer className="desk-prompt-dock">
+          {queuedPrompts.length > 0 ? (
+            <AriCard className="desk-action-slot desk-action-slot-info desk-action-slot-queue">
+              <AriFlex align="center" justify="space-between" className="desk-session-queue-head">
+                <AriTypography variant="h4" value={t("等待队列")} />
+                <AriTypography
+                  variant="caption"
+                  value={t("共 {{count}} 项", { count: queuedPrompts.length })}
+                />
+              </AriFlex>
+              <AriTypography
+                variant="caption"
+                value={editingQueuedPrompt
+                  ? t("正在编辑等待项")
+                  : t("当前执行结束后会自动继续处理。")}
+              />
+              <AriList
+                bordered
+                size="sm"
+                className="desk-session-queue-list"
+                emptyMessage={t("当前暂无等待项")}
+              >
+                {queuedPrompts.map((item, index) => (
+                  <AriListItem
+                    key={item.id}
+                    split={false}
+                    className={`desk-session-queue-item${item.status === "preempting" ? " is-preempting" : ""}${editingQueuedPromptId === item.id ? " is-editing" : ""}`}
+                  >
+                    <AriContainer className="desk-session-queue-item-body" padding={0}>
+                      <AriFlex
+                        align="center"
+                        justify="space-between"
+                        className="desk-session-queue-item-head"
+                      >
+                        <AriTypography
+                          className="desk-session-queue-item-strategy"
+                          variant="caption"
+                          value={resolveQueuedPromptStrategyLabel(item, workflows, availableSkills, t)}
+                        />
+                        <AriTypography
+                          className={`desk-session-queue-item-status desk-session-queue-item-status-${item.status}`}
+                          variant="caption"
+                          value={item.status === "preempting" ? t("即将开始") : t("等待中")}
+                        />
+                      </AriFlex>
+                      <AriTypography
+                        className="desk-session-queue-item-preview"
+                        variant="body"
+                        value={item.prompt}
+                      />
+                      <AriFlex
+                        align="center"
+                        className="desk-session-queue-item-actions"
+                        space={8}
+                      >
+                        <AriButton
+                          ghost
+                          size="sm"
+                          icon="play_arrow"
+                          label={t("立即开始")}
+                          onClick={() => {
+                            handleStartQueuedPromptNow(item.id);
+                          }}
+                        />
+                        <AriButton
+                          ghost
+                          size="sm"
+                          icon="edit"
+                          label={t("编辑")}
+                          onClick={() => {
+                            handleEditQueuedPrompt(item.id);
+                          }}
+                        />
+                        <AriTooltip content={t("置顶")} position="top">
+                          <AriButton
+                            ghost
+                            size="sm"
+                            icon="vertical_align_top"
+                            aria-label={t("置顶")}
+                            disabled={index === 0}
+                            onClick={() => {
+                              handleReorderQueuedPrompt(item.id, "top");
+                            }}
+                          />
+                        </AriTooltip>
+                        <AriTooltip content={t("上移")} position="top">
+                          <AriButton
+                            ghost
+                            size="sm"
+                            icon="arrow_upward"
+                            aria-label={t("上移")}
+                            disabled={index === 0}
+                            onClick={() => {
+                              handleReorderQueuedPrompt(item.id, "up");
+                            }}
+                          />
+                        </AriTooltip>
+                        <AriTooltip content={t("下移")} position="top">
+                          <AriButton
+                            ghost
+                            size="sm"
+                            icon="arrow_downward"
+                            aria-label={t("下移")}
+                            disabled={index >= queuedPrompts.length - 1}
+                            onClick={() => {
+                              handleReorderQueuedPrompt(item.id, "down");
+                            }}
+                          />
+                        </AriTooltip>
+                        <AriTooltip content={t("删除")} position="top">
+                          <AriButton
+                            ghost
+                            size="sm"
+                            icon="delete"
+                            aria-label={t("删除等待项")}
+                            onClick={() => {
+                              handleDeleteQueuedPrompt(item.id);
+                            }}
+                          />
+                        </AriTooltip>
+                      </AriFlex>
+                    </AriContainer>
+                  </AriListItem>
+                ))}
+              </AriList>
+            </AriCard>
+          ) : null}
           {activeApprovalSegment ? (
             <AriCard className="desk-action-slot desk-action-slot-warning">
                 <AriFlex align="center" space={8}>
@@ -10656,7 +11837,8 @@ const handleConfirmWorkflowSkillModal = () => {
                 type="default"
                 color="brand"
                 shape="round"
-                icon={sending ? "pause" : "arrow_upward"}
+                icon={promptPrimaryActionIcon}
+                aria-label={promptPrimaryActionAriaLabel}
                 className="desk-prompt-icon-btn"
                 disabled={!sending && isActiveWorkspacePathMissing}
                 onClick={handlePromptPrimaryAction}

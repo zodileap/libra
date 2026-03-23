@@ -144,12 +144,19 @@ test("TestSessionPageShouldRenderCollapsibleRunDividerAndSummary", () => {
 
   // 描述:
   //
-  //   - 执行完成后应渲染可点击的用时分割线，并在其下展示总结内容。
+  //   - 执行完成后应渲染中性的折叠控件，具体内容统一走单一时间线，不能再拆成顶部正文和底部总结。
   //   - 工作流阶段正文应保留在运行日志与 agent context 中，但不应被当成独立 transcript 消息置顶渲染。
   assert.match(source, /className=\"desk-run-divider\"/);
   assert.match(source, /className=\"desk-run-divider desk-run-divider-static desk-run-stage-divider\"/);
-  assert.match(source, /formatElapsedDuration\(runMeta.startedAt, runMeta.finishedAt\)/);
-  assert.match(source, /className=\{`desk-run-summary/);
+  assert.match(source, /\{t\("执行轨迹"\)\}/);
+  assert.match(source, /function buildAssistantRunTimelineState\(/);
+  assert.match(source, /function resolveRenderableAssistantRunTimeline\(/);
+  assert.match(source, /function resolveVisibleAssistantRunTimeline\(/);
+  assert.match(source, /const renderableTimeline = runMeta\s*\?\s*resolveRenderableAssistantRunTimeline\(message\.text, runMeta\)\s*:\s*\[\];/);
+  assert.match(source, /const visibleTimeline = runMeta\s*\?\s*resolveVisibleAssistantRunTimeline\(/s);
+  assert.match(source, /visibleTimeline\.map\(\(item\) => renderRunTimelineItem\(item\)\)/);
+  assert.match(source, /if \(item\.kind === "markdown"\) \{/);
+  assert.match(source, /if \(item\.kind === "card"\) \{/);
   assert.match(source, /control\?: "continue" \| "done";/);
   assert.match(source, /display_message\?: string;/);
   assert.match(source, /const responseDisplayMessage = sanitizeWorkflowStageDisplayMessage\(/);
@@ -183,11 +190,12 @@ test("TestSessionPageShouldRenderCollapsibleRunDividerAndSummary", () => {
   assert.match(messagesSource, /"已记录当前阶段结果。": "已记录当前阶段结果。"/);
   assert.match(source, /const workflowSummaryResult = workflowCompletionDigest\s*\?\s*await requestWorkflowExecutionSummary\(/s);
   assert.match(source, /finishAssistantRunMessage\(\s*streamMessageId,\s*"finished",\s*workflowSummaryResult\.summary,\s*workflowSummaryResult\.summarySource,\s*\)/s);
-  assert.match(source, /const visibleRunSummaryText = runMeta\?\.summarySource === "ai"/);
-  assert.match(source, /String\(runMeta\.summary \|\| ""\)\.trim\(\)/);
-  assert.match(source, /String\(runMeta\.summary \|\| ""\)\.trim\(\) !== visibleAssistantBodyText/);
-  assert.match(source, /content=\{visibleRunSummaryText\}/);
+  assert.match(source, /const visibleRunSummaryText = resolveVisibleCompletedRunSummaryText\(normalizedMessageText,\s*runMeta\);/);
+  assert.match(source, /content:\s*visibleRunSummaryText,/);
+  assert.match(source, /visible_timeline: visibleTimelineItems,/);
   assert.doesNotMatch(source, /visible_summary:\s*\{\s*type:\s*"markdown",\s*content:\s*runMeta\.summary \|\| message\.text/s);
+  assert.doesNotMatch(source, /const visibleAssistantBodyText = runMeta\s*\?\s*resolveVisibleAssistantBodyText\(message\.text, runMeta\)\s*:\s*"";/);
+  assert.doesNotMatch(source, /content=\{visibleRunSummaryText\}/);
   assert.doesNotMatch(source, /finishAssistantRunMessage\(streamMessageId, "finished", t\("执行过程已完成。"\)\);/);
   assert.match(styleSource, /\.desk-run-stage-divider/);
   assert.match(styleSource, /\.desk-run-divider-static/);
@@ -306,14 +314,15 @@ test("TestSessionPageShouldSupportActiveCancelAndCancelledStream", () => {
   // 描述:
   //
   //   - 会话页在发送中应支持主动停止，并处理 cancelled 终态事件，避免误标记为失败。
-  //   - 输入区主按钮需复用“发送/取消”动作，发送中显示暂停图标，不再显示 loading 或独立停止按钮。
+  //   - 输入区主按钮需复用“更新等待项 / 发送 / 取消”动作，发送中显示暂停图标，不再显示 loading 或独立停止按钮。
   assert.match(source, /const handleCancelCurrentRun = async \(\) =>/);
   assert.match(source, /const handlePromptPrimaryAction = \(\) => \{/);
-  assert.match(source, /if \(sending\) \{\s*void handleCancelCurrentRun\(\);\s*return;\s*\}\s*void sendMessage\(\);/s);
+  assert.match(source, /if \(editingQueuedPromptId\) \{\s*void handleCommitQueuedPromptEdit\(\);\s*return;\s*\}\s*if \(sending\) \{\s*void handleCancelCurrentRun\(\);\s*return;\s*\}\s*void sendMessage\(\);/s);
   assert.match(source, /await invoke\(COMMANDS\.CANCEL_AGENT_SESSION, \{ sessionId \}\)/);
   assert.match(source, /STREAM_KINDS\.CANCELLED/);
   assert.match(source, /isCancelErrorCode/);
-  assert.match(source, /icon=\{sending \? "pause" : "arrow_upward"\}/);
+  assert.match(source, /const promptPrimaryActionIcon = editingQueuedPrompt \? "check" : sending \? "pause" : "arrow_upward";/);
+  assert.match(source, /icon=\{promptPrimaryActionIcon\}/);
   assert.doesNotMatch(source, /icon=\{sending \? "hourglass_top" : "arrow_upward"\}/);
   assert.doesNotMatch(source, /icon="stop"/);
 });
@@ -341,9 +350,10 @@ test("TestTauriShouldExposeCancelAgentSessionCommand", () => {
 
   // 描述:
   //
-  //   - Tauri 层应暴露主动取消会话命令；runtime 服务需真正记录取消态、重置沙盒，并向前端派发 cancelled 事件与统一取消错误码。
-  assert.match(source, /async fn cancel_agent_session\(app: tauri::AppHandle, session_id: String\)/);
-  assert.match(source, /runtime[\s\S]*?\.cancel_run\(session_id\.as_str\(\)\)/s);
+  //   - Tauri 层应暴露主动取消会话命令，并向前端派发 cancelled 事件与统一取消错误码。
+  assert.match(source, /async fn cancel_agent_session\(app: tauri::AppHandle, session_id: String\) -> Result<bool, String>/);
+  assert.match(source, /runtime\s*\.cancel_run\(session_id\.as_str\(\)\)/s);
+  assert.match(source, /emit_agent_text_stream_event\(/);
   assert.match(source, /kind: "cancelled"\.to_string\(\)/);
   assert.match(source, /"core\.agent\.request_cancelled"/);
   assert.match(source, /cancel_agent_session,/);
@@ -362,6 +372,7 @@ test("TestTauriShouldRejectEmptyAgentRunResultPayload", () => {
   assert.match(source, /fn runtime_result_to_desktop_response\(value: runtime::AgentRunResult\) -> AgentRunResponse \{/);
   assert.match(source, /message: value\.message,/);
   assert.doesNotMatch(source, /执行完成（工具调用 \{\} 次）/);
+  assert.match(source, /if normalized_message\.is_empty\(\) && response\.actions\.is_empty\(\) \{/);
 });
 
 test("TestDevDebugFloatShouldUseCompactCopyFirstPanel", () => {
