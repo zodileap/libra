@@ -658,6 +658,33 @@ interface AgentRequestUserInputEventData {
 
 // 描述：
 //
+//   - 定义长驻进程状态事件的最小字段结构，统一承接 resident_process_state 的桥接数据。
+interface AgentResidentProcessStateEventData {
+  process_id?: string;
+  name?: string;
+  status?: string;
+  pid?: number;
+  exit_code?: number | null;
+  started_at_ms?: number;
+  last_output_at_ms?: number | null;
+  uptime_secs?: number;
+  workdir?: string;
+}
+
+// 描述：
+//
+//   - 定义长驻进程日志事件的最小字段结构，统一承接 resident_process_log 的桥接数据。
+interface AgentResidentProcessLogEventData {
+  process_id?: string;
+  name?: string;
+  stream?: string;
+  text?: string;
+  sequence?: number;
+  timestamp_ms?: number;
+}
+
+// 描述：
+//
 //   - 定义单题草稿状态；同一题只能二选一：预设选项或自由填写。
 interface AgentUserInputDraftAnswer {
   selectedOptionIndex?: number;
@@ -2222,6 +2249,25 @@ function isTerminalTool(toolName: string): boolean {
 
 // 描述：
 //
+//   - 判断工具是否属于“长驻进程”控制族，避免 tool_call_* 片段与 resident_process_* 流事件重复渲染。
+//
+// Params:
+//
+//   - toolName: 工具名。
+//
+// Returns:
+//
+//   - true: 长驻进程类工具。
+function isResidentProcessTool(toolName: string): boolean {
+  return toolName === "shell_start"
+    || toolName === "shell_status"
+    || toolName === "shell_logs"
+    || toolName === "shell_stop"
+    || toolName === "shell_list";
+}
+
+// 描述：
+//
 //   - 判断工具是否属于“任务计划”步骤类型。
 //
 // Params:
@@ -2627,6 +2673,53 @@ function resolveUserInputEventData(payload: AgentTextStreamEvent): AgentRequestU
 
 // 描述：
 //
+//   - 解析文本流中的长驻进程状态 data 结构，统一提取状态快照字段。
+function resolveResidentProcessStateEventData(
+  payload: AgentTextStreamEvent,
+): AgentResidentProcessStateEventData {
+  if (!payload.data || typeof payload.data !== "object") {
+    return {};
+  }
+  const data = payload.data as Record<string, unknown>;
+  return {
+    process_id: typeof data.process_id === "string" ? data.process_id : undefined,
+    name: typeof data.name === "string" ? data.name : undefined,
+    status: typeof data.status === "string" ? data.status : undefined,
+    pid: Number.isFinite(Number(data.pid)) ? Number(data.pid) : undefined,
+    exit_code: data.exit_code == null || Number.isFinite(Number(data.exit_code))
+      ? (data.exit_code == null ? null : Number(data.exit_code))
+      : undefined,
+    started_at_ms: Number.isFinite(Number(data.started_at_ms)) ? Number(data.started_at_ms) : undefined,
+    last_output_at_ms: data.last_output_at_ms == null || Number.isFinite(Number(data.last_output_at_ms))
+      ? (data.last_output_at_ms == null ? null : Number(data.last_output_at_ms))
+      : undefined,
+    uptime_secs: Number.isFinite(Number(data.uptime_secs)) ? Number(data.uptime_secs) : undefined,
+    workdir: typeof data.workdir === "string" ? data.workdir : undefined,
+  };
+}
+
+// 描述：
+//
+//   - 解析文本流中的长驻进程日志 data 结构，统一提取日志片段字段。
+function resolveResidentProcessLogEventData(
+  payload: AgentTextStreamEvent,
+): AgentResidentProcessLogEventData {
+  if (!payload.data || typeof payload.data !== "object") {
+    return {};
+  }
+  const data = payload.data as Record<string, unknown>;
+  return {
+    process_id: typeof data.process_id === "string" ? data.process_id : undefined,
+    name: typeof data.name === "string" ? data.name : undefined,
+    stream: typeof data.stream === "string" ? data.stream : undefined,
+    text: typeof data.text === "string" ? data.text : undefined,
+    sequence: Number.isFinite(Number(data.sequence)) ? Number(data.sequence) : undefined,
+    timestamp_ms: Number.isFinite(Number(data.timestamp_ms)) ? Number(data.timestamp_ms) : undefined,
+  };
+}
+
+// 描述：
+//
 //   - 构建用户提问片段 data，只保留跨页面恢复与导出所需关键字段。
 function buildUserInputSegmentData(payload: AgentTextStreamEvent): Record<string, unknown> {
   const resolved = resolveUserInputEventData(payload);
@@ -2882,6 +2975,50 @@ function resolveStreamErrorCode(payload: AgentTextStreamEvent): string {
   return typeof data.code === "string" ? data.code : "";
 }
 
+// 描述：
+//
+//   - 为长驻进程状态构建用户可见步骤文案，统一处理 running/exited/stopped 等状态差异。
+function buildResidentProcessStateStepText(
+  data: AgentResidentProcessStateEventData,
+): string {
+  const processName = String(data.name || "").trim() || translateDesktopText("长驻进程");
+  const status = String(data.status || "").trim();
+  if (status === "starting") {
+    return translateDesktopText("正在启动 {{name}}", { name: processName });
+  }
+  if (status === "running") {
+    return translateDesktopText("{{name}} 正在运行", { name: processName });
+  }
+  if (status === "stopped") {
+    return translateDesktopText("{{name}} 已停止", { name: processName });
+  }
+  if (status === "exited") {
+    const exitCode = Number.isFinite(Number(data.exit_code)) ? Number(data.exit_code) : undefined;
+    if (typeof exitCode === "number") {
+      return translateDesktopText("{{name}} 已退出（{{code}}）", {
+        name: processName,
+        code: String(exitCode),
+      });
+    }
+    return translateDesktopText("{{name}} 已退出", { name: processName });
+  }
+  return translateDesktopText("已同步 {{name}} 状态", { name: processName });
+}
+
+// 描述：
+//
+//   - 规整长驻进程日志片段的可读文本，供运行流详情连续追加。
+function buildResidentProcessLogLine(
+  data: AgentResidentProcessLogEventData,
+): string {
+  const stream = String(data.stream || "stdout").trim().toUpperCase();
+  const text = String(data.text || "").trim();
+  if (!text) {
+    return "";
+  }
+  return `[${stream}] ${text}`;
+}
+
 // 描述：把智能体文本流事件映射为“说明 + 步骤”结构，用于统一的进行中轨迹渲染。
 //
 // Params:
@@ -2933,6 +3070,9 @@ function mapAgentTextStreamToRunSegment(
   if (payload.kind === STREAM_KINDS.TOOL_CALL_STARTED) {
     const data = resolveToolCallEventData(payload);
     const toolName = String(data.name || "").trim();
+    if (isResidentProcessTool(toolName)) {
+      return null;
+    }
     if (isBrowserTool(toolName)) {
       return {
         key: segmentKey,
@@ -2993,6 +3133,10 @@ function mapAgentTextStreamToRunSegment(
     const runOk = data.ok !== false;
     const argsData = data.args_data || {};
     const resultData = data.result_data || {};
+
+    if (isResidentProcessTool(toolName)) {
+      return null;
+    }
 
     if (toolName === "request_user_input") {
       return null;
@@ -3242,6 +3386,74 @@ function mapAgentTextStreamToRunSegment(
         __segment_kind: payload.kind,
         __step_type: "undefined",
         tool_name: toolName,
+      },
+    };
+  }
+
+  if (payload.kind === STREAM_KINDS.RESIDENT_PROCESS_STATE) {
+    const data = resolveResidentProcessStateEventData(payload);
+    const residentProcessId = String(data.process_id || "").trim();
+    if (!residentProcessId) {
+      return null;
+    }
+    const processName = String(data.name || "").trim() || translateDesktopText("长驻进程");
+    const processStatus = String(data.status || "").trim();
+    const detail = truncateRunText(
+      JSON.stringify(
+        {
+          process_id: residentProcessId,
+          name: processName,
+          status: processStatus,
+          pid: data.pid,
+          exit_code: data.exit_code,
+          uptime_secs: data.uptime_secs,
+          workdir: data.workdir,
+        },
+        null,
+        2,
+      ),
+      64000,
+    );
+    return {
+      key: segmentKey,
+      intro: translateDesktopText("长驻进程"),
+      step: buildResidentProcessStateStepText(data),
+      status: processStatus === "exited" || processStatus === "stopped" ? "finished" : "running",
+      detail,
+      data: {
+        __segment_kind: payload.kind,
+        __step_type: "resident_process",
+        resident_process_id: residentProcessId,
+        resident_process_name: processName,
+        resident_process_status: processStatus,
+        resident_process_stream: "",
+        resident_process_log_text: "",
+      },
+    };
+  }
+
+  if (payload.kind === STREAM_KINDS.RESIDENT_PROCESS_LOG) {
+    const data = resolveResidentProcessLogEventData(payload);
+    const residentProcessId = String(data.process_id || "").trim();
+    const processName = String(data.name || "").trim() || translateDesktopText("长驻进程");
+    const logLine = buildResidentProcessLogLine(data);
+    if (!residentProcessId || !logLine) {
+      return null;
+    }
+    return {
+      key: segmentKey,
+      intro: translateDesktopText("长驻进程"),
+      step: translateDesktopText("正在输出 {{name}} 日志", { name: processName }),
+      status: "running",
+      detail: truncateRunText(logLine, 64000),
+      data: {
+        __segment_kind: payload.kind,
+        __step_type: "resident_process",
+        resident_process_id: residentProcessId,
+        resident_process_name: processName,
+        resident_process_status: "running",
+        resident_process_stream: String(data.stream || "").trim(),
+        resident_process_log_text: logLine,
       },
     };
   }
@@ -4277,6 +4489,7 @@ function resolveAssistantRunStageByAgentTextStream(payload: AgentTextStreamEvent
   if (
     kind.includes("tool")
     || kind.includes("call")
+    || kind.includes("resident_process")
     || kind.includes("execute")
     || kind === "llm_started"
   ) {
@@ -5743,6 +5956,55 @@ export function SessionPage({
         && !isInitialThinkingSegment(segment)
         ? []
         : current.segments;
+      const segmentData = segment.data && typeof segment.data === "object"
+        ? segment.data as Record<string, unknown>
+        : {};
+      const residentProcessId = String(segmentData.resident_process_id || "").trim();
+      const isResidentProcessSegment = segmentData.__step_type === "resident_process" && residentProcessId;
+      if (isResidentProcessSegment) {
+        const residentIndex = baseSegments.findLastIndex((item) => {
+          const itemData = item.data && typeof item.data === "object"
+            ? item.data as Record<string, unknown>
+            : {};
+          return itemData.__step_type === "resident_process"
+            && String(itemData.resident_process_id || "").trim() === residentProcessId;
+        });
+        if (residentIndex >= 0) {
+          const existingSegment = baseSegments[residentIndex];
+          const existingData = existingSegment.data && typeof existingSegment.data === "object"
+            ? existingSegment.data as Record<string, unknown>
+            : {};
+          const incomingLogText = String(segmentData.resident_process_log_text || "").trim();
+          const existingDetail = String(existingSegment.detail || "").trim();
+          const mergedDetail = incomingLogText
+            ? (existingDetail.includes(incomingLogText)
+              ? existingDetail
+              : [existingDetail, incomingLogText].filter(Boolean).join("\n"))
+            : String(segment.detail || existingDetail).trim();
+          const nextSegments = [...baseSegments];
+          nextSegments[residentIndex] = {
+            ...existingSegment,
+            intro: segment.intro || existingSegment.intro,
+            step: segment.step || existingSegment.step,
+            status: segment.status,
+            detail: mergedDetail || undefined,
+            data: {
+              ...existingData,
+              ...segmentData,
+            },
+          };
+          const syncedMeta = syncAssistantRunMetaTimeline("", {
+            ...current,
+            segments: normalizeAssistantRunSegments(nextSegments),
+          });
+          const nextRunMetaMap = {
+            ...prev,
+            [messageId]: syncedMeta,
+          };
+          assistantRunMetaMapRef.current = nextRunMetaMap;
+          return nextRunMetaMap;
+        }
+      }
       const last = baseSegments[baseSegments.length - 1];
       const isDuplicate = Boolean(
         last

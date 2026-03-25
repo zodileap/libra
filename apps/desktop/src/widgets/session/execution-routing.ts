@@ -2,7 +2,10 @@ import type { SessionWorkflowPhaseCursorSnapshot } from "../../shared/data";
 import { translateDesktopText } from "../../shared/i18n";
 import type { AgentWorkflowDefinition, WorkflowGraphNode } from "../../shared/workflow";
 import { normalizeAgentSkillId } from "../../shared/workflow/prompt-guidance";
-import type { SessionExecutionSelection } from "./prompt-utils";
+import {
+  isIndexedShortReplyPrompt,
+  type SessionExecutionSelection,
+} from "./prompt-utils";
 
 // 描述：
 //
@@ -249,6 +252,13 @@ export function resolveSessionExecutionRoute(
         resumeTarget: "workflow_stage",
       };
     }
+  }
+
+  if (isIndexedShortReplyPrompt(normalizedMessageText)) {
+    return {
+      routeKind: "chat",
+      reason: translateDesktopText("检测到数字短回复，将先结合上文候选项做消歧判断。"),
+    };
   }
 
   if (!hasExecutionIntent(normalizedMessageText)) {

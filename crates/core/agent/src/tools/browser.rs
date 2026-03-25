@@ -1279,6 +1279,7 @@ rl.on("line", async (line) => {
             session_id,
             sandbox_root,
             policy,
+            on_stream_event: None,
         }
     }
 

@@ -193,13 +193,14 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(sessionSource, /const finalSummary = resolveFinalAssistantRunSummary\(/);
   assert.doesNotMatch(sessionSource, /finishAssistantRunMessage\(streamMessageId, "finished", t\("执行过程已完成。"\)\);/);
   assert.match(sessionSource, /const hasPendingWorkflowStages = \(\) => \{/);
-  assert.match(sessionSource, /if \(streamMessageIdRef\.current\) \{\s*const failedAssistantReply = t\("执行失败：\{\{reason\}\}", \{ reason \}\);\s*setStreamingAssistantTarget\(t\("执行失败：\{\{reason\}\}", \{ reason \}\)\);\s*finishAssistantRunMessage\(\s*streamMessageIdRef\.current,\s*"failed",\s*failedAssistantReply,\s*"failure",\s*\);/s);
+  assert.match(sessionSource, /if \(streamMessageIdRef\.current\) \{\s*const failedAssistantReply = t\("执行失败：\{\{reason\}\}", \{ reason \}\);\s*finishAssistantRunMessage\(\s*streamMessageIdRef\.current,\s*"failed",\s*failedAssistantReply,\s*"failure",\s*\);/s);
+  assert.doesNotMatch(sessionSource, /const failedAssistantReply = t\("执行失败：\{\{reason\}\}", \{ reason \}\);\s*setStreamingAssistantTarget\(t\("执行失败：\{\{reason\}\}", \{ reason \}\)\);/s);
   assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.STARTED\) \{\s*(?:agentLlmDeltaBufferRef\.current = "";\s*)?(?:setSessionAiResponseRaw\(""\);\s*)?setStreamingAssistantStatusTarget\(t\("正在准备执行\.\.\."\)\);/s);
   assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.LLM_STARTED\) \{\s*(?:agentLlmDeltaBufferRef\.current = "";\s*)?(?:setSessionAiResponseRaw\(""\);\s*)?setStreamingAssistantStatusTarget\(t\("正在生成执行结果…"\)\);/s);
   assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.LLM_FINISHED\) \{/);
   assert.match(sessionSource, /function buildAssistantHeartbeatDisplayText\(/);
   assert.match(sessionSource, /function resolvePlanningDisplayText\(/);
-  assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.PLANNING\) \{\s*const planningText = resolvePlanningDisplayText\(payload\);/s);
+  assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.PLANNING\) \{\s*const planningText = resolvePlanningDisplayText\(payload\);[\s\S]*setStreamingAssistantStatusTarget\(planningText\);/s);
   assert.match(sessionSource, /if \(payload\.kind === STREAM_KINDS\.HEARTBEAT\) \{\s*assistantRunHeartbeatCountRef\.current \+= 1;/s);
   assert.match(sessionSource, /setStreamingAssistantStatusTarget\(heartbeatText\);/);
   assert.match(sessionSource, /if \(\s*payload\.kind === STREAM_KINDS\.DELTA[\s\S]*payload\.kind === STREAM_KINDS\.STARTED[\s\S]*payload\.kind === STREAM_KINDS\.LLM_STARTED[\s\S]*payload\.kind === STREAM_KINDS\.LLM_FINISHED[\s\S]*return null;\s*\}/s);
@@ -272,7 +273,7 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(sessionSource, /function isWorkflowStageDividerSegment\(segment: AssistantRunSegment\): boolean \{/);
   assert.match(sessionSource, /if \(segmentRole === WORKFLOW_STAGE_DIVIDER_SEGMENT_ROLE \|\| isWorkflowStageDividerSegment\(segment\)\) \{/);
   assert.match(sessionSource, /groups\.push\(\{\s*key: `run-group-\$\{groups\.length\}-default`,\s*title: "",\s*kind: "default",/s);
-  assert.match(sessionSource, /\.filter\(\(group\) => group\.kind === "divider" \|\| group\.steps\.length > 0\);/);
+  assert.match(sessionSource, /\.filter\(\(group\) => group\.kind === "divider" \|\| group\.kind === "markdown" \|\| group\.steps\.length > 0\);/);
   assert.match(sessionSource, /const \[sessionApprovedToolNames, setSessionApprovedToolNames\] = useState<string\[\]>\(\[\]\);/);
   assert.match(sessionSource, /const \[workflowPhaseCursor, setWorkflowPhaseCursor\] = useState<SessionWorkflowPhaseCursorSnapshot \| null>\(null\);/);
   assert.match(sessionSource, /const sessionApprovedToolNameSetRef = useRef<Set<string>>\(new Set\(\)\);/);
@@ -356,7 +357,9 @@ test("TestSessionPageShouldProvideWorkflowAndSkillSelectorModal", () => {
   assert.match(sessionSource, /label=\{t\("本次批准"\)\}/);
   assert.match(sessionSource, /label=\{t\("会话内批准"\)\}/);
   assert.match(sessionSource, /label=\{t\("拒绝"\)\}/);
-  assert.match(sessionSource, /String\(group\.title \|\| ""\)\.trim\(\) \? \(/);
+  assert.match(sessionSource, /if \(group\.kind === "markdown"\) \{/);
+  assert.match(sessionSource, /if \(group\.kind === "divider"\) \{/);
+  assert.match(sessionSource, /group\.steps\.forEach\(\(step, stepIndex\) => \{/);
   assert.match(sessionSource, /function isTerminalTool\(/);
   assert.match(sessionSource, /function isEditTool\(/);
   assert.match(sessionSource, /toolName === "todo_write"/);

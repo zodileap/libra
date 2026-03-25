@@ -21,7 +21,6 @@ import {
   getProjectWorkspaceIdBySessionId,
   getLastUsedProjectWorkspaceId,
   getAgentSessionMetaSnapshot,
-  getSessionMessages,
   getSessionRunState,
   isSessionRunning,
   listProjectWorkspaceGroups,
@@ -30,7 +29,6 @@ import {
   renameAgentSession,
   resolveAgentSessionTitle,
   SESSION_RUN_STATE_UPDATED_EVENT,
-  upsertSessionMessages,
   upsertSessionRunState,
   setLastUsedProjectWorkspaceId,
   togglePinnedAgentSession,
@@ -341,150 +339,127 @@ function truncateRunText(value: string, maxChars: number): string {
 
 // 描述：
 //
-//   - 判断运行中文案是否属于泛化占位；后台恢复时若已拿到更具体的进度文本，应避免再次回退到这类占位。
+//   - 根据当前运行态构建后台持久化时间线；侧边栏离线监听期间也必须只写时间线和预览摘要，
+//   - 绝不能再把后发终态文本回写到 messages[*].text 导致会话页顶部错序。
 //
 // Params:
 //
-//   - value: 待判断的运行中文案。
+//   - meta: 当前运行态。
 //
 // Returns:
 //
-//   - true: 属于泛化占位。
-function isGenericSidebarProgressText(value: string): boolean {
-  const normalized = String(value || "").trim();
-  if (!normalized) {
-    return true;
-  }
-  return normalized === translateDesktopText("正在思考…")
-    || normalized === translateDesktopText("正在准备执行...")
-    || normalized === translateDesktopText("正在生成执行结果…")
-    || normalized === translateDesktopText("正在整理输出...")
-    || normalized === translateDesktopText("智能体正在思考…");
-}
-
-// 描述：
-//
-//   - 在侧边栏后台监听中，为指定助手消息覆盖/新增最新文本，保证切到其他页面后返回仍能恢复离开前的真实进度文案。
-//
-// Params:
-//
-//   - messages: 当前会话的已持久化消息列表。
-//   - messageId: 助手消息 ID。
-//   - text: 最新助手文案。
-//
-// Returns:
-//
-//   - 更新后的消息列表。
-function upsertSidebarAssistantMessageById(
-  messages: Array<{ id?: string; role: "user" | "assistant"; text: string }>,
-  messageId: string,
-  text: string,
-): Array<{ id?: string; role: "user" | "assistant"; text: string }> {
-  const normalizedMessageId = String(messageId || "").trim();
-  if (!normalizedMessageId) {
-    return messages;
-  }
-  const normalizedText = String(text || "");
-  let matched = false;
-  const nextMessages = messages.map((item) => {
-    if (String(item.id || "").trim() !== normalizedMessageId) {
-      return item;
+//   - 带 timeline/nextSeq/previewText 的运行态。
+function syncSidebarRunMetaTimeline(meta: SessionRunMeta): SessionRunMeta {
+  const timeline: SessionRunMeta["timeline"] = [];
+  let nextSeq = 1;
+  (meta.segments || []).forEach((segment, index) => {
+    const segmentRole = segment.data && typeof segment.data.__segment_role === "string"
+      ? String(segment.data.__segment_role || "").trim()
+      : "";
+    const intro = String(segment.intro || "").trim();
+    const step = String(segment.step || "").trim();
+    const detail = String(segment.detail || "").trim();
+    if (segmentRole === "round_description" && intro) {
+      timeline.push({
+        id: `timeline-round-${index + 1}`,
+        seq: nextSeq,
+        kind: "markdown",
+        status: "finished",
+        payload: {
+          content: intro,
+        },
+      });
+      nextSeq += 1;
+      return;
     }
-    matched = true;
-    return {
-      ...item,
-      role: "assistant" as const,
-      text: normalizedText,
-    };
-  });
-  if (matched) {
-    return nextMessages;
-  }
-  return [...nextMessages, { id: normalizedMessageId, role: "assistant", text: normalizedText }];
-}
-
-// 描述：
-//
-//   - 根据后台收到的文本流事件推导“当前助手消息文本”；该文本会在离开会话页期间落盘，保证重新进入时与停留在会话页的视觉结果一致。
-//
-// Params:
-//
-//   - payload: 当前文本流事件。
-//   - currentText: 当前已持久化的助手消息文本。
-//   - currentSummary: 当前运行态 summary。
-//
-// Returns:
-//
-//   - 应持久化的助手消息文本。
-function resolveSidebarAssistantMessageText(
-  payload: AgentTextStreamEvent,
-  currentText: string,
-  currentSummary: string,
-  heartbeatCount: number,
-): string {
-  const text = String(payload.message || "").trim();
-  const currentMessageText = String(currentText || "").trim();
-  const summaryText = String(currentSummary || "").trim();
-  if (payload.kind === STREAM_KINDS.STARTED) {
-    return translateDesktopText("正在准备执行...");
-  }
-  if (payload.kind === STREAM_KINDS.LLM_STARTED) {
-    return translateDesktopText("正在生成执行结果…");
-  }
-  if (payload.kind === STREAM_KINDS.LLM_FINISHED) {
-    return text || translateDesktopText("正在整理输出...");
-  }
-  if (payload.kind === STREAM_KINDS.DELTA) {
-    const delta = String(payload.delta || "");
-    if (!delta) {
-      return currentMessageText || summaryText;
-    }
-    const baseText = isGenericSidebarProgressText(currentMessageText) ? "" : currentMessageText;
-    return `${baseText}${delta}`;
-  }
-  if (payload.kind === STREAM_KINDS.FINAL) {
-    return text || currentMessageText || summaryText || translateDesktopText("执行完成");
-  }
-  if (payload.kind === STREAM_KINDS.CANCELLED) {
-    return text || currentMessageText || summaryText || translateDesktopText("任务已取消");
-  }
-  if (payload.kind === STREAM_KINDS.ERROR) {
-    const errorCode = resolveStreamErrorCode(payload);
-    if (isCancelErrorCode(errorCode)) {
-      return text
-        ? translateDesktopText("任务已取消：{{message}}", { message: text })
-        : (currentMessageText || summaryText || translateDesktopText("任务已取消"));
-    }
-    if (text) {
-      return text.startsWith(translateDesktopText("执行失败："))
-        ? text
-        : translateDesktopText("执行失败：{{message}}", { message: text });
-    }
-    return currentMessageText || summaryText || translateDesktopText("执行失败：未知错误");
-  }
-  if (payload.kind === STREAM_KINDS.PLANNING && text.startsWith("__libra_planning__:")) {
-    try {
-      const meta = JSON.parse(text.slice("__libra_planning__:".length).trim()) as Record<string, unknown>;
-      if (meta && typeof meta.text === "string" && String(meta.text || "").trim()) {
-        return truncateRunText(String(meta.text || "").trim(), 300);
+    if (segmentRole === "workflow_stage_divider") {
+      const title = intro || step;
+      if (!title) {
+        return;
       }
-    } catch (_error) {
-      // 描述：后台同步恢复时忽略规划元数据解析失败，继续走兜底文案。
+      timeline.push({
+        id: `timeline-divider-${index + 1}`,
+        seq: nextSeq,
+        kind: "divider",
+        status: "finished",
+        payload: {
+          title,
+        },
+      });
+      nextSeq += 1;
+      return;
     }
-    return currentMessageText || summaryText || translateDesktopText("正在思考…");
-  }
-  if (payload.kind === STREAM_KINDS.HEARTBEAT) {
-    if (text.includes(translateDesktopText("已等待约")) || heartbeatCount <= 1) {
-      return text || currentMessageText || summaryText || translateDesktopText("正在思考…");
+    if (!intro && !step && !detail) {
+      return;
     }
-    const waitedSeconds = Math.max(1, Math.round(heartbeatCount * 1.2));
-    const baseText = text || currentMessageText || summaryText || translateDesktopText("正在思考…");
-    return translateDesktopText("{{message}}（已等待约 {{seconds}} 秒）", {
-      message: baseText,
-      seconds: waitedSeconds,
+    timeline.push({
+      id: `timeline-structured-${index + 1}`,
+      seq: nextSeq,
+      kind: "structured",
+      status: segment.status === "failed"
+        ? "failed"
+        : segment.status === "finished"
+          ? "finished"
+          : "running",
+      payload: {
+        intro,
+        text: step,
+        detail,
+        data: segment.data,
+      },
     });
+    nextSeq += 1;
+  });
+  const summaryText = String(meta.summary || "").trim();
+  if (meta.status === "failed" && summaryText) {
+    timeline.push({
+      id: `timeline-card-${nextSeq}`,
+      seq: nextSeq,
+      kind: "card",
+      status: "failed",
+      payload: {
+        title: translateDesktopText("执行失败"),
+        detail: summaryText.replace(/^执行失败[:：]\s*/u, "").trim() || summaryText,
+        hint: translateDesktopText("请重试，或切换执行策略后再试。"),
+        action_label: translateDesktopText("重试本轮"),
+      },
+    });
+    nextSeq += 1;
+  } else if (summaryText) {
+    timeline.push({
+      id: `timeline-markdown-${nextSeq}`,
+      seq: nextSeq,
+      kind: "markdown",
+      status: meta.status === "failed" ? "failed" : "finished",
+      payload: {
+        content: summaryText,
+      },
+    });
+    nextSeq += 1;
   }
-  return text || currentMessageText || summaryText || translateDesktopText("正在思考…");
+  const previewText = (() => {
+    for (const item of [...timeline].reverse()) {
+      if (item.kind === "card") {
+        return String(item.payload.detail || item.payload.title || "").trim();
+      }
+      if (item.kind === "markdown") {
+        return String(item.payload.content || "").trim();
+      }
+      if (item.kind === "structured") {
+        return String(item.payload.text || item.payload.intro || "").trim();
+      }
+      if (item.kind === "divider") {
+        return String(item.payload.title || "").trim();
+      }
+    }
+    return summaryText;
+  })();
+  return {
+    ...meta,
+    timeline,
+    nextSeq,
+    previewText,
+  };
 }
 
 // 描述：
@@ -2017,17 +1992,17 @@ function AgentSidebar({
       const now = Date.now();
       const snapshot = getSessionRunState("agent", sessionId);
       const activeMessageId = String(snapshot?.activeMessageId || "").trim() || `assistant-stream-${now}`;
-      const storedMessages = getSessionMessages("agent", sessionId);
-      const currentMessageText = String(
-        storedMessages.find((item) => item.role === "assistant" && String(item.id || "").trim() === activeMessageId)?.text || "",
-      ).trim();
       const runMetaMap = { ...(snapshot?.runMetaMap || {}) };
       const baseMeta = runMetaMap[activeMessageId] || {
         status: "running" as const,
         startedAt: now,
         collapsed: false,
         summary: "",
+        summarySource: undefined,
         segments: [],
+        timeline: [],
+        nextSeq: 1,
+        previewText: "",
       };
       let nextMeta: SessionRunMeta = {
         status: baseMeta.status === "failed" ? "failed" : baseMeta.status === "finished" ? "finished" : "running",
@@ -2035,7 +2010,17 @@ function AgentSidebar({
         finishedAt: baseMeta.finishedAt ? Number(baseMeta.finishedAt) : undefined,
         collapsed: Boolean(baseMeta.collapsed),
         summary: String(baseMeta.summary || ""),
+        summarySource: baseMeta.summarySource === "ai"
+          ? "ai"
+          : baseMeta.summarySource === "failure"
+            ? "failure"
+            : baseMeta.summarySource === "system"
+              ? "system"
+              : undefined,
         segments: Array.isArray(baseMeta.segments) ? baseMeta.segments : [],
+        timeline: Array.isArray(baseMeta.timeline) ? baseMeta.timeline : [],
+        nextSeq: Math.max(1, Math.floor(Number(baseMeta.nextSeq || 1))),
+        previewText: String(baseMeta.previewText || ""),
       };
       if (payload.kind === STREAM_KINDS.TOOL_CALL_FINISHED) {
         const toolData = resolveToolCallEventData(payload);
@@ -2061,16 +2046,11 @@ function AgentSidebar({
       if (segment) {
         nextMeta = appendRunSegmentToMeta(nextMeta, segment);
       }
-      if (payload.kind === STREAM_KINDS.DELTA) {
-        const delta = String(payload.delta || "");
-        if (delta) {
-          nextMeta.summary = `${nextMeta.summary}${delta}`;
-        }
-      }
       if (payload.kind === STREAM_KINDS.FINAL) {
         nextMeta.status = "finished";
         nextMeta.finishedAt = now;
         nextMeta.summary = String(payload.message || "").trim() || nextMeta.summary;
+        nextMeta.summarySource = "ai";
         nextSending = false;
       } else if (payload.kind === STREAM_KINDS.FINISHED) {
         nextMeta.status = "finished";
@@ -2080,6 +2060,7 @@ function AgentSidebar({
         nextMeta.status = "finished";
         nextMeta.finishedAt = now;
         nextMeta.summary = String(payload.message || "").trim() || nextMeta.summary || t("任务已取消");
+        nextMeta.summarySource = "system";
         nextSending = false;
       } else if (payload.kind === STREAM_KINDS.ERROR) {
         const errorCode = resolveStreamErrorCode(payload);
@@ -2087,31 +2068,15 @@ function AgentSidebar({
         nextMeta.status = cancelledByError ? "finished" : "failed";
         nextMeta.finishedAt = now;
         nextMeta.summary = String(payload.message || "").trim() || nextMeta.summary;
+        nextMeta.summarySource = cancelledByError ? "system" : "failure";
         nextSending = false;
       } else {
         nextMeta.status = "running";
+        nextMeta.summarySource = undefined;
         nextSending = true;
       }
+      nextMeta = syncSidebarRunMetaTimeline(nextMeta);
       runMetaMap[activeMessageId] = nextMeta;
-      const heartbeatCount = nextMeta.segments.filter((item) => {
-        const segmentKind = item.data && typeof item.data.__segment_kind === "string"
-          ? item.data.__segment_kind
-          : "";
-        return segmentKind === STREAM_KINDS.HEARTBEAT;
-      }).length;
-      const nextMessageText = resolveSidebarAssistantMessageText(
-        payload,
-        currentMessageText,
-        nextMeta.summary,
-        heartbeatCount,
-      );
-      if (payload.kind !== STREAM_KINDS.DELTA && nextMessageText && nextMessageText !== currentMessageText) {
-        upsertSessionMessages({
-          agentKey: "agent",
-          sessionId,
-          messages: upsertSidebarAssistantMessageById(storedMessages, activeMessageId, nextMessageText),
-        });
-      }
       upsertSessionRunState({
         agentKey: "agent",
         sessionId,

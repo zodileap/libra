@@ -98,10 +98,6 @@ impl AgentTool for WriteTextTool {
         "写入文本文件（支持创建不存在的父目录）。参数：{\"path\": \"相对路径\", \"content\": \"完整文件内容\"}"
     }
 
-    fn risk_level(&self) -> crate::tools::RiskLevel {
-        crate::tools::RiskLevel::High
-    }
-
     fn execute(&self, args: &Value, context: ToolContext) -> Result<Value, ProtocolError> {
         let path = get_required_string(args, "path", "core.agent.python.write_text.path_missing")?;
         let content = get_required_raw_string(
@@ -144,10 +140,6 @@ impl AgentTool for WriteJsonTool {
 
     fn description(&self) -> &'static str {
         "将结构化数据写入 JSON 文件。参数：{\"path\": \"相对路径\", \"data\": {\"任意\": \"结构\"}}"
-    }
-
-    fn risk_level(&self) -> crate::tools::RiskLevel {
-        crate::tools::RiskLevel::High
     }
 
     fn execute(&self, args: &Value, context: ToolContext) -> Result<Value, ProtocolError> {
@@ -576,10 +568,6 @@ impl AgentTool for MkdirTool {
 
     fn description(&self) -> &'static str {
         "创建目录，支持自动创建不存在的父目录。参数：{\"path\": \"相对路径\"}"
-    }
-
-    fn risk_level(&self) -> crate::tools::RiskLevel {
-        crate::tools::RiskLevel::High
     }
 
     fn execute(&self, args: &Value, context: ToolContext) -> Result<Value, ProtocolError> {
@@ -1043,14 +1031,26 @@ pub fn parse_search_line(raw_line: &str) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::ToolApprovalDecision;
+    use crate::tools::ToolContext;
+    use serde_json::json;
+    use std::path::Path;
 
-    /// 描述：验证 mkdir 被标记为高风险，确保目录写操作进入审批链路。
+    /// 描述：验证沙盒内目录创建默认可直接执行，不再因为文件写入动作统一进入审批。
     #[test]
-    fn should_mark_mkdir_as_high_risk() {
-        assert!(matches!(
-            MkdirTool.risk_level(),
-            crate::tools::RiskLevel::High
-        ));
+    fn should_allow_mkdir_without_manual_approval() {
+        let policy = crate::policy::AgentPolicy::default();
+        let context = ToolContext {
+            trace_id: "test-trace".to_string(),
+            session_id: "test-session",
+            sandbox_root: Path::new("/tmp/libra-agent-mkdir-approval"),
+            policy: &policy,
+            on_stream_event: None,
+        };
+        assert_eq!(
+            MkdirTool.approval_decision(&json!({"path": "docs/openapi"}), &context),
+            ToolApprovalDecision::Allow
+        );
     }
 
     /// 描述：验证 glob 匹配支持基础星号通配符。

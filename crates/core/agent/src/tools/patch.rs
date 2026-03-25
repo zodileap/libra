@@ -22,10 +22,6 @@ impl AgentTool for ApplyPatchTool {
         "应用 unified diff 补丁到沙盒目录，适合一次修改多个文件。参数：{\"patch\": \"补丁文本\", \"check_only\": false}"
     }
 
-    fn risk_level(&self) -> crate::tools::RiskLevel {
-        crate::tools::RiskLevel::High
-    }
-
     fn execute(&self, args: &Value, context: ToolContext) -> Result<Value, ProtocolError> {
         let patch_text =
             get_required_raw_string(args, "patch", "core.agent.python.apply_patch.patch_missing")?;

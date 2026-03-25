@@ -84,20 +84,21 @@ test("TestSidebarShouldPersistBackgroundSessionProgressText", () => {
 
   // 描述：
   //
-  //   - 离开会话页后，后台流事件应同步写入助手消息文本，而不是只写 run state。
-  assert.match(sidebarSource, /getSessionMessages/);
-  assert.match(sidebarSource, /upsertSessionMessages/);
-  assert.match(sidebarSource, /function upsertSidebarAssistantMessageById\(/);
-  assert.match(sidebarSource, /function resolveSidebarAssistantMessageText\(/);
-  assert.match(sidebarSource, /heartbeatCount: number/);
-  assert.match(sidebarSource, /if \(payload\.kind === STREAM_KINDS\.PLANNING && text\.startsWith\("__libra_planning__:"\)\)/);
-  assert.match(sidebarSource, /const meta = JSON\.parse\(text\.slice\("__libra_planning__:"\.length\)\.trim\(\)\)/);
-  assert.match(sidebarSource, /if \(payload\.kind === STREAM_KINDS\.HEARTBEAT\) \{/);
-  assert.match(sidebarSource, /const waitedSeconds = Math\.max\(1, Math\.round\(heartbeatCount \* 1\.2\)\);/);
-  assert.match(sidebarSource, /const heartbeatCount = nextMeta\.segments\.filter\(\(item\) => \{/);
-  assert.match(sidebarSource, /const storedMessages = getSessionMessages\("agent", sessionId\);/);
-  assert.match(sidebarSource, /const nextMessageText = resolveSidebarAssistantMessageText\(\s*payload,\s*currentMessageText,\s*nextMeta\.summary,\s*heartbeatCount,\s*\);/s);
-  assert.match(sidebarSource, /upsertSessionMessages\(\{\s*agentKey: "agent",\s*sessionId,\s*messages: upsertSidebarAssistantMessageById\(storedMessages, activeMessageId, nextMessageText\),\s*\}\);/s);
+  //   - 离开会话页后，后台流事件只允许更新运行态时间线，禁止再把文本回写到持久化 transcript。
+  assert.match(sidebarSource, /function syncSidebarRunMetaTimeline\(/);
+  assert.match(sidebarSource, /timeline: \[\],/);
+  assert.match(sidebarSource, /nextSeq: 1,/);
+  assert.match(sidebarSource, /previewText: ""/);
+  assert.match(sidebarSource, /nextMeta\.summarySource = "ai";/);
+  assert.match(sidebarSource, /nextMeta\.summarySource = "system";/);
+  assert.match(sidebarSource, /nextMeta\.summarySource = cancelledByError \? "system" : "failure";/);
+  assert.match(sidebarSource, /nextMeta = syncSidebarRunMetaTimeline\(nextMeta\);/);
+  assert.match(sidebarSource, /upsertSessionRunState\(\{\s*agentKey: "agent",\s*sessionId,\s*activeMessageId,\s*sending: nextSending,\s*runMetaMap,\s*updatedAt: now,\s*\}\);/s);
+  assert.doesNotMatch(sidebarSource, /getSessionMessages/);
+  assert.doesNotMatch(sidebarSource, /upsertSessionMessages/);
+  assert.doesNotMatch(sidebarSource, /function upsertSidebarAssistantMessageById\(/);
+  assert.doesNotMatch(sidebarSource, /function resolveSidebarAssistantMessageText\(/);
+  assert.doesNotMatch(sidebarSource, /const nextMessageText = resolveSidebarAssistantMessageText\(/);
 });
 
 test("TestRemoveWorkspaceShouldAlsoRemoveBoundSessions", () => {

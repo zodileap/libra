@@ -139,13 +139,24 @@ fn normalize_todo_session_id(session_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::RiskLevel;
+    use crate::tools::{ToolApprovalDecision, ToolContext};
     use std::path::Path;
 
-    /// 描述：验证 todo_write 作为会话态任务面板写入，不再走高风险审批分支。
+    /// 描述：验证 todo_write 作为会话态任务面板写入，默认不进入人工审批链路。
     #[test]
-    fn should_keep_todo_write_as_low_risk() {
-        assert!(matches!(TodoWriteTool.risk_level(), RiskLevel::Low));
+    fn should_keep_todo_write_as_allow_by_default() {
+        let policy = crate::policy::AgentPolicy::default();
+        let context = ToolContext {
+            trace_id: "test-trace".to_string(),
+            session_id: "test-session",
+            sandbox_root: Path::new("/tmp/libra-agent-todo-approval"),
+            policy: &policy,
+            on_stream_event: None,
+        };
+        assert_eq!(
+            TodoWriteTool.approval_decision(&serde_json::json!({"items": []}), &context),
+            ToolApprovalDecision::Allow
+        );
     }
 
     /// 描述：验证任务清单缓存路径落在系统临时目录，而不是项目工作目录下。

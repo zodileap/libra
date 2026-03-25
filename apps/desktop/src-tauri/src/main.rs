@@ -1501,6 +1501,25 @@ fn run_agent_command_inner(
                                 },
                             );
                         }
+                        "resident_process_state" | "resident_process_log" => {
+                            let event_data = if stream_event.tool_result_data_json.trim().is_empty() {
+                                serde_json::Value::Null
+                            } else {
+                                serde_json::from_str(stream_event.tool_result_data_json.as_str())
+                                    .unwrap_or(serde_json::Value::Null)
+                            };
+                            emit_agent_text_stream_event(
+                                &app,
+                                AgentTextStreamEvent {
+                                    trace_id: trace_id.clone(),
+                                    session_id: Some(normalized_session_id.clone()),
+                                    kind: stream_event.kind.clone(),
+                                    message: stream_event.message.clone(),
+                                    delta: None,
+                                    data: Some(event_data),
+                                },
+                            );
+                        }
                         "cancelled" | "error" => {
                             emit_agent_text_stream_event(
                                 &app,
@@ -4136,7 +4155,7 @@ async fn resolve_agent_user_input(
 }
 
 fn main() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .setup(|app| {
             apply_main_window_effects(app.handle());
             #[cfg(desktop)]
@@ -4186,8 +4205,17 @@ fn main() {
             cancel_agent_session,
             get_agent_sandbox_metrics,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running libra_desktop");
+        .build(tauri::generate_context!())
+        .expect("error while building libra_desktop");
+
+    app.run(|_app_handle, event| {
+        if matches!(
+            event,
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+        ) {
+            libra_agent_core::tools::shell::cleanup_all_resident_processes();
+        }
+    });
 }
 
 #[cfg(test)]

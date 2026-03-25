@@ -57,10 +57,15 @@ test("TestWorkflowExecutionSummaryShouldOnlyUseRealAiSummary", () => {
 
   // 描述：
   //
-  //   - visible_summary 只允许来自真实 AI summary；没有 AI summary 时必须省略。
-  assert.match(sessionSource, /const visibleSummary = runMeta\.status === "failed" && failureSummary/);
-  assert.match(sessionSource, /runMeta\.summarySource === "ai"\s*&& String\(runMeta\.summary \|\| ""\)\.trim\(\)/);
-  assert.match(sessionSource, /String\(runMeta\.summary \|\| ""\)\.trim\(\) !== visibleBodyText/);
-  assert.match(sessionSource, /visible_summary: visibleSummary,/);
+  //   - 运行消息可见内容必须统一进入时间线；总结与失败态都只能作为尾部 terminal item 追加。
+  assert.match(sharedDataSource, /export type SessionRunTimelineItemKind = "markdown" \| "structured" \| "divider" \| "card";/);
+  assert.match(sharedDataSource, /export interface SessionRunTimelineItem \{/);
+  assert.match(sharedDataSource, /timeline: SessionRunTimelineItem\[];/);
+  assert.match(sharedDataSource, /nextSeq: number;/);
+  assert.match(sharedDataSource, /previewText: string;/);
+  assert.match(sessionSource, /function buildAssistantRunTimelineState\(/);
+  assert.match(sessionSource, /if \(runMeta\.status === "failed" && failureSummary\) \{/);
+  assert.match(sessionSource, /\} else if \(visibleRunSummaryText\) \{/);
+  assert.match(sessionSource, /visible_timeline: visibleTimelineItems,/);
   assert.doesNotMatch(sessionSource, /visible_summary:\s*\{\s*type:\s*"markdown",\s*content:\s*runMeta\.summary \|\| message\.text/s);
 });

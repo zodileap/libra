@@ -644,7 +644,7 @@ test("TestMcpRegistryShouldInjectRuntimeIntoUnifiedAgentAndPromptGuidance", () =
   assert.match(constantsSource, /GET_AGENT_RUNTIME_CAPABILITIES: "get_agent_runtime_capabilities"/);
   assert.match(tauriMainSource, /async fn get_agent_runtime_capabilities/);
   assert.match(tauriMainSource, /get_agent_runtime_capabilities_inner/);
-  assert.match(tauriMainSource, /detect_capabilities\(DetectCapabilitiesRequest \{/);
+  assert.match(tauriMainSource, /\.detect_capabilities\(DetectCapabilitiesRequest \{/);
   assert.match(runtimeServerSource, /detect_agent_runtime_capabilities\(mcps\.as_slice\(\)\)/);
   assert.match(tauriMainSource, /runtime_capabilities: Option<AgentRuntimeCapabilities>/);
   assert.match(tauriMainSource, /get_agent_runtime_capabilities,/);
@@ -652,6 +652,7 @@ test("TestMcpRegistryShouldInjectRuntimeIntoUnifiedAgentAndPromptGuidance", () =
   assert.match(tauriMainSource, /list_enabled_mcp_registrations/);
   assert.match(tauriMainSource, /available_mcps:\s*available_mcps/);
   assert.match(tauriMainSource, /runtime_capabilities: Some\(core_runtime_capabilities_to_runtime_payload\(/);
+  assert.match(tauriMainSource, /resolved_runtime_capabilities/);
   assert.match(tauriMainSource, /interactive_mode=/);
 
   // 描述：
@@ -674,7 +675,7 @@ test("TestMcpRegistryShouldInjectRuntimeIntoUnifiedAgentAndPromptGuidance", () =
   assert.match(runtimeCapabilitiesSource, /template_id/);
   assert.match(runtimeCapabilitiesSource, /eq_ignore_ascii_case\("playwright-mcp"\)/);
   assert.match(runtimeCapabilitiesSource, /detect_native_browser_tool_capabilities/);
-  assert.match(runtimeCapabilitiesSource, /build_native_skip_reason/);
+  assert.match(runtimeCapabilitiesSource, /interactive_mode: AgentInteractiveMode::Native/);
   assert.match(coreToolSource, /pub struct McpTool/);
   assert.match(coreToolSource, /fn name\(&self\) -> &'static str \{\n        "mcp_tool"/);
   assert.match(coreToolSource, /tools\/call/);
@@ -686,13 +687,13 @@ test("TestMcpRegistryShouldInjectRuntimeIntoUnifiedAgentAndPromptGuidance", () =
   assert.match(corePromptSource, /mcp_tool/);
   assert.match(corePromptSource, /tool="list_tools"/);
   assert.match(corePromptSource, /build_python_playwright_runtime_prompt_block/);
-  assert.match(corePromptSource, /build_skipped_playwright_interactive_result/);
   assert.match(corePromptSource, /js_repl\/js_repl_reset\/browser_navigate/);
   assert.match(promptGuidanceSource, /mcp_tool/);
   assert.match(promptGuidanceSource, /export interface AgentRuntimeCapabilities/);
   assert.match(promptGuidanceSource, /export const DEFAULT_AGENT_RUNTIME_CAPABILITIES/);
   assert.match(promptGuidanceSource, /buildAgentToolsetLines/);
   assert.match(promptGuidanceSource, /buildPlaywrightInteractiveRuntimePrompt/);
-  assert.match(promptGuidanceSource, /当前阶段必须显式标记为“已跳过”/);
+  assert.match(promptGuidanceSource, /当前环境内建 js_repl 与 browser_\* 原生工具/);
+  assert.doesNotMatch(promptGuidanceSource, /当前阶段必须显式标记为“已跳过”/);
   assert.doesNotMatch(promptGuidanceSource, /mcp_model_tool/);
 });

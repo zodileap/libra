@@ -20,15 +20,15 @@ export interface AgentRuntimeCapabilities {
 
 // 描述：
 //
-//   - 提供稳定的运行时能力默认值；当后端尚未返回真实快照时，前端统一按 none 模式兜底。
+//   - 提供稳定的运行时能力默认值；当后端尚未返回真实快照时，前端默认按 native 模式暴露内建浏览器工具。
 export const DEFAULT_AGENT_RUNTIME_CAPABILITIES: AgentRuntimeCapabilities = {
-  nativeJsRepl: false,
-  nativeBrowserTools: false,
+  nativeJsRepl: true,
+  nativeBrowserTools: true,
   playwrightMcpServerId: "",
   playwrightMcpReady: false,
   playwrightMcpName: "",
-  interactiveMode: "none",
-  skipReason: translateDesktopText("当前环境无原生交互工具且无已启用 Playwright MCP，测试阶段已跳过。"),
+  interactiveMode: "native",
+  skipReason: "",
 };
 
 // 描述：
@@ -47,7 +47,7 @@ function normalizeInteractiveMode(value: unknown): AgentInteractiveMode {
   if (normalizedValue === "native" || normalizedValue === "mcp" || normalizedValue === "none") {
     return normalizedValue;
   }
-  return "none";
+  return "native";
 }
 
 // 描述：
@@ -69,17 +69,13 @@ export function normalizeAgentRuntimeCapabilities(value: unknown): AgentRuntimeC
   const interactiveMode = normalizeInteractiveMode(source.interactiveMode);
   const skipReason = String(source.skipReason || "").trim();
   return {
-    nativeJsRepl: Boolean(source.nativeJsRepl),
-    nativeBrowserTools: Boolean(source.nativeBrowserTools),
+    nativeJsRepl: source.nativeJsRepl === undefined ? true : Boolean(source.nativeJsRepl),
+    nativeBrowserTools: source.nativeBrowserTools === undefined ? true : Boolean(source.nativeBrowserTools),
     playwrightMcpServerId: String(source.playwrightMcpServerId || "").trim(),
     playwrightMcpReady: Boolean(source.playwrightMcpReady),
     playwrightMcpName: String(source.playwrightMcpName || "").trim(),
     interactiveMode,
-    skipReason: skipReason || (
-      interactiveMode === "none"
-        ? DEFAULT_AGENT_RUNTIME_CAPABILITIES.skipReason
-        : ""
-    ),
+    skipReason,
   };
 }
 
@@ -100,7 +96,7 @@ export function isPlaywrightInteractiveSkillId(skillId: string): boolean {
 
 // 描述：
 //
-//   - 按运行时能力快照构建统一智能体可见的工具清单，确保 Playwright 原生浏览器工具只在 native 模式暴露。
+//   - 按运行时能力快照构建统一智能体可见的工具清单；Playwright 原生浏览器工具属于内建能力，默认始终暴露。
 //
 // Params:
 //
@@ -118,11 +114,9 @@ export function buildAgentToolsetLines(runtimeCapabilities?: unknown): string[] 
     translateDesktopText("- 变更与任务：apply_patch、todo_read、todo_write、request_user_input"),
     translateDesktopText("- 联网与外部：web_search、fetch_url、mcp_tool、dcc_tool、tool_search"),
   ];
-  if (normalizedRuntimeCapabilities.interactiveMode === "native") {
-    lines.push(
-      translateDesktopText("- 真实浏览器交互：js_repl、js_repl_reset、browser_navigate、browser_snapshot、browser_click、browser_type、browser_wait_for、browser_take_screenshot、browser_tabs、browser_close"),
-    );
-  }
+  lines.push(
+    translateDesktopText("- 真实浏览器交互：js_repl、js_repl_reset、browser_navigate、browser_snapshot、browser_click、browser_type、browser_wait_for、browser_take_screenshot、browser_tabs、browser_close"),
+  );
   lines.push(
     "",
     translateDesktopText("【工具调用签名与示例（必须严格按函数签名调用）】"),
@@ -137,14 +131,12 @@ export function buildAgentToolsetLines(runtimeCapabilities?: unknown): string[] 
     translateDesktopText("- todo_write(items)：todo_write([{\"id\":\"next\",\"content\":\"设计前端框架\",\"status\":\"pending\"}])"),
     translateDesktopText("- request_user_input(questions)：request_user_input(questions=[{\"id\":\"style\",\"header\":\"展示方式\",\"question\":\"示例提示卡片是否需要提供复制按钮？\",\"options\":[{\"label\":\"需要复制按钮 (Recommended)\",\"description\":\"保留完整交互能力。\"},{\"label\":\"只展示文本\",\"description\":\"界面更简洁，但少一步操作。\"}]}])"),
   );
-  if (normalizedRuntimeCapabilities.interactiveMode === "native") {
-    lines.push(
-      "- js_repl(source)：js_repl(\"const title = await page.title(); return title;\")",
-      "- browser_navigate(url=\"http://127.0.0.1:3000\") / browser_click(selector=\"button[data-testid='submit']\")",
-      "- browser_type(selector=\"input[name='email']\", text=\"demo@example.com\") / browser_wait_for(text=\"保存成功\")",
-      "- browser_snapshot() / browser_take_screenshot(path=\"artifacts/ui.png\") / browser_tabs(action=\"list\") / browser_close() / js_repl_reset(close_browser=True)",
-    );
-  }
+  lines.push(
+    "- js_repl(source)：js_repl(\"const title = await page.title(); return title;\")",
+    "- browser_navigate(url=\"http://127.0.0.1:3000\") / browser_click(selector=\"button[data-testid='submit']\")",
+    "- browser_type(selector=\"input[name='email']\", text=\"demo@example.com\") / browser_wait_for(text=\"保存成功\")",
+    "- browser_snapshot() / browser_take_screenshot(path=\"artifacts/ui.png\") / browser_tabs(action=\"list\") / browser_close() / js_repl_reset(close_browser=True)",
+  );
   lines.push(
     translateDesktopText("- todo_read/todo_write 仅用于会话内任务计划同步；agent 编排、任务规划、阶段说明、过程总结等会话过程信息默认直接输出到会话，不要写入项目过程文件。"),
     translateDesktopText("- AI 过程信息（如 agent 编排、任务规划、阶段分析、方案草案、阻塞说明、阶段总结）默认只允许持久化到会话上下文并发送到前端消息；除非用户明确要求导出，否则禁止写入 `REQUIREMENTS.md`、`TODO.md`、`api_design.json`、`mock-plan.md` 等过程文件。"),
@@ -165,7 +157,7 @@ export function buildAgentToolsetLines(runtimeCapabilities?: unknown): string[] 
 
 // 描述：
 //
-//   - 兼容现有静态导入场景的默认工具清单；当外层未显式传入能力快照时，默认按 none 模式输出。
+//   - 兼容现有静态导入场景的默认工具清单；当外层未显式传入能力快照时，默认按 native 模式输出。
 export const AGENT_TOOLSET_LINES: string[] = buildAgentToolsetLines();
 
 // 描述：
@@ -181,18 +173,11 @@ export const AGENT_TOOLSET_LINES: string[] = buildAgentToolsetLines();
 //   - 可直接拼接到 Prompt 的执行契约文本；无内容时返回空字符串。
 export function buildPlaywrightInteractiveRuntimePrompt(runtimeCapabilities?: unknown): string {
   const normalizedRuntimeCapabilities = normalizeAgentRuntimeCapabilities(runtimeCapabilities);
-  if (normalizedRuntimeCapabilities.interactiveMode === "native") {
-    return [
-      translateDesktopText("【Playwright Interactive 运行模式】"),
-      translateDesktopText("当前环境已注入 js_repl 与 browser_* 原生工具，必须通过真实 Chromium 窗口完成交互验证。"),
-      translateDesktopText("禁止回退到 `playwright.config.ts`、`e2e/*.spec.ts` 或 `npx playwright test`。"),
-    ].join("\n");
-  }
   if (normalizedRuntimeCapabilities.interactiveMode === "mcp") {
     return [
       translateDesktopText("【Playwright Interactive 运行模式】"),
-      translateDesktopText("当前环境未注入原生 browser_* 工具，但已检测到可用 Playwright MCP。"),
-      translateDesktopText("必须先执行 `mcp_tool(server=\"{{serverId}}\", tool=\"list_tools\")` 探测能力，再通过该 MCP 完成真实浏览器交互。", {
+      translateDesktopText("当前环境内建 js_repl 与 browser_* 原生工具，同时检测到可用 Playwright MCP。"),
+      translateDesktopText("优先使用原生浏览器工具；仅在明确需要 MCP 补充能力时，再执行 `mcp_tool(server=\"{{serverId}}\", tool=\"list_tools\")` 探测能力。", {
         serverId: normalizedRuntimeCapabilities.playwrightMcpServerId || "playwright-mcp",
       }),
       translateDesktopText("禁止回退到 `playwright.config.ts`、`e2e/*.spec.ts` 或 `npx playwright test`。"),
@@ -200,8 +185,9 @@ export function buildPlaywrightInteractiveRuntimePrompt(runtimeCapabilities?: un
   }
   return [
     translateDesktopText("【Playwright Interactive 运行模式】"),
-    normalizedRuntimeCapabilities.skipReason || DEFAULT_AGENT_RUNTIME_CAPABILITIES.skipReason,
-    translateDesktopText("当前阶段必须显式标记为“已跳过”，禁止生成 `playwright.config.ts`、`e2e/*.spec.ts`，也禁止执行 `npx playwright test`。"),
+    translateDesktopText("当前环境内建 js_repl 与 browser_* 原生工具，必须通过真实 Chromium 窗口完成交互验证。"),
+    translateDesktopText("若当前工作目录尚未安装 `playwright` 依赖，应先在目标目录完成安装与 bootstrap，再继续交互。"),
+    translateDesktopText("禁止回退到 `playwright.config.ts`、`e2e/*.spec.ts` 或 `npx playwright test`。"),
   ].join("\n");
 }
 

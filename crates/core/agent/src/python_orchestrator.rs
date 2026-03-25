@@ -43,6 +43,55 @@ pub(crate) struct PythonScriptExecutionRequest<'a> {
     pub session_id: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PythonScriptExecutionMode {
+    RequireFinalResult,
+    AllowIncompleteResult,
+}
+
+#[derive(Debug, Default)]
+struct PythonScriptExecutionAccumulator {
+    actions: Vec<String>,
+    tool_facts: Vec<ToolExecutionFact>,
+    events: Vec<ProtocolEventRecord>,
+    assets: Vec<ProtocolAssetRecord>,
+}
+
+impl PythonScriptExecutionAccumulator {
+    /// 描述：按执行顺序合并单个批次的执行结果，供流式分批执行后统一产出最终协议结果。
+    fn absorb(&mut self, result: PythonScriptExecutionResult) {
+        self.actions.extend(result.actions);
+        self.tool_facts.extend(result.tool_facts);
+        self.events.extend(result.events);
+        self.assets.extend(result.assets);
+    }
+
+    /// 描述：基于累计的工具结果构造最终执行结果，避免丢失中间批次产生的事件与审计信息。
+    ///
+    /// Params:
+    ///
+    ///   - message: 最终协议正文。
+    ///   - display_message_hint: 基于 stdout 推导出的展示提示。
+    ///
+    /// Returns:
+    ///
+    ///   - 合并后的最终执行结果。
+    fn into_result(
+        self,
+        message: String,
+        display_message_hint: String,
+    ) -> PythonScriptExecutionResult {
+        PythonScriptExecutionResult {
+            message,
+            display_message_hint,
+            actions: self.actions,
+            tool_facts: self.tool_facts,
+            events: self.events,
+            assets: self.assets,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct AgentTurnRecord {
     turn_index: usize,
@@ -85,15 +134,6 @@ pub(crate) fn run_agent_with_python_workflow(
     _profile: crate::profile::AgentProfile,
     on_stream_event: &mut dyn FnMut(AgentStreamEvent),
 ) -> Result<AgentRunResult, ProtocolError> {
-    if should_skip_playwright_interactive_stage(
-        request.prompt.as_str(),
-        &request.runtime_capabilities,
-    ) {
-        return Ok(build_skipped_playwright_interactive_result(
-            &request,
-            on_stream_event,
-        ));
-    }
     if request.execution_mode == AgentExecutionMode::Chat {
         return run_agent_with_python_chat(request, policy, on_stream_event);
     }
@@ -169,9 +209,6 @@ pub(crate) fn run_agent_with_python_workflow(
             })),
         });
 
-        on_stream_event(AgentStreamEvent::LlmStarted {
-            provider: request.provider.clone(),
-        });
         let prompt = build_python_workflow_prompt(
             &request.prompt,
             request.project_name.as_deref(),
@@ -181,36 +218,34 @@ pub(crate) fn run_agent_with_python_workflow(
             request.available_mcps.as_slice(),
             &request.runtime_capabilities,
         );
-        let llm_started_at = now_millis();
-        let run_result = {
-            let stream_event_cell = std::cell::RefCell::new(&mut *on_stream_event);
-            let mut stream_observer = |chunk: &str| {
-                let mut emitter = stream_event_cell.borrow_mut();
-                (*emitter)(AgentStreamEvent::LlmDelta {
-                    content: chunk.to_string(),
-                });
-            };
-            let mut codegen_progress_observer = |progress: &str| {
-                let mut emitter = stream_event_cell.borrow_mut();
-                (*emitter)(AgentStreamEvent::Heartbeat {
-                    message: build_llm_waiting_heartbeat_message(
-                        "正在等待模型返回可执行脚本的首个片段…",
-                        progress,
-                    ),
-                });
-            };
-            crate::llm::call_model_with_policy_and_stream(
-                provider,
-                &prompt,
-                request.workdir.as_deref(),
-                llm_policy.clone(),
-                Some(&provider_config),
-                Some(&mut stream_observer),
-                Some(&mut codegen_progress_observer),
-            )
-        }
-        .map_err(|err| err.to_protocol_error())?;
-        let llm_finished_at = now_millis();
+        let streaming_base = StreamingPythonExecutionBase {
+            workdir: request.workdir.as_deref(),
+            dcc_provider_addr: request.dcc_provider_addr.as_deref(),
+            available_mcps: request.available_mcps.as_slice(),
+            policy: &policy,
+            trace_id: trace_id.as_str(),
+            session_id: request.session_id.as_str(),
+        };
+        let (
+            run_result,
+            generated_script,
+            execution,
+            batch_count,
+            llm_started_at,
+            llm_finished_at,
+            exec_started_at,
+            exec_finished_at,
+        ) = stream_python_codegen_and_execute(
+            provider,
+            request.provider.as_str(),
+            &prompt,
+            request.workdir.as_deref(),
+            llm_policy.clone(),
+            &provider_config,
+            &streaming_base,
+            "正在等待模型返回可执行脚本的首个片段…",
+            on_stream_event,
+        )?;
         usage_total.prompt_tokens = usage_total
             .prompt_tokens
             .saturating_add(run_result.usage.prompt_tokens);
@@ -220,37 +255,7 @@ pub(crate) fn run_agent_with_python_workflow(
         usage_total.total_tokens = usage_total
             .total_tokens
             .saturating_add(run_result.usage.total_tokens);
-        on_stream_event(AgentStreamEvent::LlmFinished {
-            provider: request.provider.clone(),
-        });
-
         let llm_raw_response = run_result.content.clone();
-        let generated_script = extract_python_script(&llm_raw_response);
-        if generated_script.trim().is_empty() {
-            return Err(ProtocolError::new(
-                "core.agent.python.empty_script",
-                "模型未返回可执行 Python 脚本",
-            )
-            .with_suggestion("请重试，或调整提示词让模型只输出 Python 代码。"));
-        }
-        let generated_script = repair_missing_python_block_body(&generated_script);
-        let generated_script = repair_unterminated_python_string_literals(&generated_script);
-        let generated_script = ensure_script_has_finish(&generated_script);
-        let generated_script = truncate_script_after_first_top_level_finish(&generated_script);
-        let exec_started_at = now_millis();
-        let execution = execute_python_script(
-            PythonScriptExecutionRequest {
-                user_script: &generated_script,
-                workdir: request.workdir.as_deref(),
-                dcc_provider_addr: request.dcc_provider_addr.as_deref(),
-                available_mcps: request.available_mcps.as_slice(),
-                policy: &policy,
-                trace_id: trace_id.clone(),
-                session_id: request.session_id.clone(),
-            },
-            on_stream_event,
-        )?;
-        let exec_finished_at = now_millis();
 
         let turn_result = parse_turn_result_envelope(
             &execution.message,
@@ -299,6 +304,7 @@ pub(crate) fn run_agent_with_python_workflow(
             data: Some(json!({
                 "turn_index": turn_index,
                 "script_length": generated_script.chars().count(),
+                "batch_count": batch_count,
                 "usage": run_result.usage,
                 "llm_prompt_raw": prompt,
                 "llm_response_raw": llm_raw_response,
@@ -315,6 +321,7 @@ pub(crate) fn run_agent_with_python_workflow(
             data: Some(json!({
                 "turn_index": turn_index,
                 "actions": execution.actions,
+                "batch_count": batch_count,
                 "tool_facts": execution
                     .tool_facts
                     .iter()
@@ -425,39 +432,40 @@ fn run_agent_with_python_chat(
     let mut events: Vec<ProtocolEventRecord> = Vec::new();
     let mut assets: Vec<ProtocolAssetRecord> = Vec::new();
 
-    on_stream_event(AgentStreamEvent::LlmStarted {
-        provider: request.provider.clone(),
-    });
     let prompt = build_python_chat_prompt(
         &request.prompt,
         request.project_name.as_deref(),
         request.available_mcps.as_slice(),
         &request.runtime_capabilities,
     );
-    let llm_started_at = now_millis();
-    let run_result = {
-        let stream_event_cell = std::cell::RefCell::new(&mut *on_stream_event);
-        let mut codegen_progress_observer = |progress: &str| {
-            let mut emitter = stream_event_cell.borrow_mut();
-            (*emitter)(AgentStreamEvent::Heartbeat {
-                message: build_llm_waiting_heartbeat_message(
-                    "正在读取当前问题所需的项目信息…",
-                    progress,
-                ),
-            });
-        };
-        crate::llm::call_model_with_policy_and_stream(
-            provider,
-            &prompt,
-            request.workdir.as_deref(),
-            llm_policy.clone(),
-            Some(&provider_config),
-            None,
-            Some(&mut codegen_progress_observer),
-        )
-    }
-    .map_err(|err| err.to_protocol_error())?;
-    let llm_finished_at = now_millis();
+    let streaming_base = StreamingPythonExecutionBase {
+        workdir: request.workdir.as_deref(),
+        dcc_provider_addr: request.dcc_provider_addr.as_deref(),
+        available_mcps: request.available_mcps.as_slice(),
+        policy: &policy,
+        trace_id: trace_id.as_str(),
+        session_id: request.session_id.as_str(),
+    };
+    let (
+        run_result,
+        generated_script,
+        execution,
+        batch_count,
+        llm_started_at,
+        llm_finished_at,
+        exec_started_at,
+        exec_finished_at,
+    ) = stream_python_codegen_and_execute(
+        provider,
+        request.provider.as_str(),
+        &prompt,
+        request.workdir.as_deref(),
+        llm_policy.clone(),
+        &provider_config,
+        &streaming_base,
+        "正在读取当前问题所需的项目信息…",
+        on_stream_event,
+    )?;
     usage_total.prompt_tokens = usage_total
         .prompt_tokens
         .saturating_add(run_result.usage.prompt_tokens);
@@ -467,37 +475,8 @@ fn run_agent_with_python_chat(
     usage_total.total_tokens = usage_total
         .total_tokens
         .saturating_add(run_result.usage.total_tokens);
-    on_stream_event(AgentStreamEvent::LlmFinished {
-        provider: request.provider.clone(),
-    });
 
     let llm_raw_response = run_result.content.clone();
-    let generated_script = extract_python_script(&llm_raw_response);
-    if generated_script.trim().is_empty() {
-        return Err(ProtocolError::new(
-            "core.agent.python.empty_script",
-            "模型未返回可执行 Python 脚本",
-        )
-        .with_suggestion("请重试，或调整提示词让模型只输出 Python 代码。"));
-    }
-    let generated_script = repair_missing_python_block_body(&generated_script);
-    let generated_script = repair_unterminated_python_string_literals(&generated_script);
-    let generated_script = ensure_script_has_finish(&generated_script);
-    let generated_script = truncate_script_after_first_top_level_finish(&generated_script);
-    let exec_started_at = now_millis();
-    let execution = execute_python_script(
-        PythonScriptExecutionRequest {
-            user_script: &generated_script,
-            workdir: request.workdir.as_deref(),
-            dcc_provider_addr: request.dcc_provider_addr.as_deref(),
-            available_mcps: request.available_mcps.as_slice(),
-            policy: &policy,
-            trace_id: trace_id.clone(),
-            session_id: request.session_id.clone(),
-        },
-        on_stream_event,
-    )?;
-    let exec_finished_at = now_millis();
     let turn_result = parse_turn_result_envelope(
         &execution.message,
         &execution.display_message_hint,
@@ -540,6 +519,7 @@ fn run_agent_with_python_chat(
         data: Some(json!({
             "execution_mode": request.execution_mode.as_str(),
             "script_length": generated_script.chars().count(),
+            "batch_count": batch_count,
             "usage": run_result.usage,
             "llm_prompt_raw": prompt,
             "llm_response_raw": llm_raw_response,
@@ -556,6 +536,7 @@ fn run_agent_with_python_chat(
         data: Some(json!({
             "execution_mode": request.execution_mode.as_str(),
             "actions": execution_actions,
+            "batch_count": batch_count,
             "tool_facts": execution_tool_facts,
             "turn_control": "done",
             "turn_summary": turn_result.summary,
@@ -641,18 +622,13 @@ fn build_python_workflow_prompt(
     let toolset_block = build_python_toolset_prompt_block(runtime_capabilities);
     let playwright_runtime_block =
         build_python_playwright_runtime_prompt_block(user_prompt, runtime_capabilities);
-    let native_browser_examples = if runtime_capabilities.interactive_mode
-        == AgentInteractiveMode::Native
-    {
-        "   - js_repl(source)  # 仅在 native 模式注入；在持久化 Node/Playwright 会话中执行 JavaScript\n\
-   - browser_navigate(url=\"http://127.0.0.1:3000\")  # 仅在 native 模式注入；打开真实 Chromium 页面\n\
+    let native_browser_examples =
+        "   - js_repl(source)  # 在持久化 Node/Playwright 会话中执行 JavaScript\n\
+   - browser_navigate(url=\"http://127.0.0.1:3000\")  # 打开真实 Chromium 页面\n\
    - browser_click(selector=\"button[data-testid='submit']\") / browser_type(selector=\"input[name='email']\", text=\"demo@example.com\")\n\
    - browser_wait_for(text=\"保存成功\") / browser_snapshot() / browser_take_screenshot(path=\"artifacts/ui.png\")\n\
    - browser_tabs(action=\"list\") / browser_close() / js_repl_reset(close_browser=True)\n\
-".to_string()
-    } else {
-        String::new()
-    };
+".to_string();
 
     format!(
         "{system_prompt}\n\
@@ -675,6 +651,9 @@ fn build_python_workflow_prompt(
    - write_text(path, content)\n\
     - apply_patch(patch, check_only=False)\n\
     - run_shell(command, timeout_secs=30)  # 默认返回含 stdout/stderr/status/success 的结果对象；优先读取 result.get(\"stdout\")/result.get(\"stderr\")/result.get(\"success\")\n\
+    - shell_start(command, name, ready_pattern=None, ready_timeout_secs=10)  # 启动可跨轮复用的长驻进程\n\
+    - shell_status(process_id_or_name) / shell_logs(process_id_or_name, tail_lines=40, follow_secs=0)\n\
+    - shell_stop(process_id_or_name, force=False) / shell_list()\n\
     - todo_read()  # 默认返回 items 列表\n\
     - todo_write(items)  # 仅允许一个参数 items（数组）；禁止 todo_write(\"A\", \"B\")\n\
     - request_user_input(questions=[{{\"id\":\"style\",\"header\":\"展示方式\",\"question\":\"示例提示卡片是否需要提供复制按钮？\",\"options\":[{{\"label\":\"需要复制按钮 (Recommended)\",\"description\":\"保留完整交互能力。\"}},{{\"label\":\"只展示文本\",\"description\":\"界面更简洁，但少一步操作。\"}}]}}])\n\
@@ -736,6 +715,7 @@ fn build_python_chat_prompt(
    - read_text(path)  # 默认返回文件 content 字符串；请显式写成 content = read_text(\"README.md\")，不要依赖 _ 接收上一条结果\n\
    - read_json(path)  # 默认返回 JSON data 对象；请显式写成 data = read_json(\"package.json\")，不要依赖 _ 接收上一条结果\n\
    - run_shell(command, timeout_secs=30)  # 默认返回含 stdout/stderr/status/success 的结果对象；优先读取 result.get(\"stdout\")/result.get(\"stderr\")/result.get(\"success\")\n\
+   - shell_list()  # 列出当前会话全部长驻进程；仅当用户明确需要时才进一步使用 shell_start/shell_logs/shell_stop\n\
    - finish(\"这里直接写给用户的最终答复\")\n\
 11. 若读取后仍无法确认事实，应在答复中明确说明“读取了什么、还缺什么”，不要编造目录结构、文件内容或执行结果。\n\
 当前项目：{project_name_text}\n\
@@ -749,51 +729,16 @@ fn build_python_chat_prompt(
 
 /// 描述：构建 Python 编排提示词中的工具清单，按运行时能力动态注入 Playwright 原生浏览器工具。
 fn build_python_toolset_prompt_block(runtime_capabilities: &AgentRuntimeCapabilities) -> String {
-    let mut groups = vec![
+    let _ = runtime_capabilities;
+    let groups = vec![
         "read_text/read_json/write_text/write_json/list_dir/list_directory/mkdir/stat/glob/search_files".to_string(),
-        "run_shell/run_shell_command/git_status/git_diff/git_log".to_string(),
+        "run_shell/run_shell_command/shell_start/shell_status/shell_logs/shell_stop/shell_list/git_status/git_diff/git_log".to_string(),
         "apply_patch/todo_read/todo_write/request_user_input".to_string(),
         "web_search/fetch_url/mcp_tool/dcc_tool/tool_search".to_string(),
+        "js_repl/js_repl_reset/browser_navigate/browser_snapshot/browser_click/browser_type/browser_wait_for/browser_take_screenshot/browser_tabs/browser_close"
+            .to_string(),
     ];
-    if runtime_capabilities.interactive_mode == AgentInteractiveMode::Native {
-        groups.push(
-            "js_repl/js_repl_reset/browser_navigate/browser_snapshot/browser_click/browser_type/browser_wait_for/browser_take_screenshot/browser_tabs/browser_close"
-                .to_string(),
-        );
-    }
     groups.join("；")
-}
-
-/// 描述：当请求涉及 `playwright-interactive` 技能时，按运行时模式追加稳定执行契约。
-fn build_python_playwright_runtime_prompt_block(
-    user_prompt: &str,
-    runtime_capabilities: &AgentRuntimeCapabilities,
-) -> String {
-    if !prompt_mentions_playwright_interactive(user_prompt) {
-        return String::new();
-    }
-    match runtime_capabilities.interactive_mode {
-        AgentInteractiveMode::Native => format!(
-            "Playwright Interactive 执行模式：native\n\
-当前环境已注入 js_repl 与 browser_* 原生工具，必须通过真实 Chromium 窗口交互完成验证；\
-禁止回退到 `playwright.config.ts`、`e2e/*.spec.ts` 或 `npx playwright test`。"
-        ),
-        AgentInteractiveMode::Mcp => format!(
-            "Playwright Interactive 执行模式：mcp\n\
-当前环境未注入原生 browser_* 工具，但已解析可用 Playwright MCP：server=`{}` name=`{}`。\n\
-执行前必须先调用 `mcp_tool(server=\"{}\", tool=\"list_tools\")` 探测能力，再通过该 MCP 完成真实浏览器交互；\
-禁止回退到 `playwright.config.ts`、`e2e/*.spec.ts` 或 `npx playwright test`。",
-            runtime_capabilities.playwright_mcp_server_id,
-            runtime_capabilities.playwright_mcp_name,
-            runtime_capabilities.playwright_mcp_server_id,
-        ),
-        AgentInteractiveMode::None => format!(
-            "Playwright Interactive 执行模式：none\n\
-跳过原因：{}\n\
-当前阶段必须标记为“已跳过”，禁止生成 `playwright.config.ts`、`e2e/*.spec.ts`，也禁止执行 `npx playwright test`。",
-            runtime_capabilities.skip_reason
-        ),
-    }
 }
 
 /// 描述：判断当前请求是否涉及 `playwright-interactive` 技能阶段。
@@ -805,58 +750,49 @@ fn prompt_mentions_playwright_interactive(prompt: &str) -> bool {
     normalized.contains("playwright-interactive") || normalized.contains("Playwright Interactive")
 }
 
-/// 描述：在缺少原生与 MCP 交互能力时，判断是否需要短路跳过 Playwright Interactive 阶段。
-fn should_skip_playwright_interactive_stage(
-    prompt: &str,
+/// 描述：当请求涉及 `playwright-interactive` 技能时，按运行时模式追加稳定执行契约。
+fn build_python_playwright_runtime_prompt_block(
+    user_prompt: &str,
     runtime_capabilities: &AgentRuntimeCapabilities,
-) -> bool {
-    runtime_capabilities.interactive_mode == AgentInteractiveMode::None
-        && prompt_mentions_playwright_interactive(prompt)
-}
-
-/// 描述：构建 Playwright Interactive 阶段的显式跳过结果，避免错误回退到 CLI Playwright 脚本。
-fn build_skipped_playwright_interactive_result(
-    request: &AgentRunRequest,
-    on_stream_event: &mut dyn FnMut(AgentStreamEvent),
-) -> AgentRunResult {
-    let display_message = if request.runtime_capabilities.skip_reason.trim().is_empty() {
-        "当前环境无原生交互工具且无已启用 Playwright MCP，测试阶段已跳过。".to_string()
-    } else {
-        request.runtime_capabilities.skip_reason.clone()
-    };
-    let message = format!("STATUS: DONE\nSUMMARY: {}\nNEXT: 无", display_message);
-    on_stream_event(AgentStreamEvent::Final {
-        message: display_message.clone(),
-    });
-    AgentRunResult {
-        trace_id: request.trace_id.clone(),
-        control: "done".to_string(),
-        message,
-        display_message: display_message.clone(),
-        usage: Some(LlmUsage::default()),
-        actions: Vec::new(),
-        exported_file: None,
-        steps: vec![ProtocolStepRecord {
-            index: 0,
-            code: "playwright_interactive_skipped".to_string(),
-            status: ProtocolStepStatus::Skipped,
-            elapsed_ms: 0,
-            summary: display_message.clone(),
-            error: None,
-            data: Some(json!({
-                "interactive_mode": request.runtime_capabilities.interactive_mode.as_str(),
-                "skip_reason": request.runtime_capabilities.skip_reason,
-                "runtime_capabilities": request.runtime_capabilities,
-            })),
-        }],
-        events: vec![ProtocolEventRecord {
-            event: "playwright_interactive_skipped".to_string(),
-            step_index: Some(0),
-            timestamp_ms: now_millis(),
-            message: display_message.clone(),
-        }],
-        assets: Vec::new(),
-        ui_hint: None,
+) -> String {
+    if !prompt_mentions_playwright_interactive(user_prompt) {
+        return String::new();
+    }
+    match runtime_capabilities.interactive_mode {
+        AgentInteractiveMode::Native => {
+            let mcp_hint = if runtime_capabilities.playwright_mcp_ready {
+                format!(
+                    "\n此外已解析可用 Playwright MCP：server=`{}` name=`{}`；仅在确实需要 MCP 补充能力时，才调用 `mcp_tool(server=\"{}\", tool=\"list_tools\")` 继续探测。",
+                    runtime_capabilities.playwright_mcp_server_id,
+                    runtime_capabilities.playwright_mcp_name,
+                    runtime_capabilities.playwright_mcp_server_id,
+                )
+            } else {
+                String::new()
+            };
+            format!(
+                "Playwright Interactive 执行模式：native\n\
+当前环境内建 js_repl 与 browser_* 原生工具，必须优先通过真实 Chromium 窗口交互完成验证；\
+若当前工作目录尚未解析到 `playwright` 依赖，应先在目标目录完成安装与 bootstrap，再继续交互。\
+禁止回退到 `playwright.config.ts`、`e2e/*.spec.ts` 或 `npx playwright test`。{}",
+                mcp_hint
+            )
+        }
+        AgentInteractiveMode::Mcp => format!(
+            "Playwright Interactive 执行模式：native+mcp\n\
+当前环境内建 js_repl 与 browser_* 原生工具，同时已解析可用 Playwright MCP：server=`{}` name=`{}`。\n\
+优先使用原生浏览器工具；仅在明确需要 MCP 补充能力时，才先调用 `mcp_tool(server=\"{}\", tool=\"list_tools\")` 探测能力，再通过该 MCP 完成补充交互；\
+禁止回退到 `playwright.config.ts`、`e2e/*.spec.ts` 或 `npx playwright test`。",
+            runtime_capabilities.playwright_mcp_server_id,
+            runtime_capabilities.playwright_mcp_name,
+            runtime_capabilities.playwright_mcp_server_id,
+        ),
+        AgentInteractiveMode::None => format!(
+            "Playwright Interactive 执行模式：native\n\
+当前环境默认开放 js_repl 与 browser_* 原生工具，不要因为运行时探测缺口跳过测试；\
+若首次交互前缺少 `playwright` 依赖，应先在目标目录完成安装与 bootstrap，再继续真实浏览器验证。\
+禁止回退到 `playwright.config.ts`、`e2e/*.spec.ts` 或 `npx playwright test`。"
+        ),
     }
 }
 
@@ -1366,14 +1302,13 @@ fn parse_turn_result_envelope(
 
 /// 描述：从模型返回结果中提取 Python 脚本正文，兼容 fenced block 与前置自然语言。
 fn extract_python_script(raw: &str) -> String {
-    let trimmed = raw.trim();
-    if let Some(fenced) = extract_fenced_python_block(trimmed) {
+    if let Some(fenced) = extract_fenced_python_block(raw) {
         return fenced;
     }
-    if let Some(plain_script) = extract_plain_python_from_mixed_text(trimmed) {
+    if let Some(plain_script) = extract_plain_python_from_mixed_text(raw) {
         return plain_script;
     }
-    wrap_plain_text_response_as_finish_script(trimmed)
+    wrap_plain_text_response_as_finish_script(raw.trim())
 }
 
 /// 描述：将“未命中任何 Python 代码结构”的自然语言响应包装为 finish(...) 脚本，
@@ -1876,6 +1811,119 @@ fn is_python_block_header_line(line: &str) -> bool {
         || trimmed.starts_with("async with ")
 }
 
+/// 描述：移除单行 Python 代码中的行尾注释，并保留字符串字面量中的 `#`，供流式切批判定复用。
+fn strip_python_inline_comment(line: &str) -> &str {
+    let bytes = line.as_bytes();
+    let mut state = PythonStringParseState::default();
+    let mut index = 0usize;
+
+    while index < bytes.len() {
+        let current = bytes[index] as char;
+        if state.in_triple_single_quote {
+            if starts_with_bytes(bytes, index, b"'''") {
+                state.in_triple_single_quote = false;
+                index = index.saturating_add(3);
+                continue;
+            }
+            index = index.saturating_add(1);
+            continue;
+        }
+        if state.in_triple_double_quote {
+            if starts_with_bytes(bytes, index, b"\"\"\"") {
+                state.in_triple_double_quote = false;
+                index = index.saturating_add(3);
+                continue;
+            }
+            index = index.saturating_add(1);
+            continue;
+        }
+        if state.in_single_quote {
+            if state.escaped {
+                state.escaped = false;
+                index = index.saturating_add(1);
+                continue;
+            }
+            if current == '\\' {
+                state.escaped = true;
+                index = index.saturating_add(1);
+                continue;
+            }
+            if current == '\'' {
+                state.in_single_quote = false;
+            }
+            index = index.saturating_add(1);
+            continue;
+        }
+        if state.in_double_quote {
+            if state.escaped {
+                state.escaped = false;
+                index = index.saturating_add(1);
+                continue;
+            }
+            if current == '\\' {
+                state.escaped = true;
+                index = index.saturating_add(1);
+                continue;
+            }
+            if current == '"' {
+                state.in_double_quote = false;
+            }
+            index = index.saturating_add(1);
+            continue;
+        }
+        if current == '#' {
+            return &line[..index];
+        }
+        if starts_with_bytes(bytes, index, b"'''") {
+            state.in_triple_single_quote = true;
+            index = index.saturating_add(3);
+            continue;
+        }
+        if starts_with_bytes(bytes, index, b"\"\"\"") {
+            state.in_triple_double_quote = true;
+            index = index.saturating_add(3);
+            continue;
+        }
+        if current == '\'' {
+            state.in_single_quote = true;
+            index = index.saturating_add(1);
+            continue;
+        }
+        if current == '"' {
+            state.in_double_quote = true;
+            index = index.saturating_add(1);
+            continue;
+        }
+        index = index.saturating_add(1);
+    }
+
+    line
+}
+
+/// 描述：判断当前行是否仍在等待右侧表达式或续写运算符，避免把 `index_content =` 这类半截语句提前执行。
+fn is_python_line_waiting_for_continuation(line: &str) -> bool {
+    let code = strip_python_inline_comment(line).trim();
+    if code.is_empty() {
+        return false;
+    }
+
+    const TRAILING_OPERATOR_TOKENS: &[&str] = &[
+        "**=", "//=", ">>=", "<<=", "+=", "-=", "*=", "/=", "%=", "@=", "&=", "|=", "^=", ":=",
+        "=", "**", "//", ">>", "<<", "+", "-", "*", "/", "%", "@", "&", "|", "^",
+    ];
+    if TRAILING_OPERATOR_TOKENS
+        .iter()
+        .any(|token| code.ends_with(token))
+    {
+        return true;
+    }
+
+    matches!(
+        code.split_whitespace().last(),
+        Some("and" | "or" | "not" | "in" | "is")
+    )
+}
+
 /// 描述：读取行首缩进宽度，统一把 Tab 视作 4 空格以便进行缩进层级比较。
 fn leading_indent_width(line: &str) -> usize {
     let mut width = 0usize;
@@ -1909,35 +1957,34 @@ fn extract_fenced_python_block(raw: &str) -> Option<String> {
     let mut blocks: Vec<(String, String)> = Vec::new();
     let mut in_block = false;
     let mut language = String::new();
-    let mut body: Vec<String> = Vec::new();
+    let mut body = String::new();
 
-    for line in raw.lines() {
-        let trimmed = line.trim_start();
+    for line in raw.split_inclusive('\n') {
+        let logical_line = line.strip_suffix('\n').unwrap_or(line);
+        let trimmed = logical_line.trim_start();
         if trimmed.starts_with("```") {
             if in_block {
-                let normalized_body = body.join("\n").trim().to_string();
-                if !normalized_body.is_empty() {
-                    blocks.push((language.clone(), normalized_body));
+                if !body.trim().is_empty() {
+                    blocks.push((language.clone(), body.clone()));
                 }
                 in_block = false;
                 language.clear();
-                body.clear();
+                body = String::new();
                 continue;
             }
             in_block = true;
             language = trimmed.trim_start_matches("```").trim().to_lowercase();
-            body.clear();
+            body = String::new();
             continue;
         }
         if in_block {
-            body.push(line.to_string());
+            body.push_str(line);
         }
     }
 
     if in_block {
-        let normalized_body = body.join("\n").trim().to_string();
-        if !normalized_body.is_empty() {
-            blocks.push((language, normalized_body));
+        if !body.trim().is_empty() {
+            blocks.push((language, body));
         }
     }
 
@@ -1971,21 +2018,25 @@ fn extract_fenced_python_block(raw: &str) -> Option<String> {
 ///
 ///   - 推断出的 Python 脚本；若未识别出可信代码起点返回 None。
 fn extract_plain_python_from_mixed_text(raw: &str) -> Option<String> {
-    let lines: Vec<&str> = raw.lines().collect();
-    let entry_index = lines
-        .iter()
-        .position(|line| is_probable_python_entry_line(line.trim()))?;
+    let lines: Vec<&str> = raw.split_inclusive('\n').collect();
+    let entry_index = lines.iter().position(|line| {
+        let logical_line = line.strip_suffix('\n').unwrap_or(line);
+        is_probable_python_entry_line(logical_line.trim())
+    })?;
     let mut start = entry_index;
     while start > 0 {
-        let previous = lines[start - 1].trim();
+        let previous = lines[start - 1]
+            .strip_suffix('\n')
+            .unwrap_or(lines[start - 1])
+            .trim();
         if previous.is_empty() || previous.starts_with('#') {
             start -= 1;
             continue;
         }
         break;
     }
-    let candidate = lines[start..].join("\n").trim().to_string();
-    if candidate.is_empty() {
+    let candidate = lines[start..].concat();
+    if candidate.trim().is_empty() {
         return None;
     }
     Some(candidate)
@@ -2071,6 +2122,278 @@ fn is_probable_python_call_statement(line: &str) -> bool {
     }
     head.chars()
         .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.'))
+}
+
+/// 描述：从增量流式文本中尝试提取“当前已经暴露出来的 Python 脚本来源”，仅在确认进入代码区后返回。
+///
+/// Params:
+///
+///   - raw: 截止当前 chunk 的模型原始文本。
+///
+/// Returns:
+///
+///   - 已识别出的脚本来源；若当前仍只是自然语言或尚未进入代码区则返回 None。
+fn extract_incremental_python_script_source(raw: &str) -> Option<String> {
+    if raw.trim().is_empty() {
+        return None;
+    }
+    if let Some(fenced) = extract_fenced_python_block(raw) {
+        return Some(fenced);
+    }
+    extract_plain_python_from_mixed_text(raw)
+}
+
+/// 描述：构造仅包含系统自动补全 finish(...) 的尾批脚本，供前置批次已经全部执行完但模型未显式收尾时兜底。
+///
+/// Returns:
+///
+///   - 单独可执行的 finish(...) 脚本。
+fn build_auto_finish_script() -> String {
+    "# 描述：前置流式批次已完成，但模型未显式调用 finish(...)；系统在最终 flush 时补发收尾结果。\nfinish(\"执行完成（系统自动补全 finish）\")".to_string()
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct StreamingPythonParserState {
+    string_state: PythonStringParseState,
+    paren_balance: usize,
+    bracket_balance: usize,
+    brace_balance: usize,
+    explicit_line_continuation: bool,
+}
+
+impl StreamingPythonParserState {
+    /// 描述：判断当前是否处于可安全按顶层语句切分的闭合状态。
+    fn is_closed(&self) -> bool {
+        !self.string_state.in_single_quote
+            && !self.string_state.in_double_quote
+            && !self.string_state.in_triple_single_quote
+            && !self.string_state.in_triple_double_quote
+            && self.paren_balance == 0
+            && self.bracket_balance == 0
+            && self.brace_balance == 0
+            && !self.explicit_line_continuation
+    }
+}
+
+/// 描述：按单行更新流式切批解析状态，跟踪字符串、括号与显式续行，避免把未闭合语句提前送进沙盒。
+///
+/// Params:
+///
+///   - line: 当前待分析的一行 Python 文本（不含末尾换行）。
+///   - state: 增量解析状态。
+fn update_streaming_python_parser_state(line: &str, state: &mut StreamingPythonParserState) {
+    let bytes = line.as_bytes();
+    let mut index = 0usize;
+    let mut last_non_whitespace_char: Option<char> = None;
+
+    while index < bytes.len() {
+        let current = bytes[index] as char;
+
+        if state.string_state.in_triple_single_quote {
+            if starts_with_bytes(bytes, index, b"'''") {
+                state.string_state.in_triple_single_quote = false;
+                index = index.saturating_add(3);
+                continue;
+            }
+            index = index.saturating_add(1);
+            continue;
+        }
+        if state.string_state.in_triple_double_quote {
+            if starts_with_bytes(bytes, index, b"\"\"\"") {
+                state.string_state.in_triple_double_quote = false;
+                index = index.saturating_add(3);
+                continue;
+            }
+            index = index.saturating_add(1);
+            continue;
+        }
+        if state.string_state.in_single_quote {
+            if state.string_state.escaped {
+                state.string_state.escaped = false;
+                index = index.saturating_add(1);
+                continue;
+            }
+            if current == '\\' {
+                state.string_state.escaped = true;
+                index = index.saturating_add(1);
+                continue;
+            }
+            if current == '\'' {
+                state.string_state.in_single_quote = false;
+            }
+            index = index.saturating_add(1);
+            continue;
+        }
+        if state.string_state.in_double_quote {
+            if state.string_state.escaped {
+                state.string_state.escaped = false;
+                index = index.saturating_add(1);
+                continue;
+            }
+            if current == '\\' {
+                state.string_state.escaped = true;
+                index = index.saturating_add(1);
+                continue;
+            }
+            if current == '"' {
+                state.string_state.in_double_quote = false;
+            }
+            index = index.saturating_add(1);
+            continue;
+        }
+        if current == '#' {
+            break;
+        }
+        if starts_with_bytes(bytes, index, b"'''") {
+            state.string_state.in_triple_single_quote = true;
+            index = index.saturating_add(3);
+            continue;
+        }
+        if starts_with_bytes(bytes, index, b"\"\"\"") {
+            state.string_state.in_triple_double_quote = true;
+            index = index.saturating_add(3);
+            continue;
+        }
+        if current == '\'' {
+            state.string_state.in_single_quote = true;
+            index = index.saturating_add(1);
+            continue;
+        }
+        if current == '"' {
+            state.string_state.in_double_quote = true;
+            index = index.saturating_add(1);
+            continue;
+        }
+        match current {
+            '(' => state.paren_balance = state.paren_balance.saturating_add(1),
+            ')' => state.paren_balance = state.paren_balance.saturating_sub(1),
+            '[' => state.bracket_balance = state.bracket_balance.saturating_add(1),
+            ']' => state.bracket_balance = state.bracket_balance.saturating_sub(1),
+            '{' => state.brace_balance = state.brace_balance.saturating_add(1),
+            '}' => state.brace_balance = state.brace_balance.saturating_sub(1),
+            _ => {}
+        }
+        if !current.is_whitespace() {
+            last_non_whitespace_char = Some(current);
+        }
+        index = index.saturating_add(1);
+    }
+
+    state.explicit_line_continuation = matches!(last_non_whitespace_char, Some('\\'))
+        && !state.string_state.in_single_quote
+        && !state.string_state.in_double_quote
+        && !state.string_state.in_triple_single_quote
+        && !state.string_state.in_triple_double_quote
+        && state.paren_balance == 0
+        && state.bracket_balance == 0
+        && state.brace_balance == 0;
+}
+
+/// 描述：从“尚未执行的脚本尾部”中提取一个保守可执行的顶层前缀；只在回到顶层闭合状态时切批，
+/// 避免把未闭合的字符串、括号或代码块提前执行。
+///
+/// Params:
+///
+///   - script: 当前尚未执行的脚本尾部。
+///
+/// Returns:
+///
+///   - 一个安全可执行的脚本前缀；若当前仍不足以形成安全边界则返回 None。
+fn extract_streaming_python_batch_prefix(script: &str) -> Option<&str> {
+    let normalized = script;
+    if normalized.trim().is_empty() {
+        return None;
+    }
+
+    let mut parser_state = StreamingPythonParserState::default();
+    let mut open_block_indents: Vec<usize> = Vec::new();
+    let mut pending_block_header_indent: Option<usize> = None;
+    let mut safe_cut: Option<usize> = None;
+    let mut has_significant_content = false;
+    let mut byte_offset = 0usize;
+
+    for line in normalized.split_inclusive('\n') {
+        let line_start = byte_offset;
+        let line_end = byte_offset.saturating_add(line.len());
+        byte_offset = line_end;
+        let line_is_complete = line.ends_with('\n');
+        let logical_line = line.strip_suffix('\n').unwrap_or(line);
+        let trimmed = logical_line.trim();
+        let significant_line = !trimmed.is_empty() && !trimmed.starts_with('#');
+        let line_waiting_for_continuation =
+            significant_line && is_python_line_waiting_for_continuation(logical_line);
+
+        if parser_state.is_closed() && significant_line {
+            let indent_width = leading_indent_width(logical_line);
+            while open_block_indents
+                .last()
+                .copied()
+                .map(|current| indent_width < current)
+                .unwrap_or(false)
+            {
+                open_block_indents.pop();
+            }
+
+            if let Some(expected_indent) = pending_block_header_indent {
+                if indent_width > expected_indent {
+                    open_block_indents.push(indent_width);
+                    pending_block_header_indent = None;
+                } else {
+                    break;
+                }
+            } else if indent_width > 0 && open_block_indents.is_empty() {
+                break;
+            }
+
+            if indent_width == 0 && is_top_level_finish_call_start(logical_line) {
+                if safe_cut.is_none() && !has_significant_content {
+                    return None;
+                }
+                break;
+            }
+
+            has_significant_content = true;
+        }
+
+        update_streaming_python_parser_state(logical_line, &mut parser_state);
+        if parser_state.is_closed() && significant_line && is_python_block_header_line(logical_line)
+        {
+            pending_block_header_indent = Some(leading_indent_width(logical_line));
+        }
+
+        if has_significant_content
+            && parser_state.is_closed()
+            && pending_block_header_indent.is_none()
+            && open_block_indents.is_empty()
+            && line_is_complete
+            && !line_waiting_for_continuation
+        {
+            safe_cut = Some(line_end);
+        }
+
+        if parser_state.is_closed()
+            && !significant_line
+            && has_significant_content
+            && pending_block_header_indent.is_none()
+            && open_block_indents.is_empty()
+            && line_is_complete
+        {
+            safe_cut = Some(line_end);
+        }
+
+        if line_start == line_end {
+            continue;
+        }
+    }
+
+    safe_cut.and_then(|cut| {
+        let prefix = &normalized[..cut];
+        if prefix.trim().is_empty() {
+            None
+        } else {
+            Some(prefix)
+        }
+    })
 }
 
 /// 描述：对外发流式事件前构建工具参数预览，避免把超长正文（如 write_text content）直接推送到前端。
@@ -2279,6 +2602,56 @@ fn build_tool_result_stream_data(
                 STREAM_TEXT_MAX_CHARS,
             ),
             "command": tool_args.get("command").and_then(|item| item.as_str()).unwrap_or(""),
+        }),
+        "shell_start" | "shell_status" | "shell_stop" => json!({
+            "ok": true,
+            "process_id": result_data.get("process_id").and_then(|item| item.as_str()).unwrap_or(""),
+            "name": result_data.get("name").and_then(|item| item.as_str()).unwrap_or(""),
+            "status": result_data.get("status").and_then(|item| item.as_str()).unwrap_or(""),
+            "pid": result_data.get("pid").and_then(|item| item.as_u64()).unwrap_or(0),
+            "exit_code": result_data.get("exit_code").cloned().unwrap_or(Value::Null),
+            "started_at": result_data.get("started_at").and_then(|item| item.as_u64()).unwrap_or(0),
+            "last_output_at": result_data.get("last_output_at").cloned().unwrap_or(Value::Null),
+            "uptime_secs": result_data.get("uptime_secs").and_then(|item| item.as_u64()).unwrap_or(0),
+            "workdir": result_data.get("workdir").and_then(|item| item.as_str()).unwrap_or(""),
+            "command": result_data.get("command").and_then(|item| item.as_str()).unwrap_or(""),
+            "ready": result_data.get("ready").and_then(|item| item.as_bool()).unwrap_or(false),
+            "ready_pattern": result_data.get("ready_pattern").cloned().unwrap_or(Value::Null),
+            "ready_timeout_secs": result_data.get("ready_timeout_secs").and_then(|item| item.as_u64()).unwrap_or(0),
+            "initial_output_tail": truncate_stream_text(
+                result_data.get("initial_output_tail").and_then(|item| item.as_str()).unwrap_or(""),
+                STREAM_TEXT_MAX_CHARS,
+            ),
+            "stopped": result_data.get("stopped").and_then(|item| item.as_bool()).unwrap_or(false),
+            "force": result_data.get("force").and_then(|item| item.as_bool()).unwrap_or(false),
+        }),
+        "shell_logs" => json!({
+            "ok": true,
+            "process_id": result_data.get("process_id").and_then(|item| item.as_str()).unwrap_or(""),
+            "name": result_data.get("name").and_then(|item| item.as_str()).unwrap_or(""),
+            "status": result_data.get("status").and_then(|item| item.as_str()).unwrap_or(""),
+            "pid": result_data.get("pid").and_then(|item| item.as_u64()).unwrap_or(0),
+            "exit_code": result_data.get("exit_code").cloned().unwrap_or(Value::Null),
+            "started_at": result_data.get("started_at").and_then(|item| item.as_u64()).unwrap_or(0),
+            "last_output_at": result_data.get("last_output_at").cloned().unwrap_or(Value::Null),
+            "uptime_secs": result_data.get("uptime_secs").and_then(|item| item.as_u64()).unwrap_or(0),
+            "workdir": result_data.get("workdir").and_then(|item| item.as_str()).unwrap_or(""),
+            "command": result_data.get("command").and_then(|item| item.as_str()).unwrap_or(""),
+            "tail_text": truncate_stream_text(
+                result_data.get("tail_text").and_then(|item| item.as_str()).unwrap_or(""),
+                STREAM_TEXT_MAX_CHARS,
+            ),
+            "tail_lines": result_data.get("tail_lines").cloned().unwrap_or_else(|| json!([])),
+            "follow_secs": result_data.get("follow_secs").and_then(|item| item.as_u64()).unwrap_or(0),
+        }),
+        "shell_list" => json!({
+            "ok": true,
+            "count": result_data.get("count").and_then(|item| item.as_u64()).unwrap_or(0),
+            "processes": result_data
+                .get("processes")
+                .and_then(|item| item.as_array())
+                .map(|items| items.iter().take(20).cloned().collect::<Vec<Value>>())
+                .unwrap_or_default(),
         }),
         "write_text" | "write_json" => {
             let content_preview = if tool_name == "write_json" {
@@ -2594,12 +2967,340 @@ fn build_user_input_request_id(session_id: &str) -> String {
     )
 }
 
+struct StreamingPythonExecutionBase<'a> {
+    workdir: Option<&'a str>,
+    dcc_provider_addr: Option<&'a str>,
+    available_mcps: &'a [AgentRegisteredMcp],
+    policy: &'a crate::policy::AgentPolicy,
+    trace_id: &'a str,
+    session_id: &'a str,
+}
+
+#[derive(Debug, Default)]
+struct StreamingPythonExecutionState {
+    raw_response: String,
+    executed_script: String,
+    accumulator: PythonScriptExecutionAccumulator,
+    batch_count: usize,
+}
+
+impl StreamingPythonExecutionState {
+    /// 描述：追加模型新返回的 delta，并在可能时立刻执行已经闭合的顶层脚本前缀。
+    ///
+    /// Params:
+    ///
+    ///   - delta: 本次新增文本。
+    ///   - base: 执行上下文。
+    fn push_delta<F>(
+        &mut self,
+        delta: &str,
+        base: &StreamingPythonExecutionBase<'_>,
+        on_stream_event: &mut F,
+    ) -> Result<(), ProtocolError>
+    where
+        F: FnMut(AgentStreamEvent),
+    {
+        self.raw_response.push_str(delta);
+        self.execute_ready_batches(base, on_stream_event)
+    }
+
+    /// 描述：在流结束后执行剩余尾批；若此前从未切出可执行前缀，则回退到完整脚本的一次性执行路径。
+    ///
+    /// Params:
+    ///
+    ///   - base: 执行上下文。
+    ///
+    /// Returns:
+    ///
+    ///   - 最终规范化脚本、合并后的执行结果与分批次数。
+    fn finalize<F>(
+        mut self,
+        base: &StreamingPythonExecutionBase<'_>,
+        on_stream_event: &mut F,
+    ) -> Result<(String, PythonScriptExecutionResult, usize), ProtocolError>
+    where
+        F: FnMut(AgentStreamEvent),
+    {
+        let generated_script = extract_python_script(&self.raw_response);
+        if generated_script.trim().is_empty() {
+            return Err(ProtocolError::new(
+                "core.agent.python.empty_script",
+                "模型未返回可执行 Python 脚本",
+            )
+            .with_suggestion("请重试，或调整提示词让模型只输出 Python 代码。"));
+        }
+        let generated_script = repair_missing_python_block_body(&generated_script);
+        let generated_script = repair_unterminated_python_string_literals(&generated_script);
+        let generated_script = ensure_script_has_finish(&generated_script);
+        let generated_script = truncate_script_after_first_top_level_finish(&generated_script);
+
+        if self.executed_script.trim().is_empty() {
+            let final_result = execute_python_script(
+                build_python_execution_request(&generated_script, base),
+                on_stream_event,
+            )?;
+            self.batch_count = self.batch_count.saturating_add(1);
+            let final_message = final_result.message.clone();
+            let final_display_message_hint = final_result.display_message_hint.clone();
+            self.accumulator.absorb(final_result);
+            return Ok((
+                generated_script,
+                self.accumulator
+                    .into_result(final_message, final_display_message_hint),
+                self.batch_count,
+            ));
+        }
+
+        let final_candidate = extract_incremental_python_script_source(&self.raw_response)
+            .ok_or_else(|| {
+                ProtocolError::new(
+                    "core.agent.python.streaming_candidate_missing",
+                    "流式批次已执行前缀，但最终未能重新提取脚本尾部",
+                )
+            })?;
+        let remaining_source = final_candidate
+            .strip_prefix(self.executed_script.as_str())
+            .ok_or_else(|| {
+                ProtocolError::new(
+                    "core.agent.python.streaming_prefix_diverged",
+                    "流式脚本前缀与已执行批次不一致，已停止继续执行以避免重复落地",
+                )
+            })?;
+        let remaining_script = if remaining_source.trim().is_empty() {
+            build_auto_finish_script()
+        } else {
+            let repaired_remaining = repair_missing_python_block_body(remaining_source);
+            let repaired_remaining =
+                repair_unterminated_python_string_literals(repaired_remaining.as_str());
+            let ensured_remaining = ensure_script_has_finish(repaired_remaining.as_str());
+            truncate_script_after_first_top_level_finish(ensured_remaining.as_str())
+        };
+        let final_result = execute_python_script(
+            build_python_execution_request(&remaining_script, base),
+            on_stream_event,
+        )?;
+        self.batch_count = self.batch_count.saturating_add(1);
+        let final_message = final_result.message.clone();
+        let final_display_message_hint = final_result.display_message_hint.clone();
+        self.accumulator.absorb(final_result);
+        Ok((
+            generated_script,
+            self.accumulator
+                .into_result(final_message, final_display_message_hint),
+            self.batch_count,
+        ))
+    }
+
+    /// 描述：重复提取当前可执行的安全前缀，并把每个前缀作为“允许无 finish 返回”的中间批次送入沙盒。
+    fn execute_ready_batches<F>(
+        &mut self,
+        base: &StreamingPythonExecutionBase<'_>,
+        on_stream_event: &mut F,
+    ) -> Result<(), ProtocolError>
+    where
+        F: FnMut(AgentStreamEvent),
+    {
+        loop {
+            let Some(candidate_script) =
+                extract_incremental_python_script_source(&self.raw_response)
+            else {
+                return Ok(());
+            };
+            if !self.executed_script.is_empty()
+                && !candidate_script.starts_with(self.executed_script.as_str())
+            {
+                return Err(ProtocolError::new(
+                    "core.agent.python.streaming_prefix_diverged",
+                    "流式脚本前缀在增量执行后发生漂移，已停止继续执行以避免重复落地",
+                ));
+            }
+            let pending_script = candidate_script
+                .strip_prefix(self.executed_script.as_str())
+                .unwrap_or(candidate_script.as_str());
+            let Some(batch_prefix) = extract_streaming_python_batch_prefix(pending_script) else {
+                return Ok(());
+            };
+            let batch_source = batch_prefix.trim();
+            if batch_source.is_empty() {
+                return Ok(());
+            }
+            let partial_result = execute_python_script_allow_incomplete_result(
+                build_python_execution_request(batch_source, base),
+                on_stream_event,
+            )?;
+            self.batch_count = self.batch_count.saturating_add(1);
+            self.executed_script.push_str(batch_prefix);
+            self.accumulator.absorb(partial_result);
+        }
+    }
+}
+
+/// 描述：基于统一上下文为某个脚本片段构造执行请求，避免流式批次与最终批次手写重复字段。
+fn build_python_execution_request<'a>(
+    user_script: &'a str,
+    base: &StreamingPythonExecutionBase<'a>,
+) -> PythonScriptExecutionRequest<'a> {
+    PythonScriptExecutionRequest {
+        user_script,
+        workdir: base.workdir,
+        dcc_provider_addr: base.dcc_provider_addr,
+        available_mcps: base.available_mcps,
+        policy: base.policy,
+        trace_id: base.trace_id.to_string(),
+        session_id: base.session_id.to_string(),
+    }
+}
+
+/// 描述：调用模型生成 Python 脚本，并在收到 delta 后尽早执行已经闭合的安全前缀。
+///
+/// Params:
+///
+///   - provider: 当前 LLM provider。
+///   - provider_name: provider 原始名称，供流式事件回传。
+///   - prompt: 模型提示词。
+///   - workdir: 当前工作目录。
+///   - llm_policy: LLM 调用策略。
+///   - provider_config: provider 侧配置。
+///   - base: Python 执行上下文。
+///   - waiting_message: 代码生成阶段的等待心跳文案。
+///
+/// Returns:
+///
+///   - 模型原始返回、规范化脚本、执行结果、usage、批次数与时间戳。
+fn stream_python_codegen_and_execute(
+    provider: crate::llm::LlmProvider,
+    provider_name: &str,
+    prompt: &str,
+    workdir: Option<&str>,
+    llm_policy: crate::llm::LlmGatewayPolicy,
+    provider_config: &crate::llm::LlmProviderConfig,
+    base: &StreamingPythonExecutionBase<'_>,
+    waiting_message: &str,
+    on_stream_event: &mut dyn FnMut(AgentStreamEvent),
+) -> Result<
+    (
+        crate::llm::LlmRunResult,
+        String,
+        PythonScriptExecutionResult,
+        usize,
+        u128,
+        u128,
+        u128,
+        u128,
+    ),
+    ProtocolError,
+> {
+    on_stream_event(AgentStreamEvent::LlmStarted {
+        provider: provider_name.to_string(),
+    });
+
+    let llm_started_at = now_millis();
+    let streaming_state = std::cell::RefCell::new(StreamingPythonExecutionState::default());
+    let stream_error = std::cell::RefCell::new(None::<ProtocolError>);
+    let stream_event_cell = std::cell::RefCell::new(&mut *on_stream_event);
+    let mut stream_observer = |chunk: &str| {
+        {
+            let mut emitter = stream_event_cell.borrow_mut();
+            (*emitter)(AgentStreamEvent::LlmDelta {
+                content: chunk.to_string(),
+            });
+        }
+        if stream_error.borrow().is_some() {
+            return;
+        }
+        let execute_result = {
+            let mut state = streaming_state.borrow_mut();
+            let mut emitter = stream_event_cell.borrow_mut();
+            state.push_delta(chunk, base, &mut *emitter)
+        };
+        if let Err(err) = execute_result {
+            *stream_error.borrow_mut() = Some(err);
+        }
+    };
+    let mut codegen_progress_observer = |progress: &str| {
+        let mut emitter = stream_event_cell.borrow_mut();
+        (*emitter)(AgentStreamEvent::Heartbeat {
+            message: build_llm_waiting_heartbeat_message(waiting_message, progress),
+        });
+    };
+    let run_result = crate::llm::call_model_with_policy_and_stream(
+        provider,
+        prompt,
+        workdir,
+        llm_policy,
+        Some(provider_config),
+        Some(&mut stream_observer),
+        Some(&mut codegen_progress_observer),
+    )
+    .map_err(|err| err.to_protocol_error())?;
+    let llm_finished_at = now_millis();
+    if let Some(err) = stream_error.borrow_mut().take() {
+        return Err(err);
+    }
+
+    {
+        let mut emitter = stream_event_cell.borrow_mut();
+        (*emitter)(AgentStreamEvent::LlmFinished {
+            provider: provider_name.to_string(),
+        });
+    }
+    let exec_started_at = now_millis();
+    let (generated_script, execution, batch_count) = {
+        let state = streaming_state.into_inner();
+        let mut emitter = stream_event_cell.borrow_mut();
+        state.finalize(base, &mut *emitter)?
+    };
+    let exec_finished_at = now_millis();
+    Ok((
+        run_result,
+        generated_script,
+        execution,
+        batch_count,
+        llm_started_at,
+        llm_finished_at,
+        exec_started_at,
+        exec_finished_at,
+    ))
+}
+
 pub(crate) fn execute_python_script<F>(
     request: PythonScriptExecutionRequest<'_>,
     on_stream_event: &mut F,
 ) -> Result<PythonScriptExecutionResult, ProtocolError>
 where
-    F: FnMut(AgentStreamEvent) + ?Sized,
+    F: FnMut(AgentStreamEvent),
+{
+    execute_python_script_with_mode(
+        request,
+        on_stream_event,
+        PythonScriptExecutionMode::RequireFinalResult,
+    )
+}
+
+/// 描述：执行“允许中间批次无 finish 返回”的 Python 脚本模式，供流式分批执行时复用持久化沙盒。
+fn execute_python_script_allow_incomplete_result<F>(
+    request: PythonScriptExecutionRequest<'_>,
+    on_stream_event: &mut F,
+) -> Result<PythonScriptExecutionResult, ProtocolError>
+where
+    F: FnMut(AgentStreamEvent),
+{
+    execute_python_script_with_mode(
+        request,
+        on_stream_event,
+        PythonScriptExecutionMode::AllowIncompleteResult,
+    )
+}
+
+/// 描述：执行 Python 脚本；默认要求最终批次通过 finish(...) 或可见输出产生稳定结果，
+/// 流式中间批次则允许暂时没有最终消息，只复用工具/授权/审计事件。
+fn execute_python_script_with_mode<F>(
+    request: PythonScriptExecutionRequest<'_>,
+    on_stream_event: &mut F,
+    execution_mode: PythonScriptExecutionMode,
+) -> Result<PythonScriptExecutionResult, ProtocolError>
+where
+    F: FnMut(AgentStreamEvent),
 {
     let PythonScriptExecutionRequest {
         user_script,
@@ -2700,62 +3401,79 @@ where
                         message: format!("tool={} started", tool_name),
                     });
 
-                    // 高危拦截逻辑 (Human-in-the-loop)
+                    let mut approval_preflight_error: Option<ProtocolError> = None;
+
+                    // 描述：按工具与参数动态判定审批分支，保留现有授权协议，但不再依赖静态高低风险枚举。
                     if let Some(tool) = registry.get(&tool_name) {
-                        if tool.risk_level() == crate::tools::RiskLevel::High {
-                            let approval_id = format!("appr-{}", now_millis());
-                            on_stream_event(AgentStreamEvent::RequireApproval {
-                                approval_id: approval_id.clone(),
-                                tool_name: tool_name.clone(),
-                                tool_args: tool_args_preview,
-                            });
-                            events.push(ProtocolEventRecord {
-                                event: "approval_requested".to_string(),
-                                step_index: None,
-                                timestamp_ms: now_millis(),
-                                message: format!(
-                                    "tool={} approval_requested id={}",
-                                    tool_name, approval_id
-                                ),
-                            });
-
-                            let signal = crate::APPROVAL_REGISTRY.create_request(&approval_id);
-                            let outcome = loop {
-                                let decision = match signal.lock() {
-                                    Ok(guard) => *guard,
-                                    Err(poisoned) => *poisoned.into_inner(),
-                                };
-                                if let Some(o) = decision {
-                                    break o;
-                                }
-                                thread::sleep(Duration::from_millis(200));
-                            };
-
-                            if matches!(outcome, crate::ApprovalOutcome::Rejected) {
-                                let (event_name, reject_message, reject_code) =
-                                    resolve_approval_reject_payload();
+                        let approval_context = crate::tools::ToolContext {
+                            trace_id: trace_id.clone(),
+                            session_id: &session_id,
+                            sandbox_root: &sandbox_root,
+                            policy,
+                            on_stream_event: None,
+                        };
+                        match tool.approval_decision(&tool_args, &approval_context) {
+                            crate::tools::ToolApprovalDecision::Allow => {}
+                            crate::tools::ToolApprovalDecision::RequireApproval => {
+                                let approval_id = format!("appr-{}", now_millis());
+                                on_stream_event(AgentStreamEvent::RequireApproval {
+                                    approval_id: approval_id.clone(),
+                                    tool_name: tool_name.clone(),
+                                    tool_args: tool_args_preview,
+                                });
                                 events.push(ProtocolEventRecord {
-                                    event: event_name.to_string(),
+                                    event: "approval_requested".to_string(),
                                     step_index: None,
                                     timestamp_ms: now_millis(),
-                                    message: format!("tool={} {}", tool_name, event_name),
+                                    message: format!(
+                                        "tool={} approval_requested id={}",
+                                        tool_name, approval_id
+                                    ),
                                 });
-                                let result_line = json!({"ok": false, "error": reject_message, "code": reject_code});
-                                sandbox.write_tool_result(&result_line)?;
-                                continue;
+
+                                let signal = crate::APPROVAL_REGISTRY.create_request(&approval_id);
+                                let outcome = loop {
+                                    let decision = match signal.lock() {
+                                        Ok(guard) => *guard,
+                                        Err(poisoned) => *poisoned.into_inner(),
+                                    };
+                                    if let Some(o) = decision {
+                                        break o;
+                                    }
+                                    thread::sleep(Duration::from_millis(200));
+                                };
+
+                                if matches!(outcome, crate::ApprovalOutcome::Rejected) {
+                                    let (event_name, reject_message, reject_code) =
+                                        resolve_approval_reject_payload();
+                                    events.push(ProtocolEventRecord {
+                                        event: event_name.to_string(),
+                                        step_index: None,
+                                        timestamp_ms: now_millis(),
+                                        message: format!("tool={} {}", tool_name, event_name),
+                                    });
+                                    let result_line = json!({"ok": false, "error": reject_message, "code": reject_code});
+                                    sandbox.write_tool_result(&result_line)?;
+                                    continue;
+                                }
+                                events.push(ProtocolEventRecord {
+                                    event: "approval_approved".to_string(),
+                                    step_index: None,
+                                    timestamp_ms: now_millis(),
+                                    message: format!("tool={} approval_approved", tool_name),
+                                });
                             }
-                            events.push(ProtocolEventRecord {
-                                event: "approval_approved".to_string(),
-                                step_index: None,
-                                timestamp_ms: now_millis(),
-                                message: format!("tool={} approval_approved", tool_name),
-                            });
+                            crate::tools::ToolApprovalDecision::Deny(err) => {
+                                approval_preflight_error = Some(err);
+                            }
                         }
                     }
 
-                    let tool_response: Result<Value, ProtocolError> = if tool_name
-                        == "request_user_input"
+                    let tool_response: Result<Value, ProtocolError> = if let Some(err) =
+                        approval_preflight_error
                     {
+                        Err(err)
+                    } else if tool_name == "request_user_input" {
                         match validate_request_user_input_questions(&tool_args) {
                             Ok(questions) => {
                                 let request_id = build_user_input_request_id(&session_id);
@@ -2817,6 +3535,7 @@ where
                             session_id: &session_id,
                             sandbox_root: &sandbox_root,
                             policy,
+                            on_stream_event: Some(on_stream_event),
                         };
 
                         if tool_name == "tool_search" {
@@ -2993,6 +3712,16 @@ where
 
     sandbox.last_active_at = Instant::now();
     let display_message_hint = build_display_message_hint_from_stdout(&plain_stdout_lines);
+    if execution_mode == PythonScriptExecutionMode::AllowIncompleteResult {
+        return Ok(PythonScriptExecutionResult {
+            message: final_message.trim().to_string(),
+            display_message_hint,
+            actions,
+            tool_facts,
+            events,
+            assets,
+        });
+    }
     let normalized_message = if final_message.trim().is_empty() {
         synthesize_final_message_from_stdout(&plain_stdout_lines)
     } else {
@@ -3058,7 +3787,9 @@ use crate::tools::file::{
 use crate::tools::git::{GitDiffTool, GitLogTool, GitStatusTool};
 use crate::tools::mcp::{DccTool, McpTool};
 use crate::tools::patch::ApplyPatchTool;
-use crate::tools::shell::RunShellTool;
+use crate::tools::shell::{
+    RunShellTool, ShellListTool, ShellLogsTool, ShellStartTool, ShellStatusTool, ShellStopTool,
+};
 use crate::tools::todo::{TodoReadTool, TodoWriteTool};
 use crate::tools::utils::*;
 use crate::tools::web::{FetchUrlTool, WebSearchTool};
@@ -3201,6 +3932,59 @@ fn summarize_tool_result(name: &str, ok: bool, data: &Value) -> String {
             };
             s.push_str(&format!(" (退出码: {})", exit_code));
             s
+        }
+        "shell_start" => {
+            let name = data.get("name").and_then(|value| value.as_str()).unwrap_or("");
+            let status = data.get("status").and_then(|value| value.as_str()).unwrap_or("");
+            let ready = data.get("ready").and_then(|value| value.as_bool()).unwrap_or(false);
+            let ready_pattern = data
+                .get("ready_pattern")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let process_label = if name.is_empty() { "长驻进程" } else { name };
+            if !ready && !ready_pattern.is_empty() {
+                format!("已启动 {}，但在超时前未匹配到就绪标记", process_label)
+            } else if status == "exited" {
+                let exit_code = data
+                    .get("exit_code")
+                    .and_then(|value| value.as_i64())
+                    .unwrap_or(0);
+                format!("已启动 {}，进程随后退出（退出码: {}）", process_label, exit_code)
+            } else {
+                format!("已启动可复用长驻进程：{}", process_label)
+            }
+        }
+        "shell_status" => {
+            let name = data.get("name").and_then(|value| value.as_str()).unwrap_or("");
+            let status = data.get("status").and_then(|value| value.as_str()).unwrap_or("");
+            let process_label = if name.is_empty() { "长驻进程" } else { name };
+            if status.is_empty() {
+                format!("已读取 {} 状态", process_label)
+            } else {
+                format!("{} 当前状态：{}", process_label, status)
+            }
+        }
+        "shell_logs" => {
+            let name = data.get("name").and_then(|value| value.as_str()).unwrap_or("");
+            let follow_secs = data
+                .get("follow_secs")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0);
+            let process_label = if name.is_empty() { "长驻进程" } else { name };
+            if follow_secs > 0 {
+                format!("已跟随 {} 日志 {} 秒", process_label, follow_secs)
+            } else {
+                format!("已读取 {} 日志", process_label)
+            }
+        }
+        "shell_stop" => {
+            let name = data.get("name").and_then(|value| value.as_str()).unwrap_or("");
+            let process_label = if name.is_empty() { "长驻进程" } else { name };
+            format!("已停止 {}", process_label)
+        }
+        "shell_list" => {
+            let count = data.get("count").and_then(|value| value.as_u64()).unwrap_or(0);
+            format!("已列出当前会话的 {} 个长驻进程", count)
         }
         "read_text" => {
             let content = data.get("content").and_then(|v| v.as_str()).unwrap_or("");
@@ -3378,6 +4162,11 @@ fn build_default_tool_registry(
     registry.register(Box::new(GlobTool));
     registry.register(Box::new(SearchFilesTool));
     registry.register(Box::new(RunShellTool));
+    registry.register(Box::new(ShellStartTool));
+    registry.register(Box::new(ShellStatusTool));
+    registry.register(Box::new(ShellLogsTool));
+    registry.register(Box::new(ShellStopTool));
+    registry.register(Box::new(ShellListTool));
     registry.register(Box::new(GitStatusTool));
     registry.register(Box::new(GitDiffTool));
     registry.register(Box::new(GitLogTool));
@@ -3494,6 +4283,41 @@ fn builtin_tool_descriptors() -> &'static [AgentToolDescriptor] {
             params: "command: string, timeout_secs?: number",
             tags: &["shell", "exec", "command"],
             example: r#"run_shell("cargo test -p libra_agent_core", 120)"#,
+        },
+        AgentToolDescriptor {
+            name: "shell_start",
+            description: "启动当前会话可复用的长驻 shell 进程，并按需等待 ready_pattern",
+            params: "command: string, name: string, ready_pattern?: string, ready_timeout_secs?: number",
+            tags: &["shell", "resident", "process", "server"],
+            example: r#"shell_start(command="npm run dev", name="desktop-dev", ready_pattern="ready", ready_timeout_secs=20)"#,
+        },
+        AgentToolDescriptor {
+            name: "shell_status",
+            description: "读取当前会话长驻进程状态",
+            params: "process_id_or_name: string",
+            tags: &["shell", "resident", "process", "status"],
+            example: r#"shell_status("desktop-dev")"#,
+        },
+        AgentToolDescriptor {
+            name: "shell_logs",
+            description: "读取当前会话长驻进程日志，并可在本轮继续 follow",
+            params: "process_id_or_name: string, tail_lines?: number, follow_secs?: number",
+            tags: &["shell", "resident", "process", "logs"],
+            example: r#"shell_logs("desktop-dev", tail_lines=80, follow_secs=10)"#,
+        },
+        AgentToolDescriptor {
+            name: "shell_stop",
+            description: "停止当前会话长驻进程",
+            params: "process_id_or_name: string, force?: bool",
+            tags: &["shell", "resident", "process", "stop"],
+            example: r#"shell_stop("desktop-dev", force=True)"#,
+        },
+        AgentToolDescriptor {
+            name: "shell_list",
+            description: "列出当前会话全部长驻进程摘要",
+            params: "none",
+            tags: &["shell", "resident", "process", "list"],
+            example: r#"shell_list()"#,
         },
         AgentToolDescriptor {
             name: "git_status",
@@ -3765,6 +4589,7 @@ mod tests {
     use std::env;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
     // 从 tools 模块导入公共类型
@@ -3809,6 +4634,7 @@ mod tests {
             session_id: "test-session",
             sandbox_root,
             policy,
+            on_stream_event: None,
         }
     }
 
@@ -4048,6 +4874,114 @@ def main():
         let root = PathBuf::from("/tmp/libra-agent-test");
         let path = resolve_sandbox_path(&root, "../../etc/passwd");
         assert!(path.is_err());
+    }
+
+    /// 描述：验证流式增量状态在首个安全前缀形成后会立即执行中间批次，而不是等到最终 flush 才统一跑工具。
+    #[test]
+    fn should_execute_streaming_batch_before_final_flush() {
+        if resolve_python_command().is_err() {
+            return;
+        }
+        let root = build_unique_test_root();
+        fs::create_dir_all(&root).expect("create temp root");
+        fs::write(root.join("hello.txt"), "hello").expect("seed test file");
+        let policy = crate::policy::AgentPolicy::default();
+        let base = StreamingPythonExecutionBase {
+            workdir: root.to_str(),
+            dcc_provider_addr: None,
+            available_mcps: &[],
+            policy: &policy,
+            trace_id: "test-trace-streaming-batch",
+            session_id: "test-session-streaming-batch",
+        };
+        let mut state = StreamingPythonExecutionState::default();
+        let streamed_events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let streamed_events_for_callback = Arc::clone(&streamed_events);
+        state
+            .push_delta("items = list_dir(\".\")\n", &base, &mut |event| {
+                if let AgentStreamEvent::ToolCallStarted { ref name, .. } = event {
+                    streamed_events_for_callback
+                        .lock()
+                        .expect("lock streaming event bucket")
+                        .push(format!("started:{name}"));
+                }
+                if let AgentStreamEvent::ToolCallFinished { ref name, .. } = event {
+                    streamed_events_for_callback
+                        .lock()
+                        .expect("lock streaming event bucket")
+                        .push(format!("finished:{name}"));
+                }
+            })
+            .expect("streaming delta should execute partial batch");
+        assert_eq!(state.batch_count, 1);
+        assert!(state.executed_script.contains("items = list_dir"));
+        let recorded_events = streamed_events
+            .lock()
+            .expect("lock recorded streaming events");
+        assert!(recorded_events
+            .iter()
+            .any(|item| item == "started:list_dir"));
+        assert!(recorded_events
+            .iter()
+            .any(|item| item == "finished:list_dir"));
+        drop(recorded_events);
+
+        let (generated_script, final_result, batch_count) = state
+            .finalize(&base, &mut |_| {})
+            .expect("final flush should succeed");
+        assert!(generated_script.contains("items = list_dir"));
+        assert_eq!(batch_count, 2);
+        assert!(final_result.actions.iter().any(|item| item == "list_dir"));
+        assert!(
+            final_result.message.contains("系统自动补全 finish")
+                || final_result.message.contains("执行完成")
+        );
+    }
+
+    /// 描述：验证流式增量在注释行被 chunk 截断时不会把后半段当作新批次首行执行，避免中文说明尾部触发 SyntaxError。
+    #[test]
+    fn should_not_execute_comment_tail_after_streaming_chunk_split() {
+        if resolve_python_command().is_err() {
+            return;
+        }
+        let root = build_unique_test_root();
+        fs::create_dir_all(&root).expect("create temp root");
+        fs::write(root.join("hello.txt"), "hello").expect("seed test file");
+        let policy = crate::policy::AgentPolicy::default();
+        let base = StreamingPythonExecutionBase {
+            workdir: root.to_str(),
+            dcc_provider_addr: None,
+            available_mcps: &[],
+            policy: &policy,
+            trace_id: "test-trace-streaming-comment-split",
+            session_id: "test-session-streaming-comment-split",
+        };
+        let mut state = StreamingPythonExecutionState::default();
+
+        state
+            .push_delta(
+                "items = list_dir(\".\")\n# 3. 输出架构规划与实现约束（此部分",
+                &base,
+                &mut |_| {},
+            )
+            .expect("first delta should execute only the completed statement");
+        assert_eq!(state.batch_count, 1);
+        assert_eq!(state.executed_script.trim(), r#"items = list_dir(".")"#);
+
+        state
+            .push_delta(
+                "作为 SUMMARY 返回）\narchitecture_plan = \"\"\"\nhello\n\"\"\"\nfinish(\"done\")\n",
+                &base,
+                &mut |_| {},
+            )
+            .expect("second delta should not execute comment tail as code");
+
+        let (_generated_script, final_result, batch_count) = state
+            .finalize(&base, &mut |_| {})
+            .expect("final flush should succeed after comment line completes");
+        assert!(batch_count >= 2);
+        assert!(final_result.actions.iter().any(|item| item == "list_dir"));
+        assert_eq!(final_result.message.trim(), "done");
     }
 
     /// 描述：验证 Python 沙盒中的 `list_dir(...)` 默认返回目录项数组，且可通过 `with_meta=True` 读取原始工具响应。
@@ -4381,6 +5315,7 @@ finish("list_directory recursive keyword ok")
         }
         let root = build_unique_test_root();
         fs::create_dir_all(&root).expect("create temp root");
+        let approval_requested = Arc::new(AtomicBool::new(false));
         let script = r##"
 result = write_text(file_path="requirements.md", text="# alias write ok\n")
 if not isinstance(result, dict) or not result.get("ok"):
@@ -4397,18 +5332,26 @@ finish("write_text keyword alias ok")
                 trace_id: "test-trace".to_string(),
                 session_id: "test-session-write-text-alias".to_string(),
             },
-            &mut |event| {
-                if let AgentStreamEvent::RequireApproval { approval_id, .. } = event {
-                    thread::spawn(move || {
-                        thread::sleep(Duration::from_millis(20));
-                        let _ = crate::APPROVAL_REGISTRY
-                            .submit_decision(&approval_id, crate::ApprovalOutcome::Approved);
-                    });
+            &mut {
+                let approval_requested = Arc::clone(&approval_requested);
+                move |event| {
+                    if let AgentStreamEvent::RequireApproval { approval_id, .. } = event {
+                        approval_requested.store(true, Ordering::SeqCst);
+                        thread::spawn(move || {
+                            thread::sleep(Duration::from_millis(20));
+                            let _ = crate::APPROVAL_REGISTRY
+                                .submit_decision(&approval_id, crate::ApprovalOutcome::Approved);
+                        });
+                    }
                 }
             },
         )
         .expect("write_text alias script should execute successfully");
         assert_eq!(result.message, "write_text keyword alias ok");
+        assert!(
+            !approval_requested.load(Ordering::SeqCst),
+            "write_text should not require approval inside sandbox"
+        );
         let written_content = fs::read_to_string(root.join("requirements.md"))
             .expect("write_text alias should create requirements.md");
         assert_eq!(written_content, "# alias write ok\n");
@@ -4673,6 +5616,7 @@ finish("todo_read default items list ok")
         }
         let root = build_unique_test_root();
         fs::create_dir_all(&root).expect("create temp root");
+        let approval_requested = Arc::new(AtomicBool::new(false));
         let script = r##"
 shell_result = run_shell("echo ready", 30)
 if not isinstance(shell_result, dict):
@@ -4700,18 +5644,26 @@ finish("run_shell default unwrap ok")
                 trace_id: "test-trace".to_string(),
                 session_id: "test-session-run-shell-default-unwrap".to_string(),
             },
-            &mut |event| {
-                if let AgentStreamEvent::RequireApproval { approval_id, .. } = event {
-                    thread::spawn(move || {
-                        thread::sleep(Duration::from_millis(20));
-                        let _ = crate::APPROVAL_REGISTRY
-                            .submit_decision(&approval_id, crate::ApprovalOutcome::Approved);
-                    });
+            &mut {
+                let approval_requested = Arc::clone(&approval_requested);
+                move |event| {
+                    if let AgentStreamEvent::RequireApproval { approval_id, .. } = event {
+                        approval_requested.store(true, Ordering::SeqCst);
+                        thread::spawn(move || {
+                            thread::sleep(Duration::from_millis(20));
+                            let _ = crate::APPROVAL_REGISTRY
+                                .submit_decision(&approval_id, crate::ApprovalOutcome::Approved);
+                        });
+                    }
                 }
             },
         )
         .expect("run_shell unwrap script should execute successfully");
         assert_eq!(result.message, "run_shell default unwrap ok");
+        assert!(
+            !approval_requested.load(Ordering::SeqCst),
+            "safe run_shell should not require approval"
+        );
         assert!(
             result
                 .actions
@@ -4844,6 +5796,119 @@ finish("read_text/read_json default unwrap ok")
         assert_eq!(result.message, "read_text/read_json default unwrap ok");
         assert!(result.actions.iter().any(|item| item == "read_text"));
         assert!(result.actions.iter().any(|item| item == "read_json"));
+    }
+
+    /// 描述：验证危险 shell 命令在用户批准后可继续执行，且会真实修改沙盒内文件。
+    #[test]
+    fn should_require_approval_for_dangerous_run_shell_and_continue_after_approval() {
+        if resolve_python_command().is_err() {
+            return;
+        }
+        let root = build_unique_test_root();
+        fs::create_dir_all(&root).expect("create temp root");
+        fs::write(root.join("danger.txt"), "danger").expect("prepare dangerous shell fixture");
+        let approval_requested = Arc::new(AtomicBool::new(false));
+        let script = r##"
+result = run_shell("rm -f ./danger.txt", 30, with_meta=True)
+if not isinstance(result, dict) or not result.get("ok"):
+    raise RuntimeError(f"dangerous run_shell should succeed after approval: {result}")
+data = result.get("data") or {}
+if not isinstance(data, dict) or data.get("success") is not True:
+    raise RuntimeError(f"dangerous run_shell payload mismatch: {result}")
+finish("dangerous run_shell approved ok")
+"##;
+        let result = execute_python_script(
+            PythonScriptExecutionRequest {
+                user_script: script,
+                workdir: root.to_str(),
+                dcc_provider_addr: None,
+                available_mcps: &[],
+                policy: &crate::policy::AgentPolicy::default(),
+                trace_id: "test-trace".to_string(),
+                session_id: "test-session-run-shell-dangerous-approved".to_string(),
+            },
+            &mut {
+                let approval_requested = Arc::clone(&approval_requested);
+                move |event| {
+                    if let AgentStreamEvent::RequireApproval { approval_id, .. } = event {
+                        approval_requested.store(true, Ordering::SeqCst);
+                        thread::spawn(move || {
+                            thread::sleep(Duration::from_millis(20));
+                            let _ = crate::APPROVAL_REGISTRY
+                                .submit_decision(&approval_id, crate::ApprovalOutcome::Approved);
+                        });
+                    }
+                }
+            },
+        )
+        .expect("dangerous run_shell should execute after approval");
+        assert_eq!(result.message, "dangerous run_shell approved ok");
+        assert!(
+            approval_requested.load(Ordering::SeqCst),
+            "dangerous run_shell should emit approval request"
+        );
+        assert!(
+            !root.join("danger.txt").exists(),
+            "approved dangerous command should remove sandbox file"
+        );
+    }
+
+    /// 描述：验证危险 shell 命令被用户拒绝后会回写标准拒绝载荷，且不会对沙盒内容产生副作用。
+    #[test]
+    fn should_return_reject_payload_when_dangerous_run_shell_is_rejected() {
+        if resolve_python_command().is_err() {
+            return;
+        }
+        let root = build_unique_test_root();
+        fs::create_dir_all(&root).expect("create temp root");
+        fs::write(root.join("danger.txt"), "danger").expect("prepare dangerous shell fixture");
+        let approval_requested = Arc::new(AtomicBool::new(false));
+        let script = r##"
+result = run_shell("rm -f ./danger.txt", 30, with_meta=True)
+if not isinstance(result, dict):
+    raise RuntimeError(f"dangerous rejected run_shell should return dict: {result}")
+if result.get("ok") is not False:
+    raise RuntimeError(f"dangerous rejected run_shell should return failed envelope: {result}")
+if result.get("code") != "core.agent.human_refused":
+    raise RuntimeError(f"dangerous rejected run_shell should expose refusal code: {result}")
+if "操作已被用户拒绝" not in str(result.get("error")):
+    raise RuntimeError(f"dangerous rejected run_shell should expose refusal message: {result}")
+finish("dangerous run_shell rejected ok")
+"##;
+        let result = execute_python_script(
+            PythonScriptExecutionRequest {
+                user_script: script,
+                workdir: root.to_str(),
+                dcc_provider_addr: None,
+                available_mcps: &[],
+                policy: &crate::policy::AgentPolicy::default(),
+                trace_id: "test-trace".to_string(),
+                session_id: "test-session-run-shell-dangerous-rejected".to_string(),
+            },
+            &mut {
+                let approval_requested = Arc::clone(&approval_requested);
+                move |event| {
+                    if let AgentStreamEvent::RequireApproval { approval_id, .. } = event {
+                        approval_requested.store(true, Ordering::SeqCst);
+                        thread::spawn(move || {
+                            thread::sleep(Duration::from_millis(20));
+                            let _ = crate::APPROVAL_REGISTRY
+                                .submit_decision(&approval_id, crate::ApprovalOutcome::Rejected);
+                        });
+                    }
+                }
+            },
+        )
+        .expect("dangerous rejected run_shell should return refusal payload");
+        assert_eq!(result.message, "dangerous run_shell rejected ok");
+        assert!(
+            approval_requested.load(Ordering::SeqCst),
+            "dangerous run_shell should emit approval request"
+        );
+        assert!(
+            root.join("danger.txt").exists(),
+            "rejected dangerous command should not mutate sandbox file"
+        );
     }
 
     /// 描述：验证沙盒会将最近一次工具返回值同步到 `_`，兼容模型使用 REPL 风格的 `content = _` 写法。
@@ -5438,16 +6503,16 @@ diff --git a/src/a.txt b/src/a.txt
         );
     }
 
-    /// 描述：验证黑名单命令会被 run_shell 安全策略拒绝。
+    /// 描述：验证黑名单命令会被 run_shell 安全策略升级为审批，而不是直接硬拒绝。
     #[test]
-    fn should_reject_blacklisted_shell_command() {
+    fn should_require_approval_for_blacklisted_shell_command() {
         let allowlist: HashSet<String> = HashSet::new();
         let mut denylist: HashSet<String> = HashSet::new();
         denylist.insert("rm".to_string());
-        let result = evaluate_run_shell_policy_with_sets("rm -rf ./tmp", &allowlist, &denylist);
-        assert!(result.is_err());
-        let error = result.expect_err("should reject blacklisted command");
-        assert_eq!(error.code, "core.agent.python.run_shell.command_blocked");
+        let decision = evaluate_run_shell_policy_with_sets("rm -rf ./tmp", &allowlist, &denylist)
+            .expect("blacklisted command should require approval");
+        assert_eq!(decision.command_names, vec!["rm".to_string()]);
+        assert!(decision.requires_approval);
     }
 
     /// 描述：验证白名单模式下只允许显式声明的命令执行。
@@ -5882,9 +6947,9 @@ NEXT: 进入接口建模
         ));
     }
 
-    /// 描述：验证 mcp 模式提示词会要求先探测 list_tools，并禁止暴露原生 browser_* 工具。
+    /// 描述：验证 mcp 模式提示词会保留原生浏览器工具，并把 MCP 作为补充交互能力暴露给模型。
     #[test]
-    fn should_include_mcp_playwright_prompt_contract_without_native_browser_tools() {
+    fn should_include_mcp_playwright_prompt_contract_with_native_browser_tools() {
         let prompt = build_python_workflow_prompt(
             "执行 playwright-interactive 技能并验证设置页交互",
             Some("demo"),
@@ -5902,17 +6967,17 @@ NEXT: 进入接口建模
                 skip_reason: String::new(),
             },
         );
-        assert!(!prompt.contains("js_repl/js_repl_reset/browser_navigate/browser_snapshot"));
-        assert!(prompt.contains("Playwright Interactive 执行模式：mcp"));
+        assert!(prompt.contains("js_repl/js_repl_reset/browser_navigate/browser_snapshot"));
+        assert!(prompt.contains("Playwright Interactive 执行模式：native+mcp"));
         assert!(prompt.contains("mcp_tool(server=\"playwright-mcp\", tool=\"list_tools\")"));
         assert!(prompt.contains(
             "禁止回退到 `playwright.config.ts`、`e2e/*.spec.ts` 或 `npx playwright test`"
         ));
     }
 
-    /// 描述：验证 none 模式提示词会显式要求跳过阶段，并禁止 CLI Playwright 降级方案。
+    /// 描述：验证 none 模式提示词也不会再要求跳过阶段，而是要求继续使用原生浏览器工具完成交互。
     #[test]
-    fn should_include_none_playwright_prompt_contract_with_skip_instruction() {
+    fn should_keep_native_playwright_prompt_contract_even_when_runtime_mode_is_none() {
         let prompt = build_python_workflow_prompt(
             "执行 playwright-interactive 技能并验证设置页交互",
             Some("demo"),
@@ -5920,12 +6985,19 @@ NEXT: 进入接口建模
             6,
             &[],
             &[],
-            &AgentRuntimeCapabilities::default(),
+            &AgentRuntimeCapabilities {
+                native_js_repl: false,
+                native_browser_tools: false,
+                playwright_mcp_server_id: String::new(),
+                playwright_mcp_ready: false,
+                playwright_mcp_name: String::new(),
+                interactive_mode: AgentInteractiveMode::None,
+                skip_reason: "legacy skip".to_string(),
+            },
         );
-        assert!(prompt.contains("Playwright Interactive 执行模式：none"));
-        assert!(prompt.contains("测试阶段已跳过"));
-        assert!(prompt.contains("禁止生成 `playwright.config.ts`"));
-        assert!(!prompt.contains("js_repl/js_repl_reset/browser_navigate/browser_snapshot"));
+        assert!(prompt.contains("Playwright Interactive 执行模式：native"));
+        assert!(prompt.contains("js_repl/js_repl_reset/browser_navigate/browser_snapshot"));
+        assert!(!prompt.contains("测试阶段已跳过"));
     }
 
     /// 描述：验证 request_user_input 参数校验会拒绝空问题列表，避免生成无意义的挂起请求。
@@ -6092,39 +7164,6 @@ NEXT: 进入接口建模
         assert!(prompt.contains("OpenAPI Docs"));
     }
 
-    /// 描述：验证 none 模式命中 playwright-interactive 阶段时，会直接构造“已跳过”结果而不是继续进入脚本执行。
-    #[test]
-    fn should_build_skipped_playwright_interactive_result_when_runtime_is_none() {
-        let request = AgentRunRequest {
-            trace_id: "trace-demo".to_string(),
-            session_id: "session-demo".to_string(),
-            agent_key: "agent".to_string(),
-            provider: "codex".to_string(),
-            provider_api_key: None,
-            provider_model: None,
-            provider_mode: None,
-            prompt: "执行 playwright-interactive 技能".to_string(),
-            project_name: Some("demo".to_string()),
-            model_export_enabled: false,
-            dcc_provider_addr: None,
-            output_dir: None,
-            workdir: None,
-            available_mcps: Vec::new(),
-            runtime_capabilities: AgentRuntimeCapabilities::default(),
-            execution_mode: AgentExecutionMode::Workflow,
-        };
-        let mut emitted: Vec<AgentStreamEvent> = Vec::new();
-        let result = build_skipped_playwright_interactive_result(&request, &mut |event| {
-            emitted.push(event);
-        });
-        assert_eq!(result.control, "done");
-        assert!(result.display_message.contains("测试阶段已跳过"));
-        assert_eq!(result.steps[0].status, ProtocolStepStatus::Skipped);
-        assert!(emitted
-            .iter()
-            .any(|event| matches!(event, AgentStreamEvent::Final { .. })));
-    }
-
     /// 描述：验证未闭合三引号字符串会在顶层 finish(...) 前自动补齐，避免 finish 被吞进字符串导致 SyntaxError。
     #[test]
     fn should_repair_unterminated_triple_quote_before_finish_line() {
@@ -6184,6 +7223,90 @@ finish("STATUS: DONE\nSUMMARY: 第二轮完成\nNEXT: 无")
         assert!(!normalized.contains("round-2"));
         assert!(!normalized.contains("第二轮完成"));
         assert_eq!(normalized.matches("finish(").count(), 1);
+    }
+
+    /// 描述：验证流式切批会在首个顶层 finish(...) 前保留全部安全前缀，避免把收尾调用提前执行。
+    #[test]
+    fn should_extract_streaming_batch_prefix_before_top_level_finish() {
+        let script = r#"
+items = list_dir(".")
+status = "ok"
+finish("done")
+"#;
+        let prefix = extract_streaming_python_batch_prefix(script).expect("prefix should exist");
+        assert!(prefix.contains("items = list_dir"));
+        assert!(prefix.contains("status = \"ok\""));
+        assert!(!prefix.contains("finish(\"done\")"));
+    }
+
+    /// 描述：验证流式切批会等待多行字典在括号闭合后再切批，避免把未闭合的容器字面量提前送入解释器。
+    #[test]
+    fn should_wait_for_multiline_mapping_to_close_before_streaming_batch_cut() {
+        let script = r#"
+payload = {
+    "name": "demo",
+    "status": "ok",
+}
+finish("done")
+"#;
+        let prefix =
+            extract_streaming_python_batch_prefix(script).expect("mapping prefix should exist");
+        assert!(prefix.contains("\"status\": \"ok\""));
+        assert!(prefix.contains("}"));
+        assert!(!prefix.contains("finish(\"done\")"));
+    }
+
+    /// 描述：验证仅出现未闭合三引号字符串时，不会提前切出流式批次，避免把残缺脚本送入沙盒。
+    #[test]
+    fn should_not_extract_streaming_batch_prefix_for_unterminated_triple_quote() {
+        let script = r#"
+content = """hello
+world
+"#;
+        let prefix = extract_streaming_python_batch_prefix(script);
+        assert!(prefix.is_none());
+    }
+
+    /// 描述：验证流式切批不会把以赋值运算符结尾的半截语句纳入安全前缀，避免 `index_content =` 被提前执行后触发 SyntaxError。
+    #[test]
+    fn should_keep_dangling_assignment_out_of_streaming_batch_prefix() {
+        let script = r#"
+items = list_dir(".")
+index_content =
+"#;
+        let prefix =
+            extract_streaming_python_batch_prefix(script).expect("first statement should exist");
+        assert!(prefix.contains("items = list_dir"));
+        assert!(!prefix.contains("index_content ="));
+        assert_eq!(prefix.trim(), r#"items = list_dir(".")"#);
+    }
+
+    /// 描述：验证流式切批不会把尚未换行结束的中文注释尾部纳入已执行前缀，避免下一次增量从注释中间继续后触发 SyntaxError。
+    #[test]
+    fn should_keep_partial_comment_line_out_of_streaming_batch_prefix() {
+        let script = "items = list_dir(\".\")\n# 3. 输出架构规划与实现约束（此部分";
+        let prefix =
+            extract_streaming_python_batch_prefix(script).expect("first statement should exist");
+        assert!(prefix.contains("items = list_dir"));
+        assert!(!prefix.contains("输出架构规划与实现约束"));
+        assert_eq!(prefix.trim(), r#"items = list_dir(".")"#);
+    }
+
+    /// 描述：验证函数定义要等到重新回到顶层后才会作为安全前缀切出，避免在函数体尚未闭合时过早执行。
+    #[test]
+    fn should_extract_streaming_batch_prefix_after_function_returns_to_top_level() {
+        let script = r#"
+def build_payload():
+    return {"ok": True}
+
+items = list_dir(".")
+finish("done")
+"#;
+        let prefix =
+            extract_streaming_python_batch_prefix(script).expect("function prefix should exist");
+        assert!(prefix.contains("def build_payload()"));
+        assert!(prefix.contains("items = list_dir"));
+        assert!(!prefix.contains("finish(\"done\")"));
     }
 
     /// 描述：验证短标题式 round 描述会自动扩展为口语化句子，避免展示“需求分析与定义”这类生硬标题。

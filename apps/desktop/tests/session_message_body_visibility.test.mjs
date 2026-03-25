@@ -33,15 +33,32 @@ test("TestSessionShouldPreserveAssistantBodyWhenRunSegmentsUpdate", () => {
   assert.match(source, /payload\.kind === STREAM_KINDS\.HEARTBEAT[\s\S]*setStreamingAssistantStatusTarget\(heartbeatText\);/);
   assert.match(source, /setStreamingAssistantStatusTarget\(t\("正在准备执行\.\.\."\)\);/);
   assert.match(source, /setStreamingAssistantStatusTarget\(t\("正在生成执行结果…"\)\);/);
+  assert.match(source, /payload\.kind === STREAM_KINDS\.DELTA[\s\S]*patchLatestSessionAiRawExchange\(/);
+  assert.doesNotMatch(source, /setStreamingAssistantTarget\(agentStreamTextBufferRef\.current\);/);
+  assert.doesNotMatch(source, /payload\.kind === STREAM_KINDS\.ERROR[\s\S]*setStreamingAssistantTarget\(errorSummary\);/);
+  assert.doesNotMatch(source, /payload\.kind === STREAM_KINDS\.CANCELLED[\s\S]*setStreamingAssistantTarget\(cancelledSummary\);/);
+  assert.doesNotMatch(source, /const failedAssistantReply = t\("执行失败：\{\{reason\}\}", \{ reason \}\);\s*setStreamingAssistantTarget\(t\("执行失败：\{\{reason\}\}", \{ reason \}\)\);/s);
 
   // 描述：
   //
-  //   - 带 runMeta 的助手消息仍应渲染可见正文，而不是只剩结构化轨迹和分割线。
-  assert.match(source, /const visibleAssistantBodyText = runMeta\s*\?\s*resolveVisibleAssistantBodyText\(message\.text, runMeta\)\s*:\s*"";/);
-  assert.match(source, /visibleAssistantBodyText \? \(\s*<AriContainer className="desk-run-body" padding=\{0\}>\s*<ChatMarkdown content=\{visibleAssistantBodyText\} \/>/s);
+  //   - 带 runMeta 的助手消息必须走单一时间线渲染，不能再拆成顶部正文区和底部总结区。
+  //   - 时间线构建依赖的标题规范化辅助函数必须保持模块级定义，避免被挪到组件内后运行时才触发 ReferenceError。
+  assert.match(source, /function normalizeRunSegmentIntroForCopy\(intro: string, step: string\): string \{/);
+  assert.doesNotMatch(source, /const normalizeRunSegmentIntroForCopy = \(intro: string, step: string\) => \{/);
+  assert.match(source, /function buildAssistantRunTimelineState\(/);
+  assert.match(source, /function syncAssistantRunMetaTimeline\(/);
+  assert.match(source, /function resolveRenderableAssistantRunTimeline\(/);
+  assert.match(source, /function resolveVisibleAssistantRunTimeline\(/);
+  assert.match(source, /const renderableTimeline = runMeta\s*\?\s*resolveRenderableAssistantRunTimeline\(message\.text, runMeta\)\s*:\s*\[\];/);
+  assert.match(source, /const visibleTimeline = runMeta\s*\?\s*resolveVisibleAssistantRunTimeline\(/s);
+  assert.match(source, /visibleTimeline\.map\(\(item\) => renderRunTimelineItem\(item\)\)/);
+  assert.match(source, /\{t\("执行轨迹"\)\}/);
+  assert.doesNotMatch(source, /const visibleAssistantBodyText = runMeta\s*\?\s*resolveVisibleAssistantBodyText\(message\.text, runMeta\)\s*:\s*"";/);
+  assert.doesNotMatch(source, /content=\{visibleAssistantBodyText\}/);
 
   // 描述：
   //
-  //   - agent 上下文提炼也应优先复用可见正文，避免 generic summary 把真实正文挤掉。
-  assert.match(source, /resolveVisibleAssistantBodyText\(item\.text, runMeta\)/);
+  //   - agent 上下文提炼应优先复用时间线尾部有效内容，而不是顶部正文/通用占位文本。
+  assert.match(source, /function resolveAssistantRunContextText\(/);
+  assert.match(source, /resolveAssistantRunContextText\(item\.text, runMeta\)/);
 });

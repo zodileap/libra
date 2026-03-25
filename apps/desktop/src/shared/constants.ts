@@ -119,6 +119,8 @@ export const STREAM_KINDS = {
   PLANNING: "planning",
   TOOL_CALL_STARTED: "tool_call_started",
   TOOL_CALL_FINISHED: "tool_call_finished",
+  RESIDENT_PROCESS_STATE: "resident_process_state",
+  RESIDENT_PROCESS_LOG: "resident_process_log",
   REQUIRE_APPROVAL: "require_approval",
   REQUEST_USER_INPUT: "request_user_input",
   HEARTBEAT: "heartbeat",

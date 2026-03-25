@@ -290,6 +290,27 @@ pub enum AgentStreamEvent {
     Heartbeat {
         message: String,
     },
+    /// 描述：长驻进程状态变化事件，用于把后台服务的生命周期增量同步给宿主与前端。
+    ResidentProcessState {
+        process_id: String,
+        name: String,
+        status: String,
+        pid: Option<u32>,
+        exit_code: Option<i32>,
+        started_at_ms: u64,
+        last_output_at_ms: Option<u64>,
+        uptime_secs: u64,
+        workdir: String,
+    },
+    /// 描述：长驻进程日志事件，仅在当前 agent 运行期间按需转发新增日志片段。
+    ResidentProcessLog {
+        process_id: String,
+        name: String,
+        stream: String,
+        text: String,
+        sequence: u64,
+        timestamp_ms: u64,
+    },
     /// 描述：高危操作需要人工授权。
     RequireApproval {
         approval_id: String,
@@ -328,6 +349,8 @@ impl AgentStreamEvent {
             Self::ToolCallStarted { .. } => "tool_call_started",
             Self::ToolCallFinished { .. } => "tool_call_finished",
             Self::Heartbeat { .. } => "heartbeat",
+            Self::ResidentProcessState { .. } => "resident_process_state",
+            Self::ResidentProcessLog { .. } => "resident_process_log",
             Self::RequireApproval { .. } => "require_approval",
             Self::RequestUserInput { .. } => "request_user_input",
             Self::Final { .. } => "final",

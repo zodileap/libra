@@ -76,6 +76,7 @@ pub struct EmbeddedRuntimeHandle {
 impl EmbeddedRuntimeHandle {
     /// 描述：关闭嵌入式 runtime 服务。
     pub async fn shutdown(mut self) {
+        libra_agent_core::tools::shell::cleanup_all_resident_processes();
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
         }
@@ -354,6 +355,59 @@ impl RuntimeServiceImpl {
                         "result_chars": result.chars().count(),
                         "result_key_count": json_value_keys(result_data).len(),
                         "result_keys": json_value_keys(result_data),
+                    }),
+                });
+            }
+            AgentStreamEvent::ResidentProcessState {
+                process_id,
+                name,
+                status,
+                pid,
+                exit_code,
+                ..
+            } => {
+                self.audit_log(AuditRecord {
+                    level: "info".to_string(),
+                    category: "resident_process".to_string(),
+                    event: "resident_process_state".to_string(),
+                    context: context.clone(),
+                    status: status.clone(),
+                    tool_name: name.clone(),
+                    duration_ms: None,
+                    error_code: String::new(),
+                    error_message: String::new(),
+                    summary: "resident process state changed".to_string(),
+                    meta: json!({
+                        "process_id": process_id,
+                        "pid": pid,
+                        "exit_code": exit_code,
+                    }),
+                });
+            }
+            AgentStreamEvent::ResidentProcessLog {
+                process_id,
+                name,
+                stream,
+                text,
+                sequence,
+                ..
+            } => {
+                self.audit_log(AuditRecord {
+                    level: "info".to_string(),
+                    category: "resident_process".to_string(),
+                    event: "resident_process_log".to_string(),
+                    context: context.clone(),
+                    status: "running".to_string(),
+                    tool_name: name.clone(),
+                    duration_ms: None,
+                    error_code: String::new(),
+                    error_message: String::new(),
+                    summary: "resident process log received".to_string(),
+                    meta: json!({
+                        "process_id": process_id,
+                        "stream": stream,
+                        "sequence": sequence,
+                        "chars": text.chars().count(),
                     }),
                 });
             }
@@ -1991,6 +2045,58 @@ fn core_stream_event_to_proto(
             message: message.clone(),
             ..Default::default()
         },
+        AgentStreamEvent::ResidentProcessState {
+            process_id,
+            name,
+            status,
+            pid,
+            exit_code,
+            started_at_ms,
+            last_output_at_ms,
+            uptime_secs,
+            workdir,
+        } => RunEvent {
+            trace_id: trace_id.to_string(),
+            session_id: session_id.to_string(),
+            kind: "resident_process_state".to_string(),
+            message: format!("process={} status={}", name, status),
+            tool_result_data_json: json!({
+                "process_id": process_id,
+                "name": name,
+                "status": status,
+                "pid": pid,
+                "exit_code": exit_code,
+                "started_at_ms": started_at_ms,
+                "last_output_at_ms": last_output_at_ms,
+                "uptime_secs": uptime_secs,
+                "workdir": workdir,
+            })
+            .to_string(),
+            ..Default::default()
+        },
+        AgentStreamEvent::ResidentProcessLog {
+            process_id,
+            name,
+            stream,
+            text,
+            sequence,
+            timestamp_ms,
+        } => RunEvent {
+            trace_id: trace_id.to_string(),
+            session_id: session_id.to_string(),
+            kind: "resident_process_log".to_string(),
+            message: text.clone(),
+            tool_result_data_json: json!({
+                "process_id": process_id,
+                "name": name,
+                "stream": stream,
+                "text": text,
+                "sequence": sequence,
+                "timestamp_ms": timestamp_ms,
+            })
+            .to_string(),
+            ..Default::default()
+        },
         AgentStreamEvent::RequireApproval {
             approval_id,
             tool_name,
@@ -2399,6 +2505,49 @@ mod tests {
             }
         }
         panic!("stream closed without terminal event");
+    }
+
+    /// 描述：验证 resident_process_state 事件会稳定映射到 runtime RunEvent，并携带结构化 JSON 数据。
+    #[test]
+    fn should_map_resident_process_state_event_to_proto() {
+        let event = AgentStreamEvent::ResidentProcessState {
+            process_id: "proc-1".to_string(),
+            name: "desktop-dev".to_string(),
+            status: "running".to_string(),
+            pid: Some(1234),
+            exit_code: None,
+            started_at_ms: 100,
+            last_output_at_ms: Some(200),
+            uptime_secs: 3,
+            workdir: "/tmp/demo".to_string(),
+        };
+        let proto = core_stream_event_to_proto("trace-1", "session-1", &event);
+        assert_eq!(proto.kind, "resident_process_state");
+        let payload: Value =
+            serde_json::from_str(proto.tool_result_data_json.as_str()).expect("state payload");
+        assert_eq!(payload.get("process_id").and_then(|value| value.as_str()), Some("proc-1"));
+        assert_eq!(payload.get("status").and_then(|value| value.as_str()), Some("running"));
+        assert_eq!(payload.get("pid").and_then(|value| value.as_u64()), Some(1234));
+    }
+
+    /// 描述：验证 resident_process_log 事件会稳定映射到 runtime RunEvent，并保留日志正文与序号。
+    #[test]
+    fn should_map_resident_process_log_event_to_proto() {
+        let event = AgentStreamEvent::ResidentProcessLog {
+            process_id: "proc-1".to_string(),
+            name: "desktop-dev".to_string(),
+            stream: "stdout".to_string(),
+            text: "ready".to_string(),
+            sequence: 7,
+            timestamp_ms: 123,
+        };
+        let proto = core_stream_event_to_proto("trace-1", "session-1", &event);
+        assert_eq!(proto.kind, "resident_process_log");
+        assert_eq!(proto.message, "ready");
+        let payload: Value =
+            serde_json::from_str(proto.tool_result_data_json.as_str()).expect("log payload");
+        assert_eq!(payload.get("stream").and_then(|value| value.as_str()), Some("stdout"));
+        assert_eq!(payload.get("sequence").and_then(|value| value.as_u64()), Some(7));
     }
 
     /// 描述：验证 runtime 服务启动后可通过健康检查返回 ready 状态。

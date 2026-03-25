@@ -10,17 +10,21 @@ pub mod web;
 
 use crate::policy::AgentPolicy;
 use libra_mcp_common::ProtocolError;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
 
-/// 描述：工具执行风险等级。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RiskLevel {
-    /// 低风险：只读操作，或对环境无破坏性的操作，可直接执行。
-    Low,
-    /// 高风险：涉及文件修改、命令执行、删除或敏感网络请求，必须经过人工授权。
-    High,
+/// 描述：工具执行期间向外派发流式事件的回调签名，供长驻进程等需要增量反馈的工具复用。
+pub type ToolStreamEventSink<'a> = &'a mut dyn FnMut(crate::AgentStreamEvent);
+
+/// 描述：工具审批决策，统一表达“直接执行 / 进入审批 / 直接拒绝”三种分支。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolApprovalDecision {
+    /// 低风险或已确认安全，可直接执行工具逻辑。
+    Allow,
+    /// 存在外部副作用或高风险操作，需要经过人工授权。
+    RequireApproval,
+    /// 参数非法、路径越界或命中硬限制时，直接拒绝且不进入审批。
+    Deny(ProtocolError),
 }
 
 /// 描述：工具执行上下文，携带链路追踪 ID、沙盒路径及执行策略。
@@ -29,6 +33,20 @@ pub struct ToolContext<'a> {
     pub session_id: &'a str,
     pub sandbox_root: &'a Path,
     pub policy: &'a AgentPolicy,
+    pub on_stream_event: Option<ToolStreamEventSink<'a>>,
+}
+
+impl ToolContext<'_> {
+    /// 描述：向宿主派发一条工具侧流式事件；若当前上下文未提供回调，则静默忽略。
+    ///
+    /// Params:
+    ///
+    ///   - event: 待派发的流式事件。
+    pub fn emit_stream_event(&mut self, event: crate::AgentStreamEvent) {
+        if let Some(callback) = self.on_stream_event.as_mut() {
+            callback(event);
+        }
+    }
 }
 
 /// 描述：智能体工具接口，所有可供 LLM 调用的能力均需实现此接口。
@@ -39,9 +57,14 @@ pub trait AgentTool: Send + Sync {
     /// 描述：返回工具的描述信息，用于构建提示词中的工具清单。
     fn description(&self) -> &'static str;
 
-    /// 描述：返回该工具的风险等级，默认均为低风险。
-    fn risk_level(&self) -> RiskLevel {
-        RiskLevel::Low
+    /// 描述：基于当前参数与上下文返回审批决策，默认直接执行。
+    ///
+    /// Params:
+    ///
+    ///   - args: 调用参数（JSON）。
+    ///   - context: 执行上下文。
+    fn approval_decision(&self, _args: &Value, _context: &ToolContext<'_>) -> ToolApprovalDecision {
+        ToolApprovalDecision::Allow
     }
 
     /// 描述：执行工具逻辑。

@@ -789,6 +789,192 @@ export function normalizeCodeContextMessageText(text: string): string {
 
 // 描述：
 //
+//   - 仅识别“纯数字”短回复，用于处理用户直接回 `1` / `2` 这类依赖上文选项的输入。
+const INDEXED_SHORT_REPLY_REGEX = /^\d{1,2}$/u;
+
+// 描述：
+//
+//   - 解析助手消息中的编号候选行；仅匹配常见的 `1.` / `1、` / `1)` 等选项格式。
+const NUMBERED_OPTION_LINE_REGEX = /^\s*(\d{1,2})[\.\u3001\):：-]\s*(.+\S)\s*$/u;
+
+// 描述：
+//
+//   - 辅助判断“上一条助手消息是否真的在提供选项”，避免把普通编号总结误判成可选项。
+const OPTION_SELECTION_HINT_KEYWORDS = [
+  "请选择",
+  "请选",
+  "选项",
+  "可选",
+  "推荐",
+  "recommended",
+  "选择其一",
+  "二选一",
+  "三选一",
+];
+
+// 描述：
+//
+//   - 表示从助手消息里提取出的单条编号候选，用于把用户的数字短回复映射回最近的显式选项。
+interface NumberedOptionCandidate {
+  index: string;
+  label: string;
+}
+
+// 描述：
+//
+//   - 表示数字短回复在最近助手消息中命中的候选结果，供 Prompt 注入“已命中选项 / 同组候选”说明。
+interface IndexedReplyOptionMatch {
+  matchedOption: string;
+  optionLines: string[];
+}
+
+// 描述：
+//
+//   - 判断当前输入是否为依赖上文编号的纯数字短回复；用于把 `1` 这类消息转成交由 AI 消歧的上下文输入。
+//
+// Params:
+//
+//   - prompt: 当前用户输入。
+//
+// Returns:
+//
+//   - true: 当前输入属于纯数字短回复。
+export function isIndexedShortReplyPrompt(prompt: string): boolean {
+  return INDEXED_SHORT_REPLY_REGEX.test(String(prompt || "").trim());
+}
+
+// 描述：
+//
+//   - 从单条助手消息中提取编号候选；仅保留短小、连续的候选行，避免把长段总结错当成选项列表。
+//
+// Params:
+//
+//   - text: 助手消息原文。
+//
+// Returns:
+//
+//   - 编号候选数组。
+function extractNumberedOptionCandidates(text: string): NumberedOptionCandidate[] {
+  const nonEmptyLines = String(text || "")
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (nonEmptyLines.length === 0) {
+    return [];
+  }
+  const candidates = nonEmptyLines
+    .map((line) => {
+      const match = line.match(NUMBERED_OPTION_LINE_REGEX);
+      if (!match) {
+        return null;
+      }
+      const index = String(match[1] || "").trim();
+      const label = String(match[2] || "").trim();
+      if (!index || !label || label.length > 80) {
+        return null;
+      }
+      return { index, label };
+    })
+    .filter((item): item is NumberedOptionCandidate => Boolean(item));
+  if (candidates.length < 2) {
+    return [];
+  }
+  const hasSequentialIndexes = candidates.every((item, candidateIndex) => Number(item.index) === candidateIndex + 1);
+  if (!hasSequentialIndexes) {
+    return [];
+  }
+  const normalizedText = normalizeCodeContextMessageText(text).toLowerCase();
+  const looksLikeSelectionMessage = OPTION_SELECTION_HINT_KEYWORDS.some((keyword) => normalizedText.includes(keyword))
+    || nonEmptyLines.length <= candidates.length + 2;
+  return looksLikeSelectionMessage ? candidates : [];
+}
+
+// 描述：
+//
+//   - 在最近的助手消息中查找与数字短回复对应的编号候选；只命中结构清晰的选项列表，避免误吸附到执行总结。
+//
+// Params:
+//
+//   - historyMessages: 当前会话历史消息。
+//   - replyIndex: 用户当前回复的编号。
+//
+// Returns:
+//
+//   - 命中的候选项；未命中返回 null。
+function findIndexedReplyOptionMatch(
+  historyMessages: MessageItem[],
+  replyIndex: string,
+): IndexedReplyOptionMatch | null {
+  const recentAssistantMessages = historyMessages
+    .filter((item) => item.role === "assistant")
+    .slice(-3)
+    .reverse();
+  for (const message of recentAssistantMessages) {
+    const candidates = extractNumberedOptionCandidates(message.text);
+    if (candidates.length === 0) {
+      continue;
+    }
+    const matchedCandidate = candidates.find((item) => item.index === replyIndex);
+    if (!matchedCandidate) {
+      continue;
+    }
+    return {
+      matchedOption: `${matchedCandidate.index}. ${matchedCandidate.label}`,
+      optionLines: candidates.map((item) => `${item.index}. ${item.label}`),
+    };
+  }
+  return null;
+}
+
+// 描述：
+//
+//   - 为纯数字短回复追加“先结合上文做选项消歧，否则要求澄清”的上下文约束，避免模型把 `1` 错当成全新任务。
+//
+// Params:
+//
+//   - historyMessages: 当前会话历史消息。
+//   - currentPrompt: 当前用户输入。
+//
+// Returns:
+//
+//   - 需要注入到 Prompt 的补充说明行。
+function buildIndexedShortReplyGuidanceLines(
+  historyMessages: MessageItem[],
+  currentPrompt: string,
+): string[] {
+  const normalizedPrompt = String(currentPrompt || "").trim();
+  if (!isIndexedShortReplyPrompt(normalizedPrompt)) {
+    return [];
+  }
+  const optionMatch = findIndexedReplyOptionMatch(historyMessages, normalizedPrompt);
+  if (!optionMatch) {
+    return [
+      translateDesktopText("【数字短回复消歧】"),
+      translateDesktopText("用户当前仅回复了“{{index}}”。", { index: normalizedPrompt }),
+      translateDesktopText("我没有在最近的助手消息里提取到可稳定映射的编号选项。"),
+      translateDesktopText("不要把“{{index}}”当成新的任务，也不要直接开始项目检查或执行。", {
+        index: normalizedPrompt,
+      }),
+      translateDesktopText("请直接告诉用户：当前没有对应的 {{index}} 选项。直接说你要我继续改的具体点。", {
+        index: normalizedPrompt,
+      }),
+      translateDesktopText("可以自然改写，但必须保留这层意思。"),
+      "",
+    ];
+  }
+  return [
+    translateDesktopText("【数字短回复消歧】"),
+    translateDesktopText("用户当前仅回复了“{{index}}”。", { index: normalizedPrompt }),
+    translateDesktopText("请先判断它是否在引用上文最近的编号选项；只有在含义明确时才能继续回答。"),
+    translateDesktopText("最近命中的候选项：{{option}}", { option: optionMatch.matchedOption }),
+    translateDesktopText("同组候选：{{options}}", { options: optionMatch.optionLines.join("；") }),
+    translateDesktopText("若你确认编号含义明确，就按该选项继续处理；若仍不明确，不要自行假设，直接要求用户补充具体要继续改什么。"),
+    "",
+  ];
+}
+
+// 描述：
+//
 //   - 判断当前输入是否为“仅重试提示”类短句。
 //
 // Params:
@@ -846,6 +1032,10 @@ export function buildSessionContextPrompt(
     projectProfile,
   );
   const memoryContextLines = buildSessionMemoryContextLines(sessionMemory);
+  const indexedShortReplyGuidanceLines = buildIndexedShortReplyGuidanceLines(
+    historyMessages,
+    normalizedCurrentPrompt,
+  );
   const historyLines = historyMessages
     .filter((item) => item.role === "user" || item.role === "assistant")
     .map((item) => ({
@@ -867,15 +1057,22 @@ export function buildSessionContextPrompt(
         ...profileContextLines,
         ...frameworkReplacementContextLines,
         ...memoryContextLines,
+        ...indexedShortReplyGuidanceLines,
         translateDesktopText("【当前请求】"),
         normalizedCurrentPrompt,
       ].join("\n");
     }
-    if (profileContextLines.length > 0 || memoryContextLines.length > 0 || frameworkReplacementContextLines.length > 0) {
+    if (
+      profileContextLines.length > 0
+      || memoryContextLines.length > 0
+      || frameworkReplacementContextLines.length > 0
+      || indexedShortReplyGuidanceLines.length > 0
+    ) {
       return [
         ...profileContextLines,
         ...frameworkReplacementContextLines,
         ...memoryContextLines,
+        ...indexedShortReplyGuidanceLines,
         translateDesktopText("【当前请求】"),
         normalizedCurrentPrompt,
       ].join("\n");
@@ -899,6 +1096,7 @@ export function buildSessionContextPrompt(
     ...profileContextLines,
     ...frameworkReplacementContextLines,
     ...memoryContextLines,
+    ...indexedShortReplyGuidanceLines,
     translateDesktopText("【会话上下文】"),
     ...historyLines,
     "",

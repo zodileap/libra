@@ -60,11 +60,11 @@ test("TestWorkflowSkillExecutionPlanShouldValidateRegistryStateAndBuildPrompt", 
   assert.match(promptGuidanceSource, /buildAgentToolsetLines/);
   assert.match(promptGuidanceSource, /buildPlaywrightInteractiveRuntimePrompt/);
   assert.match(promptGuidanceSource, /DEFAULT_AGENT_RUNTIME_CAPABILITIES/);
-  assert.match(promptGuidanceSource, /interactiveMode: "none"/);
-  assert.match(promptGuidanceSource, /if \(normalizedRuntimeCapabilities\.interactiveMode === "native"\)/);
+  assert.match(promptGuidanceSource, /interactiveMode: "native"/);
   assert.match(promptGuidanceSource, /js_repl、js_repl_reset、browser_navigate、browser_snapshot、browser_click、browser_type、browser_wait_for、browser_take_screenshot、browser_tabs、browser_close/);
   assert.match(promptGuidanceSource, /mcp_tool\(server=.*tool=.*list_tools/);
-  assert.match(promptGuidanceSource, /当前阶段必须显式标记为“已跳过”/);
+  assert.match(promptGuidanceSource, /当前环境内建 js_repl 与 browser_\* 原生工具/);
+  assert.doesNotMatch(promptGuidanceSource, /当前阶段必须显式标记为“已跳过”/);
   assert.match(promptGuidanceSource, /禁止 import 第三方工具模块/);
   assert.match(promptGuidanceSource, /工具调用签名与示例/);
   assert.match(promptGuidanceSource, /- read_text\(path\)：content = read_text/);

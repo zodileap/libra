@@ -292,6 +292,91 @@ def run_shell(command=None, timeout_secs=None, with_meta=False, **kwargs):
     return _remember_last_value(response)
 
 def run_shell_command(command, timeout_secs=30, with_meta=False): return run_shell(command=command, timeout_secs=timeout_secs, with_meta=with_meta)
+def shell_start(command=None, name=None, ready_pattern=None, ready_timeout_secs=10, with_meta=False, **kwargs):
+    resolved_command = _pick_first_non_none([command, _pop_alias(kwargs, ("cmd", "shell_command"))])
+    resolved_name = _pick_first_non_none([name, _pop_alias(kwargs, ("process_name", "label"))])
+    resolved_ready_pattern = _pick_first_non_none([ready_pattern, _pop_alias(kwargs, ("pattern", "ready_text"))])
+    include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, ("include_meta", "raw")), False))
+    response = _invoke_tool(
+        "shell_start",
+        {
+            "command": _require_arg(resolved_command, "command"),
+            "name": _require_arg(resolved_name, "name"),
+            "ready_pattern": resolved_ready_pattern,
+            "ready_timeout_secs": _resolve_with_alias(ready_timeout_secs, _pop_alias(kwargs, ("timeout", "timeout_secs")), 10),
+        },
+    )
+    if include_meta:
+        return _remember_last_value(response)
+    if isinstance(response, dict):
+        data = response.get("data")
+        if isinstance(data, dict):
+            return _remember_last_value(data)
+    return _remember_last_value(response)
+
+def shell_status(process_id_or_name=None, with_meta=False, **kwargs):
+    resolved_identifier = _pick_first_non_none([process_id_or_name, _pop_alias(kwargs, ("process_id", "name", "identifier"))])
+    include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, ("include_meta", "raw")), False))
+    response = _invoke_tool(
+        "shell_status",
+        {"process_id_or_name": _require_arg(resolved_identifier, "process_id_or_name")},
+    )
+    if include_meta:
+        return _remember_last_value(response)
+    if isinstance(response, dict):
+        data = response.get("data")
+        if isinstance(data, dict):
+            return _remember_last_value(data)
+    return _remember_last_value(response)
+
+def shell_logs(process_id_or_name=None, tail_lines=40, follow_secs=0, with_meta=False, **kwargs):
+    resolved_identifier = _pick_first_non_none([process_id_or_name, _pop_alias(kwargs, ("process_id", "name", "identifier"))])
+    include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, ("include_meta", "raw")), False))
+    response = _invoke_tool(
+        "shell_logs",
+        {
+            "process_id_or_name": _require_arg(resolved_identifier, "process_id_or_name"),
+            "tail_lines": _resolve_with_alias(tail_lines, _pop_alias(kwargs, ("tail", "lines")), 40),
+            "follow_secs": _resolve_with_alias(follow_secs, _pop_alias(kwargs, ("follow", "timeout_secs")), 0),
+        },
+    )
+    if include_meta:
+        return _remember_last_value(response)
+    if isinstance(response, dict):
+        data = response.get("data")
+        if isinstance(data, dict):
+            return _remember_last_value(data)
+    return _remember_last_value(response)
+
+def shell_stop(process_id_or_name=None, force=False, with_meta=False, **kwargs):
+    resolved_identifier = _pick_first_non_none([process_id_or_name, _pop_alias(kwargs, ("process_id", "name", "identifier"))])
+    include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, ("include_meta", "raw")), False))
+    response = _invoke_tool(
+        "shell_stop",
+        {
+            "process_id_or_name": _require_arg(resolved_identifier, "process_id_or_name"),
+            "force": bool(_resolve_with_alias(force, _pop_alias(kwargs, ("kill", "hard")), False)),
+        },
+    )
+    if include_meta:
+        return _remember_last_value(response)
+    if isinstance(response, dict):
+        data = response.get("data")
+        if isinstance(data, dict):
+            return _remember_last_value(data)
+    return _remember_last_value(response)
+
+def shell_list(with_meta=False, **kwargs):
+    include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, ("include_meta", "raw")), False))
+    response = _invoke_tool("shell_list", {})
+    if include_meta:
+        return _remember_last_value(response)
+    if isinstance(response, dict):
+        data = response.get("data")
+        if isinstance(data, dict):
+            return _remember_last_value(data)
+    return _remember_last_value(response)
+
 def read_text(path=None, with_meta=False, **kwargs):
     resolved_path = _pick_first_non_none([path, _pop_alias(kwargs, ("file_path", "filename"))])
     include_meta = bool(_resolve_with_alias(with_meta, _pop_alias(kwargs, ("include_meta", "raw")), False))
@@ -896,6 +981,11 @@ def _register_python_tool_module_aliases():
             "search_files": search_files,
             "run_shell": run_shell,
             "run_shell_command": run_shell_command,
+            "shell_start": shell_start,
+            "shell_status": shell_status,
+            "shell_logs": shell_logs,
+            "shell_stop": shell_stop,
+            "shell_list": shell_list,
             "git_status": git_status,
             "git_diff": git_diff,
             "git_log": git_log,

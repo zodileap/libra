@@ -1,5 +1,5 @@
 use super::utils::get_required_string;
-use super::{AgentTool, RiskLevel, ToolContext};
+use super::{AgentTool, ToolApprovalDecision, ToolContext};
 use crate::AgentRegisteredMcp;
 use libra_mcp_common::ProtocolError;
 use reqwest::blocking::Client;
@@ -18,6 +18,15 @@ const MCP_HTTP_TIMEOUT_SECS: u64 = 20;
 const MCP_INITIALIZE_REQUEST_ID: u64 = 1;
 const MCP_TOOL_REQUEST_ID: u64 = 2;
 const DEFAULT_DCC_TRANSFER_FORMATS: [&str; 3] = ["fbx", "glb", "obj"];
+const READONLY_EXTERNAL_ACTION_TOKENS: [&str; 13] = [
+    "list", "get", "read", "query", "search", "find", "stat", "check", "inspect", "describe",
+    "preview", "fetch", "snapshot",
+];
+const MUTATING_EXTERNAL_ACTION_TOKENS: [&str; 15] = [
+    "create", "update", "edit", "write", "delete", "remove", "run", "exec", "execute", "import",
+    "export", "upload", "download", "click", "type",
+];
+const MUTATING_EXTERNAL_ACTION_SUFFIX_TOKENS: [&str; 2] = ["press", "submit"];
 
 /// 描述：统一 MCP 工具入口，负责历史 DCC 兼容分支与外部注册 MCP 的调度。
 pub struct McpTool {
@@ -58,8 +67,12 @@ impl AgentTool for McpTool {
         "调用已注册的 MCP Server；当前支持模型 MCP 兼容入口、stdio MCP 与 HTTP MCP。"
     }
 
-    fn risk_level(&self) -> RiskLevel {
-        RiskLevel::High
+    fn approval_decision(&self, args: &Value, _context: &ToolContext<'_>) -> ToolApprovalDecision {
+        let request = match parse_mcp_tool_request(args) {
+            Ok(value) => value,
+            Err(err) => return ToolApprovalDecision::Deny(err),
+        };
+        classify_external_action_approval(request.tool.as_str(), &["list_tools"])
     }
 
     fn execute(&self, args: &Value, context: ToolContext) -> Result<Value, ProtocolError> {
@@ -88,8 +101,17 @@ impl AgentTool for DccTool {
         "调用 DCC 建模能力路由；可按 capability / software 选择建模软件，并支持生成跨软件迁移计划。"
     }
 
-    fn risk_level(&self) -> RiskLevel {
-        RiskLevel::High
+    fn approval_decision(&self, args: &Value, _context: &ToolContext<'_>) -> ToolApprovalDecision {
+        let request = match parse_dcc_tool_request(args) {
+            Ok(value) => value,
+            Err(err) => return ToolApprovalDecision::Deny(err),
+        };
+        if is_cross_dcc_request(&request)
+            && request.action.trim().eq_ignore_ascii_case("plan_transfer")
+        {
+            return ToolApprovalDecision::Allow;
+        }
+        classify_external_action_approval(request.action.as_str(), &["plan_transfer"])
     }
 
     fn execute(&self, args: &Value, context: ToolContext) -> Result<Value, ProtocolError> {
@@ -210,6 +232,61 @@ fn read_optional_string_arg(args: &Value, keys: &[&str]) -> String {
         .map(str::trim)
         .unwrap_or("")
         .to_string()
+}
+
+/// 描述：按工具或动作名称推断外部系统调用是否只读，确保 MCP / DCC 默认遵循“只读免批、副作用审批”口径。
+///
+/// Params:
+///
+///   - name: 工具名或动作名。
+///   - readonly_exact_names: 明确可直接放行的只读特例名称。
+///
+/// Returns:
+///
+///   - Allow: 明确只读，可直接执行。
+///   - RequireApproval: 存在副作用或语义不明确，需要人工授权。
+fn classify_external_action_approval(
+    name: &str,
+    readonly_exact_names: &[&str],
+) -> ToolApprovalDecision {
+    let normalized = normalize_external_action_name(name);
+    if normalized.is_empty() {
+        return ToolApprovalDecision::RequireApproval;
+    }
+    if readonly_exact_names
+        .iter()
+        .any(|candidate| normalized.eq_ignore_ascii_case(candidate))
+    {
+        return ToolApprovalDecision::Allow;
+    }
+    let tokens = tokenize_external_action_name(normalized.as_str());
+    if tokens.iter().any(|token| {
+        MUTATING_EXTERNAL_ACTION_TOKENS.contains(&token.as_str())
+            || MUTATING_EXTERNAL_ACTION_SUFFIX_TOKENS.contains(&token.as_str())
+    }) {
+        return ToolApprovalDecision::RequireApproval;
+    }
+    if tokens
+        .iter()
+        .any(|token| READONLY_EXTERNAL_ACTION_TOKENS.contains(&token.as_str()))
+    {
+        return ToolApprovalDecision::Allow;
+    }
+    ToolApprovalDecision::RequireApproval
+}
+
+/// 描述：规范化工具或动作名称，统一去除两端空白并转小写，便于后续按命名规则分类。
+fn normalize_external_action_name(name: &str) -> String {
+    name.trim().to_lowercase()
+}
+
+/// 描述：把外部工具名称按非字母数字字符拆成语义 token，兼容 `mesh.edit`、`list_tools`、`tools/list` 等命名风格。
+fn tokenize_external_action_name(name: &str) -> Vec<String> {
+    name.split(|ch: char| !ch.is_ascii_alphanumeric())
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(|token| token.to_string())
+        .collect()
 }
 
 /// 描述：判断当前 DCC 请求是否为跨软件迁移计划；一旦涉及 source/target 或 cross capability，统一进入计划分支。
@@ -1562,10 +1639,11 @@ fn truncate_stderr(text: &str) -> String {
 mod tests {
     use super::{
         build_cross_dcc_transfer_plan, build_http_headers, build_http_mcp_payload,
-        parse_dcc_tool_request, parse_http_mcp_response, parse_mcp_tool_request,
-        read_jsonrpc_message, select_dcc_provider, select_registered_mcp, AgentRegisteredMcp,
-        DccToolCallRequest, McpToolCallRequest,
+        classify_external_action_approval, parse_dcc_tool_request, parse_http_mcp_response,
+        parse_mcp_tool_request, read_jsonrpc_message, select_dcc_provider, select_registered_mcp,
+        AgentRegisteredMcp, DccToolCallRequest, McpToolCallRequest,
     };
+    use crate::tools::ToolApprovalDecision;
     use serde_json::json;
     use std::collections::HashMap;
     use std::io::{BufReader, Cursor};
@@ -1641,6 +1719,51 @@ mod tests {
                 .get("scope")
                 .and_then(|value| value.as_str()),
             Some("selected")
+        );
+    }
+
+    /// 描述：验证 `list_tools` 会被视为只读探测操作，不再触发审批卡。
+    #[test]
+    fn should_allow_readonly_mcp_list_tools() {
+        assert_eq!(
+            classify_external_action_approval("list_tools", &["list_tools"]),
+            ToolApprovalDecision::Allow
+        );
+    }
+
+    /// 描述：验证点号命名的只读动作会按 token 识别，避免 `scene.inspect` 被误判成未知副作用调用。
+    #[test]
+    fn should_allow_readonly_mcp_action_by_token() {
+        assert_eq!(
+            classify_external_action_approval("scene.inspect", &["list_tools"]),
+            ToolApprovalDecision::Allow
+        );
+    }
+
+    /// 描述：验证带副作用 token 的动作会进入审批，确保 `mesh.edit` 这类调用不会被直接放行。
+    #[test]
+    fn should_require_approval_for_mutating_dcc_action() {
+        assert_eq!(
+            classify_external_action_approval("mesh.edit", &["plan_transfer"]),
+            ToolApprovalDecision::RequireApproval
+        );
+    }
+
+    /// 描述：验证跨软件迁移 `plan_transfer` 属于只读计划生成，不触发审批。
+    #[test]
+    fn should_allow_cross_dcc_plan_transfer() {
+        assert_eq!(
+            classify_external_action_approval("plan_transfer", &["plan_transfer"]),
+            ToolApprovalDecision::Allow
+        );
+    }
+
+    /// 描述：验证无法从名称判断语义的外部动作默认进入审批，保留对未知副作用的保护边界。
+    #[test]
+    fn should_require_approval_for_unknown_external_action() {
+        assert_eq!(
+            classify_external_action_approval("synchronize_state", &["list_tools"]),
+            ToolApprovalDecision::RequireApproval
         );
     }
 

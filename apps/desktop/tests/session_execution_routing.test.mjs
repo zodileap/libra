@@ -52,6 +52,8 @@ test("TestSessionExecutionRoutingShouldSupportWorkflowSkillChatAndResumePaths", 
   // 描述：
   //
   //   - 选择为 none 时直接走普通对话；选择为 skill 时只在具备执行意图时进入技能执行。
+  assert.match(routingSource, /if \(isIndexedShortReplyPrompt\(normalizedMessageText\)\) \{/);
+  assert.match(routingSource, /检测到数字短回复，将先结合上文候选项做消歧判断。/);
   assert.match(routingSource, /if \(!hasExecutionIntent\(normalizedMessageText\)\) \{/);
   assert.match(routingSource, /routeKind: "chat"/);
   assert.match(routingSource, /当前消息缺少明确执行意图，按普通对话处理。/);

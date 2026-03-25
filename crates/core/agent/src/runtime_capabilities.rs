@@ -42,14 +42,13 @@ pub struct AgentRuntimeCapabilities {
 impl Default for AgentRuntimeCapabilities {
     fn default() -> Self {
         Self {
-            native_js_repl: false,
-            native_browser_tools: false,
+            native_js_repl: true,
+            native_browser_tools: true,
             playwright_mcp_server_id: String::new(),
             playwright_mcp_ready: false,
             playwright_mcp_name: String::new(),
-            interactive_mode: AgentInteractiveMode::None,
-            skip_reason: "当前环境无原生交互工具且无已启用 Playwright MCP，测试阶段已跳过。"
-                .to_string(),
+            interactive_mode: AgentInteractiveMode::Native,
+            skip_reason: String::new(),
         }
     }
 }
@@ -70,41 +69,22 @@ pub fn resolve_agent_runtime_capabilities(
     native_browser_tools: bool,
     available_mcps: &[AgentRegisteredMcp],
 ) -> AgentRuntimeCapabilities {
-    if native_js_repl && native_browser_tools {
-        return AgentRuntimeCapabilities {
-            native_js_repl,
-            native_browser_tools,
-            playwright_mcp_server_id: String::new(),
-            playwright_mcp_ready: false,
-            playwright_mcp_name: String::new(),
-            interactive_mode: AgentInteractiveMode::Native,
-            skip_reason: String::new(),
-        };
-    }
-
-    if let Some(playwright_mcp) = available_mcps
+    let _ = (native_js_repl, native_browser_tools);
+    let playwright_mcp = available_mcps
         .iter()
-        .find(|item| is_ready_playwright_mcp_registration(item))
-    {
-        return AgentRuntimeCapabilities {
-            native_js_repl,
-            native_browser_tools,
-            playwright_mcp_server_id: playwright_mcp.id.clone(),
-            playwright_mcp_ready: true,
-            playwright_mcp_name: playwright_mcp.name.clone(),
-            interactive_mode: AgentInteractiveMode::Mcp,
-            skip_reason: String::new(),
-        };
-    }
-
+        .find(|item| is_ready_playwright_mcp_registration(item));
     AgentRuntimeCapabilities {
-        native_js_repl,
-        native_browser_tools,
-        playwright_mcp_server_id: String::new(),
-        playwright_mcp_ready: false,
-        playwright_mcp_name: String::new(),
-        interactive_mode: AgentInteractiveMode::None,
-        skip_reason: build_native_skip_reason(native_js_repl, native_browser_tools),
+        native_js_repl: true,
+        native_browser_tools: true,
+        playwright_mcp_server_id: playwright_mcp
+            .map(|item| item.id.clone())
+            .unwrap_or_default(),
+        playwright_mcp_ready: playwright_mcp.is_some(),
+        playwright_mcp_name: playwright_mcp
+            .map(|item| item.name.clone())
+            .unwrap_or_default(),
+        interactive_mode: AgentInteractiveMode::Native,
+        skip_reason: String::new(),
     }
 }
 
@@ -120,12 +100,11 @@ pub fn resolve_agent_runtime_capabilities(
 pub fn detect_agent_runtime_capabilities(
     available_mcps: &[AgentRegisteredMcp],
 ) -> AgentRuntimeCapabilities {
-    let native = detect_native_browser_tool_capabilities();
-    resolve_agent_runtime_capabilities(
-        native.native_js_repl,
-        native.native_browser_tools,
-        available_mcps,
-    )
+    // 描述：
+    //
+    //   - 保留底层探测调用，供后续审计或调试复用；但不再用其结果否决内建 js_repl/browser_* 能力。
+    let _native_probe = detect_native_browser_tool_capabilities();
+    resolve_agent_runtime_capabilities(true, true, available_mcps)
 }
 
 /// 描述：判断注册项是否命中 Playwright MCP fallback 识别规则。
@@ -199,21 +178,6 @@ pub fn is_ready_playwright_mcp_registration(registration: &AgentRegisteredMcp) -
     }
 }
 
-/// 描述：在原生交互能力不可用时生成统一跳过原因，确保前端与总结口径一致。
-fn build_native_skip_reason(native_js_repl: bool, native_browser_tools: bool) -> String {
-    if !native_js_repl && !native_browser_tools {
-        return "当前环境无原生交互工具且无已启用 Playwright MCP，测试阶段已跳过。".to_string();
-    }
-    if !native_js_repl {
-        return "当前环境缺少原生 js_repl 且无已启用 Playwright MCP，测试阶段已跳过。".to_string();
-    }
-    if !native_browser_tools {
-        return "当前环境缺少原生 browser_* 工具且无已启用 Playwright MCP，测试阶段已跳过。"
-            .to_string();
-    }
-    "当前环境无可用 Playwright 交互能力，测试阶段已跳过。".to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,17 +226,19 @@ mod tests {
         assert!(capabilities.skip_reason.is_empty());
     }
 
-    /// 描述：验证空注册表且无原生工具时，会返回 none 模式并附带稳定跳过原因。
+    /// 描述：验证即使底层探测未 ready，也仍默认暴露 native 模式，避免在 prompt 阶段提前否决内建工具。
     #[test]
-    fn should_return_none_mode_when_no_native_tool_or_playwright_mcp_exists() {
+    fn should_keep_native_mode_when_runtime_probe_is_not_ready() {
         let capabilities = resolve_agent_runtime_capabilities(false, false, &[]);
-        assert_eq!(capabilities.interactive_mode, AgentInteractiveMode::None);
-        assert!(capabilities.skip_reason.contains("测试阶段已跳过"));
+        assert_eq!(capabilities.interactive_mode, AgentInteractiveMode::Native);
+        assert!(capabilities.skip_reason.is_empty());
+        assert!(capabilities.native_js_repl);
+        assert!(capabilities.native_browser_tools);
     }
 
-    /// 描述：验证已启用且运行态就绪的 Playwright MCP 会触发 mcp 模式。
+    /// 描述：验证已启用且运行态就绪的 Playwright MCP 会作为补充能力写入快照，但不再抢占 native 模式。
     #[test]
-    fn should_return_mcp_mode_when_ready_playwright_registration_exists() {
+    fn should_record_ready_playwright_mcp_without_overriding_native_mode() {
         let registration = build_mcp(
             "playwright-mcp",
             "playwright",
@@ -282,18 +248,19 @@ mod tests {
             true,
         );
         let capabilities = resolve_agent_runtime_capabilities(false, false, &[registration]);
-        assert_eq!(capabilities.interactive_mode, AgentInteractiveMode::Mcp);
+        assert_eq!(capabilities.interactive_mode, AgentInteractiveMode::Native);
         assert_eq!(capabilities.playwright_mcp_server_id, "playwright-mcp");
         assert!(capabilities.playwright_mcp_ready);
     }
 
-    /// 描述：验证未就绪或缺少 transport 关键字段的注册项不会误判为可用 Playwright MCP。
+    /// 描述：验证未就绪或缺少 transport 关键字段的注册项不会误判为可用 Playwright MCP，但 native 模式仍保持可用。
     #[test]
     fn should_ignore_non_ready_playwright_registration() {
         let mut registration = build_mcp("browser-kit", "", "", &[], &["browser.click"], false);
         registration.transport = "stdio".to_string();
         let capabilities = resolve_agent_runtime_capabilities(false, false, &[registration]);
-        assert_eq!(capabilities.interactive_mode, AgentInteractiveMode::None);
+        assert_eq!(capabilities.interactive_mode, AgentInteractiveMode::Native);
+        assert!(!capabilities.playwright_mcp_ready);
     }
 
     /// 描述：验证 template_id 命中 playwright-mcp 时，即使 id 自定义，也会识别为 Playwright MCP。
