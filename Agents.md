@@ -216,16 +216,99 @@
 
 # 测试规范
 
+## 总则
+
 - 所有新增功能或模块必须包含单元测试。
-- 测试文件命名必须以 `_test` 结尾。
-- 测试函数命名必须以 `Test` 开头。
-- 每个测试函数必须包含明确的断言，确保功能正确性。
-- 测试覆盖率应达到至少 80%。
 - 测试代码必须遵循与生产代码相同的编码规范和注释要求。
 - 测试应涵盖正常情况、边界情况和异常情况。
 - 测试应该放在单独的文件中，不要和具体实现混在一起。
-- `apps/desktop` 的自动化测试目录固定为：
-  - `tests/ui/playwright`
-  - `tests/e2e/tauri-driver`
-- `apps/desktop/tests/ui/playwright` 只负责 UI 层验证，默认使用 Playwright，不替代真实 Tauri 容器内的端到端流程校验。
-- `apps/desktop/tests/e2e/tauri-driver` 只负责 Desktop E2E，默认使用 `tauri-driver + webdriverio`，凡是依赖 Tauri 容器、原生桥接或桌面运行时的场景都应归入这一层。
+- 测试覆盖率应达到至少 80%。
+
+## 前端（Desktop）测试规范
+
+### 测试分层
+
+Desktop 测试严格按以下三层组织，禁止跨层混放：
+
+| 层级 | 目录 | 框架 | 职责 |
+|---|---|---|---|
+| 单元测试 | `tests/unit/*.test.mjs` | Node.js `node:test` + `node:assert/strict` | 纯函数逻辑、数据转换、工具函数 |
+| UI 测试 | `tests/ui/playwright/` | Playwright | 页面渲染、交互行为、界面回归 |
+| E2E 测试 | `tests/e2e/tauri-driver/` | tauri-driver + webdriverio | Tauri 容器内的桌面流程与跨层集成 |
+
+### 单元测试编写规范
+
+#### 文件与命名
+
+- 测试文件放在 `apps/desktop/tests/unit/` 目录下。
+- 文件名格式：`<模块名>.test.mjs`，与被测源文件语义对应。
+- 测试函数使用描述性名称，格式：`"<函数名> should <预期行为>"`。
+
+#### 测试内容原则
+
+- **测试行为，不测实现**：断言函数的输入→输出，不用正则扫描源码。
+- **直接导入被测函数**：从源文件 import 纯函数，直接调用并断言返回值。
+- **每个测试只验证一个行为**：不要在一个 test 中混合多个不相关的断言。
+- **必须覆盖三类场景**：正常路径、边界值（空值/null/undefined/极端输入）、错误路径。
+- **禁止使用正则扫描源文件内容作为主要断言手段**；只有"架构守卫"测试（如依赖规则检查、CSS 变量守卫）允许读取源文件。
+
+#### 架构守卫测试
+
+以下场景允许保留"源码扫描"模式，但应放在独立的守卫测试文件中：
+
+- **依赖规则守卫**：验证模块间禁止的 import 关系。
+- **样式变量守卫**：验证 CSS 变量均已定义。
+- **结构契约守卫**：验证关键导出、路由常量等存在性。
+
+守卫测试文件命名：`<守卫名>_guard.test.mjs`。
+
+#### 断言规范
+
+```javascript
+import test from "node:test";
+import assert from "node:assert/strict";
+
+// 描述：校验 <函数名> 在 <场景> 下的行为。
+test("<函数名> should <预期行为>", () => {
+  const result = functionUnderTest(input);
+  assert.equal(result, expected);
+});
+
+// 边界情况
+test("<函数名> should handle empty input gracefully", () => {
+  assert.equal(functionUnderTest(""), fallbackValue);
+  assert.equal(functionUnderTest(null), fallbackValue);
+  assert.equal(functionUnderTest(undefined), fallbackValue);
+});
+```
+
+#### 禁止模式
+
+- 禁止 `fs.readFileSync` + `assert.match(source, /pattern/)` 的正则扫描作为单元测试主体。
+- 禁止测试恒为真的常量断言（如 `assert.equal(true, true)`）。
+- 禁止在单元测试中依赖 DOM、window、localStorage 等浏览器 API；需浏览器环境的测试归入 UI 层。
+- 禁止在单元测试中依赖 Tauri invoke；需 Tauri 容器的测试归入 E2E 层。
+
+### 运行方式
+
+```bash
+# 单元测试
+pnpm --filter @libra/desktop run test:unit
+
+# UI 测试
+pnpm --filter @libra/desktop run test:ui
+
+# E2E 测试
+pnpm --filter @libra/desktop run test:e2e
+```
+
+## 后端（Go）测试规范
+
+- 测试文件命名必须以 `_test.go` 结尾。
+- 测试函数命名必须以 `Test` 开头。
+- 每个测试函数必须包含明确的断言，确保功能正确性。
+
+## Core（Rust）测试规范
+
+- 测试模块使用 `#[cfg(test)]` 标注。
+- 测试函数使用 `#[test]` 或 `#[tokio::test]` 标注。

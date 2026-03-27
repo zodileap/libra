@@ -9,7 +9,8 @@
     "dev:ui:macos": "node ./scripts/dev-ui.macos.mjs",
     "dev:ui:linux": "node ./scripts/dev-ui.linux.mjs",
     "build:ui": "vite build",
-    "test:unit": "node --test ./tests/**/*.test.mjs",
+    "test:unit": "node --import tsx/esm --test ./tests/unit/**/*.test.{mjs,mts}",
+    "test:guard": "node --import tsx/esm --test ./tests/*_guard.test.mjs",
     "test:e2e": "node --test ./tests/e2e/tauri-driver/desktop-smoke.e2e.mjs",
     "dev": "node ../../scripts/run-desktop-tauri.mjs dev",
     "build": "node ../../scripts/run-desktop-tauri.mjs build",
@@ -30,6 +31,7 @@
     "@vitejs/plugin-react-swc": "^3.11.0",
     "playwright": "^1.58.2",
     "sass-embedded": "^1.97.3",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vite": "^5.4.21",
     "webdriverio": "^9.25.0"
